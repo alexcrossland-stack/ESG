@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, Save, CheckCircle, Clock, History, Download, Eye, ChevronDown, ChevronUp } from "lucide-react";
+import { FileText, Save, CheckCircle, Clock, History, Download, Eye, ChevronDown, ChevronUp, Sparkles, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 
 const SECTIONS = [
@@ -26,6 +27,7 @@ const SECTIONS = [
 export default function Policy() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["purpose"]));
   const [editContent, setEditContent] = useState<Record<string, string>>({});
   const [isDirty, setIsDirty] = useState(false);
@@ -107,6 +109,7 @@ export default function Policy() {
 
   const completedSections = SECTIONS.filter(s => editContent[s.key]?.trim()).length;
   const progress = Math.round((completedSections / SECTIONS.length) * 100);
+  const emptySections = SECTIONS.filter(s => !editContent[s.key]?.trim());
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
@@ -146,6 +149,36 @@ export default function Policy() {
           )}
         </div>
       </div>
+
+      {emptySections.length > 0 && (
+        <Card className="border-primary/20 bg-primary/5" data-testid="card-ai-generate-banner">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 shrink-0 mt-0.5">
+                <Sparkles className="w-[18px] h-[18px] text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">Generate your policy with AI</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {completedSections === 0
+                    ? "Get a complete first draft tailored to your company in minutes. Answer a few questions and our AI will generate all 7 policy sections for you."
+                    : `You have ${emptySections.length} section${emptySections.length === 1 ? "" : "s"} still to complete. Use the AI Policy Generator to fill in the gaps.`}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="shrink-0"
+                onClick={() => setLocation("/policy-generator")}
+                data-testid="button-generate-with-ai"
+              >
+                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                Generate with AI
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-3 gap-3 text-sm">
         <Card>
