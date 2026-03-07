@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
+import OpenAI from "openai";
 
 const { Pool } = pg;
 
@@ -162,6 +163,37 @@ async function seedDatabase(companyId: string, userId: string) {
     content: policyContent,
     createdBy: userId,
   });
+
+  // Seed carbon calculation
+  const carbonInputs = {
+    electricity: "180000",
+    gas: "45000",
+    diesel: "2500",
+    petrol: "1800",
+    vehicleMileage: "35000",
+    domesticFlights: "5000",
+    shortHaulFlights: "15000",
+    longHaulFlights: "8000",
+    railTravel: "12000",
+    hotelNights: "40",
+    country: "UK",
+  };
+  const factors = await storage.getEmissionFactors("UK");
+  if (factors.length > 0) {
+    const results = calculateEmissions(carbonInputs, factors);
+    await storage.createCarbonCalculation({
+      companyId,
+      reportingPeriod: "2024",
+      periodType: "annual",
+      inputs: carbonInputs,
+      results,
+      scope1Total: results.scope1Total.toFixed(4),
+      scope2Total: results.scope2Total.toFixed(4),
+      scope3Total: results.scope3Total.toFixed(4),
+      totalEmissions: results.totalEmissions.toFixed(4),
+      employeeCount: 48,
+    });
+  }
 
   // Seed audit log
   await storage.createAuditLog({
@@ -582,5 +614,557 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(logs);
   });
 
+  // ===== AI POLICY GENERATOR =====
+  const openai = new OpenAI({
+    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  });
+
+  app.post("/api/policy-generator/generate", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { inputs } = req.body;
+
+      const saved = await storage.createPolicyGenerationInput({ companyId, inputs });
+
+      const prompt = buildPolicyPrompt(inputs);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [
+          { role: "system", content: "You are an ESG policy expert specialising in SME businesses. Write professional but accessible ESG policies in plain English. Do not give legal advice. Always include a note that the policy should be reviewed by management before formal adoption." },
+          { role: "user", content: prompt },
+        ],
+        max_completion_tokens: 4096,
+        response_format: { type: "json_object" },
+      });
+
+      const generatedText = completion.choices[0]?.message?.content || "{}";
+      let generatedContent;
+      try {
+        generatedContent = JSON.parse(generatedText);
+      } catch {
+        generatedContent = { rawText: generatedText };
+      }
+
+      await storage.updatePolicyGenerationInput(saved.id, { generatedContent });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "ESG policy generated via AI",
+        entityType: "policy_generation",
+        entityId: saved.id,
+        details: { sectorsUsed: inputs.sector },
+      });
+
+      res.json({ id: saved.id, generatedContent });
+    } catch (e: any) {
+      console.error("Policy generation error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/policy-generator/history", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const history = await storage.getPolicyGenerationInputs(companyId);
+    res.json(history);
+  });
+
+  app.post("/api/policy-generator/save-to-policy", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { content } = req.body;
+
+      let policy = await storage.getPolicy(companyId);
+      if (!policy) policy = await storage.createPolicy(companyId);
+
+      const versions = await storage.getPolicyVersions(policy.id);
+      const nextVersion = versions.length > 0 ? versions[0].versionNumber + 1 : 1;
+      await storage.createPolicyVersion({
+        policyId: policy.id,
+        versionNumber: nextVersion,
+        content,
+        createdBy: userId,
+      });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "AI-generated policy saved as new version",
+        entityType: "policy",
+        entityId: policy.id,
+        details: { versionNumber: nextVersion },
+      });
+
+      res.json({ ok: true, versionNumber: nextVersion });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ===== CARBON CALCULATOR =====
+  app.get("/api/carbon/factors", requireAuth, async (req, res) => {
+    const country = (req.query.country as string) || "UK";
+    const factors = await storage.getEmissionFactors(country);
+    res.json(factors);
+  });
+
+  app.get("/api/carbon/calculations", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const calcs = await storage.getCarbonCalculations(companyId);
+    res.json(calcs);
+  });
+
+  app.post("/api/carbon/calculate", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { inputs, reportingPeriod, periodType, employeeCount } = req.body;
+
+      const country = inputs.country || "UK";
+      const factors = await storage.getEmissionFactors(country);
+
+      const results = calculateEmissions(inputs, factors);
+
+      const calc = await storage.createCarbonCalculation({
+        companyId,
+        reportingPeriod,
+        periodType: periodType || "annual",
+        inputs,
+        results,
+        scope1Total: results.scope1Total.toFixed(4),
+        scope2Total: results.scope2Total.toFixed(4),
+        scope3Total: results.scope3Total.toFixed(4),
+        totalEmissions: results.totalEmissions.toFixed(4),
+        employeeCount: employeeCount || null,
+      });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "Carbon calculation completed",
+        entityType: "carbon_calculation",
+        entityId: calc.id,
+        details: { reportingPeriod, totalEmissions: results.totalEmissions },
+      });
+
+      res.json(calc);
+    } catch (e: any) {
+      console.error("Carbon calculation error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/carbon/calculations/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const calc = await storage.getCarbonCalculation(req.params.id);
+      if (!calc || calc.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      await storage.deleteCarbonCalculation(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ===== QUESTIONNAIRE AUTOFILL =====
+  app.get("/api/questionnaires", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const qs = await storage.getQuestionnaires(companyId);
+    res.json(qs);
+  });
+
+  app.get("/api/questionnaires/:id", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const q = await storage.getQuestionnaire(req.params.id);
+    if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Questionnaire not found" });
+    const questions = await storage.getQuestionnaireQuestions(q.id);
+    res.json({ ...q, questions });
+  });
+
+  app.post("/api/questionnaires", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { title, source, questions } = req.body;
+
+      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft" });
+
+      if (questions && Array.isArray(questions)) {
+        for (let i = 0; i < questions.length; i++) {
+          await storage.createQuestionnaireQuestion({
+            questionnaireId: q.id,
+            questionText: questions[i],
+            orderIndex: i,
+          });
+        }
+      }
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "Questionnaire created",
+        entityType: "questionnaire",
+        entityId: q.id,
+        details: { title, questionCount: questions?.length || 0 },
+      });
+
+      const savedQuestions = await storage.getQuestionnaireQuestions(q.id);
+      res.json({ ...q, questions: savedQuestions });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/questionnaires/:id/autofill", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const questionnaireId = req.params.id;
+
+      const qRecord = await storage.getQuestionnaire(questionnaireId);
+      if (!qRecord || qRecord.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+
+      const questions = await storage.getQuestionnaireQuestions(questionnaireId);
+      if (!questions.length) return res.status(400).json({ error: "No questions found" });
+
+      // Gather company context
+      const company = await storage.getCompany(companyId);
+      const policy = await storage.getPolicy(companyId);
+      const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
+      const topics = await storage.getMaterialTopics(companyId);
+      const allMetrics = await storage.getMetrics(companyId);
+      const actions = await storage.getActionPlans(companyId);
+      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+
+      // Get recent metric values
+      const metricData: Record<string, any> = {};
+      for (const m of allMetrics.filter(m => m.enabled)) {
+        const vals = await storage.getMetricValues(m.id);
+        if (vals.length > 0) {
+          metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
+        }
+      }
+
+      const context = buildCompanyContext(company, latestVersion?.content, topics, metricData, actions, carbonCalcs);
+
+      // Process questions - use rules-based matching first, then AI for gaps
+      const updatedQuestions = [];
+      for (const q of questions) {
+        const ruleResult = matchQuestionByRules(q.questionText, context);
+        let suggestedAnswer = ruleResult.answer;
+        let confidence = ruleResult.confidence;
+        let sourceRef = ruleResult.source;
+        let category = categorizeQuestion(q.questionText);
+
+        if (confidence === "low" || !suggestedAnswer) {
+          try {
+            const aiResult = await generateAIAnswer(openai, q.questionText, context);
+            suggestedAnswer = aiResult.answer;
+            confidence = aiResult.confidence || "medium";
+            sourceRef = aiResult.source || sourceRef;
+          } catch {
+            suggestedAnswer = "No formal data is currently recorded in the system for this area. A draft response can be prepared for management review.";
+            confidence = "low";
+            sourceRef = "No source found";
+          }
+        }
+
+        const updated = await storage.updateQuestionnaireQuestion(q.id, {
+          category,
+          suggestedAnswer,
+          confidence: confidence as any,
+          sourceRef,
+        });
+        updatedQuestions.push(updated);
+      }
+
+      await storage.updateQuestionnaire(questionnaireId, { status: "in_progress" });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "Questionnaire autofill completed",
+        entityType: "questionnaire",
+        entityId: questionnaireId,
+        details: { questionCount: questions.length },
+      });
+
+      res.json({ questions: updatedQuestions });
+    } catch (e: any) {
+      console.error("Autofill error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/questionnaires/:qId/questions/:id", requireAuth, async (req, res) => {
+    try {
+      const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/questionnaires/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const q = await storage.getQuestionnaire(req.params.id);
+      if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      await storage.deleteQuestionnaire(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
+}
+
+// ===== HELPER FUNCTIONS =====
+
+function buildPolicyPrompt(inputs: any): string {
+  return `Generate a professional ESG policy for the following SME business. Return as a JSON object with these keys: titlePage, purposeAndScope, commitmentStatement, environmentalCommitments, socialCommitments, governanceCommitments, responsibilities, implementationAndMonitoring, reviewCycle, approvalSection.
+
+Company Profile:
+- Company Name: ${inputs.companyName || "[Company Name]"}
+- Sector: ${inputs.sector || "General"}
+- Country: ${inputs.country || "United Kingdom"}
+- Number of Employees: ${inputs.employeeCount || "Not specified"}
+- Number of Sites: ${inputs.numberOfSites || 1}
+- Business Type: ${inputs.businessType || "Service business"}
+- Has Vehicles: ${inputs.hasVehicles ? "Yes" : "No"}
+- Has International Suppliers: ${inputs.hasInternationalSuppliers ? "Yes" : "No"}
+
+Environmental:
+- Tracks Electricity: ${inputs.trackElectricity ? "Yes" : "No"}
+- Tracks Fuel/Gas: ${inputs.trackFuel ? "Yes" : "No"}
+- Tracks Water: ${inputs.trackWater ? "Yes" : "No"}
+- Tracks Waste/Recycling: ${inputs.trackWaste ? "Yes" : "No"}
+- Carbon Reduction Commitment: ${inputs.carbonCommitment ? "Yes" : "No"}
+- Environmental Certifications: ${inputs.envCertifications || "None"}
+
+Social:
+- Has Employee Handbook: ${inputs.hasHandbook ? "Yes" : "No"}
+- Tracks Diversity Data: ${inputs.trackDiversity ? "Yes" : "No"}
+- Provides Employee Training: ${inputs.providesTraining ? "Yes" : "No"}
+- Tracks H&S Incidents: ${inputs.trackHealthSafety ? "Yes" : "No"}
+- Wellbeing Initiatives: ${inputs.hasWellbeing ? "Yes" : "No"}
+- Pays Living Wage: ${inputs.paysLivingWage ? "Yes" : "No"}
+
+Governance:
+- Anti-Bribery Rules: ${inputs.hasAntiBribery ? "Yes" : "No"}
+- Whistleblowing Process: ${inputs.hasWhistleblowing ? "Yes" : "No"}
+- Data Privacy Policy: ${inputs.hasDataPrivacy ? "Yes" : "No"}
+- ESG Responsible Person: ${inputs.esgResponsible || "Not specified"}
+- Review Frequency: ${inputs.reviewFrequency || "Annual"}
+
+Write in plain English. Make it sound professional but not overly legal. Where data is missing use sensible defaults. Include "[Insert review month]" only where truly necessary. Add a footer note that the policy should be reviewed by management before formal adoption.`;
+}
+
+function calculateEmissions(inputs: any, factors: any[]): any {
+  const findFactor = (category: string) => {
+    const f = factors.find((f: any) => f.category === category);
+    return f ? parseFloat(f.factor) : 0;
+  };
+
+  const electricity = (parseFloat(inputs.electricity) || 0) * findFactor("electricity");
+  const gas = (parseFloat(inputs.gas) || 0) * findFactor("gas");
+  const diesel = (parseFloat(inputs.diesel) || 0) * findFactor("fuel");
+  const petrol = (parseFloat(inputs.petrol) || 0) * findFactor("fuel");
+  const vehicles = (parseFloat(inputs.vehicleMileage) || 0) * findFactor("vehicles");
+
+  const scope1Total = gas + diesel + petrol + vehicles;
+  const scope2Total = electricity;
+
+  const domesticFlights = (parseFloat(inputs.domesticFlights) || 0) * (factors.find((f: any) => f.name === "Domestic Flight")?.factor || 0.24587);
+  const shortHaulFlights = (parseFloat(inputs.shortHaulFlights) || 0) * (factors.find((f: any) => f.name === "Short-haul Flight")?.factor || 0.15353);
+  const longHaulFlights = (parseFloat(inputs.longHaulFlights) || 0) * (factors.find((f: any) => f.name === "Long-haul Flight")?.factor || 0.19309);
+  const rail = (parseFloat(inputs.railTravel) || 0) * findFactor("travel");
+  const hotelNights = (parseFloat(inputs.hotelNights) || 0) * (factors.find((f: any) => f.name === "Hotel Nights")?.factor || 10.24);
+
+  const scope3Total = domesticFlights + shortHaulFlights + longHaulFlights + rail + hotelNights;
+  const totalEmissions = scope1Total + scope2Total + scope3Total;
+
+  return {
+    scope1Total: Math.round(scope1Total * 10000) / 10000,
+    scope2Total: Math.round(scope2Total * 10000) / 10000,
+    scope3Total: Math.round(scope3Total * 10000) / 10000,
+    totalEmissions: Math.round(totalEmissions * 10000) / 10000,
+    breakdown: {
+      electricity: Math.round(electricity * 100) / 100,
+      gas: Math.round(gas * 100) / 100,
+      diesel: Math.round(diesel * 100) / 100,
+      petrol: Math.round(petrol * 100) / 100,
+      vehicles: Math.round(vehicles * 100) / 100,
+      domesticFlights: Math.round(domesticFlights * 100) / 100,
+      shortHaulFlights: Math.round(shortHaulFlights * 100) / 100,
+      longHaulFlights: Math.round(longHaulFlights * 100) / 100,
+      rail: Math.round(rail * 100) / 100,
+      hotelNights: Math.round(hotelNights * 100) / 100,
+    },
+    unit: "kgCO2e",
+  };
+}
+
+function categorizeQuestion(question: string): string {
+  const q = question.toLowerCase();
+  if (q.includes("carbon") || q.includes("emission") || q.includes("ghg") || q.includes("co2")) return "Carbon";
+  if (q.includes("energy") || q.includes("electricity") || q.includes("fuel")) return "Environmental";
+  if (q.includes("waste") || q.includes("recycl")) return "Environmental";
+  if (q.includes("water")) return "Environmental";
+  if (q.includes("environmental") || q.includes("pollution")) return "Environmental";
+  if (q.includes("policy") || q.includes("esg policy") || q.includes("sustainability policy")) return "Policy";
+  if (q.includes("training") || q.includes("development")) return "Training";
+  if (q.includes("diversity") || q.includes("inclusion") || q.includes("equal")) return "Social";
+  if (q.includes("health") || q.includes("safety") || q.includes("wellbeing")) return "Social";
+  if (q.includes("employee") || q.includes("staff") || q.includes("workforce")) return "Social";
+  if (q.includes("supplier") || q.includes("supply chain") || q.includes("procurement")) return "Supply Chain";
+  if (q.includes("brib") || q.includes("corruption") || q.includes("whistleblow")) return "Governance";
+  if (q.includes("privacy") || q.includes("data protection") || q.includes("gdpr")) return "Data Privacy";
+  if (q.includes("governance") || q.includes("board") || q.includes("oversight")) return "Governance";
+  return "General";
+}
+
+function buildCompanyContext(company: any, policyContent: any, topics: any[], metricData: Record<string, any>, actions: any[], carbonCalcs: any[]): string {
+  let ctx = `Company: ${company?.name || "Unknown"}\nSector: ${company?.industry || "General"}\nCountry: ${company?.country || "UK"}\nEmployees: ${company?.employeeCount || "Unknown"}\n`;
+
+  if (policyContent) {
+    ctx += `\nESG Policy Content:\n`;
+    if (typeof policyContent === "object") {
+      for (const [key, val] of Object.entries(policyContent)) {
+        ctx += `- ${key}: ${val}\n`;
+      }
+    }
+  }
+
+  const selectedTopics = topics.filter(t => t.selected);
+  if (selectedTopics.length > 0) {
+    ctx += `\nPriority ESG Topics: ${selectedTopics.map(t => t.topic).join(", ")}\n`;
+  }
+
+  if (Object.keys(metricData).length > 0) {
+    ctx += `\nCurrent Metrics:\n`;
+    for (const [name, data] of Object.entries(metricData)) {
+      ctx += `- ${name}: ${data.latestValue} ${data.unit} (${data.period})\n`;
+    }
+  }
+
+  if (actions.length > 0) {
+    ctx += `\nAction Plans:\n`;
+    for (const a of actions) {
+      ctx += `- ${a.title} (Status: ${a.status})\n`;
+    }
+  }
+
+  if (carbonCalcs.length > 0) {
+    const latest = carbonCalcs[0];
+    ctx += `\nLatest Carbon Calculation (${latest.reportingPeriod}): Total ${latest.totalEmissions} kgCO2e, Scope 1: ${latest.scope1Total}, Scope 2: ${latest.scope2Total}\n`;
+  }
+
+  return ctx;
+}
+
+function matchQuestionByRules(question: string, context: string): { answer: string; confidence: string; source: string } {
+  const q = question.toLowerCase();
+
+  if (q.includes("esg policy") || (q.includes("do you have") && q.includes("policy"))) {
+    if (context.includes("ESG Policy Content")) {
+      return { answer: "Yes, we have a formal ESG policy in place that covers environmental, social and governance commitments. The policy is reviewed regularly and available upon request.", confidence: "high", source: "ESG Policy" };
+    }
+    return { answer: "We are currently developing a formal ESG policy.", confidence: "medium", source: "System data" };
+  }
+
+  if (q.includes("carbon") || q.includes("emission") || q.includes("ghg")) {
+    if (context.includes("Carbon Calculation")) {
+      const match = context.match(/Total ([\d.]+) kgCO2e/);
+      const total = match ? match[1] : "measured";
+      return { answer: `Yes, we measure our carbon emissions. Our most recent calculation shows total emissions of ${total} kgCO2e. We track Scope 1 and Scope 2 emissions and are working to reduce them year on year.`, confidence: "high", source: "Carbon Calculator" };
+    }
+    if (context.includes("Scope 1") || context.includes("Scope 2")) {
+      return { answer: "Yes, we track our carbon emissions through our ESG management system.", confidence: "medium", source: "Metric data" };
+    }
+  }
+
+  if (q.includes("diversity") || q.includes("inclusion")) {
+    if (context.includes("Gender Split") || context.includes("Diversity")) {
+      const match = context.match(/Gender Split.*?: ([\d.]+)/);
+      const pct = match ? match[1] : null;
+      return { answer: `We are committed to diversity and inclusion. ${pct ? `Our current gender split shows ${pct}% female representation. ` : ""}We track diversity data and have active improvement plans in place.`, confidence: "high", source: "Metric data & Policy" };
+    }
+  }
+
+  if (q.includes("training")) {
+    if (context.includes("Training")) {
+      return { answer: "Yes, we provide regular employee training including ESG awareness, health and safety, and role-specific development. Training hours are tracked through our ESG management system.", confidence: "high", source: "Metric data & Policy" };
+    }
+  }
+
+  if (q.includes("waste") || q.includes("recycl")) {
+    if (context.includes("Waste") || context.includes("Recycling")) {
+      const wasteMatch = context.match(/Waste Generated.*?: ([\d.]+)/);
+      const recycleMatch = context.match(/Recycling Rate.*?: ([\d.]+)/);
+      let answer = "We track waste generation and recycling rates.";
+      if (wasteMatch) answer += ` Current waste generated: ${wasteMatch[1]} tonnes.`;
+      if (recycleMatch) answer += ` Current recycling rate: ${recycleMatch[1]}%.`;
+      return { answer, confidence: "high", source: "Metric data" };
+    }
+  }
+
+  if (q.includes("anti-bribery") || q.includes("corruption")) {
+    if (context.includes("Anti-Bribery") || context.includes("governance")) {
+      return { answer: "Yes, we have a formal anti-bribery and anti-corruption policy in place. All employees are made aware of their obligations and we operate a zero-tolerance approach.", confidence: "high", source: "ESG Policy" };
+    }
+  }
+
+  if (q.includes("whistleblow")) {
+    if (context.includes("Whistleblowing") || context.includes("governance")) {
+      return { answer: "Yes, we have a whistleblowing policy and procedure in place that allows employees and stakeholders to raise concerns confidentially.", confidence: "high", source: "ESG Policy" };
+    }
+  }
+
+  if (q.includes("privacy") || q.includes("data protection") || q.includes("gdpr")) {
+    if (context.includes("Data Privacy")) {
+      return { answer: "Yes, we have a data privacy policy in place and provide regular data protection training to all staff. We comply with applicable data protection regulations.", confidence: "high", source: "ESG Policy & Training data" };
+    }
+  }
+
+  if (q.includes("supplier") || q.includes("supply chain")) {
+    if (context.includes("Supplier")) {
+      return { answer: "We are developing supplier standards and a code of conduct to ensure our supply chain meets our ESG requirements.", confidence: "medium", source: "Action Plans" };
+    }
+  }
+
+  if (q.includes("health") && q.includes("safety")) {
+    if (context.includes("Lost Time") || context.includes("Health & Safety")) {
+      const match = context.match(/Lost Time Incidents.*?: ([\d.]+)/);
+      let answer = "Yes, we track health and safety performance including incident rates.";
+      if (match) answer += ` Our latest lost time incident count is ${match[1]}.`;
+      return { answer, confidence: "high", source: "Metric data" };
+    }
+  }
+
+  return { answer: "", confidence: "low", source: "No source found" };
+}
+
+async function generateAIAnswer(openai: OpenAI, question: string, context: string): Promise<{ answer: string; confidence: string; source: string }> {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-5.2",
+    messages: [
+      {
+        role: "system",
+        content: `You are an ESG questionnaire assistant for SME businesses. Generate concise, professional answers based ONLY on the company data provided. Never invent facts. If no data is available, clearly state that. Return JSON with keys: answer, confidence (high/medium/low), source (the data source used).`,
+      },
+      {
+        role: "user",
+        content: `Company context:\n${context}\n\nQuestion: ${question}\n\nGenerate a suggested answer as JSON.`,
+      },
+    ],
+    max_completion_tokens: 512,
+    response_format: { type: "json_object" },
+  });
+
+  const text = completion.choices[0]?.message?.content || "{}";
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { answer: text, confidence: "low", source: "AI generated" };
+  }
 }

@@ -5,12 +5,19 @@ import {
   users, companies, companySettings, esgPolicies, policyVersions,
   materialTopics, metrics, metricTargets, metricValues, evidenceFiles,
   actionPlans, reportRuns, auditLogs,
+  policyGenerationInputs, emissionFactors, carbonCalculations,
+  questionnaires, questionnaireQuestions,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
   type MaterialTopic, type Metric, type InsertMetric,
   type MetricTarget, type MetricValue, type InsertMetricValue,
   type EvidenceFile, type ActionPlan, type InsertActionPlan,
   type ReportRun, type AuditLog,
+  type PolicyGenerationInput, type InsertPolicyGenerationInput,
+  type EmissionFactor, type InsertEmissionFactor,
+  type CarbonCalculation, type InsertCarbonCalculation,
+  type Questionnaire, type InsertQuestionnaire,
+  type QuestionnaireQuestion, type InsertQuestionnaireQuestion,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -83,6 +90,34 @@ export interface IStorage {
 
   // Dashboard
   getDashboardData(companyId: string): Promise<any>;
+
+  // Policy Generation
+  createPolicyGenerationInput(data: InsertPolicyGenerationInput): Promise<PolicyGenerationInput>;
+  getPolicyGenerationInputs(companyId: string): Promise<PolicyGenerationInput[]>;
+  updatePolicyGenerationInput(id: string, data: Partial<PolicyGenerationInput>): Promise<PolicyGenerationInput | undefined>;
+
+  // Emission Factors
+  getEmissionFactors(country?: string): Promise<EmissionFactor[]>;
+  createEmissionFactor(factor: InsertEmissionFactor): Promise<EmissionFactor>;
+  updateEmissionFactor(id: string, data: Partial<EmissionFactor>): Promise<EmissionFactor | undefined>;
+
+  // Carbon Calculations
+  getCarbonCalculations(companyId: string): Promise<CarbonCalculation[]>;
+  getCarbonCalculation(id: string): Promise<CarbonCalculation | undefined>;
+  createCarbonCalculation(calc: InsertCarbonCalculation): Promise<CarbonCalculation>;
+  updateCarbonCalculation(id: string, data: Partial<CarbonCalculation>): Promise<CarbonCalculation | undefined>;
+  deleteCarbonCalculation(id: string): Promise<void>;
+
+  // Questionnaires
+  getQuestionnaires(companyId: string): Promise<Questionnaire[]>;
+  getQuestionnaire(id: string): Promise<Questionnaire | undefined>;
+  createQuestionnaire(q: InsertQuestionnaire): Promise<Questionnaire>;
+  updateQuestionnaire(id: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
+  deleteQuestionnaire(id: string): Promise<void>;
+  getQuestionnaireQuestions(questionnaireId: string): Promise<QuestionnaireQuestion[]>;
+  createQuestionnaireQuestion(q: InsertQuestionnaireQuestion): Promise<QuestionnaireQuestion>;
+  updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>): Promise<QuestionnaireQuestion | undefined>;
+  deleteQuestionnaireQuestions(questionnaireId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -359,6 +394,106 @@ export class DatabaseStorage implements IStorage {
         overdue: actions.filter(a => a.status === "overdue").length,
       },
     };
+  }
+
+  // Policy Generation
+  async createPolicyGenerationInput(data: InsertPolicyGenerationInput) {
+    const [r] = await db.insert(policyGenerationInputs).values(data as any).returning();
+    return r;
+  }
+
+  async getPolicyGenerationInputs(companyId: string) {
+    return db.select().from(policyGenerationInputs).where(eq(policyGenerationInputs.companyId, companyId)).orderBy(desc(policyGenerationInputs.createdAt));
+  }
+
+  async updatePolicyGenerationInput(id: string, data: Partial<PolicyGenerationInput>) {
+    const [r] = await db.update(policyGenerationInputs).set(data).where(eq(policyGenerationInputs.id, id)).returning();
+    return r;
+  }
+
+  // Emission Factors
+  async getEmissionFactors(country?: string) {
+    if (country) {
+      return db.select().from(emissionFactors).where(eq(emissionFactors.country, country));
+    }
+    return db.select().from(emissionFactors);
+  }
+
+  async createEmissionFactor(factor: InsertEmissionFactor) {
+    const [r] = await db.insert(emissionFactors).values(factor as any).returning();
+    return r;
+  }
+
+  async updateEmissionFactor(id: string, data: Partial<EmissionFactor>) {
+    const [r] = await db.update(emissionFactors).set(data).where(eq(emissionFactors.id, id)).returning();
+    return r;
+  }
+
+  // Carbon Calculations
+  async getCarbonCalculations(companyId: string) {
+    return db.select().from(carbonCalculations).where(eq(carbonCalculations.companyId, companyId)).orderBy(desc(carbonCalculations.createdAt));
+  }
+
+  async getCarbonCalculation(id: string) {
+    const [r] = await db.select().from(carbonCalculations).where(eq(carbonCalculations.id, id));
+    return r;
+  }
+
+  async createCarbonCalculation(calc: InsertCarbonCalculation) {
+    const [r] = await db.insert(carbonCalculations).values(calc as any).returning();
+    return r;
+  }
+
+  async updateCarbonCalculation(id: string, data: Partial<CarbonCalculation>) {
+    const [r] = await db.update(carbonCalculations).set({ ...data, updatedAt: new Date() }).where(eq(carbonCalculations.id, id)).returning();
+    return r;
+  }
+
+  async deleteCarbonCalculation(id: string) {
+    await db.delete(carbonCalculations).where(eq(carbonCalculations.id, id));
+  }
+
+  // Questionnaires
+  async getQuestionnaires(companyId: string) {
+    return db.select().from(questionnaires).where(eq(questionnaires.companyId, companyId)).orderBy(desc(questionnaires.createdAt));
+  }
+
+  async getQuestionnaire(id: string) {
+    const [r] = await db.select().from(questionnaires).where(eq(questionnaires.id, id));
+    return r;
+  }
+
+  async createQuestionnaire(q: InsertQuestionnaire) {
+    const [r] = await db.insert(questionnaires).values(q as any).returning();
+    return r;
+  }
+
+  async updateQuestionnaire(id: string, data: Partial<Questionnaire>) {
+    const [r] = await db.update(questionnaires).set({ ...data, updatedAt: new Date() }).where(eq(questionnaires.id, id)).returning();
+    return r;
+  }
+
+  async deleteQuestionnaire(id: string) {
+    await db.delete(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, id));
+    await db.delete(questionnaires).where(eq(questionnaires.id, id));
+  }
+
+  async getQuestionnaireQuestions(questionnaireId: string) {
+    return db.select().from(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, questionnaireId)).orderBy(questionnaireQuestions.orderIndex);
+  }
+
+  async createQuestionnaireQuestion(q: InsertQuestionnaireQuestion) {
+    const [r] = await db.insert(questionnaireQuestions).values(q as any).returning();
+    return r;
+  }
+
+  async updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>) {
+    const [r] = await db.update(questionnaireQuestions).set(data).where(eq(questionnaireQuestions.id, id)).returning();
+    return r;
+  }
+
+  async deleteQuestionnaireQuestions(questionnaireId: string) {
+    await db.delete(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, questionnaireId));
   }
 }
 

@@ -18,6 +18,9 @@ import DataEntry from "@/pages/data-entry";
 import Actions from "@/pages/actions";
 import Reports from "@/pages/reports";
 import Settings from "@/pages/settings";
+import QuestionnairePage from "@/pages/questionnaire";
+import PolicyGenerator from "@/pages/policy-generator";
+import CarbonCalculator from "@/pages/carbon-calculator";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -67,7 +70,10 @@ function ProtectedApp() {
               <Route path="/data-entry" component={DataEntry} />
               <Route path="/actions" component={Actions} />
               <Route path="/reports" component={Reports} />
+              <Route path="/policy-generator" component={PolicyGenerator} />
+              <Route path="/carbon-calculator" component={CarbonCalculator} />
               <Route path="/settings" component={Settings} />
+              <Route path="/questionnaire" component={QuestionnairePage} />
               <Route component={NotFound} />
             </Switch>
           </main>

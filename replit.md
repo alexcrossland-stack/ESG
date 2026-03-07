@@ -1,6 +1,6 @@
 # ESG Manager — SME ESG Platform
 
-A production-style SaaS web application for SME businesses to manage ESG policies, ESG data, and ESG reporting.
+A production-style SaaS web application for SME businesses to manage ESG policies, ESG data, and ESG reporting, with AI-assisted tools for policy generation, questionnaire autofill, and carbon calculation.
 
 ## Overview
 
@@ -17,12 +17,19 @@ This platform replaces spreadsheets and documents with a single, guided platform
 7. **Reports** — Generate ESG reports with configurable sections (policy, topics, metrics, actions), preview, and export (text/CSV)
 8. **Settings** — Company profile (industry, country, employee count, revenue band), account info, and activity log
 
+### AI-Assisted Features
+
+9. **AI Policy Generator** — Guided 4-step questionnaire (company profile, environmental, social, governance) that generates a tailored ESG policy using AI. Preview, edit, and save as a new policy version.
+10. **Supplier Questionnaire Autofill** — Paste or enter ESG questionnaire questions; the system uses rules-based matching + AI to generate suggested answers using existing company data (policy, metrics, actions, carbon data). Shows confidence levels and source references. Export as CSV or copy to clipboard.
+11. **Carbon Calculator** — Simple SME-friendly calculator for Scope 1, 2, and 3 emissions. Uses configurable emission factors stored in database. Shows breakdown by source, per-employee metrics, and history of calculations.
+
 ## Tech Stack
 
 - **Frontend**: React, TanStack Query, Wouter, Recharts, Shadcn UI, Tailwind CSS
 - **Backend**: Node.js, Express
 - **Database**: PostgreSQL (via Drizzle ORM)
 - **Auth**: Session-based with express-session and connect-pg-simple
+- **AI**: OpenAI via Replit AI Integrations (gpt-5.2 for policy generation and questionnaire autofill)
 
 ## Database Tables
 
@@ -39,12 +46,33 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - `action_plans` — ESG improvement actions
 - `report_runs` — Report generation history
 - `audit_logs` — Activity history
+- `policy_generation_inputs` — AI policy generator questionnaire inputs and generated content
+- `emission_factors` — Configurable carbon emission factors (UK DEFRA 2024 defaults)
+- `carbon_calculations` — Carbon calculation inputs, results, and history
+- `questionnaires` — Uploaded/created ESG questionnaires
+- `questionnaire_questions` — Individual questions with suggested/edited answers, confidence, and source
+
+## Emission Factors
+
+Pre-seeded UK DEFRA 2024 emission factors:
+- Grid Electricity: 0.20707 kgCO2e/kWh
+- Natural Gas: 0.18293 kgCO2e/kWh
+- Diesel: 2.70559 kgCO2e/litre
+- Petrol: 2.31482 kgCO2e/litre
+- Company Car: 0.27436 kgCO2e/mile
+- Domestic Flight: 0.24587 kgCO2e/passenger-km
+- Short-haul Flight: 0.15353 kgCO2e/passenger-km
+- Long-haul Flight: 0.19309 kgCO2e/passenger-km
+- Rail Travel: 0.03549 kgCO2e/passenger-km
+- Hotel Nights: 10.24000 kgCO2e/night
+
+Factors are stored in the `emission_factors` table and can be updated via the database.
 
 ## Demo Account
 
 - **Email**: demo@example.com
 - **Password**: password123
-- Pre-loaded with 6 months of sample data, 4 improvement actions, and a published ESG policy
+- Pre-loaded with 6 months of sample data, 4 improvement actions, a published ESG policy, and a sample carbon calculation
 
 ## Architecture
 
@@ -52,6 +80,10 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - Session stored in PostgreSQL via `connect-pg-simple`
 - Frontend served by Vite in development
 - Seed data created on first user registration
+- Password hashing: SHA-256 with salt `esg_salt_2024`
+- Design: green primary color (`hsl(158, 64%, 32%)`), Open Sans font, supports light/dark mode
+- Sidebar width: 14rem via CSS vars on SidebarProvider
+- `apiRequest` used as `apiRequest(method, url, data)` not fetch-style
 
 ## Running
 

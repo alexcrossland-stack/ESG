@@ -154,6 +154,72 @@ export const auditLogs = pgTable("audit_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Policy Generation Inputs
+export const policyGenerationInputs = pgTable("policy_generation_inputs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  inputs: jsonb("inputs").notNull(),
+  generatedContent: jsonb("generated_content"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Emission Factors
+export const emissionFactors = pgTable("emission_factors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  country: text("country").notNull().default("UK"),
+  unit: text("unit").notNull(),
+  factor: decimal("factor", { precision: 15, scale: 6 }).notNull(),
+  sourceLabel: text("source_label"),
+  effectiveDate: timestamp("effective_date").defaultNow(),
+});
+
+// Carbon Calculations
+export const carbonCalculations = pgTable("carbon_calculations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  reportingPeriod: text("reporting_period").notNull(),
+  periodType: text("period_type").notNull().default("annual"),
+  inputs: jsonb("inputs").notNull(),
+  results: jsonb("results"),
+  scope1Total: decimal("scope1_total", { precision: 15, scale: 4 }),
+  scope2Total: decimal("scope2_total", { precision: 15, scale: 4 }),
+  scope3Total: decimal("scope3_total", { precision: 15, scale: 4 }),
+  totalEmissions: decimal("total_emissions", { precision: 15, scale: 4 }),
+  employeeCount: integer("employee_count"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Questionnaires
+export const questionnaireStatusEnum = pgEnum("questionnaire_status", ["draft", "in_progress", "completed"]);
+export const confidenceEnum = pgEnum("confidence_level", ["high", "medium", "low"]);
+
+export const questionnaires = pgTable("questionnaires", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  title: text("title").notNull(),
+  source: text("source"),
+  status: questionnaireStatusEnum("status").default("draft"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const questionnaireQuestions = pgTable("questionnaire_questions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  questionnaireId: varchar("questionnaire_id").notNull(),
+  questionText: text("question_text").notNull(),
+  category: text("category"),
+  orderIndex: integer("order_index").default(0),
+  suggestedAnswer: text("suggested_answer"),
+  editedAnswer: text("edited_answer"),
+  confidence: confidenceEnum("confidence"),
+  sourceRef: text("source_ref"),
+  approved: boolean("approved").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
@@ -166,6 +232,11 @@ export const insertMaterialTopicSchema = createInsertSchema(materialTopics).omit
 export const insertMetricTargetSchema = createInsertSchema(metricTargets).omit({ id: true });
 export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({ id: true, uploadedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export const insertPolicyGenerationInputSchema = createInsertSchema(policyGenerationInputs).omit({ id: true, createdAt: true });
+export const insertEmissionFactorSchema = createInsertSchema(emissionFactors).omit({ id: true, effectiveDate: true });
+export const insertCarbonCalculationSchema = createInsertSchema(carbonCalculations).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertQuestionnaireSchema = createInsertSchema(questionnaires).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertQuestionnaireQuestionSchema = createInsertSchema(questionnaireQuestions).omit({ id: true, createdAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -187,3 +258,13 @@ export type ActionPlan = typeof actionPlans.$inferSelect;
 export type InsertActionPlan = z.infer<typeof insertActionPlanSchema>;
 export type ReportRun = typeof reportRuns.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
+export type PolicyGenerationInput = typeof policyGenerationInputs.$inferSelect;
+export type InsertPolicyGenerationInput = z.infer<typeof insertPolicyGenerationInputSchema>;
+export type EmissionFactor = typeof emissionFactors.$inferSelect;
+export type InsertEmissionFactor = z.infer<typeof insertEmissionFactorSchema>;
+export type CarbonCalculation = typeof carbonCalculations.$inferSelect;
+export type InsertCarbonCalculation = z.infer<typeof insertCarbonCalculationSchema>;
+export type Questionnaire = typeof questionnaires.$inferSelect;
+export type InsertQuestionnaire = z.infer<typeof insertQuestionnaireSchema>;
+export type QuestionnaireQuestion = typeof questionnaireQuestions.$inferSelect;
+export type InsertQuestionnaireQuestion = z.infer<typeof insertQuestionnaireQuestionSchema>;

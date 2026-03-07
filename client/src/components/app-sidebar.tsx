@@ -7,6 +7,7 @@ import {
 import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
+  Wand2, Calculator, FileQuestion,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -22,6 +23,9 @@ const navItems = [
   { title: "Data Entry", href: "/data-entry", icon: ClipboardList, group: "main" },
   { title: "Action Tracker", href: "/actions", icon: CheckSquare, group: "main" },
   { title: "Reports", href: "/reports", icon: Download, group: "main" },
+  { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
+  { title: "Questionnaire", href: "/questionnaire", icon: FileQuestion, group: "ai" },
+  { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
 ];
 
@@ -36,6 +40,7 @@ export function AppSidebar() {
   const company = authData?.company;
 
   const mainItems = navItems.filter(i => i.group === "main");
+  const aiItems = navItems.filter(i => i.group === "ai");
   const settingsItems = navItems.filter(i => i.group === "settings");
 
   return (
@@ -63,6 +68,30 @@ export function AppSidebar() {
             <SidebarMenu>
               {mainItems.map((item) => {
                 const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild data-active={isActive}>
+                      <Link href={item.href} data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
+                        <item.icon className="w-4 h-4" />
+                        <span>{item.title}</span>
+                        {isActive && (
+                          <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary" />
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>AI Tools</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {aiItems.map((item) => {
+                const isActive = location === item.href || location.startsWith(item.href);
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild data-active={isActive}>
