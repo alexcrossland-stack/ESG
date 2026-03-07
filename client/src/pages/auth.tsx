@@ -116,9 +116,27 @@ export default function Auth() {
                     </Button>
                   </form>
                 </Form>
-                <div className="mt-4 p-3 rounded-md bg-muted text-xs text-muted-foreground">
-                  <strong>Demo account:</strong> demo@example.com / password123
+                <div className="relative my-5">
+                  <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
+                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">or</span></div>
                 </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={loginMutation.isPending}
+                  data-testid="button-demo-login"
+                  onClick={() => {
+                    loginForm.setValue("email", "demo@example.com");
+                    loginForm.setValue("password", "password123");
+                    loginMutation.mutate({ email: "demo@example.com", password: "password123" });
+                  }}
+                >
+                  {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
+                </Button>
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  Pre-loaded with sample ESG data so you can explore every feature
+                </p>
               </CardContent>
             </TabsContent>
 
