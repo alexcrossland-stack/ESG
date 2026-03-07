@@ -215,7 +215,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     secret: process.env.SESSION_SECRET || "esg-platform-secret-2024",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 7 * 24 * 60 * 60 * 1000, sameSite: "lax" },
+    cookie: {
+      secure: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: "none" as const,
+      httpOnly: true,
+    },
     proxy: true,
   }));
 
@@ -243,7 +248,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Seed database with defaults
       await seedDatabase(company.id, user.id);
 
-      res.json({ user: { ...user, password: undefined }, company });
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ error: "Session error" });
+        res.json({ user: { ...user, password: undefined }, company });
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -259,7 +267,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (req.session as any).userId = user.id;
       (req.session as any).companyId = user.companyId;
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
-      res.json({ user: { ...user, password: undefined }, company });
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ error: "Session error" });
+        res.json({ user: { ...user, password: undefined }, company });
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

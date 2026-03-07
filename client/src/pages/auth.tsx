@@ -41,10 +41,12 @@ export default function Auth() {
   });
 
   const loginMutation = useMutation({
-    mutationFn: (data: z.infer<typeof loginSchema>) =>
-      apiRequest("POST", "/api/auth/login", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    mutationFn: async (data: z.infer<typeof loginSchema>) => {
+      const res = await apiRequest("POST", "/api/auth/login", data);
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data);
       setLocation("/");
     },
     onError: (e: any) => {
@@ -53,10 +55,12 @@ export default function Auth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: (data: z.infer<typeof registerSchema>) =>
-      apiRequest("POST", "/api/auth/register", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    mutationFn: async (data: z.infer<typeof registerSchema>) => {
+      const res = await apiRequest("POST", "/api/auth/register", data);
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data);
       setLocation("/");
       toast({ title: "Welcome!", description: "Your ESG platform is ready. We've pre-loaded some example data to get you started." });
     },
