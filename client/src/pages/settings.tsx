@@ -381,7 +381,7 @@ function AdminTemplateEditor() {
             </div>
 
             <div className="space-y-3">
-              <Label className="text-xs font-semibold">Section Clause Text & AI Hints</Label>
+              <Label className="text-xs font-semibold">Section Clause Text & Prompt Hints</Label>
               {editSections.map((section: any, i: number) => (
                 <Card key={section.key} className="p-3 space-y-2">
                   <p className="text-xs font-medium">{section.label}</p>
@@ -390,13 +390,13 @@ function AdminTemplateEditor() {
                     <Textarea
                       value={section.defaultClauseText || ""}
                       onChange={(e) => handleSectionChange(i, "defaultClauseText", e.target.value)}
-                      placeholder="Default clause text (used as fallback if AI is not available)"
+                      placeholder="Default clause text (used as fallback if generation is not available)"
                       className="text-xs min-h-16 resize-none"
                       data-testid={`admin-clause-${section.key}`}
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-[10px] text-muted-foreground">AI Prompt Hint</Label>
+                    <Label className="text-[10px] text-muted-foreground">Prompt Hint</Label>
                     <Textarea
                       value={section.aiPromptHint || ""}
                       onChange={(e) => handleSectionChange(i, "aiPromptHint", e.target.value)}

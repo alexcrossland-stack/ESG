@@ -158,11 +158,11 @@ export default function Policy() {
                 <Sparkles className="w-[18px] h-[18px] text-primary" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium">Generate your policy with AI</p>
+                <p className="text-sm font-medium">Generate your policy</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {completedSections === 0
-                    ? "Get a complete first draft tailored to your company in minutes. Answer a few questions and our AI will generate all 7 policy sections for you."
-                    : `You have ${emptySections.length} section${emptySections.length === 1 ? "" : "s"} still to complete. Use the AI Policy Generator to fill in the gaps.`}
+                    ? "Get a complete first draft tailored to your company in minutes. Answer a few questions and we'll generate all 7 policy sections for you."
+                    : `You have ${emptySections.length} section${emptySections.length === 1 ? "" : "s"} still to complete. Use the Policy Generator to fill in the gaps.`}
                 </p>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 shrink-0">

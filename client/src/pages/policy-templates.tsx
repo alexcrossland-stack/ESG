@@ -121,7 +121,7 @@ export default function PolicyTemplatesPage() {
             Policy Templates
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            18 structured policy and procedure templates with guided questionnaires and AI-assisted drafting
+            18 structured policy and procedure templates with guided questionnaires and smart drafting
           </p>
         </div>
       </div>
@@ -187,7 +187,7 @@ export default function PolicyTemplatesPage() {
                           <IconComp className="w-4 h-4" />
                         </div>
                         {existingPolicy && (
-                          <Badge variant="secondary" className="text-xs">Generated</Badge>
+                          <Badge variant="secondary" className="text-xs">Created</Badge>
                         )}
                       </div>
                       <CardTitle className="text-sm mt-2">{t.name}</CardTitle>
@@ -222,7 +222,7 @@ export default function PolicyTemplatesPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 <FilePlus className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
-                <p className="text-sm font-medium">No policies generated yet</p>
+                <p className="text-sm font-medium">No policies created yet</p>
                 <p className="text-xs text-muted-foreground mt-1">Select a template from the library to get started</p>
               </CardContent>
             </Card>
@@ -309,7 +309,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Policy generated", description: `${template.name} has been generated successfully.` });
+      toast({ title: "Policy created", description: `${template.name} has been created successfully.` });
       onComplete(data);
     },
     onError: (e: any) => {
@@ -516,7 +516,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div className="text-xs text-amber-800 dark:text-amber-200 space-y-1">
                 <p className="font-medium">Important Notice</p>
-                <p>This generated policy is a starting point. It does not guarantee certification to any ISO standard or full legal compliance. A functioning management system also requires implementation, records, training, internal audits, and management review.</p>
+                <p>This policy is a starting point. It does not guarantee certification to any ISO standard or full legal compliance. A functioning management system also requires implementation, records, training, internal audits, and management review.</p>
               </div>
             </CardContent>
           </Card>

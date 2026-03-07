@@ -121,7 +121,7 @@ export default function PolicyGenerator() {
     },
     onSuccess: (data: { id: string; generatedContent: Record<string, string> }) => {
       setGeneratedContent(data.generatedContent);
-      toast({ title: "Policy generated", description: "Your ESG policy has been generated successfully." });
+      toast({ title: "Policy generated", description: "Your ESG policy has been created successfully." });
     },
     onError: () => {
       toast({ title: "Generation failed", description: "Failed to generate policy. Please try again.", variant: "destructive" });
@@ -135,7 +135,7 @@ export default function PolicyGenerator() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/policy"] });
-      toast({ title: "Policy saved", description: "Generated content has been saved to your ESG Policy." });
+      toast({ title: "Policy saved", description: "Your content has been saved to your ESG Policy." });
     },
     onError: () => {
       toast({ title: "Save failed", description: "Failed to save policy. Please try again.", variant: "destructive" });
@@ -432,7 +432,7 @@ export default function PolicyGenerator() {
           {generatedContent ? (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-base font-semibold" data-testid="text-preview-heading">Generated Policy Preview</h2>
+                <h2 className="text-base font-semibold" data-testid="text-preview-heading">Policy Preview</h2>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"

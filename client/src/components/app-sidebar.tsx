@@ -24,7 +24,7 @@ const navItems = [
   { title: "Action Tracker", href: "/actions", icon: CheckSquare, group: "main" },
   { title: "Reports", href: "/reports", icon: Download, group: "main" },
   { title: "Policy Templates", href: "/policy-templates", icon: Library, group: "ai" },
-  { title: "ESG Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
+  { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
   { title: "Questionnaire", href: "/questionnaire", icon: FileQuestion, group: "ai" },
   { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
@@ -88,7 +88,7 @@ export function AppSidebar() {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>AI Tools</SidebarGroupLabel>
+          <SidebarGroupLabel>Tools</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {aiItems.map((item) => {

@@ -641,7 +641,7 @@ export default function QuestionnairePage() {
           Questionnaire Autofill
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Answer ESG questionnaires using your company data and AI
+          Answer ESG questionnaires using your company data
         </p>
       </div>
 
