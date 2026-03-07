@@ -1,0 +1,312 @@
+Build a production-style SaaS web application for SME businesses to manage ESG policies, ESG data, and ESG reporting.
+
+The goal is to create a simple ESG management system for small and medium-sized businesses that replaces spreadsheets and documents with one easy platform.
+
+This should not be an enterprise compliance platform. It should be practical, simple, and usable by a business owner, CFO, HR manager, or operations manager without ESG expertise.
+
+Design the product with plain English language and guided workflows.
+
+⸻
+
+PRODUCT PURPOSE
+
+The application must allow an SME to:
+	1.	Create and maintain an ESG policy
+	2.	Record ESG metrics monthly or quarterly
+	3.	Track ESG progress on a dashboard
+	4.	Upload evidence documents
+	5.	Assign improvement actions
+	6.	Generate ESG reports for customers, investors, lenders, and tenders
+
+⸻
+
+CORE PRODUCT MODULES
+	1.	COMPANY SETUP WIZARD
+
+Create an onboarding wizard that collects:
+	•	company name
+	•	industry / sector
+	•	country
+	•	employee count
+	•	revenue band
+	•	number of locations
+	•	whether the company manufactures, distributes, or provides services
+	•	whether the company has vehicles
+	•	whether they track energy, waste, water, diversity, training, health & safety, and governance already
+
+Use this information to configure a starter ESG framework for the company.
+
+⸻
+
+	2.	ESG POLICY BUILDER
+
+Create a policy editor with templates.
+
+Users should be able to:
+	•	generate an ESG policy from a template
+	•	edit sections
+	•	save versions
+	•	publish the policy
+	•	download a PDF
+	•	track review dates
+	•	maintain version history
+
+Suggested policy sections:
+	•	purpose and scope
+	•	environmental commitments
+	•	social commitments
+	•	governance commitments
+	•	roles and responsibilities
+	•	data collection approach
+	•	review cycle
+
+⸻
+
+	3.	MATERIAL ESG TOPICS
+
+Create a page where the company selects which ESG topics matter most.
+
+Example topics:
+
+Environmental
+	•	energy use
+	•	carbon emissions
+	•	waste
+	•	water
+
+Social
+	•	employee wellbeing
+	•	diversity and inclusion
+	•	training and development
+	•	health and safety
+
+Governance
+	•	anti-bribery
+	•	supplier standards
+	•	data privacy
+	•	board oversight
+
+Selected topics should influence dashboards and reporting.
+
+⸻
+
+	4.	METRICS LIBRARY
+
+Create a metrics library containing ESG metrics with definitions.
+
+Each metric should include:
+	•	metric name
+	•	description
+	•	unit of measure
+	•	reporting frequency (monthly / quarterly / annual)
+	•	data owner
+	•	target value
+	•	optional evidence upload
+
+Include default SME metrics.
+
+Environmental metrics:
+	•	electricity consumption
+	•	gas or fuel consumption
+	•	Scope 1 emissions
+	•	Scope 2 emissions
+	•	business travel emissions
+	•	waste generated
+	•	recycling rate
+	•	water consumption
+
+Social metrics:
+	•	total employees
+	•	gender split
+	•	employee turnover
+	•	absence rate
+	•	training hours per employee
+	•	lost time incidents
+	•	employee engagement score
+
+Governance metrics:
+	•	board meetings held
+	•	anti-bribery policy in place
+	•	whistleblowing policy in place
+	•	data privacy training completion
+	•	supplier code of conduct adoption
+
+Users should be able to enable or disable metrics.
+
+⸻
+
+	5.	ESG DATA ENTRY
+
+Create a data entry system where users can:
+	•	choose reporting period (month or quarter)
+	•	enter metric values
+	•	upload supporting documents
+	•	add comments
+	•	see who submitted the data
+	•	lock periods once approved
+
+⸻
+
+	6.	DASHBOARD
+
+Create a dashboard that shows:
+	•	current ESG performance
+	•	trends over time
+	•	target vs actual
+	•	missing data alerts
+	•	Environmental / Social / Governance breakdown
+	•	reporting completion score
+
+Include charts and clear visual indicators.
+
+⸻
+
+	7.	ACTION TRACKER
+
+Create an ESG improvement tracker.
+
+Users should be able to create actions such as:
+	•	reduce electricity usage
+	•	introduce supplier code of conduct
+	•	improve diversity in management
+	•	roll out compliance training
+
+Each action should include:
+	•	title
+	•	description
+	•	owner
+	•	due date
+	•	status
+	•	related ESG metric
+	•	attachments and notes
+
+⸻
+
+	8.	REPORTING
+
+Create a report generator that produces ESG reports automatically.
+
+Reports should include:
+	•	company overview
+	•	ESG policy summary
+	•	priority ESG topics
+	•	ESG metrics
+	•	trends
+	•	targets vs actual
+	•	improvement actions
+	•	evidence summary
+
+Allow export as:
+	•	PDF
+	•	Word
+	•	CSV (for metrics)
+
+⸻
+
+MVP FEATURES
+
+Build the first version with:
+	•	secure login system
+	•	one company per account
+	•	admin and editor roles
+	•	onboarding wizard
+	•	ESG policy template builder
+	•	metrics library
+	•	monthly or quarterly data entry
+	•	dashboards with charts
+	•	action tracker
+	•	document upload
+	•	PDF report export
+	•	audit log of changes
+
+⸻
+
+DO NOT BUILD YET
+
+Do not build advanced enterprise ESG functionality such as:
+	•	multi-company consolidation
+	•	regulatory mapping engines
+	•	complex Scope 3 carbon modelling
+	•	portfolio reporting
+	•	benchmarking against other companies
+
+⸻
+
+TECH STACK
+
+Use the following stack:
+
+Frontend
+React
+
+Backend
+Node.js with Express
+
+Database
+PostgreSQL
+
+Other requirements:
+	•	authentication system with role-based access
+	•	file storage for uploaded evidence
+	•	charting library for dashboards
+	•	PDF generation for reports
+	•	responsive UI design
+	•	clean and modern interface
+
+⸻
+
+DATABASE STRUCTURE
+
+Create the following core tables:
+
+users
+companies
+company_settings
+esg_policies
+policy_versions
+material_topics
+metrics
+metric_targets
+metric_values
+evidence_files
+action_plans
+report_runs
+audit_logs
+
+⸻
+
+WORKFLOWS
+
+The app must support these workflows:
+	1.	ESG Setup
+Create company → complete onboarding → generate ESG policy → select priority topics
+	2.	Record ESG Data
+Select reporting period → enter metrics → upload evidence → submit
+	3.	Review Performance
+Open dashboard → review trends → identify gaps → create actions
+	4.	Generate ESG Report
+Select reporting period → generate report → export PDF or CSV
+
+⸻
+
+USER EXPERIENCE PRINCIPLES
+	•	plain English language
+	•	minimal ESG jargon
+	•	guided onboarding
+	•	simple data entry
+	•	clear dashboards
+	•	professional report outputs
+	•	intuitive navigation
+
+⸻
+
+Also include:
+	•	seed data with example ESG metrics
+	•	a sample SME account
+	•	a working dashboard example
+	•	a sample ESG report template
+	•	a README explaining the system structure and how to run the app
+
+⸻
+
+Build a fully functional MVP structure with working UI, API routes, and database models so the system can be expanded later.
