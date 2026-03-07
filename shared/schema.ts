@@ -220,6 +220,43 @@ export const questionnaireQuestions = pgTable("questionnaire_questions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Policy Templates & Generated Policies
+export const policyTemplateStatusEnum = pgEnum("policy_template_status", ["draft", "approved", "published"]);
+export const policyToneEnum = pgEnum("policy_tone", ["simple_sme", "audit_ready"]);
+
+export const policyTemplates = pgTable("policy_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  description: text("description"),
+  sections: jsonb("sections").notNull(),
+  questionnaire: jsonb("questionnaire").notNull(),
+  complianceMapping: jsonb("compliance_mapping"),
+  defaultReviewCycle: text("default_review_cycle").default("annual"),
+  isSystem: boolean("is_system").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const generatedPolicies = pgTable("generated_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  templateId: varchar("template_id").notNull(),
+  templateSlug: text("template_slug").notNull(),
+  title: text("title").notNull(),
+  status: policyTemplateStatusEnum("status").default("draft"),
+  content: jsonb("content"),
+  questionnaireAnswers: jsonb("questionnaire_answers"),
+  policyOwner: text("policy_owner"),
+  approver: text("approver"),
+  approvedAt: timestamp("approved_at"),
+  reviewDate: timestamp("review_date"),
+  versionNumber: integer("version_number").default(1),
+  tone: policyToneEnum("tone").default("simple_sme"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
@@ -237,6 +274,8 @@ export const insertEmissionFactorSchema = createInsertSchema(emissionFactors).om
 export const insertCarbonCalculationSchema = createInsertSchema(carbonCalculations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertQuestionnaireSchema = createInsertSchema(questionnaires).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertQuestionnaireQuestionSchema = createInsertSchema(questionnaireQuestions).omit({ id: true, createdAt: true });
+export const insertPolicyTemplateSchema = createInsertSchema(policyTemplates).omit({ id: true, createdAt: true });
+export const insertGeneratedPolicySchema = createInsertSchema(generatedPolicies).omit({ id: true, createdAt: true, updatedAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -268,3 +307,7 @@ export type Questionnaire = typeof questionnaires.$inferSelect;
 export type InsertQuestionnaire = z.infer<typeof insertQuestionnaireSchema>;
 export type QuestionnaireQuestion = typeof questionnaireQuestions.$inferSelect;
 export type InsertQuestionnaireQuestion = z.infer<typeof insertQuestionnaireQuestionSchema>;
+export type PolicyTemplate = typeof policyTemplates.$inferSelect;
+export type InsertPolicyTemplate = z.infer<typeof insertPolicyTemplateSchema>;
+export type GeneratedPolicy = typeof generatedPolicies.$inferSelect;
+export type InsertGeneratedPolicy = z.infer<typeof insertGeneratedPolicySchema>;

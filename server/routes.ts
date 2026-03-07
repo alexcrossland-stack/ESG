@@ -13,6 +13,7 @@ import crypto from "crypto";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import OpenAI from "openai";
+import { POLICY_TEMPLATES } from "./policy-templates";
 
 const { Pool } = pg;
 
@@ -927,6 +928,140 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ===== POLICY TEMPLATES MODULE =====
+  await seedPolicyTemplates();
+
+  app.get("/api/policy-templates", requireAuth, async (_req, res) => {
+    const templates = await storage.getPolicyTemplates();
+    res.json(templates);
+  });
+
+  app.get("/api/policy-templates/:slug", requireAuth, async (req, res) => {
+    const template = await storage.getPolicyTemplate(req.params.slug);
+    if (!template) return res.status(404).json({ error: "Template not found" });
+    res.json(template);
+  });
+
+  app.post("/api/policy-templates/:slug/generate", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { answers } = req.body;
+
+      const template = await storage.getPolicyTemplate(req.params.slug);
+      if (!template) return res.status(404).json({ error: "Template not found" });
+
+      const prompt = buildTemplatePrompt(template, answers);
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [
+          { role: "system", content: TEMPLATE_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        max_completion_tokens: 6000,
+        response_format: { type: "json_object" },
+      });
+
+      const generatedText = completion.choices[0]?.message?.content || "{}";
+      let content: Record<string, string>;
+      try {
+        content = JSON.parse(generatedText);
+      } catch {
+        content = { rawText: generatedText };
+      }
+
+      const tone = answers.tone?.includes("Audit") ? "audit_ready" as const : "simple_sme" as const;
+      const policy = await storage.createGeneratedPolicy({
+        companyId,
+        templateId: template.id,
+        templateSlug: template.slug,
+        title: `${answers.companyName || "Company"} — ${template.name}`,
+        content,
+        questionnaireAnswers: answers,
+        policyOwner: answers.policyOwner || null,
+        approver: answers.approver || null,
+        reviewDate: null,
+        versionNumber: 1,
+        tone,
+      });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: `Policy generated: ${template.name}`,
+        entityType: "generated_policy",
+        entityId: policy.id,
+        details: { templateSlug: template.slug, tone },
+      });
+
+      res.json(policy);
+    } catch (e: any) {
+      console.error("Template generation error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/generated-policies", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const policies = await storage.getGeneratedPolicies(companyId);
+    res.json(policies);
+  });
+
+  app.get("/api/generated-policies/:id", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const policy = await storage.getGeneratedPolicy(req.params.id);
+    if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+    res.json(policy);
+  });
+
+  app.put("/api/generated-policies/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const policy = await storage.getGeneratedPolicy(req.params.id);
+      if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+
+      const updated = await storage.updateGeneratedPolicy(req.params.id, req.body);
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: `Policy updated: ${policy.title}`,
+        entityType: "generated_policy",
+        entityId: policy.id,
+        details: { status: req.body.status },
+      });
+
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/generated-policies/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const policy = await storage.getGeneratedPolicy(req.params.id);
+      if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      await storage.deleteGeneratedPolicy(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/policy-templates/:slug/admin", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      const updated = await storage.updatePolicyTemplate(req.params.slug, req.body);
+      if (!updated) return res.status(404).json({ error: "Template not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
 }
 
@@ -1154,6 +1289,95 @@ function matchQuestionByRules(question: string, context: string): { answer: stri
   }
 
   return { answer: "", confidence: "low", source: "No source found" };
+}
+
+async function seedPolicyTemplates() {
+  try {
+    const count = await storage.getPolicyTemplateCount();
+    if (count === 0) {
+      console.log("Seeding policy templates...");
+      for (const t of POLICY_TEMPLATES) {
+        await storage.createPolicyTemplate({
+          slug: t.slug,
+          name: t.name,
+          category: t.category,
+          description: t.description,
+          sections: t.sections,
+          questionnaire: t.questionnaire,
+          complianceMapping: t.complianceMapping,
+          defaultReviewCycle: t.defaultReviewCycle,
+          isSystem: true,
+        });
+      }
+      console.log(`Seeded ${POLICY_TEMPLATES.length} policy templates.`);
+    }
+  } catch (e: any) {
+    console.error("Error seeding templates:", e.message);
+  }
+}
+
+const TEMPLATE_SYSTEM_PROMPT = `You are a policy and procedure drafting expert specialising in ISO management systems (9001, 14001, 45001, 27001) for UK SME businesses. You write professional, practical policies that are proportionate to the size of the business.
+
+IMPORTANT GUARDRAILS:
+- Do NOT claim this policy guarantees certification to any ISO standard.
+- Do NOT claim this policy ensures full legal compliance.
+- Always include a note that implementation, records, training, internal audits, and management review are also required for a functioning management system.
+- Use UK English spelling throughout.
+- Use active voice and plain language.
+
+Adapt your wording based on company size, sector, ISO standards being targeted, whether the business is UK-only or multi-country, and whether they have employees, contractors, suppliers, or physical sites.`;
+
+function buildTemplatePrompt(template: any, answers: any): string {
+  const sections = template.sections as any[];
+  const sectionKeys = sections.map((s: any) => s.key);
+  const sectionHints = sections.map((s: any) => `  "${s.key}": "${s.aiPromptHint}"`).join(",\n");
+
+  const tone = answers.tone?.includes("Audit")
+    ? "Formal, detailed, ISO-aligned language suitable for external audit."
+    : "Plain English, practical, proportionate for a small business.";
+
+  const certList = Array.isArray(answers.certifications) ? answers.certifications.join(", ") : (answers.certifications || "None specified");
+  const setupList = Array.isArray(answers.setupType) ? answers.setupType.join(", ") : (answers.setupType || "Not specified");
+
+  let prompt = `Generate a structured "${template.name}" for the following organisation.
+
+Return a JSON object with these exact keys (one per policy section):
+{
+${sectionHints}
+}
+
+Each value should be a string containing the full clause text for that section in Markdown format.
+
+COMPANY PROFILE:
+- Company Name: ${answers.companyName || "[Company Name]"}
+- Legal Entity: ${answers.legalEntity || answers.companyName || "[Company Name]"}
+- Sector: ${answers.sector || "General"}
+- Employees: ${answers.employeeCount || "Not specified"}
+- Countries: ${answers.countries || "United Kingdom"}
+- Business Setup: ${setupList}
+- Customer/Tender Requirements: ${answers.customerRequirements || "None specified"}
+- ISO Certifications Sought: ${certList}
+- Key Risks: ${answers.keyRisks || "Not specified"}
+- Policy Owner: ${answers.policyOwner || "[Policy Owner]"}
+- Approver: ${answers.approver || "[Approver]"}
+
+TONE: ${tone}
+`;
+
+  const extraKeys = Object.keys(answers).filter(k => !["companyName", "legalEntity", "sector", "employeeCount", "countries", "setupType", "customerRequirements", "certifications", "keyRisks", "policyOwner", "approver", "tone"].includes(k));
+  if (extraKeys.length > 0) {
+    prompt += "\nADDITIONAL CONTEXT:\n";
+    for (const k of extraKeys) {
+      const val = answers[k];
+      if (val === true) prompt += `- ${k}: Yes\n`;
+      else if (val === false) prompt += `- ${k}: No\n`;
+      else if (val) prompt += `- ${k}: ${val}\n`;
+    }
+  }
+
+  prompt += `\nIMPORTANT: In the "versionControl" section, include a version control and approval table with fields for Version Number, Date, Author, Approver, and Next Review Date. Use the policy owner and approver names provided.`;
+
+  return prompt;
 }
 
 async function generateAIAnswer(openai: OpenAI, question: string, context: string): Promise<{ answer: string; confidence: string; source: string }> {

@@ -1,0 +1,84 @@
+Build a policy generator module for an SME ESG and ISO compliance app.
+
+The module must not be a generic text generator. It must be a structured policy system with:
+1. a fixed policy library
+2. guided questionnaires for each policy
+3. clause-based document assembly
+4. AI-assisted drafting and editing
+5. version control fields
+6. compliance notes and review dates
+
+Create the following policy templates:
+- Quality Policy
+- Environmental Policy
+- Health and Safety Policy
+- Information Security Policy
+- Data Protection Policy
+- Risk Management Procedure
+- Document Control Procedure
+- Nonconformity and Corrective Action Procedure
+- Internal Audit Procedure
+- Management Review Procedure
+- Incident Reporting and Investigation Procedure
+- Emergency Preparedness and Response Procedure
+- Supplier Code of Conduct
+- Modern Slavery Policy
+- Anti-Bribery and Corruption Policy
+- Sustainability / Carbon Reduction Policy
+- Equality, Diversity and Inclusion Policy
+- Whistleblowing Policy
+
+For each policy template, include:
+- Purpose
+- Scope
+- Policy commitments
+- Roles and responsibilities
+- Operating rules / controls
+- Reporting and escalation
+- Training and awareness
+- Monitoring and review
+- Related documents
+- Version control and approval block
+
+For each policy template, build a guided questionnaire so the AI can ask the user for:
+- company name
+- legal entity
+- sector
+- number of employees
+- countries of operation
+- office / warehouse / manufacturing / remote setup
+- customer or tender requirements
+- relevant certifications sought (ISO 9001, ISO 14001, ISO 45001, ISO 27001)
+- key risks
+- named policy owner
+- named approver
+- desired tone: simple SME or audit-ready
+
+Build reusable clause logic so the AI can adapt policy wording by:
+- company size
+- sector risk
+- selected ISO standards
+- UK-only or multi-country operations
+- whether the business has employees, contractors, suppliers, or physical sites
+
+Add compliance mapping to each template showing:
+- relevant ISO standards
+- likely legal drivers
+- common customer questionnaire uses
+
+Add guardrails:
+- do not claim guaranteed certification
+- do not claim guaranteed legal compliance
+- always add a note that implementation, records, training, audits and management review are also required
+
+Allow output formats:
+- editable web view
+- DOCX export
+- PDF export
+
+Also build an admin area where I can update:
+- clause text
+- review cycles
+- legal references
+- approval wording
+- brand styling

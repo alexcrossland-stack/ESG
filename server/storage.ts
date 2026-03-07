@@ -18,6 +18,9 @@ import {
   type CarbonCalculation, type InsertCarbonCalculation,
   type Questionnaire, type InsertQuestionnaire,
   type QuestionnaireQuestion, type InsertQuestionnaireQuestion,
+  policyTemplates, generatedPolicies,
+  type PolicyTemplate, type InsertPolicyTemplate,
+  type GeneratedPolicy, type InsertGeneratedPolicy,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -118,6 +121,20 @@ export interface IStorage {
   createQuestionnaireQuestion(q: InsertQuestionnaireQuestion): Promise<QuestionnaireQuestion>;
   updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>): Promise<QuestionnaireQuestion | undefined>;
   deleteQuestionnaireQuestions(questionnaireId: string): Promise<void>;
+
+  // Policy Templates
+  getPolicyTemplates(): Promise<PolicyTemplate[]>;
+  getPolicyTemplate(slug: string): Promise<PolicyTemplate | undefined>;
+  createPolicyTemplate(t: InsertPolicyTemplate): Promise<PolicyTemplate>;
+  updatePolicyTemplate(slug: string, data: Partial<PolicyTemplate>): Promise<PolicyTemplate | undefined>;
+  getPolicyTemplateCount(): Promise<number>;
+
+  // Generated Policies
+  getGeneratedPolicies(companyId: string): Promise<GeneratedPolicy[]>;
+  getGeneratedPolicy(id: string): Promise<GeneratedPolicy | undefined>;
+  createGeneratedPolicy(p: InsertGeneratedPolicy): Promise<GeneratedPolicy>;
+  updateGeneratedPolicy(id: string, data: Partial<GeneratedPolicy>): Promise<GeneratedPolicy | undefined>;
+  deleteGeneratedPolicy(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -494,6 +511,55 @@ export class DatabaseStorage implements IStorage {
 
   async deleteQuestionnaireQuestions(questionnaireId: string) {
     await db.delete(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, questionnaireId));
+  }
+
+  // Policy Templates
+  async getPolicyTemplates() {
+    return db.select().from(policyTemplates).orderBy(policyTemplates.name);
+  }
+
+  async getPolicyTemplate(slug: string) {
+    const [r] = await db.select().from(policyTemplates).where(eq(policyTemplates.slug, slug));
+    return r;
+  }
+
+  async createPolicyTemplate(t: InsertPolicyTemplate) {
+    const [r] = await db.insert(policyTemplates).values(t as any).returning();
+    return r;
+  }
+
+  async updatePolicyTemplate(slug: string, data: Partial<PolicyTemplate>) {
+    const [r] = await db.update(policyTemplates).set(data).where(eq(policyTemplates.slug, slug)).returning();
+    return r;
+  }
+
+  async getPolicyTemplateCount() {
+    const result = await db.select({ count: sql<number>`count(*)` }).from(policyTemplates);
+    return Number(result[0].count);
+  }
+
+  // Generated Policies
+  async getGeneratedPolicies(companyId: string) {
+    return db.select().from(generatedPolicies).where(eq(generatedPolicies.companyId, companyId)).orderBy(desc(generatedPolicies.updatedAt));
+  }
+
+  async getGeneratedPolicy(id: string) {
+    const [r] = await db.select().from(generatedPolicies).where(eq(generatedPolicies.id, id));
+    return r;
+  }
+
+  async createGeneratedPolicy(p: InsertGeneratedPolicy) {
+    const [r] = await db.insert(generatedPolicies).values(p as any).returning();
+    return r;
+  }
+
+  async updateGeneratedPolicy(id: string, data: Partial<GeneratedPolicy>) {
+    const [r] = await db.update(generatedPolicies).set({ ...data, updatedAt: new Date() }).where(eq(generatedPolicies.id, id)).returning();
+    return r;
+  }
+
+  async deleteGeneratedPolicy(id: string) {
+    await db.delete(generatedPolicies).where(eq(generatedPolicies.id, id));
   }
 }
 

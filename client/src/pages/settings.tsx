@@ -10,7 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { useToast } from "@/hooks/use-toast";
-import { Settings as SettingsIcon, Building2, Clock, Save } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight } from "lucide-react";
 import { format } from "date-fns";
 
 const INDUSTRIES = [
@@ -227,6 +233,191 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+
+      {user?.role === "admin" && <AdminTemplateEditor />}
     </div>
+  );
+}
+
+function AdminTemplateEditor() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [editSections, setEditSections] = useState<any[]>([]);
+  const [editReviewCycle, setEditReviewCycle] = useState("");
+  const [editCompliance, setEditCompliance] = useState<any>({});
+  const [editDescription, setEditDescription] = useState("");
+
+  const { data: templates = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/policy-templates"],
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ slug, data }: { slug: string; data: any }) => {
+      const res = await apiRequest("PUT", `/api/policy-templates/${slug}/admin`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-templates"] });
+      setEditingSlug(null);
+      toast({ title: "Template updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const openEditor = (t: any) => {
+    setEditSections(JSON.parse(JSON.stringify(t.sections)));
+    setEditReviewCycle(t.defaultReviewCycle || "annual");
+    setEditCompliance(JSON.parse(JSON.stringify(t.complianceMapping || {})));
+    setEditDescription(t.description || "");
+    setEditingSlug(t.slug);
+  };
+
+  const handleSectionChange = (index: number, field: string, value: string) => {
+    setEditSections(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    if (!editingSlug) return;
+    updateMutation.mutate({
+      slug: editingSlug,
+      data: { sections: editSections, defaultReviewCycle: editReviewCycle, description: editDescription, complianceMapping: editCompliance },
+    });
+  };
+
+  const editingTemplate = templates.find((t: any) => t.slug === editingSlug);
+
+  return (
+    <>
+      <Card data-testid="card-admin-templates">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Library className="w-4 h-4 text-primary" />
+            Policy Template Admin
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Edit clause text, review cycles, and legal references for policy templates
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <Skeleton className="h-32" />
+          ) : (
+            <div className="space-y-1 max-h-72 overflow-y-auto">
+              {templates.map((t: any) => (
+                <div
+                  key={t.slug}
+                  className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer text-xs"
+                  onClick={() => openEditor(t)}
+                  data-testid={`admin-template-${t.slug}`}
+                >
+                  <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{t.name}</p>
+                    <p className="text-muted-foreground">{t.category} · Review: {t.defaultReviewCycle}</p>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editingSlug} onOpenChange={(open) => !open && setEditingSlug(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Edit: {editingTemplate?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Template Description</Label>
+              <Textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                className="text-xs min-h-12 resize-none"
+                data-testid="admin-template-description"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Default Review Cycle</Label>
+                <Select value={editReviewCycle} onValueChange={setEditReviewCycle}>
+                  <SelectTrigger data-testid="select-review-cycle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="bi-annual">Bi-annual</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                    <SelectItem value="every-2-years">Every 2 years</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">ISO Standards (comma-separated)</Label>
+                <Input
+                  value={(editCompliance.isoStandards || []).join(", ")}
+                  onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, isoStandards: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
+                  className="text-xs"
+                  data-testid="admin-iso-standards"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Legal Drivers (comma-separated)</Label>
+              <Input
+                value={(editCompliance.legalDrivers || []).join(", ")}
+                onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, legalDrivers: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
+                className="text-xs"
+                data-testid="admin-legal-drivers"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-xs font-semibold">Section Clause Text & AI Hints</Label>
+              {editSections.map((section: any, i: number) => (
+                <Card key={section.key} className="p-3 space-y-2">
+                  <p className="text-xs font-medium">{section.label}</p>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Default Clause Text</Label>
+                    <Textarea
+                      value={section.defaultClauseText || ""}
+                      onChange={(e) => handleSectionChange(i, "defaultClauseText", e.target.value)}
+                      placeholder="Default clause text (used as fallback if AI is not available)"
+                      className="text-xs min-h-16 resize-none"
+                      data-testid={`admin-clause-${section.key}`}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">AI Prompt Hint</Label>
+                    <Textarea
+                      value={section.aiPromptHint || ""}
+                      onChange={(e) => handleSectionChange(i, "aiPromptHint", e.target.value)}
+                      className="text-xs min-h-12 resize-none"
+                      data-testid={`admin-hint-${section.key}`}
+                    />
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setEditingSlug(null)}>Cancel</Button>
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-template-admin">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

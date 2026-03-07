@@ -21,6 +21,7 @@ import Settings from "@/pages/settings";
 import QuestionnairePage from "@/pages/questionnaire";
 import PolicyGenerator from "@/pages/policy-generator";
 import CarbonCalculator from "@/pages/carbon-calculator";
+import PolicyTemplatesPage from "@/pages/policy-templates";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -71,6 +72,7 @@ function ProtectedApp() {
               <Route path="/actions" component={Actions} />
               <Route path="/reports" component={Reports} />
               <Route path="/policy-generator" component={PolicyGenerator} />
+              <Route path="/policy-templates" component={PolicyTemplatesPage} />
               <Route path="/carbon-calculator" component={CarbonCalculator} />
               <Route path="/settings" component={Settings} />
               <Route path="/questionnaire" component={QuestionnairePage} />

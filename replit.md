@@ -22,6 +22,7 @@ This platform replaces spreadsheets and documents with a single, guided platform
 9. **AI Policy Generator** — Guided 4-step questionnaire (company profile, environmental, social, governance) that generates a tailored ESG policy using AI. Preview, edit, and save as a new policy version.
 10. **Supplier Questionnaire Autofill** — Paste or enter ESG questionnaire questions; the system uses rules-based matching + AI to generate suggested answers using existing company data (policy, metrics, actions, carbon data). Shows confidence levels and source references. Export as CSV or copy to clipboard.
 11. **Carbon Calculator** — Simple SME-friendly calculator for Scope 1, 2, and 3 emissions. Uses configurable emission factors stored in database. Shows breakdown by source, per-employee metrics, and history of calculations.
+12. **Policy Templates** — 18 structured policy templates (Quality, Environmental, H&S, InfoSec, Data Protection, Risk Management, Document Control, NC/CA, Internal Audit, Management Review, Incident Reporting, Emergency Preparedness, Supplier CoC, Modern Slavery, Anti-Bribery, Sustainability/Carbon, EDI, Whistleblowing) with guided questionnaires, clause-based AI drafting, compliance mapping (ISO/legal), version control, approve/publish workflow, and multi-format export (TXT/DOCX/PDF). Admin area for editing clause text, review cycles, and compliance references.
 
 ## Tech Stack
 
@@ -51,6 +52,8 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - `carbon_calculations` — Carbon calculation inputs, results, and history
 - `questionnaires` — Uploaded/created ESG questionnaires
 - `questionnaire_questions` — Individual questions with suggested/edited answers, confidence, and source
+- `policy_templates` — 18 structured policy templates with clause definitions, questionnaires, and compliance mapping
+- `generated_policies` — AI-generated policies from templates with clause-by-clause content, version control, and approval workflow
 
 ## Emission Factors
 

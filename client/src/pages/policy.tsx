@@ -165,16 +165,27 @@ export default function Policy() {
                     : `You have ${emptySections.length} section${emptySections.length === 1 ? "" : "s"} still to complete. Use the AI Policy Generator to fill in the gaps.`}
                 </p>
               </div>
-              <Button
-                size="sm"
-                className="shrink-0"
-                onClick={() => setLocation("/policy-generator")}
-                data-testid="button-generate-with-ai"
-              >
-                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                Generate with AI
-                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-              </Button>
+              <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => setLocation("/policy-templates")}
+                  data-testid="button-policy-templates"
+                >
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                  Policy Templates
+                  <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => setLocation("/policy-generator")}
+                  data-testid="button-generate-with-ai"
+                >
+                  ESG Policy Generator
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>

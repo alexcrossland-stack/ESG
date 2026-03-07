@@ -7,7 +7,7 @@ import {
 import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
-  Wand2, Calculator, FileQuestion,
+  Wand2, Calculator, FileQuestion, Library,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,7 +23,8 @@ const navItems = [
   { title: "Data Entry", href: "/data-entry", icon: ClipboardList, group: "main" },
   { title: "Action Tracker", href: "/actions", icon: CheckSquare, group: "main" },
   { title: "Reports", href: "/reports", icon: Download, group: "main" },
-  { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
+  { title: "Policy Templates", href: "/policy-templates", icon: Library, group: "ai" },
+  { title: "ESG Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
   { title: "Questionnaire", href: "/questionnaire", icon: FileQuestion, group: "ai" },
   { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
