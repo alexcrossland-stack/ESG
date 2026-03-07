@@ -215,7 +215,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     secret: process.env.SESSION_SECRET || "esg-platform-secret-2024",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 },
+    cookie: { secure: false, maxAge: 7 * 24 * 60 * 60 * 1000, sameSite: "lax" },
+    proxy: true,
   }));
 
   // Auth routes
