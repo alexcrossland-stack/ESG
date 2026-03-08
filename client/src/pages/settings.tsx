@@ -89,9 +89,9 @@ export default function Settings() {
   const user = authData?.user;
 
   return (
-    <div className="p-6 space-y-6 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 max-w-3xl mx-auto">
       <div>
-        <h1 className="text-xl font-semibold flex items-center gap-2">
+        <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
           <SettingsIcon className="w-5 h-5 text-primary" />
           Settings
         </h1>

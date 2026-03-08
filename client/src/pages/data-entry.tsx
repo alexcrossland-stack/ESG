@@ -60,7 +60,7 @@ const AUTO_CALC_METRICS = [
 function generatePeriods() {
   const periods = [];
   const now = new Date();
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 24; i++) {
     const d = subMonths(now, i);
     periods.push(format(d, "yyyy-MM"));
   }
@@ -85,12 +85,12 @@ export default function DataEntry() {
 
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
-    queryFn: () => fetch(`/api/raw-data/${selectedPeriod}`).then(r => r.json()),
+    queryFn: () => fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include" }).then(r => r.json()),
   });
 
   const { data: entryData, isLoading: entryLoading } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedPeriod],
-    queryFn: () => fetch(`/api/data-entry/${selectedPeriod}`).then(r => r.json()),
+    queryFn: () => fetch(`/api/data-entry/${selectedPeriod}`, { credentials: "include" }).then(r => r.json()),
   });
 
   useEffect(() => {
@@ -181,10 +181,10 @@ export default function DataEntry() {
   const rawCompletion = Math.round((filledRawCount / totalRawFields) * 100);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
+          <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-primary" />
             Data Entry
           </h1>

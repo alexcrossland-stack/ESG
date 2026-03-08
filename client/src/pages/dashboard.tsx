@@ -1,16 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  TrendingDown, TrendingUp, AlertTriangle, CheckCircle,
-  Clock, Zap, Users, Shield, Target, Activity, Leaf, ArrowUp, ArrowDown,
+  AlertTriangle, CheckCircle, Clock, Zap, Users, Shield,
+  Activity, Leaf, ArrowUp, ArrowDown,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -62,10 +61,9 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
   );
 }
 
-function CategoryBar({ label, counts, color }: {
+function CategoryBar({ label, counts }: {
   label: string;
   counts: { green: number; amber: number; red: number; missing: number; total: number };
-  color: string;
 }) {
   const total = counts.total || 1;
   const greenPct = (counts.green / total) * 100;
@@ -100,13 +98,13 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4">
         <Skeleton className="h-8 w-64" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-28" />)}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-64" />)}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-48" />)}
         </div>
       </div>
     );
@@ -128,27 +126,26 @@ export default function Dashboard() {
   const envMetrics = metricSummaries.filter((m: any) => m.category === "environmental");
   const socialMetrics = metricSummaries.filter((m: any) => m.category === "social");
 
-  const emissionsTrend = envMetrics
-    .filter((m: any) => ["Scope 1 Emissions", "Scope 2 Emissions"].includes(m.name))
-    .flatMap((m: any) => (m.trend || []).map((t: any) => ({ ...t, metric: m.name })));
-
   const periodEmissions: Record<string, any> = {};
-  emissionsTrend.forEach((t: any) => {
-    if (!periodEmissions[t.period]) periodEmissions[t.period] = { period: t.period.replace("2025-", "") };
-    if (t.metric === "Scope 1 Emissions") periodEmissions[t.period].scope1 = t.value;
-    if (t.metric === "Scope 2 Emissions") periodEmissions[t.period].scope2 = t.value;
-  });
+  envMetrics
+    .filter((m: any) => ["Scope 1 Emissions", "Scope 2 Emissions"].includes(m.name))
+    .flatMap((m: any) => (m.trend || []).map((t: any) => ({ ...t, metric: m.name })))
+    .forEach((t: any) => {
+      if (!periodEmissions[t.period]) periodEmissions[t.period] = { period: t.period.replace(/^\d{4}-/, "") };
+      if (t.metric === "Scope 1 Emissions") periodEmissions[t.period].scope1 = t.value;
+      if (t.metric === "Scope 2 Emissions") periodEmissions[t.period].scope2 = t.value;
+    });
   const emissionsChartData = Object.values(periodEmissions);
 
   const electricityMetric = envMetrics.find((m: any) => m.name === "Electricity Consumption");
   const electricityChart = (electricityMetric?.trend || []).map((t: any) => ({
-    period: t.period?.replace("2025-", ""),
+    period: t.period?.replace(/^\d{4}-/, ""),
     value: t.value,
   }));
 
   const workforceMetric = socialMetrics.find((m: any) => m.name === "Total Employees");
   const workforceChart = (workforceMetric?.trend || []).map((t: any) => ({
-    period: t.period?.replace("2025-", ""),
+    period: t.period?.replace(/^\d{4}-/, ""),
     value: t.value,
   }));
 
@@ -157,10 +154,10 @@ export default function Dashboard() {
     .slice(0, 5);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold" data-testid="text-dashboard-title">
+          <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">
             {company?.name ? `${company.name} — ESG Dashboard` : "ESG Dashboard"}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -169,7 +166,7 @@ export default function Dashboard() {
         </div>
         {enhanced?.latestPeriod && (
           <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
-            Latest data: {enhanced.latestPeriod}
+            Latest: {enhanced.latestPeriod}
           </Badge>
         )}
       </div>
@@ -179,72 +176,70 @@ export default function Dashboard() {
           <AlertTriangle className="w-4 h-4" />
           <AlertDescription>
             {overdueActions.length} action{overdueActions.length > 1 ? "s are" : " is"} overdue.{" "}
-            <Link href="/actions" className="font-medium underline underline-offset-2">Review your action tracker</Link>
+            <Link href="/actions" className="font-medium underline underline-offset-2">Review actions</Link>
           </AlertDescription>
         </Alert>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card data-testid="stat-esg-score">
-          <CardContent className="p-5 flex flex-col items-center">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1">
+          <CardContent className="p-4 flex flex-col items-center justify-center">
             <ScoreRing score={esgScore} label="ESG Score" />
           </CardContent>
         </Card>
 
         <Card data-testid="stat-total-metrics">
-          <CardContent className="p-5">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground mb-1">Total Metrics</p>
             <p className="text-2xl font-bold">{enhanced?.totalMetrics || 0}</p>
-            <p className="text-xs text-muted-foreground mt-1">tracked</p>
+            <p className="text-xs text-muted-foreground mt-0.5">tracked</p>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-on-track" className="border-emerald-200 dark:border-emerald-800">
-          <CardContent className="p-5">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground mb-1">On Track</p>
             <p className="text-2xl font-bold text-emerald-600">{statusCounts.green}</p>
-            <p className="text-xs text-muted-foreground mt-1">green status</p>
+            <p className="text-xs text-muted-foreground mt-0.5">green</p>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-at-risk" className="border-amber-200 dark:border-amber-800">
-          <CardContent className="p-5">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground mb-1">At Risk</p>
             <p className="text-2xl font-bold text-amber-600">{statusCounts.amber}</p>
-            <p className="text-xs text-muted-foreground mt-1">amber status</p>
+            <p className="text-xs text-muted-foreground mt-0.5">amber</p>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-off-track" className="border-red-200 dark:border-red-800">
-          <CardContent className="p-5">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground mb-1">Off Track</p>
             <p className="text-2xl font-bold text-red-600">{statusCounts.red}</p>
-            <p className="text-xs text-muted-foreground mt-1">red status</p>
+            <p className="text-xs text-muted-foreground mt-0.5">red</p>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="md:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Category Performance</CardTitle>
             <CardDescription className="text-xs">Traffic light status by ESG category</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <CategoryBar label="Environmental" counts={categorySummary.environmental || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} color={COLORS.environmental} />
-            <CategoryBar label="Social" counts={categorySummary.social || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} color={COLORS.social} />
-            <CategoryBar label="Governance" counts={categorySummary.governance || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} color={COLORS.governance} />
+            <CategoryBar label="Environmental" counts={categorySummary.environmental || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
+            <CategoryBar label="Social" counts={categorySummary.social || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
+            <CategoryBar label="Governance" counts={categorySummary.governance || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-                Needs Attention
-              </CardTitle>
-            </div>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              Needs Attention
+            </CardTitle>
             <CardDescription className="text-xs">Metrics at risk or off track</CardDescription>
           </CardHeader>
           <CardContent>
@@ -269,30 +264,33 @@ export default function Dashboard() {
                 </div>
               ))}
               {attentionMetrics.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-4">All metrics on track</p>
+                <div className="text-center py-6">
+                  <CheckCircle className="w-6 h-6 text-emerald-400 mx-auto mb-2" />
+                  <p className="text-xs text-muted-foreground">All metrics on track</p>
+                </div>
               )}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {emissionsChartData.length > 0 && (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Leaf className="w-4 h-4 text-primary" />
-                Carbon Emissions Trend
+                Carbon Emissions
               </CardTitle>
-              <CardDescription className="text-xs">Scope 1 & 2 emissions (tCO2e)</CardDescription>
+              <CardDescription className="text-xs">Scope 1 & 2 (tCO2e)</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={180}>
+              <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={emissionsChartData}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6 }} />
+                  <XAxis dataKey="period" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} width={35} />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} />
                   <Bar dataKey="scope1" name="Scope 1" fill={COLORS.environmental} radius={[3, 3, 0, 0]} stackId="a" />
                   <Bar dataKey="scope2" name="Scope 2" fill="hsl(158, 44%, 52%)" radius={[3, 3, 0, 0]} stackId="a" />
                 </BarChart>
@@ -306,18 +304,18 @@ export default function Dashboard() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Zap className="w-4 h-4 text-primary" />
-                Electricity Consumption
+                Electricity
               </CardTitle>
-              <CardDescription className="text-xs">Monthly kWh — lower is better</CardDescription>
+              <CardDescription className="text-xs">Monthly kWh</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={180}>
+              <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={electricityChart}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="period" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} width={40} />
                   <Tooltip
-                    contentStyle={{ fontSize: 12, borderRadius: 6 }}
+                    contentStyle={{ fontSize: 11, borderRadius: 6 }}
                     formatter={(v: any) => [`${v?.toLocaleString()} kWh`, "Electricity"]}
                   />
                   <Line type="monotone" dataKey="value" stroke={COLORS.environmental} strokeWidth={2} dot={{ r: 3 }} />
@@ -328,7 +326,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {workforceChart.length > 0 && (
           <Card>
             <CardHeader className="pb-2">
@@ -339,12 +337,12 @@ export default function Dashboard() {
               <CardDescription className="text-xs">Total headcount</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={160}>
+              <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={workforceChart}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} domain={["auto", "auto"]} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6 }} />
+                  <XAxis dataKey="period" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} domain={["auto", "auto"]} width={30} />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} />
                   <Bar dataKey="value" fill={COLORS.social} radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -360,7 +358,7 @@ export default function Dashboard() {
                 Recent Actions
               </CardTitle>
               <Link href="/actions">
-                <Button variant="ghost" size="sm" className="text-xs h-6 px-2">View all</Button>
+                <Button variant="ghost" size="sm" className="text-xs h-6 px-2" data-testid="link-view-actions">View all</Button>
               </Link>
             </div>
           </CardHeader>
@@ -371,7 +369,6 @@ export default function Dashboard() {
                   <div className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
                     action.status === "complete" ? "bg-primary" :
                     action.status === "in_progress" ? "bg-blue-500" :
-                    action.status === "overdue" ? "bg-destructive" :
                     "bg-muted-foreground"
                   }`} />
                   <div className="min-w-0 flex-1">
@@ -416,7 +413,7 @@ export default function Dashboard() {
             </div>
             <div className="pt-2 border-t border-border">
               <Link href="/data-entry">
-                <Button size="sm" variant="outline" className="w-full text-xs">
+                <Button size="sm" variant="outline" className="w-full text-xs" data-testid="link-enter-data">
                   Enter Data
                 </Button>
               </Link>

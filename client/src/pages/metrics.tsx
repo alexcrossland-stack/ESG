@@ -1,14 +1,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,8 +17,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  BarChart3, Plus, Leaf, Users, Shield, Target, ArrowUp, ArrowDown,
-  Minus, Info, Calculator, PenLine, GitBranch, ChevronRight, X, TrendingUp, TrendingDown,
+  BarChart3, Plus, Leaf, Users, Shield, ArrowUp, ArrowDown,
+  Minus, Calculator, PenLine, GitBranch, ChevronRight,
 } from "lucide-react";
 
 type MetricSummary = {
@@ -43,9 +41,6 @@ type MetricSummary = {
 type EnhancedData = {
   totalMetrics: number;
   statusCounts: { green: number; amber: number; red: number; missing: number };
-  categorySummary: Record<string, { green: number; amber: number; red: number; missing: number; total: number }>;
-  esgScore: number;
-  latestPeriod: string;
   metricSummaries: MetricSummary[];
 };
 
@@ -92,7 +87,7 @@ function TrendArrow({ percentChange, direction }: { percentChange: number | null
 function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null; onClose: () => void }) {
   const { data: historyData } = useQuery<any>({
     queryKey: ["/api/metrics", metric?.id, "history"],
-    queryFn: () => fetch(`/api/metrics/${metric?.id}/history`).then(r => r.json()),
+    queryFn: () => fetch(`/api/metrics/${metric?.id}/history`, { credentials: "include" }).then(r => r.json()),
     enabled: !!metric?.id,
   });
 
@@ -102,12 +97,12 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
   const typeConfig = TYPE_CONFIG[metric.metricType] || TYPE_CONFIG.manual;
   const history = historyData?.history || [];
   const chartData = history.map((h: any) => ({
-    period: h.period?.replace("2025-", ""),
+    period: h.period?.replace(/^\d{4}-/, ""),
     value: h.value ? Number(h.value) : null,
   }));
 
   return (
-    <DialogContent className="max-w-lg">
+    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2 text-base">
           <StatusDot status={metric.status} />
@@ -172,15 +167,9 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} width={35} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6 }} />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="hsl(158, 64%, 32%)"
-                  strokeWidth={2}
-                  dot={{ r: 2 }}
-                />
+                <Line type="monotone" dataKey="value" stroke="hsl(158, 64%, 32%)" strokeWidth={2} dot={{ r: 2 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -197,32 +186,34 @@ function MetricRow({ metric, onClick }: { metric: MetricSummary; onClick: () => 
 
   return (
     <div
-      className="flex items-center gap-3 p-3 rounded-md border border-border hover:border-primary/30 hover:bg-muted/30 cursor-pointer transition-colors"
+      className="flex items-center gap-2 sm:gap-3 p-2.5 sm:p-3 rounded-md border border-border hover:border-primary/30 hover:bg-muted/30 cursor-pointer transition-colors"
       onClick={onClick}
       data-testid={`metric-row-${metric.id}`}
     >
       <StatusDot status={metric.status} />
-      <div className={`p-1.5 rounded-md ${config.bg} shrink-0`}>
+      <div className={`p-1 sm:p-1.5 rounded-md ${config.bg} shrink-0 hidden sm:block`}>
         <Icon className={`w-3.5 h-3.5 ${config.color}`} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium truncate">{metric.name}</p>
-          <Badge variant="secondary" className="text-xs shrink-0 gap-1 py-0">
+          <Badge variant="secondary" className="text-[10px] shrink-0 gap-0.5 py-0 hidden sm:flex">
             <typeConfig.icon className={`w-2.5 h-2.5 ${typeConfig.color}`} />
             {typeConfig.label}
           </Badge>
         </div>
       </div>
-      <div className="flex items-center gap-4 shrink-0">
+      <div className="flex items-center gap-2 sm:gap-4 shrink-0">
         <div className="text-right">
           <p className="text-sm font-bold">
             {metric.latestValue !== null ? metric.latestValue.toLocaleString() : "—"}
           </p>
           <p className="text-xs text-muted-foreground">{metric.unit || ""}</p>
         </div>
-        <TrendArrow percentChange={metric.percentChange} direction={metric.direction} />
-        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        <div className="hidden sm:block">
+          <TrendArrow percentChange={metric.percentChange} direction={metric.direction} />
+        </div>
+        <ChevronRight className="w-4 h-4 text-muted-foreground hidden sm:block" />
       </div>
     </div>
   );
@@ -334,7 +325,7 @@ export default function Metrics() {
   });
 
   if (isLoading) {
-    return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16" />)}</div>;
+    return <div className="p-4 sm:p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-14" />)}</div>;
   }
 
   const metrics = data?.metricSummaries || [];
@@ -345,10 +336,10 @@ export default function Metrics() {
   if (typeFilter !== "all") filtered = filtered.filter(m => m.metricType === typeFilter);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
+          <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-primary" />
             Metrics Library
           </h1>
@@ -362,7 +353,7 @@ export default function Metrics() {
             <DialogTrigger asChild>
               <Button size="sm" data-testid="button-add-custom-metric">
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
-                Add Custom
+                Add
               </Button>
             </DialogTrigger>
             <AddMetricDialog onClose={() => setShowAdd(false)} />
@@ -370,52 +361,38 @@ export default function Metrics() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
-        <button
-          className={`p-3 rounded-md border text-center transition-colors ${statusFilter === "all" ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"}`}
-          onClick={() => setStatusFilter("all")}
-          data-testid="filter-status-all"
-        >
-          <p className="text-lg font-bold">{metrics.length}</p>
-          <p className="text-xs text-muted-foreground">Total</p>
-        </button>
-        <button
-          className={`p-3 rounded-md border text-center transition-colors ${statusFilter === "green" ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20" : "border-border hover:border-emerald-300"}`}
-          onClick={() => setStatusFilter(statusFilter === "green" ? "all" : "green")}
-          data-testid="filter-status-green"
-        >
-          <p className="text-lg font-bold text-emerald-600">{statusCounts.green}</p>
-          <p className="text-xs text-muted-foreground">On Track</p>
-        </button>
-        <button
-          className={`p-3 rounded-md border text-center transition-colors ${statusFilter === "amber" ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20" : "border-border hover:border-amber-300"}`}
-          onClick={() => setStatusFilter(statusFilter === "amber" ? "all" : "amber")}
-          data-testid="filter-status-amber"
-        >
-          <p className="text-lg font-bold text-amber-600">{statusCounts.amber}</p>
-          <p className="text-xs text-muted-foreground">At Risk</p>
-        </button>
-        <button
-          className={`p-3 rounded-md border text-center transition-colors ${statusFilter === "red" ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-border hover:border-red-300"}`}
-          onClick={() => setStatusFilter(statusFilter === "red" ? "all" : "red")}
-          data-testid="filter-status-red"
-        >
-          <p className="text-lg font-bold text-red-600">{statusCounts.red}</p>
-          <p className="text-xs text-muted-foreground">Off Track</p>
-        </button>
+      <div className="grid grid-cols-4 gap-2 sm:gap-3">
+        {[
+          { key: "all", label: "Total", value: metrics.length, color: "" },
+          { key: "green", label: "On Track", value: statusCounts.green, color: "text-emerald-600" },
+          { key: "amber", label: "At Risk", value: statusCounts.amber, color: "text-amber-600" },
+          { key: "red", label: "Off Track", value: statusCounts.red, color: "text-red-600" },
+        ].map(s => (
+          <button
+            key={s.key}
+            className={`p-2 sm:p-3 rounded-md border text-center transition-colors ${
+              statusFilter === s.key ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+            }`}
+            onClick={() => setStatusFilter(statusFilter === s.key && s.key !== "all" ? "all" : s.key)}
+            data-testid={`filter-status-${s.key}`}
+          >
+            <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
+            <p className="text-[10px] sm:text-xs text-muted-foreground">{s.label}</p>
+          </button>
+        ))}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1">
-          <TabsList>
-            <TabsTrigger value="all">All</TabsTrigger>
-            <TabsTrigger value="environmental" data-testid="tab-environmental">Environmental</TabsTrigger>
-            <TabsTrigger value="social" data-testid="tab-social">Social</TabsTrigger>
-            <TabsTrigger value="governance" data-testid="tab-governance">Governance</TabsTrigger>
+          <TabsList className="h-8">
+            <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
+            <TabsTrigger value="environmental" data-testid="tab-environmental" className="text-xs">Environmental</TabsTrigger>
+            <TabsTrigger value="social" data-testid="tab-social" className="text-xs">Social</TabsTrigger>
+            <TabsTrigger value="governance" data-testid="tab-governance" className="text-xs">Governance</TabsTrigger>
           </TabsList>
         </Tabs>
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-32 h-8 text-xs" data-testid="select-type-filter">
+          <SelectTrigger className="w-28 h-8 text-xs" data-testid="select-type-filter">
             <SelectValue placeholder="Type" />
           </SelectTrigger>
           <SelectContent>
@@ -427,7 +404,7 @@ export default function Metrics() {
         </Select>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {filtered.map(metric => (
           <MetricRow
             key={metric.id}

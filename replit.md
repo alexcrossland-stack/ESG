@@ -109,7 +109,8 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 
 - **Email**: demo@example.com
 - **Password**: password123
-- Pre-loaded with 28 metrics, 6 months of sample data, raw data inputs, action plans, ESG policy, and carbon calculation
+- Pre-loaded with 28 metrics, 6 months of sample data (2025-01 to 2025-06), raw data inputs for all periods (including travel data), action plans, ESG policy, and carbon calculation
+- Data Entry period selector covers 24 months to ensure seed data periods are accessible
 
 ## Architecture
 

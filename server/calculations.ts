@@ -212,9 +212,9 @@ export function runCalculationsForPeriod(
   results["Living Wage Coverage"] = calculateLivingWageCoverage(livingWageEmployees, headcount);
   results["Management Gender Diversity"] = calculateManagementGenderDiversity(femaleManagers, totalManagers);
 
-  const s1 = scope1 || existingMetricValues["Scope 1 Emissions"] || 0;
-  const s2 = scope2 || existingMetricValues["Scope 2 Emissions"] || 0;
-  const travel = travelEmissions || existingMetricValues["Business Travel Emissions"] || 0;
+  const s1 = scope1 !== null && scope1 !== undefined ? scope1 : (existingMetricValues["Scope 1 Emissions"] ?? 0);
+  const s2 = scope2 !== null && scope2 !== undefined ? scope2 : (existingMetricValues["Scope 2 Emissions"] ?? 0);
+  const travel = travelEmissions !== null && travelEmissions !== undefined ? travelEmissions : (existingMetricValues["Business Travel Emissions"] ?? 0);
   if (headcount > 0) {
     results["Carbon Intensity"] = calculateCarbonIntensity(s1, s2, travel, "per_employee", headcount);
   } else if (annualRevenue > 0) {

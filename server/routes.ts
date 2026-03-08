@@ -29,6 +29,19 @@ function requireAuth(req: Request, res: Response, next: Function) {
   next();
 }
 
+const ENVIRONMENTAL_RAW_KEYS = [
+  "elec", "gas", "fuel", "waste", "water", "flight", "hotel", "rail", "car_miles",
+];
+const SOCIAL_RAW_KEYS = [
+  "employee", "headcount", "absence", "training", "female", "manager", "living", "leaver",
+];
+
+function classifyRawDataCategory(inputName: string): "environmental" | "social" | "governance" {
+  if (ENVIRONMENTAL_RAW_KEYS.some(k => inputName.includes(k))) return "environmental";
+  if (SOCIAL_RAW_KEYS.some(k => inputName.includes(k))) return "social";
+  return "governance";
+}
+
 async function seedDatabase(companyId: string, userId: string) {
   const existingMetrics = await storage.getMetrics(companyId);
   if (existingMetrics.length > 0) return;
@@ -152,6 +165,56 @@ async function seedDatabase(companyId: string, userId: string) {
   }
 
   const sampleRawData: Record<string, Record<string, number>> = {
+    "2025-01": {
+      electricity_kwh: 45200, gas_kwh: 12400, vehicle_fuel_litres: 420,
+      total_waste_tonnes: 8.4, recycled_waste_tonnes: 5.21, water_m3: 120,
+      employee_headcount: 48, employee_leavers: 2, absence_days: 20,
+      total_working_days: 960, total_training_hours: 120, trained_staff: 41,
+      total_staff: 48, signed_suppliers: 20, total_suppliers: 50,
+      female_managers: 6, total_managers: 20, living_wage_employees: 46,
+      domestic_flight_km: 800, short_haul_flight_km: 2000, long_haul_flight_km: 0,
+      rail_km: 500, hotel_nights: 5, car_miles: 1200,
+    },
+    "2025-02": {
+      electricity_kwh: 43800, gas_kwh: 11800, vehicle_fuel_litres: 410,
+      total_waste_tonnes: 8.1, recycled_waste_tonnes: 5.18, water_m3: 115,
+      employee_headcount: 48, employee_leavers: 2, absence_days: 22,
+      total_working_days: 960, total_training_hours: 144, trained_staff: 42,
+      total_staff: 48, signed_suppliers: 21, total_suppliers: 50,
+      female_managers: 6, total_managers: 20, living_wage_employees: 46,
+      domestic_flight_km: 600, short_haul_flight_km: 1500, long_haul_flight_km: 0,
+      rail_km: 400, hotel_nights: 3, car_miles: 1000,
+    },
+    "2025-03": {
+      electricity_kwh: 41500, gas_kwh: 9600, vehicle_fuel_litres: 395,
+      total_waste_tonnes: 7.9, recycled_waste_tonnes: 5.21, water_m3: 110,
+      employee_headcount: 50, employee_leavers: 2, absence_days: 19,
+      total_working_days: 1000, total_training_hours: 140, trained_staff: 45,
+      total_staff: 50, signed_suppliers: 22, total_suppliers: 50,
+      female_managers: 7, total_managers: 21, living_wage_employees: 48,
+      domestic_flight_km: 500, short_haul_flight_km: 2500, long_haul_flight_km: 3000,
+      rail_km: 600, hotel_nights: 6, car_miles: 800,
+    },
+    "2025-04": {
+      electricity_kwh: 39200, gas_kwh: 7200, vehicle_fuel_litres: 380,
+      total_waste_tonnes: 7.6, recycled_waste_tonnes: 5.17, water_m3: 108,
+      employee_headcount: 51, employee_leavers: 2, absence_days: 18,
+      total_working_days: 1020, total_training_hours: 163, trained_staff: 47,
+      total_staff: 51, signed_suppliers: 24, total_suppliers: 50,
+      female_managers: 7, total_managers: 21, living_wage_employees: 49,
+      domestic_flight_km: 400, short_haul_flight_km: 2000, long_haul_flight_km: 2000,
+      rail_km: 500, hotel_nights: 4, car_miles: 900,
+    },
+    "2025-05": {
+      electricity_kwh: 37800, gas_kwh: 5800, vehicle_fuel_litres: 370,
+      total_waste_tonnes: 7.3, recycled_waste_tonnes: 5.11, water_m3: 105,
+      employee_headcount: 51, employee_leavers: 2, absence_days: 20,
+      total_working_days: 1020, total_training_hours: 179, trained_staff: 49,
+      total_staff: 51, signed_suppliers: 25, total_suppliers: 50,
+      female_managers: 7, total_managers: 20, living_wage_employees: 49,
+      domestic_flight_km: 300, short_haul_flight_km: 1800, long_haul_flight_km: 0,
+      rail_km: 400, hotel_nights: 3, car_miles: 700,
+    },
     "2025-06": {
       electricity_kwh: 36100, gas_kwh: 5100, vehicle_fuel_litres: 360,
       total_waste_tonnes: 7.0, recycled_waste_tonnes: 5.04, water_m3: 102,
@@ -159,17 +222,16 @@ async function seedDatabase(companyId: string, userId: string) {
       total_working_days: 1040, total_training_hours: 198, trained_staff: 50,
       total_staff: 52, signed_suppliers: 26, total_suppliers: 50,
       female_managers: 7, total_managers: 20, living_wage_employees: 51,
+      domestic_flight_km: 200, short_haul_flight_km: 1500, long_haul_flight_km: 0,
+      rail_km: 300, hotel_nights: 2, car_miles: 600,
     },
   };
 
   for (const [period, inputs] of Object.entries(sampleRawData)) {
     for (const [inputName, value] of Object.entries(inputs)) {
-      const cat = inputName.includes("elec") || inputName.includes("gas") || inputName.includes("fuel") || inputName.includes("waste") || inputName.includes("water")
-        ? "environmental" : inputName.includes("employee") || inputName.includes("absence") || inputName.includes("training") || inputName.includes("female") || inputName.includes("manager") || inputName.includes("living")
-        ? "social" : "governance";
       await storage.createRawDataInput({
-        companyId, inputName, inputCategory: cat, value: value.toString(),
-        unit: "", period, enteredBy: userId,
+        companyId, inputName, inputCategory: classifyRawDataCategory(inputName),
+        value: value.toString(), unit: "", period, enteredBy: userId,
       });
     }
   }
@@ -586,9 +648,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const results: any[] = [];
       for (const [inputName, value] of Object.entries(inputs)) {
         if (value === null || value === undefined || value === "") continue;
-        const cat = inputName.includes("elec") || inputName.includes("gas") || inputName.includes("fuel") || inputName.includes("waste") || inputName.includes("water")
-          ? "environmental" : inputName.includes("employee") || inputName.includes("absence") || inputName.includes("training") || inputName.includes("female") || inputName.includes("manager") || inputName.includes("living") || inputName.includes("headcount")
-          ? "social" : "governance";
+        const cat = classifyRawDataCategory(inputName);
         const r = await storage.upsertRawDataInput(companyId, inputName, period, {
           inputCategory: cat, value: String(value), unit: "", enteredBy: userId,
         });
@@ -619,7 +679,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const rawData = await storage.getRawDataByPeriod(companyId, period);
       const rawInputs: RawInputs = {};
       for (const d of rawData) {
-        rawInputs[d.inputName] = d.value ? Number(d.value) : undefined;
+        rawInputs[d.inputName] = d.value !== null && d.value !== undefined ? Number(d.value) : undefined;
       }
 
       const allMetrics = await storage.getMetrics(companyId);
@@ -627,21 +687,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const m of allMetrics) {
         const vals = await storage.getMetricValues(m.id);
         const periodVal = vals.find(v => v.period === period);
-        if (periodVal) existingValues[m.name] = periodVal.value ? Number(periodVal.value) : null;
+        if (periodVal) existingValues[m.name] = periodVal.value !== null ? Number(periodVal.value) : null;
       }
 
       const calculated = runCalculationsForPeriod(rawInputs, {}, existingValues);
       const updated: any[] = [];
 
       for (const [metricName, calcValue] of Object.entries(calculated)) {
-        if (calcValue === null) continue;
+        if (calcValue === null || calcValue === undefined) continue;
         const metric = allMetrics.find(m => m.name === metricName && (m.metricType === "calculated" || m.metricType === "derived"));
         if (!metric) continue;
 
         const vals = await storage.getMetricValues(metric.id);
         const existingForPeriod = vals.find(v => v.period === period);
-        const previousPeriodVal = vals.find(v => v.period < period);
-        const prevVal = previousPeriodVal ? Number(previousPeriodVal.value) : null;
+        const sortedPrev = vals.filter(v => v.period < period).sort((a, b) => a.period.localeCompare(b.period));
+        const previousPeriodVal = sortedPrev.length > 0 ? sortedPrev[sortedPrev.length - 1] : null;
+        const prevVal = previousPeriodVal?.value !== null && previousPeriodVal?.value !== undefined ? Number(previousPeriodVal.value) : null;
         const pctChange = prevVal && prevVal !== 0 ? Math.round(((calcValue - prevVal) / Math.abs(prevVal)) * 10000) / 100 : null;
         const status = getTrafficLightStatus(
           calcValue,
@@ -714,6 +775,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
       const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner } = req.body;
       const result = await storage.updateMetric(req.params.id, {
         direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner,
@@ -738,7 +803,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter(m => m.enabled);
 
-      const latestPeriod = "2025-06";
+      let latestPeriod = "";
+      for (const metric of enabledMetrics) {
+        const vals = await storage.getMetricValues(metric.id);
+        for (const v of vals) {
+          if (v.period > latestPeriod) latestPeriod = v.period;
+        }
+      }
+      if (!latestPeriod) latestPeriod = new Date().toISOString().slice(0, 7);
       const statusCounts = { green: 0, amber: 0, red: 0, missing: 0 };
       const categorySummary: Record<string, { green: number; amber: number; red: number; missing: number; total: number }> = {
         environmental: { green: 0, amber: 0, red: 0, missing: 0, total: 0 },
