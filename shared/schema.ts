@@ -33,7 +33,18 @@ export const companies = pgTable("companies", {
   locations: integer("locations").default(1),
   businessType: text("business_type"),
   hasVehicles: boolean("has_vehicles").default(false),
+  operationalProfile: text("operational_profile"),
+  reportingYearStart: text("reporting_year_start"),
   onboardingComplete: boolean("onboarding_complete").default(false),
+  onboardingPath: text("onboarding_path"),
+  onboardingStep: integer("onboarding_step").default(0),
+  onboardingProgressPercent: integer("onboarding_progress_percent").default(0),
+  onboardingStartedAt: timestamp("onboarding_started_at"),
+  onboardingCompletedAt: timestamp("onboarding_completed_at"),
+  esgMaturity: text("esg_maturity"),
+  selectedModules: jsonb("selected_modules"),
+  selectedMetrics: jsonb("selected_metrics"),
+  onboardingAnswers: jsonb("onboarding_answers"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

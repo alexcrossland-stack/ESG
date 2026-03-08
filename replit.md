@@ -105,19 +105,53 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `POST /api/metrics/recalculate/:period` — Trigger recalculation
 - `GET /api/dashboard/enhanced` — Enhanced dashboard with traffic lights
 
+## Onboarding System
+
+Two-path onboarding for new users, with database persistence and autosave/resume:
+
+### Guided Setup (8-step wizard)
+1. **Company Profile** — Name, industry, country, employee count, operational profile
+2. **ESG Maturity** — Just Starting / Some Policies / Formal Programme
+3. **Module Selection** — Toggle: Metrics, Carbon Calculator, Policy Generator, Supplier Questionnaire, Reporting, Traffic Light Scoring
+4. **Metric Selection** — Grouped by E/S/G, pre-selected based on maturity + profile, with descriptions
+5. **Carbon Calculator Setup** — Track electricity/gas/vehicles, auto Scope 1/2
+6. **Policy Generation Setup** — Enable/disable policy drafting tools
+7. **Supplier Assessment Setup** — Enable/disable supplier questionnaire
+8. **Completion Summary** — Metrics count, module status, company details, "Go to Dashboard"
+
+### Manual Setup
+- Immediately marks onboarding complete, seeds full demo data
+- Shows a setup checklist card on the dashboard with real progress tracking (profile, metrics, carbon calculator, policies, supplier, data entry)
+
+### Onboarding API
+- `PUT /api/onboarding/step` — Autosave step data (validated, bounds-checked 1-8)
+- `POST /api/onboarding/complete` — Finalize onboarding, create metrics from selections (guided) or seed full data (manual)
+
+### Onboarding DB Columns (companies table)
+- `onboarding_complete` (boolean), `onboarding_path` (guided/manual), `onboarding_step` (1-8), `onboarding_progress_percent` (0-100)
+- `onboarding_started_at`, `onboarding_completed_at` (timestamps)
+- `esg_maturity`, `selected_modules`, `selected_metrics`, `onboarding_answers` (jsonb), `operational_profile`, `reporting_year_start`
+
+### Flow
+- New registrations: `onboardingComplete = false` → redirected to /onboarding
+- Demo account: `onboardingComplete = true` → goes straight to dashboard
+- `seedDatabase()` (for demo/manual) sets `onboardingComplete = true` automatically
+- `seedMetricsFromSelection()` creates only the metrics selected during guided wizard via METRIC_KEY_MAP
+
 ## Demo Account
 
 - **Email**: demo@example.com
 - **Password**: password123
 - Pre-loaded with 28 metrics, 6 months of sample data (2025-01 to 2025-06), raw data inputs for all periods (including travel data), action plans, ESG policy, and carbon calculation
 - Data Entry period selector covers 24 months to ensure seed data periods are accessible
+- Has `onboardingComplete = true` (bypasses onboarding)
 
 ## Architecture
 
 - All routes prefixed with `/api`
 - Session stored in PostgreSQL via `connect-pg-simple`
 - Frontend served by Vite in development
-- Seed data created on first registration and on login (if metrics missing)
+- New registrations go through onboarding wizard; demo account auto-seeds on login
 - Password hashing: SHA-256 with salt `esg_salt_2024`
 - Design: green primary color (`hsl(158, 64%, 32%)`), Open Sans font, supports light/dark mode
 - Sidebar width: 14rem via CSS vars on SidebarProvider

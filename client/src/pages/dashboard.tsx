@@ -8,8 +8,8 @@ import {
   Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  AlertTriangle, CheckCircle, Clock, Zap, Users, Shield,
-  Activity, Leaf, ArrowUp, ArrowDown,
+  AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
+  Activity, Leaf, ArrowUp, ArrowDown, ClipboardList,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -89,10 +89,53 @@ function CategoryBar({ label, counts }: {
   );
 }
 
+function SetupChecklist({ company, metricCount, hasCarbonCalc, hasPolicy }: { company: any; metricCount: number; hasCarbonCalc: boolean; hasPolicy: boolean }) {
+  const items = [
+    { label: "Add company profile", done: !!company?.industry, link: "/settings" },
+    { label: "Enable ESG metrics", done: metricCount > 0, link: "/metrics" },
+    { label: "Configure carbon calculator", done: hasCarbonCalc, link: "/carbon-calculator" },
+    { label: "Generate policies", done: hasPolicy, link: "/policy-generator" },
+    { label: "Set up supplier questionnaire", done: false, link: "/questionnaire" },
+    { label: "Enter first month of data", done: metricCount > 0, link: "/data-entry" },
+  ];
+  const doneCount = items.filter(i => i.done).length;
+  if (doneCount === items.length) return null;
+
+  return (
+    <Card className="border-primary/30 bg-primary/5" data-testid="card-setup-checklist">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <ClipboardList className="w-4 h-4 text-primary" />
+          Setup Checklist
+        </CardTitle>
+        <CardDescription className="text-xs">{doneCount} of {items.length} complete</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-1.5">
+          {items.map(item => (
+            <Link key={item.label} href={item.link}>
+              <div className="flex items-center gap-2 p-2 rounded-md hover:bg-background/60 cursor-pointer transition-colors">
+                {item.done ? (
+                  <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0" />
+                )}
+                <span className={`text-sm ${item.done ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced"] });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const { data: carbonCalcs } = useQuery<any>({ queryKey: ["/api/carbon-calculations"] });
+  const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
 
   const isLoading = enhancedLoading || oldLoading;
 
@@ -179,6 +222,15 @@ export default function Dashboard() {
             <Link href="/actions" className="font-medium underline underline-offset-2">Review actions</Link>
           </AlertDescription>
         </Alert>
+      )}
+
+      {company?.onboardingPath === "manual" && (
+        <SetupChecklist
+          company={company}
+          metricCount={metricSummaries.length}
+          hasCarbonCalc={Array.isArray(carbonCalcs) && carbonCalcs.length > 0}
+          hasPolicy={!!policyData?.id}
+        />
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">

@@ -22,6 +22,7 @@ import QuestionnairePage from "@/pages/questionnaire";
 import PolicyGenerator from "@/pages/policy-generator";
 import CarbonCalculator from "@/pages/carbon-calculator";
 import PolicyTemplatesPage from "@/pages/policy-templates";
+import Onboarding from "@/pages/onboarding";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -51,6 +52,10 @@ function ProtectedApp() {
 
   if (!data?.user) {
     return <Redirect to="/auth" />;
+  }
+
+  if (!data?.company?.onboardingComplete) {
+    return <Onboarding />;
   }
 
   return (
