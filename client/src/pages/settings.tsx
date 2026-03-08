@@ -16,7 +16,8 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 
 const INDUSTRIES = [
@@ -234,8 +235,191 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      {user?.role === "admin" && <MetricsAdmin />}
       {user?.role === "admin" && <AdminTemplateEditor />}
     </div>
+  );
+}
+
+function MetricsAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [editingMetric, setEditingMetric] = useState<any | null>(null);
+
+  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced"] });
+  const metrics = enhanced?.metricSummaries || [];
+
+  const [direction, setDirection] = useState("");
+  const [targetValue, setTargetValue] = useState("");
+  const [targetMin, setTargetMin] = useState("");
+  const [targetMax, setTargetMax] = useState("");
+  const [amberThreshold, setAmberThreshold] = useState("");
+  const [redThreshold, setRedThreshold] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [helpText, setHelpText] = useState("");
+  const [dataOwner, setDataOwner] = useState("");
+
+  const openEditor = (m: any) => {
+    setEditingMetric(m);
+    setDirection(m.direction || "higher_is_better");
+    setTargetValue(m.target ? String(m.target) : "");
+    setTargetMin(m.targetMin ? String(m.targetMin) : "");
+    setTargetMax(m.targetMax ? String(m.targetMax) : "");
+    setAmberThreshold("5");
+    setRedThreshold("15");
+    setEnabled(true);
+    setHelpText(m.helpText || "");
+    setDataOwner(m.dataOwner || "");
+  };
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return apiRequest("PUT", `/api/metrics/${editingMetric.id}/admin`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      setEditingMetric(null);
+      toast({ title: "Metric settings updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const handleSave = () => {
+    updateMutation.mutate({
+      direction,
+      targetValue: targetValue || null,
+      targetMin: targetMin || null,
+      targetMax: targetMax || null,
+      amberThreshold: amberThreshold || "5",
+      redThreshold: redThreshold || "15",
+      enabled,
+      helpText,
+      dataOwner,
+    });
+  };
+
+  const statusColors: Record<string, string> = {
+    green: "bg-emerald-500",
+    amber: "bg-amber-500",
+    red: "bg-red-500",
+    missing: "bg-gray-300",
+  };
+
+  return (
+    <>
+      <Card data-testid="card-admin-metrics">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            Metric Configuration
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Configure targets, thresholds, and scoring for each metric
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {metrics.map((m: any) => (
+              <div
+                key={m.id}
+                className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer text-xs"
+                onClick={() => openEditor(m)}
+                data-testid={`admin-metric-${m.id}`}
+              >
+                <div className={`w-2 h-2 rounded-full shrink-0 ${statusColors[m.status] || statusColors.missing}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{m.name}</p>
+                  <p className="text-muted-foreground">{m.category} · {m.metricType} · {m.direction?.replace(/_/g, " ")}</p>
+                </div>
+                <span className="text-muted-foreground">{m.latestValue !== null ? `${m.latestValue} ${m.unit || ""}` : "—"}</span>
+                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editingMetric} onOpenChange={(open) => !open && setEditingMetric(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Configure: {editingMetric?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Scoring Direction</Label>
+              <Select value={direction} onValueChange={setDirection}>
+                <SelectTrigger data-testid="select-direction"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="higher_is_better">Higher is better</SelectItem>
+                  <SelectItem value="lower_is_better">Lower is better</SelectItem>
+                  <SelectItem value="target_range">Target range</SelectItem>
+                  <SelectItem value="compliance_yes_no">Compliance (Yes/No)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {direction === "target_range" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Target Min</Label>
+                  <Input type="number" step="any" value={targetMin} onChange={e => setTargetMin(e.target.value)} data-testid="input-target-min" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Target Max</Label>
+                  <Input type="number" step="any" value={targetMax} onChange={e => setTargetMax(e.target.value)} data-testid="input-target-max" />
+                </div>
+              </div>
+            ) : direction !== "compliance_yes_no" ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Target Value ({editingMetric?.unit})</Label>
+                <Input type="number" step="any" value={targetValue} onChange={e => setTargetValue(e.target.value)} data-testid="input-target-value" />
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1">
+                  Amber Threshold
+                  <span className="text-muted-foreground">(% deviation)</span>
+                </Label>
+                <Input type="number" step="any" value={amberThreshold} onChange={e => setAmberThreshold(e.target.value)} data-testid="input-amber-threshold" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1">
+                  Red Threshold
+                  <span className="text-muted-foreground">(% deviation)</span>
+                </Label>
+                <Input type="number" step="any" value={redThreshold} onChange={e => setRedThreshold(e.target.value)} data-testid="input-red-threshold" />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Data Owner</Label>
+              <Input value={dataOwner} onChange={e => setDataOwner(e.target.value)} data-testid="input-data-owner" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Help Text</Label>
+              <Textarea value={helpText} onChange={e => setHelpText(e.target.value)} className="text-xs min-h-12 resize-none" data-testid="input-help-text" />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Metric Enabled</Label>
+              <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="switch-metric-enabled" />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setEditingMetric(null)}>Cancel</Button>
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-metric-admin">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {updateMutation.isPending ? "Saving..." : "Save Settings"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

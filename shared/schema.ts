@@ -6,6 +6,9 @@ import { z } from "zod";
 export const roleEnum = pgEnum("role", ["admin", "editor"]);
 export const metricCategoryEnum = pgEnum("metric_category", ["environmental", "social", "governance"]);
 export const metricFrequencyEnum = pgEnum("metric_frequency", ["monthly", "quarterly", "annual"]);
+export const metricTypeEnum = pgEnum("metric_type", ["manual", "calculated", "derived"]);
+export const metricDirectionEnum = pgEnum("metric_direction", ["higher_is_better", "lower_is_better", "target_range", "compliance_yes_no"]);
+export const trafficLightEnum = pgEnum("traffic_light", ["green", "amber", "red"]);
 export const actionStatusEnum = pgEnum("action_status", ["not_started", "in_progress", "complete", "overdue"]);
 export const policyStatusEnum = pgEnum("policy_status", ["draft", "published"]);
 export const reportTypeEnum = pgEnum("report_type", ["pdf", "csv", "word"]);
@@ -84,6 +87,17 @@ export const metrics = pgTable("metrics", {
   dataOwner: text("data_owner"),
   enabled: boolean("enabled").default(true),
   isDefault: boolean("is_default").default(false),
+  metricType: text("metric_type").default("manual"),
+  calculationType: text("calculation_type"),
+  formulaText: text("formula_text"),
+  direction: text("direction").default("higher_is_better"),
+  targetValue: decimal("target_value", { precision: 15, scale: 4 }),
+  targetMin: decimal("target_min", { precision: 15, scale: 4 }),
+  targetMax: decimal("target_max", { precision: 15, scale: 4 }),
+  displayOrder: integer("display_order").default(0),
+  helpText: text("help_text"),
+  amberThreshold: decimal("amber_threshold", { precision: 5, scale: 2 }).default("5"),
+  redThreshold: decimal("red_threshold", { precision: 5, scale: 2 }).default("15"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -99,10 +113,29 @@ export const metricValues = pgTable("metric_values", {
   metricId: varchar("metric_id").notNull(),
   period: text("period").notNull(),
   value: decimal("value", { precision: 15, scale: 4 }),
+  previousValue: decimal("previous_value", { precision: 15, scale: 4 }),
+  targetValue: decimal("target_value", { precision: 15, scale: 4 }),
+  status: text("status"),
+  percentChange: decimal("percent_change", { precision: 10, scale: 2 }),
   submittedBy: varchar("submitted_by"),
   submittedAt: timestamp("submitted_at").defaultNow(),
   notes: text("notes"),
   locked: boolean("locked").default(false),
+});
+
+export const rawDataInputs = pgTable("raw_data_inputs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  inputName: text("input_name").notNull(),
+  inputCategory: text("input_category").notNull(),
+  value: decimal("value", { precision: 15, scale: 4 }),
+  unit: text("unit"),
+  periodType: text("period_type").default("monthly"),
+  period: text("period").notNull(),
+  source: text("source"),
+  enteredBy: varchar("entered_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const evidenceFiles = pgTable("evidence_files", {
@@ -270,6 +303,7 @@ export const insertMetricTargetSchema = createInsertSchema(metricTargets).omit({
 export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({ id: true, uploadedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export const insertPolicyGenerationInputSchema = createInsertSchema(policyGenerationInputs).omit({ id: true, createdAt: true });
+export const insertRawDataInputSchema = createInsertSchema(rawDataInputs).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEmissionFactorSchema = createInsertSchema(emissionFactors).omit({ id: true, effectiveDate: true });
 export const insertCarbonCalculationSchema = createInsertSchema(carbonCalculations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertQuestionnaireSchema = createInsertSchema(questionnaires).omit({ id: true, createdAt: true, updatedAt: true });
@@ -299,6 +333,8 @@ export type ReportRun = typeof reportRuns.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type PolicyGenerationInput = typeof policyGenerationInputs.$inferSelect;
 export type InsertPolicyGenerationInput = z.infer<typeof insertPolicyGenerationInputSchema>;
+export type RawDataInput = typeof rawDataInputs.$inferSelect;
+export type InsertRawDataInput = z.infer<typeof insertRawDataInputSchema>;
 export type EmissionFactor = typeof emissionFactors.$inferSelect;
 export type InsertEmissionFactor = z.infer<typeof insertEmissionFactorSchema>;
 export type CarbonCalculation = typeof carbonCalculations.$inferSelect;

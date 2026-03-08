@@ -4,7 +4,7 @@ import pg from "pg";
 import {
   users, companies, companySettings, esgPolicies, policyVersions,
   materialTopics, metrics, metricTargets, metricValues, evidenceFiles,
-  actionPlans, reportRuns, auditLogs,
+  actionPlans, reportRuns, auditLogs, rawDataInputs,
   policyGenerationInputs, emissionFactors, carbonCalculations,
   questionnaires, questionnaireQuestions,
   type User, type InsertUser, type Company, type InsertCompany,
@@ -13,6 +13,7 @@ import {
   type MetricTarget, type MetricValue, type InsertMetricValue,
   type EvidenceFile, type ActionPlan, type InsertActionPlan,
   type ReportRun, type AuditLog,
+  type RawDataInput, type InsertRawDataInput,
   type PolicyGenerationInput, type InsertPolicyGenerationInput,
   type EmissionFactor, type InsertEmissionFactor,
   type CarbonCalculation, type InsertCarbonCalculation,
@@ -71,6 +72,12 @@ export interface IStorage {
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   updateMetricValue(id: string, data: Partial<MetricValue>): Promise<MetricValue | undefined>;
   lockPeriod(companyId: string, period: string): Promise<void>;
+
+  // Raw Data Inputs
+  getRawDataByPeriod(companyId: string, period: string): Promise<RawDataInput[]>;
+  createRawDataInput(data: InsertRawDataInput): Promise<RawDataInput>;
+  updateRawDataInput(id: string, data: Partial<RawDataInput>): Promise<RawDataInput | undefined>;
+  upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>): Promise<RawDataInput>;
 
   // Evidence Files
   getEvidenceFiles(companyId: string): Promise<EvidenceFile[]>;
@@ -314,6 +321,34 @@ export class DatabaseStorage implements IStorage {
       .where(
         sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId}) AND ${metricValues.period} = ${period}`
       );
+  }
+
+  async getRawDataByPeriod(companyId: string, period: string) {
+    return db.select().from(rawDataInputs)
+      .where(and(eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.period, period)))
+      .orderBy(rawDataInputs.inputCategory, rawDataInputs.inputName);
+  }
+
+  async createRawDataInput(data: InsertRawDataInput) {
+    const [r] = await db.insert(rawDataInputs).values(data as any).returning();
+    return r;
+  }
+
+  async updateRawDataInput(id: string, data: Partial<RawDataInput>) {
+    const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, id)).returning();
+    return r;
+  }
+
+  async upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>) {
+    const [existing] = await db.select().from(rawDataInputs)
+      .where(and(eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.inputName, inputName), eq(rawDataInputs.period, period)));
+    if (existing) {
+      const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, existing.id)).returning();
+      return r;
+    } else {
+      const [r] = await db.insert(rawDataInputs).values({ companyId, inputName, period, ...data } as any).returning();
+      return r;
+    }
   }
 
   async getEvidenceFiles(companyId: string) {

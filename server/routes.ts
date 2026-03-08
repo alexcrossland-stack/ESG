@@ -14,6 +14,7 @@ import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import OpenAI from "openai";
 import { POLICY_TEMPLATES } from "./policy-templates";
+import { getTrafficLightStatus, runCalculationsForPeriod, type RawInputs } from "./calculations";
 
 const { Pool } = pg;
 
@@ -33,32 +34,38 @@ async function seedDatabase(companyId: string, userId: string) {
   if (existingMetrics.length > 0) return;
 
   const defaultMetrics = [
-    // Environmental
-    { name: "Electricity Consumption", description: "Total electricity used across all sites", category: "environmental" as const, unit: "kWh", frequency: "monthly" as const, dataOwner: "Operations Manager" },
-    { name: "Gas / Fuel Consumption", description: "Natural gas and fuel oil consumption", category: "environmental" as const, unit: "kWh", frequency: "monthly" as const, dataOwner: "Operations Manager" },
-    { name: "Scope 1 Emissions", description: "Direct greenhouse gas emissions from owned sources", category: "environmental" as const, unit: "tCO2e", frequency: "quarterly" as const, dataOwner: "Operations Manager" },
-    { name: "Scope 2 Emissions", description: "Indirect emissions from purchased electricity", category: "environmental" as const, unit: "tCO2e", frequency: "quarterly" as const, dataOwner: "Operations Manager" },
-    { name: "Waste Generated", description: "Total waste produced by the business", category: "environmental" as const, unit: "tonnes", frequency: "monthly" as const, dataOwner: "Facilities Manager" },
-    { name: "Recycling Rate", description: "Percentage of waste that is recycled", category: "environmental" as const, unit: "%", frequency: "monthly" as const, dataOwner: "Facilities Manager" },
-    { name: "Water Consumption", description: "Total water used across all sites", category: "environmental" as const, unit: "m³", frequency: "monthly" as const, dataOwner: "Facilities Manager" },
-    // Social
-    { name: "Total Employees", description: "Total number of employees (headcount)", category: "social" as const, unit: "people", frequency: "monthly" as const, dataOwner: "HR Manager" },
-    { name: "Gender Split (% Female)", description: "Percentage of workforce identifying as female", category: "social" as const, unit: "%", frequency: "quarterly" as const, dataOwner: "HR Manager" },
-    { name: "Employee Turnover Rate", description: "Annual employee turnover as a percentage", category: "social" as const, unit: "%", frequency: "quarterly" as const, dataOwner: "HR Manager" },
-    { name: "Absence Rate", description: "Employee absence as a percentage of total working days", category: "social" as const, unit: "%", frequency: "monthly" as const, dataOwner: "HR Manager" },
-    { name: "Training Hours per Employee", description: "Average training hours per employee per year", category: "social" as const, unit: "hours", frequency: "quarterly" as const, dataOwner: "HR Manager" },
-    { name: "Lost Time Incidents", description: "Number of workplace incidents resulting in lost time", category: "social" as const, unit: "incidents", frequency: "monthly" as const, dataOwner: "H&S Manager" },
-    { name: "Employee Engagement Score", description: "Average employee engagement survey score", category: "social" as const, unit: "score /10", frequency: "annual" as const, dataOwner: "HR Manager" },
-    // Governance
-    { name: "Board Meetings Held", description: "Number of board or senior management meetings held", category: "governance" as const, unit: "meetings", frequency: "quarterly" as const, dataOwner: "Company Secretary" },
-    { name: "Anti-Bribery Policy in Place", description: "Whether a formal anti-bribery policy exists (1=Yes, 0=No)", category: "governance" as const, unit: "1/0", frequency: "annual" as const, dataOwner: "Compliance Manager" },
-    { name: "Whistleblowing Policy in Place", description: "Whether a formal whistleblowing policy exists (1=Yes, 0=No)", category: "governance" as const, unit: "1/0", frequency: "annual" as const, dataOwner: "Compliance Manager" },
-    { name: "Data Privacy Training Completion", description: "Percentage of staff who completed data privacy training", category: "governance" as const, unit: "%", frequency: "annual" as const, dataOwner: "Data Protection Officer" },
-    { name: "Supplier Code of Conduct Adoption", description: "Percentage of suppliers who signed the code of conduct", category: "governance" as const, unit: "%", frequency: "annual" as const, dataOwner: "Procurement Manager" },
+    { name: "Electricity Consumption", description: "Total electricity used across all sites", category: "environmental" as const, unit: "kWh", frequency: "monthly" as const, dataOwner: "Operations Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 1, helpText: "Enter your total electricity usage in kilowatt-hours from your utility bills" },
+    { name: "Gas / Fuel Consumption", description: "Natural gas and fuel oil consumption", category: "environmental" as const, unit: "kWh", frequency: "monthly" as const, dataOwner: "Operations Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 2, helpText: "Enter gas consumption in kWh from your gas bills" },
+    { name: "Company Vehicle Fuel Use", description: "Total fuel used by company-owned or leased vehicles", category: "environmental" as const, unit: "litres", frequency: "monthly" as const, dataOwner: "Operations Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 3, helpText: "Enter total fuel purchased for company vehicles in litres" },
+    { name: "Scope 1 Emissions", description: "Direct greenhouse gas emissions from owned sources (gas, fuel, vehicles)", category: "environmental" as const, unit: "tCO2e", frequency: "quarterly" as const, dataOwner: "Operations Manager", metricType: "calculated", calculationType: "scope1", formulaText: "(Gas kWh × gas factor + Vehicle litres × fuel factor) / 1000", direction: "lower_is_better", displayOrder: 4, helpText: "Automatically calculated from your gas/fuel consumption and vehicle fuel data" },
+    { name: "Scope 2 Emissions", description: "Indirect emissions from purchased electricity", category: "environmental" as const, unit: "tCO2e", frequency: "quarterly" as const, dataOwner: "Operations Manager", metricType: "calculated", calculationType: "scope2", formulaText: "Electricity kWh × electricity emission factor / 1000", direction: "lower_is_better", displayOrder: 5, helpText: "Automatically calculated from your electricity consumption" },
+    { name: "Waste Generated", description: "Total waste produced by the business", category: "environmental" as const, unit: "tonnes", frequency: "monthly" as const, dataOwner: "Facilities Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 6, helpText: "Enter total waste in tonnes from your waste collection records" },
+    { name: "Recycling Rate", description: "Percentage of waste that is recycled", category: "environmental" as const, unit: "%", frequency: "monthly" as const, dataOwner: "Facilities Manager", metricType: "calculated", calculationType: "recycling_rate", formulaText: "Recycled waste / Total waste × 100", direction: "higher_is_better", displayOrder: 7, helpText: "Automatically calculated from waste and recycled waste data" },
+    { name: "Water Consumption", description: "Total water used across all sites", category: "environmental" as const, unit: "m³", frequency: "monthly" as const, dataOwner: "Facilities Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 8, helpText: "Enter water consumption in cubic metres from your water bills" },
+    { name: "Business Travel Emissions", description: "Emissions from business travel including flights, rail, hotels, and car mileage", category: "environmental" as const, unit: "tCO2e", frequency: "quarterly" as const, dataOwner: "Operations Manager", metricType: "calculated", calculationType: "travel_emissions", formulaText: "Sum of (travel activity × emission factor) for each travel type / 1000", direction: "lower_is_better", displayOrder: 9, helpText: "Automatically calculated from your business travel activity data" },
+    { name: "Carbon Intensity", description: "Total carbon emissions relative to business size (per employee or per £m revenue)", category: "environmental" as const, unit: "tCO2e/employee", frequency: "quarterly" as const, dataOwner: "Operations Manager", metricType: "derived", calculationType: "carbon_intensity", formulaText: "(Scope 1 + Scope 2 + Travel Emissions) / Total employees", direction: "lower_is_better", displayOrder: 10, helpText: "Derived from your total emissions and employee count or revenue" },
+    { name: "Total Employees", description: "Total number of employees (headcount)", category: "social" as const, unit: "people", frequency: "monthly" as const, dataOwner: "HR Manager", metricType: "manual", direction: "higher_is_better", displayOrder: 11, helpText: "Enter your total employee headcount" },
+    { name: "Gender Split (% Female)", description: "Percentage of workforce identifying as female", category: "social" as const, unit: "%", frequency: "quarterly" as const, dataOwner: "HR Manager", metricType: "manual", direction: "target_range", targetMin: "40", targetMax: "60", displayOrder: 12, helpText: "Enter the percentage of your workforce identifying as female" },
+    { name: "Management Gender Diversity", description: "Percentage of management positions held by women", category: "social" as const, unit: "%", frequency: "quarterly" as const, dataOwner: "HR Manager", metricType: "calculated", calculationType: "management_diversity", formulaText: "Female managers / Total managers × 100", direction: "target_range", targetMin: "30", targetMax: "60", displayOrder: 13, helpText: "Calculated from female managers and total managers data" },
+    { name: "Employee Turnover Rate", description: "Employees leaving as a percentage of average headcount", category: "social" as const, unit: "%", frequency: "quarterly" as const, dataOwner: "HR Manager", metricType: "calculated", calculationType: "turnover_rate", formulaText: "Employee leavers / Average headcount × 100", direction: "lower_is_better", displayOrder: 14, helpText: "Calculated from leavers and headcount data" },
+    { name: "Absence Rate", description: "Employee absence as a percentage of total working days", category: "social" as const, unit: "%", frequency: "monthly" as const, dataOwner: "HR Manager", metricType: "calculated", calculationType: "absence_rate", formulaText: "Absence days / Total working days × 100", direction: "lower_is_better", displayOrder: 15, helpText: "Calculated from absence days and total working days" },
+    { name: "Training Hours per Employee", description: "Average training hours delivered per employee", category: "social" as const, unit: "hours", frequency: "quarterly" as const, dataOwner: "HR Manager", metricType: "calculated", calculationType: "training_per_employee", formulaText: "Total training hours / Total employees", direction: "higher_is_better", displayOrder: 16, helpText: "Calculated from total training hours and headcount" },
+    { name: "Lost Time Incidents", description: "Number of workplace incidents resulting in lost time", category: "social" as const, unit: "incidents", frequency: "monthly" as const, dataOwner: "H&S Manager", metricType: "manual", direction: "lower_is_better", displayOrder: 17, helpText: "Enter the number of incidents that resulted in time off work" },
+    { name: "Employee Engagement Score", description: "Average employee engagement survey score", category: "social" as const, unit: "score /10", frequency: "annual" as const, dataOwner: "HR Manager", metricType: "manual", direction: "higher_is_better", displayOrder: 18, helpText: "Enter your latest employee engagement survey score (out of 10)" },
+    { name: "Living Wage Coverage", description: "Percentage of employees paid at or above the real living wage", category: "social" as const, unit: "%", frequency: "annual" as const, dataOwner: "HR Manager", metricType: "calculated", calculationType: "living_wage", formulaText: "Employees paid living wage / Total employees × 100", direction: "higher_is_better", displayOrder: 19, helpText: "Calculated from living wage employee count and total headcount" },
+    { name: "Community Investment", description: "Total value of community investment, donations, and volunteering", category: "social" as const, unit: "£", frequency: "quarterly" as const, dataOwner: "HR Manager", metricType: "manual", direction: "higher_is_better", displayOrder: 20, helpText: "Enter the total value of donations, sponsorship, and volunteering time" },
+    { name: "Board Meetings Held", description: "Number of board or senior management meetings held", category: "governance" as const, unit: "meetings", frequency: "quarterly" as const, dataOwner: "Company Secretary", metricType: "manual", direction: "target_range", targetMin: "4", targetMax: "12", displayOrder: 21, helpText: "Enter the number of board or senior management meetings this period" },
+    { name: "Anti-Bribery Policy in Place", description: "Whether a formal anti-bribery and corruption policy exists", category: "governance" as const, unit: "yes/no", frequency: "annual" as const, dataOwner: "Compliance Manager", metricType: "manual", direction: "compliance_yes_no", displayOrder: 22, helpText: "Enter 1 if you have a policy in place, 0 if not" },
+    { name: "Whistleblowing Policy in Place", description: "Whether a formal whistleblowing policy exists", category: "governance" as const, unit: "yes/no", frequency: "annual" as const, dataOwner: "Compliance Manager", metricType: "manual", direction: "compliance_yes_no", displayOrder: 23, helpText: "Enter 1 if you have a policy in place, 0 if not" },
+    { name: "Data Privacy Training Completion", description: "Percentage of staff who completed data privacy training", category: "governance" as const, unit: "%", frequency: "annual" as const, dataOwner: "Data Protection Officer", metricType: "calculated", calculationType: "privacy_training", formulaText: "Trained staff / Total staff × 100", direction: "higher_is_better", displayOrder: 24, helpText: "Calculated from trained staff count and total staff" },
+    { name: "Supplier Code of Conduct Adoption", description: "Percentage of suppliers who signed the code of conduct", category: "governance" as const, unit: "%", frequency: "annual" as const, dataOwner: "Procurement Manager", metricType: "calculated", calculationType: "supplier_code", formulaText: "Signed suppliers / Total suppliers × 100", direction: "higher_is_better", displayOrder: 25, helpText: "Calculated from signed and total supplier counts" },
+    { name: "Cybersecurity Policy in Place", description: "Whether a formal cybersecurity policy exists", category: "governance" as const, unit: "yes/no", frequency: "annual" as const, dataOwner: "IT Manager", metricType: "manual", direction: "compliance_yes_no", displayOrder: 26, helpText: "Enter 1 if you have a policy in place, 0 if not" },
+    { name: "ESG Responsibility Assigned", description: "Whether a named individual is responsible for ESG management", category: "governance" as const, unit: "yes/no", frequency: "annual" as const, dataOwner: "Managing Director", metricType: "manual", direction: "compliance_yes_no", displayOrder: 27, helpText: "Enter 1 if ESG responsibility is formally assigned, 0 if not" },
+    { name: "ESG Targets Set", description: "Whether formal ESG targets have been established", category: "governance" as const, unit: "yes/no", frequency: "annual" as const, dataOwner: "Managing Director", metricType: "manual", direction: "compliance_yes_no", displayOrder: 28, helpText: "Enter 1 if formal ESG targets are set, 0 if not" },
   ];
 
   for (const m of defaultMetrics) {
-    await storage.createMetric({ ...m, companyId, enabled: true, isDefault: true });
+    await storage.createMetric({ ...m, companyId, enabled: true, isDefault: true } as any);
   }
 
   // Seed material topics
@@ -78,34 +85,92 @@ async function seedDatabase(companyId: string, userId: string) {
   ];
   await storage.upsertMaterialTopics(companyId, topicsList as any);
 
-  // Seed sample metric values
   const allMetrics = await storage.getMetrics(companyId);
   const periods = ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"];
+
   const sampleData: Record<string, number[]> = {
     "Electricity Consumption": [45200, 43800, 41500, 39200, 37800, 36100],
     "Gas / Fuel Consumption": [12400, 11800, 9600, 7200, 5800, 5100],
+    "Company Vehicle Fuel Use": [420, 410, 395, 380, 370, 360],
+    "Scope 1 Emissions": [3.4, 3.3, 2.9, 2.4, 2.1, 1.9],
+    "Scope 2 Emissions": [9.4, 9.1, 8.6, 8.1, 7.8, 7.5],
     "Waste Generated": [8.4, 8.1, 7.9, 7.6, 7.3, 7.0],
     "Recycling Rate": [62, 64, 66, 68, 70, 72],
+    "Water Consumption": [120, 115, 110, 108, 105, 102],
+    "Business Travel Emissions": [1.2, 0.9, 1.1, 1.0, 0.8, 0.7],
+    "Carbon Intensity": [0.29, 0.28, 0.25, 0.23, 0.21, 0.19],
     "Total Employees": [48, 48, 50, 51, 51, 52],
     "Gender Split (% Female)": [42, 42, 43, 43, 44, 44],
+    "Management Gender Diversity": [30, 30, 33, 33, 35, 35],
+    "Employee Turnover Rate": [4.2, 3.8, 3.5, 3.2, 3.0, 2.8],
     "Absence Rate": [2.1, 2.3, 1.9, 1.8, 2.0, 1.7],
+    "Training Hours per Employee": [2.5, 3.0, 2.8, 3.2, 3.5, 3.8],
     "Lost Time Incidents": [1, 0, 0, 1, 0, 0],
+    "Employee Engagement Score": [7.5, 7.5, 7.5, 7.5, 7.5, 7.8],
+    "Living Wage Coverage": [95, 95, 96, 96, 97, 98],
+    "Community Investment": [500, 250, 750, 300, 400, 600],
     "Board Meetings Held": [1, 1, 1, 1, 1, 1],
+    "Anti-Bribery Policy in Place": [1, 1, 1, 1, 1, 1],
+    "Whistleblowing Policy in Place": [1, 1, 1, 1, 1, 1],
+    "Data Privacy Training Completion": [85, 88, 90, 92, 95, 97],
+    "Supplier Code of Conduct Adoption": [40, 42, 45, 48, 50, 52],
+    "Cybersecurity Policy in Place": [1, 1, 1, 1, 1, 1],
+    "ESG Responsibility Assigned": [1, 1, 1, 1, 1, 1],
+    "ESG Targets Set": [0, 0, 0, 1, 1, 1],
   };
 
   for (const metric of allMetrics) {
     const values = sampleData[metric.name];
     if (values) {
       for (let i = 0; i < periods.length; i++) {
+        const prevValue = i > 0 ? values[i - 1] : null;
+        const pctChange = prevValue && prevValue !== 0 ? Math.round(((values[i] - prevValue) / Math.abs(prevValue)) * 10000) / 100 : null;
+        const status = getTrafficLightStatus(
+          values[i],
+          metric.targetValue ? Number(metric.targetValue) : null,
+          metric.direction || "higher_is_better",
+          Number(metric.amberThreshold || 5),
+          Number(metric.redThreshold || 15),
+          metric.targetMin ? Number(metric.targetMin) : null,
+          metric.targetMax ? Number(metric.targetMax) : null,
+          prevValue
+        );
         await storage.createMetricValue({
           metricId: metric.id,
           period: periods[i],
           value: values[i].toString(),
+          previousValue: prevValue?.toString() || null,
+          targetValue: metric.targetValue?.toString() || null,
+          status,
+          percentChange: pctChange?.toString() || null,
           submittedBy: userId,
           notes: "",
           locked: i < 3,
         });
       }
+    }
+  }
+
+  const sampleRawData: Record<string, Record<string, number>> = {
+    "2025-06": {
+      electricity_kwh: 36100, gas_kwh: 5100, vehicle_fuel_litres: 360,
+      total_waste_tonnes: 7.0, recycled_waste_tonnes: 5.04, water_m3: 102,
+      employee_headcount: 52, employee_leavers: 1, absence_days: 18,
+      total_working_days: 1040, total_training_hours: 198, trained_staff: 50,
+      total_staff: 52, signed_suppliers: 26, total_suppliers: 50,
+      female_managers: 7, total_managers: 20, living_wage_employees: 51,
+    },
+  };
+
+  for (const [period, inputs] of Object.entries(sampleRawData)) {
+    for (const [inputName, value] of Object.entries(inputs)) {
+      const cat = inputName.includes("elec") || inputName.includes("gas") || inputName.includes("fuel") || inputName.includes("waste") || inputName.includes("water")
+        ? "environmental" : inputName.includes("employee") || inputName.includes("absence") || inputName.includes("training") || inputName.includes("female") || inputName.includes("manager") || inputName.includes("living")
+        ? "social" : "governance";
+      await storage.createRawDataInput({
+        companyId, inputName, inputCategory: cat, value: value.toString(),
+        unit: "", period, enteredBy: userId,
+      });
     }
   }
 
@@ -268,6 +333,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (req.session as any).userId = user.id;
       (req.session as any).companyId = user.companyId;
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
+
+      if (user.companyId) {
+        try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
+      }
+
       req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
         res.json({ user: { ...user, password: undefined }, company });
@@ -495,6 +565,239 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: {},
       });
       res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Raw Data Inputs
+  app.get("/api/raw-data/:period", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const data = await storage.getRawDataByPeriod(companyId, req.params.period);
+    res.json(data);
+  });
+
+  app.post("/api/raw-data", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { inputs, period } = req.body;
+
+      const results: any[] = [];
+      for (const [inputName, value] of Object.entries(inputs)) {
+        if (value === null || value === undefined || value === "") continue;
+        const cat = inputName.includes("elec") || inputName.includes("gas") || inputName.includes("fuel") || inputName.includes("waste") || inputName.includes("water")
+          ? "environmental" : inputName.includes("employee") || inputName.includes("absence") || inputName.includes("training") || inputName.includes("female") || inputName.includes("manager") || inputName.includes("living") || inputName.includes("headcount")
+          ? "social" : "governance";
+        const r = await storage.upsertRawDataInput(companyId, inputName, period, {
+          inputCategory: cat, value: String(value), unit: "", enteredBy: userId,
+        });
+        results.push(r);
+      }
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "Raw data submitted",
+        entityType: "raw_data",
+        entityId: period,
+        details: { period, inputCount: results.length },
+      });
+
+      res.json({ saved: results.length, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Recalculate metrics for a period
+  app.post("/api/metrics/recalculate/:period", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const period = req.params.period;
+
+      const rawData = await storage.getRawDataByPeriod(companyId, period);
+      const rawInputs: RawInputs = {};
+      for (const d of rawData) {
+        rawInputs[d.inputName] = d.value ? Number(d.value) : undefined;
+      }
+
+      const allMetrics = await storage.getMetrics(companyId);
+      const existingValues: Record<string, number | null> = {};
+      for (const m of allMetrics) {
+        const vals = await storage.getMetricValues(m.id);
+        const periodVal = vals.find(v => v.period === period);
+        if (periodVal) existingValues[m.name] = periodVal.value ? Number(periodVal.value) : null;
+      }
+
+      const calculated = runCalculationsForPeriod(rawInputs, {}, existingValues);
+      const updated: any[] = [];
+
+      for (const [metricName, calcValue] of Object.entries(calculated)) {
+        if (calcValue === null) continue;
+        const metric = allMetrics.find(m => m.name === metricName && (m.metricType === "calculated" || m.metricType === "derived"));
+        if (!metric) continue;
+
+        const vals = await storage.getMetricValues(metric.id);
+        const existingForPeriod = vals.find(v => v.period === period);
+        const previousPeriodVal = vals.find(v => v.period < period);
+        const prevVal = previousPeriodVal ? Number(previousPeriodVal.value) : null;
+        const pctChange = prevVal && prevVal !== 0 ? Math.round(((calcValue - prevVal) / Math.abs(prevVal)) * 10000) / 100 : null;
+        const status = getTrafficLightStatus(
+          calcValue,
+          metric.targetValue ? Number(metric.targetValue) : null,
+          metric.direction || "higher_is_better",
+          Number(metric.amberThreshold || 5),
+          Number(metric.redThreshold || 15),
+          metric.targetMin ? Number(metric.targetMin) : null,
+          metric.targetMax ? Number(metric.targetMax) : null,
+          prevVal
+        );
+
+        if (existingForPeriod) {
+          const r = await storage.updateMetricValue(existingForPeriod.id, {
+            value: calcValue.toString(),
+            previousValue: prevVal?.toString() || null,
+            status,
+            percentChange: pctChange?.toString() || null,
+          });
+          updated.push({ metric: metricName, value: calcValue, status, updated: true });
+        } else {
+          await storage.createMetricValue({
+            metricId: metric.id,
+            period,
+            value: calcValue.toString(),
+            previousValue: prevVal?.toString() || null,
+            targetValue: metric.targetValue?.toString() || null,
+            status,
+            percentChange: pctChange?.toString() || null,
+            submittedBy: userId,
+            notes: "Auto-calculated",
+            locked: false,
+          });
+          updated.push({ metric: metricName, value: calcValue, status, created: true });
+        }
+      }
+
+      res.json({ period, updated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Metric history with traffic lights
+  app.get("/api/metrics/:id/history", requireAuth, async (req, res) => {
+    const metric = await storage.getMetric(req.params.id);
+    if (!metric) return res.status(404).json({ error: "Metric not found" });
+    const values = await storage.getMetricValues(req.params.id);
+    const sortedValues = values.sort((a, b) => a.period.localeCompare(b.period));
+    const history = sortedValues.map((v, i) => {
+      const val = v.value ? Number(v.value) : null;
+      const prev = i > 0 && sortedValues[i - 1].value ? Number(sortedValues[i - 1].value) : null;
+      const status = v.status || getTrafficLightStatus(
+        val,
+        metric.targetValue ? Number(metric.targetValue) : null,
+        metric.direction || "higher_is_better",
+        Number(metric.amberThreshold || 5),
+        Number(metric.redThreshold || 15),
+        metric.targetMin ? Number(metric.targetMin) : null,
+        metric.targetMax ? Number(metric.targetMax) : null,
+        prev
+      );
+      return { ...v, status, previousValue: prev };
+    });
+    res.json({ metric, history });
+  });
+
+  // Admin metric update
+  app.put("/api/metrics/:id/admin", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner } = req.body;
+      const result = await storage.updateMetric(req.params.id, {
+        direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner,
+      });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "Metric settings updated",
+        entityType: "metric",
+        entityId: req.params.id,
+        details: req.body,
+      });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Enhanced dashboard
+  app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+
+      const latestPeriod = "2025-06";
+      const statusCounts = { green: 0, amber: 0, red: 0, missing: 0 };
+      const categorySummary: Record<string, { green: number; amber: number; red: number; missing: number; total: number }> = {
+        environmental: { green: 0, amber: 0, red: 0, missing: 0, total: 0 },
+        social: { green: 0, amber: 0, red: 0, missing: 0, total: 0 },
+        governance: { green: 0, amber: 0, red: 0, missing: 0, total: 0 },
+      };
+
+      const metricSummaries: any[] = [];
+
+      for (const metric of enabledMetrics) {
+        const values = await storage.getMetricValues(metric.id);
+        const latestVal = values.find(v => v.period === latestPeriod);
+        const cat = metric.category;
+        categorySummary[cat].total++;
+
+        if (!latestVal || latestVal.value === null) {
+          statusCounts.missing++;
+          categorySummary[cat].missing++;
+          metricSummaries.push({ ...metric, latestValue: null, status: "missing", trend: null });
+          continue;
+        }
+
+        const val = Number(latestVal.value);
+        const sortedVals = values.sort((a, b) => a.period.localeCompare(b.period));
+        const prevEntry = sortedVals.filter(v => v.period < latestPeriod).pop();
+        const prev = prevEntry?.value ? Number(prevEntry.value) : null;
+        const status = latestVal.status || getTrafficLightStatus(
+          val, metric.targetValue ? Number(metric.targetValue) : null,
+          metric.direction || "higher_is_better",
+          Number(metric.amberThreshold || 5), Number(metric.redThreshold || 15),
+          metric.targetMin ? Number(metric.targetMin) : null, metric.targetMax ? Number(metric.targetMax) : null, prev
+        );
+
+        statusCounts[status as "green" | "amber" | "red"]++;
+        categorySummary[cat][status as "green" | "amber" | "red"]++;
+
+        const trend = sortedVals.slice(-6).map(v => ({ period: v.period, value: v.value ? Number(v.value) : null }));
+
+        metricSummaries.push({
+          id: metric.id, name: metric.name, category: cat, unit: metric.unit,
+          metricType: metric.metricType, direction: metric.direction,
+          latestValue: val, previousValue: prev, status, trend,
+          percentChange: prev && prev !== 0 ? Math.round(((val - prev) / Math.abs(prev)) * 10000) / 100 : null,
+          target: metric.targetValue ? Number(metric.targetValue) : null,
+          helpText: metric.helpText, formulaText: metric.formulaText,
+        });
+      }
+
+      const totalScored = statusCounts.green + statusCounts.amber + statusCounts.red;
+      const esgScore = totalScored > 0 ? Math.round((statusCounts.green / totalScored) * 100) : 0;
+
+      res.json({
+        totalMetrics: enabledMetrics.length,
+        statusCounts,
+        categorySummary,
+        esgScore,
+        latestPeriod,
+        metricSummaries,
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

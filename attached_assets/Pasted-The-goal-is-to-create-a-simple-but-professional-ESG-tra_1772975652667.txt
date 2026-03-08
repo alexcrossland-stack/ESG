@@ -1,0 +1,544 @@
+The goal is to create a simple but professional ESG tracking system for small and medium-sized businesses. The feature must support manual metrics, automatic calculations, derived metrics, trend tracking, and traffic light scoring.
+
+The solution must be clean, easy to use, and future-ready for reports, benchmarking, and AI recommendations.
+
+⸻
+
+1. Core outcome required
+
+Create an ESG metrics system that allows a business to:
+	•	track Environmental, Social, and Governance metrics
+	•	enter raw source data monthly, quarterly, or annually
+	•	automatically calculate selected ESG metrics from raw data
+	•	generate derived metrics from other saved values
+	•	compare current value versus previous period and target
+	•	assign a red / amber / green traffic light status to each metric
+	•	show trend history and dashboard summaries
+	•	support admin configuration of metrics, targets, and settings
+
+The system must be designed so that it stores both raw data and calculated outputs, not just final KPI values.
+
+⸻
+
+2. Metric library to implement
+
+Create the following default metric library.
+
+Environmental metrics
+	1.	Electricity Consumption
+	2.	Gas / Fuel Consumption
+	3.	Company Vehicle Fuel Use
+	4.	Scope 1 Emissions
+	5.	Scope 2 Emissions
+	6.	Waste Generated
+	7.	Recycling Rate
+	8.	Water Consumption
+	9.	Business Travel Emissions
+	10.	Carbon Intensity
+
+Social metrics
+	11.	Total Employees
+	12.	Gender Split (% Female)
+	13.	Management Gender Diversity
+	14.	Employee Turnover Rate
+	15.	Absence Rate
+	16.	Training Hours per Employee
+	17.	Lost Time Incidents
+	18.	Employee Engagement Score
+	19.	Living Wage Coverage
+	20.	Community Investment
+
+Governance metrics
+	21.	Board Meetings Held
+	22.	Anti-Bribery Policy in Place
+	23.	Whistleblowing Policy in Place
+	24.	Data Privacy Training Completion
+	25.	Supplier Code of Conduct Adoption
+	26.	Cybersecurity Policy in Place
+	27.	ESG Responsibility Assigned
+	28.	ESG Targets Set
+
+⸻
+
+3. Data model requirements
+
+Create a proper database structure.
+
+A. metrics table
+
+Each metric must have:
+	•	id
+	•	name
+	•	category (Environmental, Social, Governance)
+	•	description
+	•	unit
+	•	frequency
+	•	data_owner
+	•	metric_type
+	•	calculation_type
+	•	formula_text
+	•	direction
+	•	target_value
+	•	target_min
+	•	target_max
+	•	active
+	•	display_order
+	•	help_text
+
+B. metric_values table
+
+Store period-based metric results with:
+	•	id
+	•	metric_id
+	•	period_type (monthly, quarterly, annual)
+	•	period_start
+	•	period_end
+	•	current_value
+	•	previous_value
+	•	target_value
+	•	status
+	•	percent_change
+	•	notes
+	•	created_at
+	•	updated_at
+
+C. raw_data_inputs table
+
+Store source data separately with:
+	•	id
+	•	input_name
+	•	input_category
+	•	value
+	•	unit
+	•	period_type
+	•	period_start
+	•	period_end
+	•	source
+	•	entered_by
+	•	created_at
+	•	updated_at
+
+D. emission_factors table
+
+Store editable factors with:
+	•	id
+	•	factor_name
+	•	factor_category
+	•	factor_value
+	•	factor_unit
+	•	region
+	•	effective_from
+	•	effective_to
+	•	active
+
+E. audit_log table
+
+Track changes with:
+	•	id
+	•	entity_type
+	•	entity_id
+	•	action_type
+	•	old_value
+	•	new_value
+	•	changed_by
+	•	changed_at
+
+⸻
+
+4. Metric types
+
+Support these metric types:
+
+Manual metric
+
+User directly enters the final metric value.
+
+Automatic metric
+
+Metric is calculated from raw input data using a defined formula.
+
+Derived metric
+
+Metric is calculated using other metric outputs already saved in the system.
+
+Clearly label each metric in the UI as:
+	•	Manual
+	•	Calculated
+	•	Derived
+
+⸻
+
+5. Automatic calculation rules
+
+Implement the following formulas.
+
+Scope 1 Emissions
+
+Calculate using gas/fuel consumption and company vehicle fuel use.
+
+Formula:
+	•	gas or fuel consumption × relevant emission factor
+	•	company vehicle fuel litres × relevant emission factor
+	•	sum both values
+
+Scope 2 Emissions
+
+Formula:
+	•	electricity consumption in kWh × electricity emission factor
+
+Recycling Rate
+
+Formula:
+	•	recycled waste / total waste × 100
+
+Business Travel Emissions
+
+Calculate from travel records using travel-type emission factors.
+Support:
+	•	flights
+	•	rail
+	•	hotel stays
+	•	car mileage
+	•	taxis
+
+Employee Turnover Rate
+
+Formula:
+	•	employee leavers / average headcount × 100
+
+Absence Rate
+
+Formula:
+	•	absence days / total working days × 100
+
+Data Privacy Training Completion
+
+Formula:
+	•	trained staff / total staff × 100
+
+Supplier Code of Conduct Adoption
+
+Formula:
+	•	suppliers signed code / total suppliers × 100
+
+Living Wage Coverage
+
+Formula:
+	•	employees paid living wage / total employees × 100
+
+Training Hours per Employee
+
+Formula:
+	•	total training hours / total employees
+
+⸻
+
+6. Derived metric rules
+
+Implement these derived metrics.
+
+Carbon Intensity
+
+Support two calculation modes:
+	•	emissions per £m revenue
+	•	emissions per employee
+
+Formula option 1:
+	•	(Scope 1 + Scope 2 + Business Travel Emissions) / annual revenue
+
+Formula option 2:
+	•	(Scope 1 + Scope 2 + Business Travel Emissions) / total employees
+
+Management Gender Diversity
+
+Formula:
+	•	female managers / total managers × 100
+
+Overall ESG Score
+
+Create:
+	•	Environmental score
+	•	Social score
+	•	Governance score
+	•	Overall ESG score
+
+Use a simple scoring model based on:
+	•	completion of data
+	•	trend direction
+	•	target achievement
+	•	policy coverage for yes/no governance items
+
+Keep this scoring logic configurable and easy to adjust later.
+
+⸻
+
+7. Traffic light scoring logic
+
+Add a red / amber / green status for every metric.
+
+Each metric must support one of these direction settings:
+	•	higher_is_better
+	•	lower_is_better
+	•	target_range
+	•	compliance_yes_no
+
+Green
+
+Set status to green when:
+	•	metric meets or beats target
+	•	or trend improved in the correct direction
+
+Amber
+
+Set status to amber when:
+	•	metric is close to target, such as within 5 percent
+	•	or no significant movement versus prior period
+
+Red
+
+Set status to red when:
+	•	metric misses target materially
+	•	or trend moves in the wrong direction
+
+Compliance metrics
+
+For yes/no metrics:
+	•	yes = green
+	•	no = red
+
+Target range metrics
+
+For metrics such as board meetings held:
+	•	green if within range or above minimum threshold
+	•	amber if slightly below range
+	•	red if materially below range
+
+Make thresholds configurable in admin settings.
+
+⸻
+
+8. Raw input forms required
+
+Build raw data entry forms for the fields needed to support calculations.
+
+Include:
+	•	monthly electricity kWh
+	•	monthly gas kWh
+	•	vehicle fuel litres
+	•	total waste tonnes
+	•	recycled waste tonnes
+	•	water m3
+	•	employee headcount
+	•	employee leavers
+	•	absence days
+	•	total working days
+	•	trained staff count
+	•	total staff count
+	•	supplier count
+	•	signed supplier count
+	•	female managers
+	•	total managers
+	•	annual revenue
+	•	business travel activity by type
+
+Data entry should support:
+	•	monthly
+	•	quarterly
+	•	annual
+
+The system must save history by reporting period.
+
+⸻
+
+9. UI requirements
+
+A. ESG dashboard
+
+Show:
+	•	total metrics tracked
+	•	number of green metrics
+	•	number of amber metrics
+	•	number of red metrics
+	•	environmental summary
+	•	social summary
+	•	governance summary
+	•	overall ESG score
+	•	recent changes
+	•	missing data warnings
+
+B. Metric list page
+
+Display all metrics with:
+	•	name
+	•	category
+	•	current value
+	•	unit
+	•	target
+	•	previous value
+	•	percent change
+	•	traffic light status
+	•	manual/calculated/derived badge
+
+Allow filters by:
+	•	category
+	•	status
+	•	frequency
+	•	data owner
+	•	metric type
+
+C. Metric detail page
+
+When a user clicks into a metric, show:
+	•	metric name
+	•	category
+	•	description
+	•	formula
+	•	source inputs used
+	•	current value
+	•	previous value
+	•	target
+	•	trend graph
+	•	status
+	•	notes
+	•	audit history
+	•	reporting frequency
+	•	data owner
+
+D. Admin settings page
+
+Allow admin users to:
+	•	edit metric definitions
+	•	activate or deactivate metrics
+	•	change targets
+	•	edit formulas where appropriate
+	•	change direction type
+	•	change traffic light thresholds
+	•	update emission factors
+	•	set metric ownership
+	•	choose calculation mode for carbon intensity
+
+⸻
+
+10. User experience requirements
+
+The interface must be designed for non-expert SME users.
+
+Requirements:
+	•	use plain English
+	•	show short help text under each field
+	•	explain formulas simply
+	•	clearly separate raw data from final KPI values
+	•	show when a metric is auto-calculated
+	•	show missing data warnings
+	•	show data completeness percentage
+	•	avoid ESG jargon where possible
+
+⸻
+
+11. Business logic requirements
+
+Data storage
+
+Do not only store final ESG metric values.
+
+Store:
+	•	raw source data
+	•	formulas
+	•	emission factors
+	•	calculated outputs
+	•	historical targets
+	•	traffic light history
+	•	notes
+	•	audit trail
+
+Recalculation
+
+When raw data changes, dependent calculated metrics must automatically update.
+
+Example:
+If electricity consumption changes, Scope 2 Emissions and Carbon Intensity should also update.
+
+Validation
+
+Add validation for:
+	•	missing required source data
+	•	divide-by-zero cases
+	•	invalid percentages above 100 where not allowed
+	•	invalid negative values unless explicitly supported
+
+⸻
+
+12. Charts and analytics
+
+For each metric show:
+	•	current value
+	•	previous value
+	•	percentage change
+	•	trend over time
+	•	traffic light history
+
+Use simple charts for:
+	•	emissions trend
+	•	waste and recycling trend
+	•	workforce trend
+	•	training trend
+	•	governance completion trend
+
+⸻
+
+13. Default SME settings
+
+Preload the app with:
+	•	the 28 default metrics above
+	•	standard frequencies
+	•	basic emission factors
+	•	sensible targets where appropriate
+	•	default traffic light thresholds
+	•	monthly utility tracking
+	•	quarterly HR and emissions rates
+	•	annual governance and policy metrics
+
+⸻
+
+14. Acceptance criteria
+
+The feature is complete only if all of the following work:
+	1.	A user can enter raw monthly electricity data and the system automatically calculates Scope 2 Emissions.
+	2.	A user can enter waste and recycled waste and the system automatically calculates Recycling Rate.
+	3.	A user can enter employee leavers and headcount and the system automatically calculates Employee Turnover Rate.
+	4.	A user can view current versus previous value for every metric.
+	5.	A user can see a red, amber, or green status for every metric.
+	6.	An admin can edit targets and traffic light thresholds.
+	7.	Carbon Intensity updates automatically when emissions or revenue change.
+	8.	The dashboard shows summary counts of green, amber, and red metrics.
+	9.	The app stores audit history.
+	10.	The design is simple enough for an SME owner with no ESG expertise.
+
+⸻
+
+15. Technical delivery requirements
+
+Please build this in a modular way with:
+	•	reusable calculation functions
+	•	reusable traffic light scoring logic
+	•	a clean database schema
+	•	clear separation between raw inputs, calculations, and display logic
+
+Code should be production-ready, readable, and easy to extend later for:
+	•	PDF ESG reports
+	•	supplier questionnaires
+	•	AI recommendations
+	•	benchmarking
+	•	exports
+
+⸻
+
+16. Final implementation request
+
+After building the feature:
+	•	seed the database with the default metrics
+	•	provide sample test data
+	•	create at least one example dashboard view
+	•	document the formulas used
+	•	document where to edit emission factors and thresholds
+	•	ensure the UI works end-to-end without placeholders

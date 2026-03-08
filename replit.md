@@ -8,21 +8,56 @@ This platform replaces spreadsheets and documents with a single, guided platform
 
 ## Features
 
-1. **Dashboard** — Real-time ESG performance with charts (electricity trends, workforce, category breakdown), completion scores, and action summaries
+1. **Dashboard** — Real-time ESG performance with ESG score ring, traffic light summary (green/amber/red), category performance bars, emissions trend charts, workforce chart, needs-attention list, and action summaries
 2. **ESG Policy Builder** — Accordion-style policy editor with sections (purpose, environmental, social, governance, roles, data collection, review cycle), version history, draft/publish workflow, and export
 3. **Priority Topics** — Select which ESG topics matter most across Environmental, Social, and Governance categories
-4. **Metrics Library** — Pre-loaded 19 default ESG metrics (7 environmental, 7 social, 5 governance) with enable/disable toggle, data owner, frequency, and target setting
-5. **Data Entry** — Monthly/quarterly data entry grouped by category, with period selector, notes, individual/bulk save, and period locking
+4. **Metrics Library** — 28 default ESG metrics (10 environmental, 10 social, 8 governance) with traffic light status dots, trend arrows, metric type badges (Manual/Calculated/Derived), category/status/type filters, and detail dialog with trend charts, formulas, and current/previous/target values
+5. **Data Entry** — Tabbed interface with Raw Data Inputs (grouped environmental/social/governance fields with auto-calculation) and Manual Metrics entry. Save & Calculate triggers recalculation of all calculated/derived metrics with live results display
 6. **Action Tracker** — Create and manage ESG improvement actions with title, description, owner, due date, status, and progress notes
 7. **Reports** — Generate ESG reports with configurable sections (policy, topics, metrics, actions), preview, and export (text/CSV)
-8. **Settings** — Company profile (industry, country, employee count, revenue band), account info, and activity log
+8. **Settings** — Company profile, account info, Metric Configuration admin (direction, targets, thresholds, enable/disable), Policy Template admin, and activity log
 
 ### AI-Assisted Features
 
-9. **AI Policy Generator** — Guided 4-step questionnaire (company profile, environmental, social, governance) that generates a tailored ESG policy using AI. Preview, edit, and save as a new policy version.
-10. **Supplier Questionnaire Autofill** — Paste or enter ESG questionnaire questions; the system uses rules-based matching + AI to generate suggested answers using existing company data (policy, metrics, actions, carbon data). Shows confidence levels and source references. Export as CSV or copy to clipboard.
-11. **Carbon Calculator** — Simple SME-friendly calculator for Scope 1, 2, and 3 emissions. Uses configurable emission factors stored in database. Shows breakdown by source, per-employee metrics, and history of calculations.
-12. **Policy Templates** — 18 structured policy templates (Quality, Environmental, H&S, InfoSec, Data Protection, Risk Management, Document Control, NC/CA, Internal Audit, Management Review, Incident Reporting, Emergency Preparedness, Supplier CoC, Modern Slavery, Anti-Bribery, Sustainability/Carbon, EDI, Whistleblowing) with guided questionnaires, clause-based AI drafting, compliance mapping (ISO/legal), version control, approve/publish workflow, and multi-format export (TXT/DOCX/PDF). Admin area for editing clause text, review cycles, and compliance references.
+9. **Policy Generator** — Guided 4-step questionnaire that generates a tailored ESG policy using AI
+10. **Supplier Questionnaire Autofill** — Paste ESG questionnaire questions; generates suggested answers using existing company data
+11. **Carbon Calculator** — SME-friendly calculator for Scope 1, 2, and 3 emissions with configurable emission factors
+12. **Policy Templates** — 18 structured policy templates with guided questionnaires, clause-based drafting, compliance mapping, version control, and multi-format export (TXT/DOCX/PDF)
+
+## Metrics System
+
+### 28 Default Metrics
+
+**Environmental (10):** Electricity Consumption, Gas/Fuel Consumption, Company Vehicle Fuel Use, Scope 1 Emissions (calculated), Scope 2 Emissions (calculated), Waste Generated, Recycling Rate (calculated), Water Consumption, Business Travel Emissions (calculated), Carbon Intensity (derived)
+
+**Social (10):** Total Employees, Gender Split (% Female), Management Gender Diversity (calculated), Employee Turnover Rate (calculated), Absence Rate (calculated), Training Hours per Employee (calculated), Lost Time Incidents, Employee Engagement Score, Living Wage Coverage (calculated), Community Investment
+
+**Governance (8):** Board Meetings Held, Anti-Bribery Policy in Place, Whistleblowing Policy in Place, Data Privacy Training Completion (calculated), Supplier Code of Conduct Adoption (calculated), Cybersecurity Policy in Place, ESG Responsibility Assigned, ESG Targets Set
+
+### Metric Types
+- **Manual**: User enters values directly (e.g. electricity kWh, headcount)
+- **Calculated**: Auto-computed from raw data inputs (e.g. Scope 1 = gas + fuel factors)
+- **Derived**: Computed from other metrics (e.g. Carbon Intensity = emissions / employees)
+
+### Traffic Light Scoring
+- **Green**: On target or improving
+- **Amber**: Within amber threshold % of target
+- **Red**: Beyond red threshold % of target
+- Directions: higher_is_better, lower_is_better, target_range, compliance_yes_no
+
+### Calculation Engine (server/calculations.ts)
+- Scope 1: (Gas kWh × factor + Vehicle litres × factor) / 1000
+- Scope 2: Electricity kWh × factor / 1000
+- Recycling Rate: Recycled / Total × 100
+- Business Travel: Sum of (activity × factor) / 1000
+- Carbon Intensity: Total emissions / employees (or per £m revenue)
+- Turnover Rate: Leavers / Headcount × 100
+- Absence Rate: Absence days / Working days × 100
+- Training per Employee: Total hours / Headcount
+- And more (privacy training, supplier code, living wage, management diversity)
+
+### Raw Data Inputs
+Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle_fuel_litres, total_waste_tonnes, recycled_waste_tonnes, water_m3, employee_headcount, employee_leavers, absence_days, total_working_days, total_training_hours, trained_staff, total_staff, signed_suppliers, total_suppliers, female_managers, total_managers, living_wage_employees, domestic_flight_km, short_haul_flight_km, long_haul_flight_km, rail_km, hotel_nights, car_miles
 
 ## Tech Stack
 
@@ -30,7 +65,7 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - **Backend**: Node.js, Express
 - **Database**: PostgreSQL (via Drizzle ORM)
 - **Auth**: Session-based with express-session and connect-pg-simple
-- **AI**: OpenAI via Replit AI Integrations (gpt-5.2 for policy generation and questionnaire autofill)
+- **AI**: OpenAI via Replit AI Integrations (gpt-5.2)
 
 ## Database Tables
 
@@ -39,50 +74,49 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - `company_settings` — Which ESG areas to track
 - `esg_policies` — Policy documents with status
 - `policy_versions` — Version history for policies
-- `material_topics` — Priority ESG topics (environmental/social/governance)
-- `metrics` — Metric definitions (enabled/disabled per company)
+- `material_topics` — Priority ESG topics
+- `metrics` — Metric definitions with metricType, calculationType, formulaText, direction, targetValue/Min/Max, displayOrder, helpText, amberThreshold, redThreshold
 - `metric_targets` — Target values per metric
-- `metric_values` — Actual data submissions per period
+- `metric_values` — Data submissions with previousValue, targetValue, status (traffic light), percentChange
+- `raw_data_inputs` — Raw operational data inputs (electricity, gas, waste, headcount, etc.)
 - `evidence_files` — Document uploads
 - `action_plans` — ESG improvement actions
 - `report_runs` — Report generation history
 - `audit_logs` — Activity history
-- `policy_generation_inputs` — AI policy generator questionnaire inputs and generated content
-- `emission_factors` — Configurable carbon emission factors (UK DEFRA 2024 defaults)
-- `carbon_calculations` — Carbon calculation inputs, results, and history
-- `questionnaires` — Uploaded/created ESG questionnaires
-- `questionnaire_questions` — Individual questions with suggested/edited answers, confidence, and source
-- `policy_templates` — 18 structured policy templates with clause definitions, questionnaires, and compliance mapping
-- `generated_policies` — AI-generated policies from templates with clause-by-clause content, version control, and approval workflow
+- `policy_generation_inputs` — Policy generator questionnaire inputs
+- `emission_factors` — Carbon emission factors (UK DEFRA 2024)
+- `carbon_calculations` — Carbon calculation history
+- `questionnaires` / `questionnaire_questions` — ESG questionnaires
+- `policy_templates` / `generated_policies` — Policy template system
 
-## Emission Factors
+## API Routes
 
-Pre-seeded UK DEFRA 2024 emission factors:
-- Grid Electricity: 0.20707 kgCO2e/kWh
-- Natural Gas: 0.18293 kgCO2e/kWh
-- Diesel: 2.70559 kgCO2e/litre
-- Petrol: 2.31482 kgCO2e/litre
-- Company Car: 0.27436 kgCO2e/mile
-- Domestic Flight: 0.24587 kgCO2e/passenger-km
-- Short-haul Flight: 0.15353 kgCO2e/passenger-km
-- Long-haul Flight: 0.19309 kgCO2e/passenger-km
-- Rail Travel: 0.03549 kgCO2e/passenger-km
-- Hotel Nights: 10.24000 kgCO2e/night
-
-Factors are stored in the `emission_factors` table and can be updated via the database.
+### Metrics & Data
+- `GET /api/metrics` — List all metrics
+- `POST /api/metrics` — Add custom metric
+- `PUT /api/metrics/:id` — Update metric
+- `PUT /api/metrics/:id/admin` — Admin metric configuration
+- `GET /api/metrics/:id/history` — Metric history with traffic lights
+- `GET /api/data-entry/:period` — Get metric values for period
+- `POST /api/data-entry` — Submit metric value
+- `POST /api/data-entry/:period/lock` — Lock period
+- `GET /api/raw-data/:period` — Get raw data inputs
+- `POST /api/raw-data` — Save raw data inputs
+- `POST /api/metrics/recalculate/:period` — Trigger recalculation
+- `GET /api/dashboard/enhanced` — Enhanced dashboard with traffic lights
 
 ## Demo Account
 
 - **Email**: demo@example.com
 - **Password**: password123
-- Pre-loaded with 6 months of sample data, 4 improvement actions, a published ESG policy, and a sample carbon calculation
+- Pre-loaded with 28 metrics, 6 months of sample data, raw data inputs, action plans, ESG policy, and carbon calculation
 
 ## Architecture
 
 - All routes prefixed with `/api`
 - Session stored in PostgreSQL via `connect-pg-simple`
 - Frontend served by Vite in development
-- Seed data created on first user registration
+- Seed data created on first registration and on login (if metrics missing)
 - Password hashing: SHA-256 with salt `esg_salt_2024`
 - Design: green primary color (`hsl(158, 64%, 32%)`), Open Sans font, supports light/dark mode
 - Sidebar width: 14rem via CSS vars on SidebarProvider
