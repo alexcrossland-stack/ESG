@@ -22,7 +22,7 @@ This platform replaces spreadsheets and documents with a single, guided platform
 9. **Policy Generator** — Guided 4-step questionnaire that generates a tailored ESG policy using AI
 10. **Supplier Questionnaire Autofill** — Paste ESG questionnaire questions; generates suggested answers using existing company data
 11. **Carbon Calculator** — SME-friendly calculator for Scope 1, 2, and 3 emissions with configurable emission factors
-12. **Policy Templates** — 18 structured policy templates with guided questionnaires, clause-based drafting, compliance mapping, version control, and multi-format export (TXT/DOCX/PDF)
+12. **Policy Templates** — 28 structured policy templates with guided questionnaires, clause-based drafting, compliance mapping, version control, and multi-format export (TXT/DOCX/PDF)
 
 ## Metrics System
 

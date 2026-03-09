@@ -2124,6 +2124,27 @@ async function seedPolicyTemplates() {
         });
       }
       console.log(`Seeded ${POLICY_TEMPLATES.length} policy templates.`);
+    } else {
+      const existing = await storage.getPolicyTemplates();
+      const existingSlugs = new Set(existing.map((t: any) => t.slug));
+      let added = 0;
+      for (const t of POLICY_TEMPLATES) {
+        if (!existingSlugs.has(t.slug)) {
+          await storage.createPolicyTemplate({
+            slug: t.slug,
+            name: t.name,
+            category: t.category,
+            description: t.description,
+            sections: t.sections,
+            questionnaire: t.questionnaire,
+            complianceMapping: t.complianceMapping,
+            defaultReviewCycle: t.defaultReviewCycle,
+            isSystem: true,
+          });
+          added++;
+        }
+      }
+      if (added > 0) console.log(`Added ${added} new policy templates.`);
     }
   } catch (e: any) {
     console.error("Error seeding templates:", e.message);
