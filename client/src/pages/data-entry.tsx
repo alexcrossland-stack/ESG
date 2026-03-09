@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,8 +14,10 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
+  Upload, Download, FileSpreadsheet, Table,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
+import * as XLSX from "xlsx";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -235,11 +237,15 @@ export default function DataEntry() {
         <TabsList>
           <TabsTrigger value="raw" data-testid="tab-raw-data">
             <Calculator className="w-3.5 h-3.5 mr-1.5" />
-            Raw Data Inputs
+            Raw Data
           </TabsTrigger>
           <TabsTrigger value="manual" data-testid="tab-manual-entry">
             <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
-            Manual Metrics
+            Manual
+          </TabsTrigger>
+          <TabsTrigger value="upload" data-testid="tab-excel-upload">
+            <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5" />
+            Excel Upload
           </TabsTrigger>
         </TabsList>
 
@@ -456,7 +462,311 @@ export default function DataEntry() {
           )}
 
         </TabsContent>
+
+        <TabsContent value="upload" className="mt-4 space-y-4">
+          <ExcelUploadTab />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function ExcelUploadTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [parsedData, setParsedData] = useState<{ name: string; period: string; value: number }[] | null>(null);
+  const [previewRows, setPreviewRows] = useState<Record<string, Record<string, number | null>>>({});
+  const [previewPeriods, setPreviewPeriods] = useState<string[]>([]);
+  const [fileName, setFileName] = useState<string>("");
+  const [unmatchedNames, setUnmatchedNames] = useState<string[]>([]);
+
+  const { data: templateData } = useQuery<{ rows: string[]; periods: string[]; categories: { raw: string[]; manual: string[] } }>({
+    queryKey: ["/api/data-entry/template"],
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: (rows: { name: string; period: string; value: number }[]) =>
+      apiRequest("POST", "/api/data-entry/bulk-upload", { rows }).then(r => r.json()),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-data"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      toast({
+        title: "Upload complete",
+        description: `${data.rawSaved} raw inputs, ${data.metricSaved} metrics saved. ${data.skipped} skipped. ${data.periodsRecalculated} periods recalculated.`,
+      });
+      setParsedData(null);
+      setPreviewRows({});
+      setPreviewPeriods([]);
+      setFileName("");
+      setUnmatchedNames([]);
+    },
+    onError: (e: any) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const handleDownloadTemplate = () => {
+    if (!templateData?.periods || !templateData?.categories) return;
+    const ws_data: (string | number | null)[][] = [];
+    const headerRow = ["Metric / Input", ...templateData.periods];
+    ws_data.push(headerRow);
+
+    ws_data.push(["--- RAW DATA INPUTS ---", ...templateData.periods.map(() => null)]);
+    for (const name of templateData.categories.raw) {
+      ws_data.push([name, ...templateData.periods.map(() => null)]);
+    }
+    ws_data.push(["--- MANUAL METRICS ---", ...templateData.periods.map(() => null)]);
+    for (const name of templateData.categories.manual) {
+      ws_data.push([name, ...templateData.periods.map(() => null)]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    const colWidths = [{ wch: 35 }, ...templateData.periods.map(() => ({ wch: 12 }))];
+    ws["!cols"] = colWidths;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "ESG Data");
+    XLSX.writeFile(wb, "esg_data_template.xlsx");
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json<any>(sheet, { header: 1 });
+
+        if (jsonData.length < 2) {
+          toast({ title: "Empty spreadsheet", description: "No data rows found", variant: "destructive" });
+          return;
+        }
+
+        const headers = (jsonData[0] as any[]).map((h: any) => String(h || "").trim());
+        const periodColumns: { index: number; period: string }[] = [];
+        for (let i = 1; i < headers.length; i++) {
+          const h = headers[i];
+          const match = h.match(/^(\d{4})-(\d{2})$/);
+          if (match) {
+            periodColumns.push({ index: i, period: h });
+          }
+        }
+
+        if (periodColumns.length === 0) {
+          toast({
+            title: "No period columns found",
+            description: "Column headers should be in YYYY-MM format (e.g. 2025-01, 2025-02)",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const allNames = new Set((templateData?.rows || []).map(r => r.toLowerCase()));
+        const rows: { name: string; period: string; value: number }[] = [];
+        const preview: Record<string, Record<string, number | null>> = {};
+        const unmatched = new Set<string>();
+        const periods = periodColumns.map(p => p.period);
+
+        for (let r = 1; r < jsonData.length; r++) {
+          const row = jsonData[r] as any[];
+          const name = String(row[0] || "").trim();
+          if (!name || name.startsWith("---")) continue;
+
+          preview[name] = {};
+          const isKnown = allNames.has(name.toLowerCase());
+          if (!isKnown) unmatched.add(name);
+
+          for (const pc of periodColumns) {
+            const cellValue = row[pc.index];
+            if (cellValue !== undefined && cellValue !== null && cellValue !== "" && !isNaN(Number(cellValue))) {
+              rows.push({ name, period: pc.period, value: Number(cellValue) });
+              preview[name][pc.period] = Number(cellValue);
+            } else {
+              preview[name][pc.period] = null;
+            }
+          }
+        }
+
+        setParsedData(rows);
+        setPreviewRows(preview);
+        setPreviewPeriods(periods);
+        setUnmatchedNames([...unmatched]);
+
+        toast({ title: `Parsed ${rows.length} data points from ${Object.keys(preview).length} rows` });
+      } catch (err: any) {
+        toast({ title: "Failed to parse file", description: err.message, variant: "destructive" });
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const dataPointCount = parsedData?.length || 0;
+  const rowCount = Object.keys(previewRows).length;
+
+  return (
+    <div className="space-y-4">
+      <Alert className="border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800">
+        <FileSpreadsheet className="w-4 h-4 text-blue-500" />
+        <AlertDescription className="text-sm">
+          Upload an Excel file with metric names down the left column and monthly periods (YYYY-MM) across the top.
+          This allows you to upload historical and ongoing data in bulk.
+        </AlertDescription>
+      </Alert>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleDownloadTemplate}
+          disabled={!templateData}
+          data-testid="button-download-template"
+        >
+          <Download className="w-3.5 h-3.5 mr-1.5" />
+          Download Template
+        </Button>
+
+        <Button
+          variant={parsedData ? "outline" : "default"}
+          size="sm"
+          onClick={() => fileInputRef.current?.click()}
+          data-testid="button-choose-file"
+        >
+          <Upload className="w-3.5 h-3.5 mr-1.5" />
+          {fileName ? "Choose Different File" : "Choose Excel File"}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          className="hidden"
+          onChange={handleFileChange}
+          data-testid="input-file-upload"
+        />
+      </div>
+
+      {parsedData && parsedData.length > 0 && (
+        <>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Table className="w-4 h-4 text-primary" />
+                Preview: {fileName}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                {rowCount} rows, {previewPeriods.length} periods, {dataPointCount} data points
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {unmatchedNames.length > 0 && (
+                <Alert variant="destructive" className="mb-3">
+                  <AlertCircle className="w-4 h-4" />
+                  <AlertDescription className="text-xs">
+                    {unmatchedNames.length} row(s) not matched to known metrics and will be skipped:{" "}
+                    <span className="font-medium">{unmatchedNames.join(", ")}</span>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="overflow-x-auto border rounded-md">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted/50 border-b">
+                      <th className="text-left p-2 font-medium sticky left-0 bg-muted/50 min-w-[180px]">Metric / Input</th>
+                      {previewPeriods.map(p => (
+                        <th key={p} className="text-right p-2 font-medium min-w-[80px]">{p}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(previewRows).map(([name, periods]) => {
+                      const isUnmatched = unmatchedNames.includes(name);
+                      return (
+                        <tr key={name} className={`border-b last:border-0 ${isUnmatched ? "bg-red-50 dark:bg-red-950/20 opacity-60" : "hover:bg-muted/30"}`}>
+                          <td className={`p-2 font-medium sticky left-0 bg-background ${isUnmatched ? "bg-red-50 dark:bg-red-950/20 line-through" : ""}`}>
+                            {name}
+                          </td>
+                          {previewPeriods.map(p => (
+                            <td key={p} className="text-right p-2 tabular-nums">
+                              {periods[p] != null ? periods[p]!.toLocaleString() : <span className="text-muted-foreground">-</span>}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              {dataPointCount - (unmatchedNames.length > 0 ? parsedData.filter(r => unmatchedNames.includes(r.name)).length : 0)} data points will be uploaded
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setParsedData(null); setPreviewRows({}); setPreviewPeriods([]); setFileName(""); setUnmatchedNames([]); }}
+                data-testid="button-clear-upload"
+              >
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => uploadMutation.mutate(parsedData)}
+                disabled={uploadMutation.isPending}
+                data-testid="button-upload-data"
+              >
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                {uploadMutation.isPending ? "Uploading..." : "Upload Data"}
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {parsedData && parsedData.length === 0 && (
+        <Alert>
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>No numeric data found in the file. Make sure values are in the cells.</AlertDescription>
+        </Alert>
+      )}
+
+      <Card className="bg-muted/30">
+        <CardContent className="pt-4">
+          <h3 className="text-sm font-medium mb-2">Expected Format</h3>
+          <div className="overflow-x-auto border rounded-md bg-background">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50 border-b">
+                  <th className="text-left p-2 font-medium">Metric / Input</th>
+                  <th className="text-right p-2 font-medium">2025-01</th>
+                  <th className="text-right p-2 font-medium">2025-02</th>
+                  <th className="text-right p-2 font-medium">2025-03</th>
+                  <th className="text-right p-2 font-medium">...</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b"><td className="p-2">Electricity Consumption</td><td className="text-right p-2 text-muted-foreground">45200</td><td className="text-right p-2 text-muted-foreground">43800</td><td className="text-right p-2 text-muted-foreground">41500</td><td className="text-right p-2">...</td></tr>
+                <tr className="border-b"><td className="p-2">Gas / Fuel Consumption</td><td className="text-right p-2 text-muted-foreground">12400</td><td className="text-right p-2 text-muted-foreground">11800</td><td className="text-right p-2 text-muted-foreground">9600</td><td className="text-right p-2">...</td></tr>
+                <tr className="border-b"><td className="p-2">Employee Headcount</td><td className="text-right p-2 text-muted-foreground">48</td><td className="text-right p-2 text-muted-foreground">50</td><td className="text-right p-2 text-muted-foreground">51</td><td className="text-right p-2">...</td></tr>
+                <tr><td className="p-2">Lost Time Incidents</td><td className="text-right p-2 text-muted-foreground">1</td><td className="text-right p-2 text-muted-foreground">0</td><td className="text-right p-2 text-muted-foreground">0</td><td className="text-right p-2">...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Row names should match the labels shown in Raw Data Inputs or your metric names.
+            Empty cells will be skipped. Column headers must be in YYYY-MM format.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

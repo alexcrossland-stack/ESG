@@ -12,7 +12,7 @@ This platform replaces spreadsheets and documents with a single, guided platform
 2. **ESG Policy Builder** — Accordion-style policy editor with sections (purpose, environmental, social, governance, roles, data collection, review cycle), version history, draft/publish workflow, and export
 3. **Priority Topics** — Select which ESG topics matter most across Environmental, Social, and Governance categories
 4. **Metrics Library** — 28 default ESG metrics (10 environmental, 10 social, 8 governance) with traffic light status dots, trend arrows, metric type badges (Manual/Calculated/Derived), category/status/type filters, and detail dialog with trend charts, formulas, and current/previous/target values
-5. **Data Entry** — Tabbed interface with Raw Data Inputs (grouped environmental/social/governance fields with auto-calculation) and Manual Metrics entry. Save & Calculate triggers recalculation of all calculated/derived metrics with live results display
+5. **Data Entry** — Tabbed interface with Raw Data Inputs (grouped environmental/social/governance fields with auto-calculation), Manual Metrics entry, and Excel Upload (bulk import with template download, preview, validation, and auto-recalculation). Save & Calculate triggers recalculation of all calculated/derived metrics with live results display
 6. **Action Tracker** — Create and manage ESG improvement actions with title, description, owner, due date, status, and progress notes
 7. **Reports** — Generate ESG reports with configurable sections (policy, topics, metrics, actions), preview, and export (text/CSV)
 8. **Settings** — Company profile, account info, Metric Configuration admin (direction, targets, thresholds, enable/disable), Policy Template admin, and activity log
@@ -102,6 +102,8 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `POST /api/data-entry/:period/lock` — Lock period
 - `GET /api/raw-data/:period` — Get raw data inputs
 - `POST /api/raw-data` — Save raw data inputs
+- `POST /api/data-entry/bulk-upload` — Bulk upload from Excel (raw + manual data, with lock checks and auto-recalculation)
+- `GET /api/data-entry/template` — Get template structure (row names and periods) for Excel download
 - `POST /api/metrics/recalculate/:period` — Trigger recalculation
 - `GET /api/dashboard/enhanced` — Enhanced dashboard with traffic lights
 
