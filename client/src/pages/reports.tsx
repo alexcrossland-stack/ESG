@@ -155,14 +155,17 @@ export default function Reports() {
   const { data: reports = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/reports"] });
 
   const generateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/reports/generate", {
-      period: selectedPeriod,
-      reportType,
-      includePolicy,
-      includeTopics,
-      includeMetrics,
-      includeActions,
-    }),
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/reports/generate", {
+        period: selectedPeriod,
+        reportType,
+        includePolicy,
+        includeTopics,
+        includeMetrics,
+        includeActions,
+      });
+      return res.json();
+    },
     onSuccess: (data: any) => {
       setReportData(data.data);
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
