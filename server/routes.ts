@@ -22,11 +22,26 @@ function hashPassword(password: string): string {
   return crypto.createHash("sha256").update(password + "esg_salt_2024").digest("hex");
 }
 
+const tokenStore = new Map<string, { userId: string; companyId: string; expiresAt: number }>();
+
+function generateToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 function requireAuth(req: Request, res: Response, next: Function) {
-  if (!(req.session as any).userId) {
-    return res.status(401).json({ error: "Not authenticated" });
+  if ((req.session as any).userId) {
+    return next();
   }
-  next();
+  const authHeader = req.headers["x-auth-token"] as string;
+  if (authHeader) {
+    const entry = tokenStore.get(authHeader);
+    if (entry && entry.expiresAt > Date.now()) {
+      (req.session as any).userId = entry.userId;
+      (req.session as any).companyId = entry.companyId;
+      return next();
+    }
+  }
+  return res.status(401).json({ error: "Not authenticated" });
 }
 
 const ENVIRONMENTAL_RAW_KEYS = [
@@ -459,9 +474,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       (req.session as any).userId = user.id;
       (req.session as any).companyId = company.id;
 
+      const token = generateToken();
+      tokenStore.set(token, { userId: user.id, companyId: company.id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+
       req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        res.json({ user: { ...user, password: undefined }, company });
+        res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -483,9 +501,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
       }
 
+      const token = generateToken();
+      tokenStore.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+
       req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        res.json({ user: { ...user, password: undefined }, company });
+        res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -493,11 +514,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/auth/logout", (req, res) => {
+    const authHeader = req.headers["x-auth-token"] as string;
+    if (authHeader) tokenStore.delete(authHeader);
     req.session.destroy(() => res.json({ ok: true }));
   });
 
   app.get("/api/auth/me", async (req, res) => {
-    const userId = (req.session as any).userId;
+    let userId = (req.session as any).userId;
+    if (!userId) {
+      const authHeader = req.headers["x-auth-token"] as string;
+      if (authHeader) {
+        const entry = tokenStore.get(authHeader);
+        if (entry && entry.expiresAt > Date.now()) {
+          userId = entry.userId;
+          (req.session as any).userId = entry.userId;
+          (req.session as any).companyId = entry.companyId;
+        }
+      }
+    }
     if (!userId) return res.status(401).json({ error: "Not authenticated" });
     const user = await storage.getUser(userId);
     if (!user) return res.status(401).json({ error: "User not found" });

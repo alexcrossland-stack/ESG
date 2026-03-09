@@ -1,7 +1,8 @@
-import { queryClient } from "./queryClient";
+import { apiRequest, queryClient, setAuthToken } from "./queryClient";
 
 export async function logout() {
-  await fetch("/api/auth/logout", { method: "POST" });
+  try { await apiRequest("POST", "/api/auth/logout"); } catch {}
+  setAuthToken(null);
   queryClient.clear();
   window.location.href = "/auth";
 }
