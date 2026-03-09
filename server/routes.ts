@@ -658,6 +658,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      const existingTopics = await storage.getMaterialTopics(companyId);
+      if (existingTopics.length === 0) {
+        const topicsList = [
+          { topic: "Energy Use", category: "environmental" as const, selected: true },
+          { topic: "Carbon Emissions", category: "environmental" as const, selected: true },
+          { topic: "Waste Management", category: "environmental" as const, selected: true },
+          { topic: "Water Consumption", category: "environmental" as const, selected: false },
+          { topic: "Employee Wellbeing", category: "social" as const, selected: true },
+          { topic: "Diversity & Inclusion", category: "social" as const, selected: true },
+          { topic: "Training & Development", category: "social" as const, selected: true },
+          { topic: "Health & Safety", category: "social" as const, selected: true },
+          { topic: "Anti-Bribery & Corruption", category: "governance" as const, selected: true },
+          { topic: "Supplier Standards", category: "governance" as const, selected: false },
+          { topic: "Data Privacy", category: "governance" as const, selected: true },
+          { topic: "Board Oversight", category: "governance" as const, selected: false },
+        ];
+        await storage.upsertMaterialTopics(companyId, topicsList as any);
+      }
+
       await storage.createAuditLog({
         companyId, userId,
         action: `Onboarding completed (${isManual ? "manual" : "guided"})`,
