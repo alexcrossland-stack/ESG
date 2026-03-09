@@ -426,13 +426,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(session({
     store: new PgSession({ pool, createTableIfMissing: true }),
     secret: process.env.SESSION_SECRET || "esg-platform-secret-2024",
-    resave: false,
+    resave: true,
     saveUninitialized: false,
     cookie: {
       secure: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
       sameSite: "none" as const,
       httpOnly: true,
+      partitioned: true,
     },
     proxy: true,
   }));
