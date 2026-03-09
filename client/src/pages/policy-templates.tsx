@@ -121,7 +121,7 @@ export default function PolicyTemplatesPage() {
             Policy Templates
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            18 structured policy and procedure templates with guided questionnaires and smart drafting
+            {templates.length} structured policy and procedure templates with guided questionnaires and smart drafting
           </p>
         </div>
       </div>
