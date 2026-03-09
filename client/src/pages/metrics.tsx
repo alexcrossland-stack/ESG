@@ -134,19 +134,19 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
           <div className="p-3 bg-muted/50 rounded-md text-center">
             <p className="text-xs text-muted-foreground">Current</p>
             <p className="text-lg font-bold" data-testid="text-current-value">
-              {metric.latestValue !== null ? metric.latestValue.toLocaleString() : "—"}
+              {metric.latestValue != null ? metric.latestValue.toLocaleString() : "—"}
             </p>
           </div>
           <div className="p-3 bg-muted/50 rounded-md text-center">
             <p className="text-xs text-muted-foreground">Previous</p>
             <p className="text-lg font-bold">
-              {metric.previousValue !== null ? metric.previousValue.toLocaleString() : "—"}
+              {metric.previousValue != null ? metric.previousValue.toLocaleString() : "—"}
             </p>
           </div>
           <div className="p-3 bg-muted/50 rounded-md text-center">
             <p className="text-xs text-muted-foreground">Target</p>
             <p className="text-lg font-bold">
-              {metric.target !== null ? metric.target.toLocaleString() : "—"}
+              {metric.target != null ? metric.target.toLocaleString() : "—"}
             </p>
           </div>
         </div>
@@ -210,7 +210,7 @@ function MetricRow({ metric, onClick }: { metric: MetricSummary; onClick: () => 
       <div className="flex items-center gap-2 sm:gap-4 shrink-0">
         <div className="text-right">
           <p className="text-sm font-bold">
-            {metric.latestValue !== null ? metric.latestValue.toLocaleString() : "—"}
+            {metric.latestValue != null ? metric.latestValue.toLocaleString() : "—"}
           </p>
           <p className="text-xs text-muted-foreground">{metric.unit || ""}</p>
         </div>
