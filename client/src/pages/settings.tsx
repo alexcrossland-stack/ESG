@@ -17,7 +17,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle } from "lucide-react";
+import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle, Lock } from "lucide-react";
 import { format } from "date-fns";
 
 const INDUSTRIES = [
@@ -195,11 +195,10 @@ export default function Settings() {
             </div>
             <Badge variant="secondary">{user?.role}</Badge>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Password changes are coming in a future update.
-          </p>
         </CardContent>
       </Card>
+
+      <PasswordChangeCard />
 
       <Card>
         <CardHeader className="pb-3">
@@ -238,6 +237,94 @@ export default function Settings() {
       {user?.role === "admin" && <MetricsAdmin />}
       {user?.role === "admin" && <AdminTemplateEditor />}
     </div>
+  );
+}
+
+function PasswordChangeCard() {
+  const { toast } = useToast();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const changeMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/auth/change-password", { currentPassword, newPassword });
+    },
+    onSuccess: () => {
+      toast({ title: "Password updated", description: "Your password has been changed successfully." });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Password change failed", description: e.message || "Something went wrong", variant: "destructive" });
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      toast({ title: "Password too short", description: "New password must be at least 6 characters.", variant: "destructive" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: "Passwords do not match", description: "Please make sure your new passwords match.", variant: "destructive" });
+      return;
+    }
+    changeMutation.mutate();
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Lock className="w-4 h-4" />
+          Change Password
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Current Password</Label>
+            <Input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Enter current password"
+              data-testid="input-current-password"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">New Password</Label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Enter new password (min 6 characters)"
+              data-testid="input-new-password"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Confirm New Password</Label>
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirm new password"
+              data-testid="input-confirm-password"
+            />
+          </div>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={changeMutation.isPending || !currentPassword || !newPassword || !confirmPassword}
+            data-testid="button-change-password"
+          >
+            {changeMutation.isPending ? "Updating..." : "Update Password"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 

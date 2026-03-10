@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, setAuthToken } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -46,7 +46,6 @@ export default function Auth() {
       return res.json();
     },
     onSuccess: async (data) => {
-      if (data.token) setAuthToken(data.token);
       queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries();
       setLocation("/");
@@ -62,7 +61,6 @@ export default function Auth() {
       return res.json();
     },
     onSuccess: async (data) => {
-      if (data.token) setAuthToken(data.token);
       queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries();
       setLocation("/");

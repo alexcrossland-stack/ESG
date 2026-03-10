@@ -13,33 +13,33 @@ import crypto from "crypto";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import OpenAI from "openai";
+import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
 import { getTrafficLightStatus, runCalculationsForPeriod, type RawInputs } from "./calculations";
 
 const { Pool } = pg;
 
-function hashPassword(password: string): string {
+const BCRYPT_ROUNDS = 12;
+
+function legacyHashPassword(password: string): string {
   return crypto.createHash("sha256").update(password + "esg_salt_2024").digest("hex");
 }
 
-const tokenStore = new Map<string, { userId: string; companyId: string; expiresAt: number }>();
+async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, BCRYPT_ROUNDS);
+}
 
-function generateToken(): string {
-  return crypto.randomBytes(32).toString("hex");
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  if (storedHash.startsWith("$2a$") || storedHash.startsWith("$2b$")) {
+    return bcrypt.compare(password, storedHash);
+  }
+  return storedHash === legacyHashPassword(password);
 }
 
 function requireAuth(req: Request, res: Response, next: Function) {
   if ((req.session as any).userId) {
     return next();
-  }
-  const authHeader = req.headers["x-auth-token"] as string;
-  if (authHeader) {
-    const entry = tokenStore.get(authHeader);
-    if (entry && entry.expiresAt > Date.now()) {
-      (req.session as any).userId = entry.userId;
-      (req.session as any).companyId = entry.companyId;
-      return next();
-    }
   }
   return res.status(401).json({ error: "Not authenticated" });
 }
@@ -438,23 +438,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const PgSession = connectPgSimple(session);
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (!sessionSecret) {
+    throw new Error("SESSION_SECRET environment variable is required");
+  }
+
   app.use(session({
     store: new PgSession({ pool, createTableIfMissing: true }),
-    secret: process.env.SESSION_SECRET || "esg-platform-secret-2024",
+    secret: sessionSecret,
     resave: true,
     saveUninitialized: false,
     cookie: {
       secure: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      sameSite: "none" as const,
+      sameSite: "lax" as const,
       httpOnly: true,
-      partitioned: true,
     },
     proxy: true,
   }));
 
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: "Too many login attempts. Please try again in 15 minutes." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: (req) => (req.body?.email || "").trim().toLowerCase() || req.ip || "unknown",
+  });
+
+  const passwordChangeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    message: { error: "Too many password change attempts. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
+  const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    message: { error: "Too many registration attempts. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
   // Auth routes
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
       const { username, email, password, companyName } = req.body;
       if (!username || !email || !password) return res.status(400).json({ error: "Missing required fields" });
@@ -462,76 +494,143 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existing = await storage.getUserByEmail(email);
       if (existing) return res.status(409).json({ error: "Email already registered" });
 
+      const hashedPassword = await hashPassword(password);
       const company = await storage.createCompany({ name: companyName || "My Company" });
       const user = await storage.createUser({
         username,
         email,
-        password: hashPassword(password),
+        password: hashedPassword,
         role: "admin",
         companyId: company.id,
       });
 
-      (req.session as any).userId = user.id;
-      (req.session as any).companyId = company.id;
+      await storage.createAuditLog({
+        companyId: company.id,
+        userId: user.id,
+        action: "user_registered",
+        entityType: "user",
+        entityId: user.id,
+        details: { email: user.email },
+      });
 
-      const token = generateToken();
-      tokenStore.set(token, { userId: user.id, companyId: company.id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-
-      req.session.save((err) => {
+      req.session.regenerate((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        res.json({ user: { ...user, password: undefined }, company, token });
+        (req.session as any).userId = user.id;
+        (req.session as any).companyId = company.id;
+        req.session.save((err) => {
+          if (err) return res.status(500).json({ error: "Session error" });
+          res.json({ user: { ...user, password: undefined }, company });
+        });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
       const user = await storage.getUserByEmail(email);
-      if (!user || user.password !== hashPassword(password)) {
+      if (!user) {
+        await storage.createAuditLog({
+          action: "login_failed",
+          entityType: "auth",
+          details: { email, reason: "user_not_found" },
+        });
         return res.status(401).json({ error: "Invalid email or password" });
       }
-      (req.session as any).userId = user.id;
-      (req.session as any).companyId = user.companyId;
+
+      const passwordValid = await verifyPassword(password, user.password);
+      if (!passwordValid) {
+        await storage.createAuditLog({
+          companyId: user.companyId || undefined,
+          userId: user.id,
+          action: "login_failed",
+          entityType: "auth",
+          details: { email, reason: "wrong_password" },
+        });
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      if (!user.password.startsWith("$2a$") && !user.password.startsWith("$2b$")) {
+        const newHash = await hashPassword(password);
+        await storage.updateUser(user.id, { password: newHash });
+      }
+
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
 
       if (user.companyId) {
         try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
       }
 
-      const token = generateToken();
-      tokenStore.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      await storage.createAuditLog({
+        companyId: user.companyId || undefined,
+        userId: user.id,
+        action: "login_success",
+        entityType: "auth",
+        details: { email: user.email },
+      });
 
-      req.session.save((err) => {
+      req.session.regenerate((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        res.json({ user: { ...user, password: undefined }, company, token });
+        (req.session as any).userId = user.id;
+        (req.session as any).companyId = user.companyId;
+        req.session.save((err) => {
+          if (err) return res.status(500).json({ error: "Session error" });
+          res.json({ user: { ...user, password: undefined }, company });
+        });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post("/api/auth/logout", (req, res) => {
-    const authHeader = req.headers["x-auth-token"] as string;
-    if (authHeader) tokenStore.delete(authHeader);
+  app.post("/api/auth/logout", async (req, res) => {
+    const userId = (req.session as any).userId;
+    const companyId = (req.session as any).companyId;
+    if (userId) {
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "logout",
+        entityType: "auth",
+      });
+    }
     req.session.destroy(() => res.json({ ok: true }));
   });
 
-  app.get("/api/auth/me", async (req, res) => {
-    let userId = (req.session as any).userId;
-    if (!userId) {
-      const authHeader = req.headers["x-auth-token"] as string;
-      if (authHeader) {
-        const entry = tokenStore.get(authHeader);
-        if (entry && entry.expiresAt > Date.now()) {
-          userId = entry.userId;
-          (req.session as any).userId = entry.userId;
-          (req.session as any).companyId = entry.companyId;
-        }
-      }
+  app.post("/api/auth/change-password", requireAuth, passwordChangeLimiter, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { currentPassword, newPassword } = req.body;
+      if (!currentPassword || !newPassword) return res.status(400).json({ error: "Both current and new password are required" });
+      if (newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters" });
+
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const valid = await verifyPassword(currentPassword, user.password);
+      if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
+
+      const newHash = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: newHash });
+
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId,
+        userId: user.id,
+        action: "password_changed",
+        entityType: "user",
+        entityId: user.id,
+      });
+
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    const userId = (req.session as any).userId;
     if (!userId) return res.status(401).json({ error: "Not authenticated" });
     const user = await storage.getUser(userId);
     if (!user) return res.status(401).json({ error: "User not found" });

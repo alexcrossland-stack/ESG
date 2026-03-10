@@ -88,9 +88,7 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
   const { data: historyData } = useQuery<any>({
     queryKey: ["/api/metrics", metric?.id, "history"],
     queryFn: () => {
-        const token = sessionStorage.getItem("auth_token");
-        const headers: Record<string, string> = token ? { "x-auth-token": token } : {};
-        return fetch(`/api/metrics/${metric?.id}/history`, { credentials: "include", headers }).then(r => r.json());
+        return fetch(`/api/metrics/${metric?.id}/history`, { credentials: "include" }).then(r => r.json());
       },
     enabled: !!metric?.id,
   });

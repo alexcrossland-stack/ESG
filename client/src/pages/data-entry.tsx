@@ -88,18 +88,14 @@ export default function DataEntry() {
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
     queryFn: () => {
-        const token = sessionStorage.getItem("auth_token");
-        const headers: Record<string, string> = token ? { "x-auth-token": token } : {};
-        return fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include", headers }).then(r => r.json());
+        return fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include" }).then(r => r.json());
       },
   });
 
   const { data: entryData, isLoading: entryLoading } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedPeriod],
     queryFn: () => {
-        const token = sessionStorage.getItem("auth_token");
-        const headers: Record<string, string> = token ? { "x-auth-token": token } : {};
-        return fetch(`/api/data-entry/${selectedPeriod}`, { credentials: "include", headers }).then(r => r.json());
+        return fetch(`/api/data-entry/${selectedPeriod}`, { credentials: "include" }).then(r => r.json());
       },
   });
 

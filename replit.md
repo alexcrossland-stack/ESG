@@ -64,7 +64,7 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - **Frontend**: React, TanStack Query, Wouter, Recharts, Shadcn UI, Tailwind CSS
 - **Backend**: Node.js, Express
 - **Database**: PostgreSQL (via Drizzle ORM)
-- **Auth**: Session-based with express-session and connect-pg-simple
+- **Auth**: Session-based with express-session and connect-pg-simple, bcrypt password hashing, rate limiting
 - **AI**: OpenAI via Replit AI Integrations (gpt-5.2)
 
 ## Database Tables
@@ -154,7 +154,10 @@ Two-path onboarding for new users, with database persistence and autosave/resume
 - Session stored in PostgreSQL via `connect-pg-simple`
 - Frontend served by Vite in development
 - New registrations go through onboarding wizard; demo account auto-seeds on login
-- Password hashing: SHA-256 with salt `esg_salt_2024`
+- Password hashing: bcrypt (12 rounds) with SHA-256 legacy fallback and auto-migration on login
+- Rate limiting: 10 login attempts/15min (keyed by normalized email), 5 register attempts/hr, 5 password changes/15min
+- Session security: SameSite=lax, httpOnly, secure cookies; session regeneration on login/register; SESSION_SECRET required (no fallback)
+- Password change: POST /api/auth/change-password (requireAuth, validates current password, bcrypt new hash, audit logged)
 - Design: green primary color (`hsl(158, 64%, 32%)`), Open Sans font, supports light/dark mode
 - Sidebar width: 14rem via CSS vars on SidebarProvider
 - `apiRequest` used as `apiRequest(method, url, data)` not fetch-style
