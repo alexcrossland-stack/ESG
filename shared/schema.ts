@@ -259,10 +259,13 @@ export const emissionFactors = pgTable("emission_factors", {
   unit: text("unit").notNull(),
   factor: decimal("factor", { precision: 15, scale: 6 }).notNull(),
   sourceLabel: text("source_label"),
+  factorYear: integer("factor_year").default(2024),
+  version: integer("version").default(1),
+  fuelType: text("fuel_type"),
+  methodology: text("methodology"),
   effectiveDate: timestamp("effective_date").defaultNow(),
 });
 
-// Carbon Calculations
 export const carbonCalculations = pgTable("carbon_calculations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull(),
@@ -275,6 +278,10 @@ export const carbonCalculations = pgTable("carbon_calculations", {
   scope3Total: decimal("scope3_total", { precision: 15, scale: 4 }),
   totalEmissions: decimal("total_emissions", { precision: 15, scale: 4 }),
   employeeCount: integer("employee_count"),
+  factorYear: integer("factor_year").default(2024),
+  dataQuality: jsonb("data_quality"),
+  methodologyNotes: jsonb("methodology_notes"),
+  assumptions: jsonb("assumptions"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

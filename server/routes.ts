@@ -1726,6 +1726,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(factors);
   });
 
+  app.get("/api/carbon/calculations/:id/export", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const calc = await storage.getCarbonCalculation(req.params.id);
+      if (!calc || calc.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+
+      const results = calc.results as any;
+      const methodNotes = (calc as any).methodologyNotes || results?.lineItems || [];
+      const assumptions = (calc as any).assumptions || results?.assumptions || [];
+      const factorYear = (calc as any).factorYear || results?.factorYear || 2024;
+
+      let text = `CARBON FOOTPRINT ESTIMATE\n`;
+      text += `========================\n\n`;
+      text += `Period: ${calc.reportingPeriod} (${calc.periodType})\n`;
+      text += `Factor Year: ${factorYear}\n`;
+      text += `Calculated: ${calc.createdAt ? new Date(calc.createdAt).toLocaleDateString() : "N/A"}\n\n`;
+
+      text += `SUMMARY\n-------\n`;
+      text += `Scope 1 (Direct): ${parseFloat(String(calc.scope1Total || 0)).toFixed(2)} kgCO2e\n`;
+      text += `Scope 2 (Electricity): ${parseFloat(String(calc.scope2Total || 0)).toFixed(2)} kgCO2e\n`;
+      text += `Scope 3 (Travel): ${parseFloat(String(calc.scope3Total || 0)).toFixed(2)} kgCO2e\n`;
+      text += `Total: ${parseFloat(String(calc.totalEmissions || 0)).toFixed(2)} kgCO2e\n`;
+      if (calc.employeeCount) text += `Per Employee: ${(parseFloat(String(calc.totalEmissions || 0)) / calc.employeeCount).toFixed(2)} kgCO2e\n`;
+      text += `\n`;
+
+      if (methodNotes.length > 0) {
+        text += `DETAILED BREAKDOWN\n------------------\n`;
+        for (const n of methodNotes) {
+          text += `\n${n.source} (Scope ${n.scope})\n`;
+          text += `  Calculation: ${n.calculation}\n`;
+          text += `  Data Quality: ${n.dataQuality}\n`;
+          text += `  Factor Source: ${n.factorSource} (${n.factorYear})\n`;
+          text += `  Methodology: ${n.methodology}\n`;
+          if (n.fuelType) text += `  Fuel Type: ${n.fuelType}\n`;
+          if (n.assumptions?.length) text += `  Assumptions: ${n.assumptions.join("; ")}\n`;
+        }
+        text += `\n`;
+      }
+
+      if (assumptions.length > 0) {
+        text += `ASSUMPTIONS\n-----------\n`;
+        for (const a of assumptions) {
+          text += `- ${a}\n`;
+        }
+        text += `\n`;
+      }
+
+      text += `DISCLAIMER\n----------\n`;
+      text += `This is an estimate produced by an SME carbon estimator. Emission factors sourced from UK DEFRA ${factorYear} GHG Conversion Factors.\n`;
+      text += `Values should be reviewed before use in formal disclosures or regulatory submissions.\n`;
+      text += `Data quality indicators: Actual = measured/invoiced data, Estimated = calculated from partial data, Proxy = derived from industry benchmarks.\n`;
+
+      res.setHeader("Content-Type", "text/plain");
+      res.setHeader("Content-Disposition", `attachment; filename=carbon-estimate-${calc.reportingPeriod}.txt`);
+      res.send(text);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/carbon/calculations", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
     const calcs = await storage.getCarbonCalculations(companyId);
@@ -1736,12 +1796,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { inputs, reportingPeriod, periodType, employeeCount } = req.body;
+      const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap } = req.body;
 
       const country = inputs.country || "UK";
       const factors = await storage.getEmissionFactors(country);
 
-      const results = calculateEmissions(inputs, factors);
+      const results = calculateEmissions(inputs, factors, dqMap || {});
 
       const calc = await storage.createCarbonCalculation({
         companyId,
@@ -1754,6 +1814,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         scope3Total: results.scope3Total.toFixed(4),
         totalEmissions: results.totalEmissions.toFixed(4),
         employeeCount: employeeCount || null,
+        factorYear: results.factorYear,
+        dataQuality: results.dataQuality,
+        methodologyNotes: results.lineItems,
+        assumptions: results.assumptions,
       });
 
       await storage.createAuditLog({
@@ -1761,7 +1825,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         action: "Carbon calculation completed",
         entityType: "carbon_calculation",
         entityId: calc.id,
-        details: { reportingPeriod, totalEmissions: results.totalEmissions },
+        details: { reportingPeriod, totalEmissions: results.totalEmissions, factorYear: results.factorYear },
       });
 
       res.json(calc);
@@ -2427,47 +2491,223 @@ Governance:
 Write in plain English. Make it sound professional but not overly legal. Where data is missing use sensible defaults. Include "[Insert review month]" only where truly necessary. Add a footer note that the policy should be reviewed by management before formal adoption.`;
 }
 
-function calculateEmissions(inputs: any, factors: any[]): any {
-  const findFactor = (category: string) => {
-    const f = factors.find((f: any) => f.category === category);
-    return f ? parseFloat(f.factor) : 0;
+interface CarbonLineItem {
+  key: string;
+  label: string;
+  scope: 1 | 2 | 3;
+  activityValue: number;
+  activityUnit: string;
+  factor: number;
+  factorUnit: string;
+  factorSource: string;
+  factorYear: number;
+  emissions: number;
+  dataQuality: "actual" | "estimated" | "proxy";
+  methodology: string;
+  assumptions: string[];
+  fuelType?: string;
+}
+
+function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<string, string> = {}): any {
+  const findFactor = (category: string, fuelType?: string): any => {
+    if (fuelType) {
+      const specific = factors.find((f: any) => f.category === category && f.fuelType === fuelType);
+      if (specific) return specific;
+    }
+    return factors.find((f: any) => f.category === category && (!f.fuelType || f.fuelType === "mixed" || f.fuelType === null)) || null;
   };
+  const findFactorByName = (name: string): any => factors.find((f: any) => f.name === name) || null;
+  const r = (v: number) => Math.round(v * 10000) / 10000;
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  const dq = (key: string): "actual" | "estimated" | "proxy" => (dataQualityMap[key] as any) || "actual";
+  const factorYear = factors[0]?.factorYear || 2024;
 
-  const electricity = (parseFloat(inputs.electricity) || 0) * findFactor("electricity");
-  const gas = (parseFloat(inputs.gas) || 0) * findFactor("gas");
-  const diesel = (parseFloat(inputs.diesel) || 0) * findFactor("fuel");
-  const petrol = (parseFloat(inputs.petrol) || 0) * findFactor("fuel");
-  const vehicles = (parseFloat(inputs.vehicleMileage) || 0) * findFactor("vehicles");
+  const lineItems: CarbonLineItem[] = [];
+  const assumptions: string[] = [];
 
-  const scope1Total = gas + diesel + petrol + vehicles;
-  const scope2Total = electricity;
+  const elecVal = parseFloat(inputs.electricity) || 0;
+  if (elecVal > 0) {
+    const ef = findFactor("electricity");
+    const fv = ef ? parseFloat(ef.factor) : 0.20707;
+    lineItems.push({
+      key: "electricity", label: "Grid Electricity", scope: 2,
+      activityValue: elecVal, activityUnit: "kWh", factor: fv, factorUnit: "kgCO2e/kWh",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(elecVal * fv), dataQuality: dq("electricity"),
+      methodology: ef?.methodology || "Location-based, UK national grid average.",
+      assumptions: dq("electricity") === "proxy" ? ["Electricity estimated from floor area proxy"] : [],
+    });
+  }
 
-  const domesticFlights = (parseFloat(inputs.domesticFlights) || 0) * (factors.find((f: any) => f.name === "Domestic Flight")?.factor || 0.24587);
-  const shortHaulFlights = (parseFloat(inputs.shortHaulFlights) || 0) * (factors.find((f: any) => f.name === "Short-haul Flight")?.factor || 0.15353);
-  const longHaulFlights = (parseFloat(inputs.longHaulFlights) || 0) * (factors.find((f: any) => f.name === "Long-haul Flight")?.factor || 0.19309);
-  const rail = (parseFloat(inputs.railTravel) || 0) * findFactor("travel");
-  const hotelNights = (parseFloat(inputs.hotelNights) || 0) * (factors.find((f: any) => f.name === "Hotel Nights")?.factor || 10.24);
+  const gasVal = parseFloat(inputs.gas) || 0;
+  if (gasVal > 0) {
+    const ef = findFactor("gas");
+    const fv = ef ? parseFloat(ef.factor) : 0.18293;
+    lineItems.push({
+      key: "gas", label: "Natural Gas", scope: 1,
+      activityValue: gasVal, activityUnit: "kWh", factor: fv, factorUnit: "kgCO2e/kWh",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(gasVal * fv), dataQuality: dq("gas"), fuelType: "natural_gas",
+      methodology: ef?.methodology || "Gross calorific value basis.",
+      assumptions: [],
+    });
+  }
 
-  const scope3Total = domesticFlights + shortHaulFlights + longHaulFlights + rail + hotelNights;
-  const totalEmissions = scope1Total + scope2Total + scope3Total;
+  const dieselVal = parseFloat(inputs.diesel) || 0;
+  if (dieselVal > 0) {
+    const ef = findFactor("fuel", "diesel") || findFactor("fuel");
+    const fv = ef ? parseFloat(ef.factor) : 2.70559;
+    lineItems.push({
+      key: "diesel", label: "Diesel", scope: 1,
+      activityValue: dieselVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(dieselVal * fv), dataQuality: dq("diesel"), fuelType: "diesel",
+      methodology: ef?.methodology || "Per litre of automotive diesel.",
+      assumptions: [],
+    });
+  }
+
+  const petrolVal = parseFloat(inputs.petrol) || 0;
+  if (petrolVal > 0) {
+    const ef = findFactor("fuel", "petrol") || findFactor("fuel");
+    const fv = ef ? parseFloat(ef.factor) : 2.31482;
+    lineItems.push({
+      key: "petrol", label: "Petrol", scope: 1,
+      activityValue: petrolVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(petrolVal * fv), dataQuality: dq("petrol"), fuelType: "petrol",
+      methodology: ef?.methodology || "Per litre of motor gasoline.",
+      assumptions: [],
+    });
+  }
+
+  const lpgVal = parseFloat(inputs.lpg) || 0;
+  if (lpgVal > 0) {
+    const ef = findFactor("fuel", "lpg") || findFactorByName("LPG");
+    const fv = ef ? parseFloat(ef.factor) : 1.55537;
+    lineItems.push({
+      key: "lpg", label: "LPG", scope: 1,
+      activityValue: lpgVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(lpgVal * fv), dataQuality: dq("lpg"), fuelType: "lpg",
+      methodology: ef?.methodology || "Per litre of LPG.",
+      assumptions: [],
+    });
+  }
+
+  const vehicleVal = parseFloat(inputs.vehicleMileage) || 0;
+  const vehicleFuelType = inputs.vehicleFuelType && inputs.vehicleFuelType !== "avg" ? inputs.vehicleFuelType : null;
+  if (vehicleVal > 0) {
+    const ef = findFactor("vehicles", vehicleFuelType);
+    const fv = ef ? parseFloat(ef.factor) : 0.27436;
+    const vehicleLabel = vehicleFuelType
+      ? `Company Vehicle (${vehicleFuelType.charAt(0).toUpperCase() + vehicleFuelType.slice(1)})`
+      : "Company Vehicle (Average)";
+    const vAssumptions: string[] = [];
+    if (!vehicleFuelType) vAssumptions.push("Average fleet composition assumed (no fuel type specified)");
+    lineItems.push({
+      key: "vehicles", label: vehicleLabel, scope: 1,
+      activityValue: vehicleVal, activityUnit: "miles", factor: fv, factorUnit: "kgCO2e/mile",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(vehicleVal * fv), dataQuality: dq("vehicleMileage"), fuelType: vehicleFuelType || "mixed",
+      methodology: ef?.methodology || "Average company car per mile.",
+      assumptions: vAssumptions,
+    });
+  }
+
+  const travelItems: { key: string; inputKey: string; label: string; name: string; unit: string; fallback: number }[] = [
+    { key: "domesticFlights", inputKey: "domesticFlights", label: "Domestic Flights", name: "Domestic Flight", unit: "passenger-km", fallback: 0.24587 },
+    { key: "shortHaulFlights", inputKey: "shortHaulFlights", label: "Short-haul Flights", name: "Short-haul Flight", unit: "passenger-km", fallback: 0.15353 },
+    { key: "longHaulFlights", inputKey: "longHaulFlights", label: "Long-haul Flights", name: "Long-haul Flight", unit: "passenger-km", fallback: 0.19309 },
+    { key: "rail", inputKey: "railTravel", label: "Rail Travel", name: "Rail Travel", unit: "passenger-km", fallback: 0.03549 },
+    { key: "hotelNights", inputKey: "hotelNights", label: "Hotel Nights", name: "Hotel Nights", unit: "nights", fallback: 10.24 },
+  ];
+
+  for (const ti of travelItems) {
+    const val = parseFloat(inputs[ti.inputKey]) || 0;
+    if (val > 0) {
+      const ef = findFactorByName(ti.name);
+      const fv = ef ? parseFloat(ef.factor) : ti.fallback;
+      lineItems.push({
+        key: ti.key, label: ti.label, scope: 3,
+        activityValue: val, activityUnit: ti.unit, factor: fv, factorUnit: `kgCO2e/${ti.unit}`,
+        factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+        emissions: r2(val * fv), dataQuality: dq(ti.inputKey),
+        methodology: ef?.methodology || `Standard emission factor for ${ti.label.toLowerCase()}.`,
+        assumptions: [],
+      });
+    }
+  }
+
+  const proxyElec = parseFloat(inputs.floorAreaM2) || 0;
+  if (proxyElec > 0 && elecVal === 0) {
+    const proxyFactor = 120;
+    const annualKwh = proxyElec * proxyFactor;
+    const ef = findFactor("electricity");
+    const fv = ef ? parseFloat(ef.factor) : 0.20707;
+    assumptions.push(`Electricity estimated from floor area: ${proxyElec} m2 x ${proxyFactor} kWh/m2/yr`);
+    lineItems.push({
+      key: "electricity", label: "Grid Electricity (Proxy)", scope: 2,
+      activityValue: annualKwh, activityUnit: "kWh (estimated)", factor: fv, factorUnit: "kgCO2e/kWh",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(annualKwh * fv), dataQuality: "proxy",
+      methodology: "Proxy calculation: floor area (m2) x typical energy use intensity (120 kWh/m2/yr for UK offices).",
+      assumptions: [`Floor area ${proxyElec} m2`, `Energy use intensity assumed at ${proxyFactor} kWh/m2/yr`, "Based on CIBSE TM46 benchmark for general office"],
+    });
+  }
+
+  const proxyGas = parseFloat(inputs.floorAreaM2) || 0;
+  if (proxyGas > 0 && gasVal === 0) {
+    const proxyFactor = 80;
+    const annualKwh = proxyGas * proxyFactor;
+    const ef = findFactor("gas");
+    const fv = ef ? parseFloat(ef.factor) : 0.18293;
+    assumptions.push(`Gas estimated from floor area: ${proxyGas} m2 x ${proxyFactor} kWh/m2/yr`);
+    lineItems.push({
+      key: "gas", label: "Natural Gas (Proxy)", scope: 1,
+      activityValue: annualKwh, activityUnit: "kWh (estimated)", factor: fv, factorUnit: "kgCO2e/kWh",
+      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      emissions: r2(annualKwh * fv), dataQuality: "proxy", fuelType: "natural_gas",
+      methodology: "Proxy calculation: floor area (m2) x typical gas use intensity (80 kWh/m2/yr for UK offices).",
+      assumptions: [`Floor area ${proxyGas} m2`, `Gas use intensity assumed at ${proxyFactor} kWh/m2/yr`, "Based on CIBSE TM46 benchmark for general office"],
+    });
+  }
+
+  const scope1Total = r(lineItems.filter(l => l.scope === 1).reduce((s, l) => s + l.emissions, 0));
+  const scope2Total = r(lineItems.filter(l => l.scope === 2).reduce((s, l) => s + l.emissions, 0));
+  const scope3Total = r(lineItems.filter(l => l.scope === 3).reduce((s, l) => s + l.emissions, 0));
+  const totalEmissions = r(scope1Total + scope2Total + scope3Total);
+
+  const breakdown: Record<string, number> = {};
+  for (const li of lineItems) {
+    breakdown[li.key] = (breakdown[li.key] || 0) + li.emissions;
+  }
+
+  const methodologyNotes = lineItems.map(li => ({
+    source: li.label, scope: li.scope,
+    calculation: `${li.activityValue.toLocaleString()} ${li.activityUnit} x ${li.factor} ${li.factorUnit} = ${li.emissions.toLocaleString()} kgCO2e`,
+    methodology: li.methodology, factorSource: li.factorSource, factorYear: li.factorYear,
+    dataQuality: li.dataQuality,
+    ...(li.assumptions.length > 0 ? { assumptions: li.assumptions } : {}),
+    ...(li.fuelType ? { fuelType: li.fuelType } : {}),
+  }));
+
+  const allAssumptions = [
+    ...assumptions,
+    ...lineItems.flatMap(l => l.assumptions),
+  ];
+  if (lineItems.some(l => l.dataQuality === "estimated")) allAssumptions.push("Some values marked as estimated and may be refined with actual data");
+  if (lineItems.some(l => l.dataQuality === "proxy")) allAssumptions.push("Proxy values used where actual data was unavailable");
+
+  const dataQuality: Record<string, string> = {};
+  for (const li of lineItems) {
+    dataQuality[li.key] = li.dataQuality;
+  }
 
   return {
-    scope1Total: Math.round(scope1Total * 10000) / 10000,
-    scope2Total: Math.round(scope2Total * 10000) / 10000,
-    scope3Total: Math.round(scope3Total * 10000) / 10000,
-    totalEmissions: Math.round(totalEmissions * 10000) / 10000,
-    breakdown: {
-      electricity: Math.round(electricity * 100) / 100,
-      gas: Math.round(gas * 100) / 100,
-      diesel: Math.round(diesel * 100) / 100,
-      petrol: Math.round(petrol * 100) / 100,
-      vehicles: Math.round(vehicles * 100) / 100,
-      domesticFlights: Math.round(domesticFlights * 100) / 100,
-      shortHaulFlights: Math.round(shortHaulFlights * 100) / 100,
-      longHaulFlights: Math.round(longHaulFlights * 100) / 100,
-      rail: Math.round(rail * 100) / 100,
-      hotelNights: Math.round(hotelNights * 100) / 100,
-    },
+    scope1Total, scope2Total, scope3Total, totalEmissions,
+    breakdown, lineItems: methodologyNotes,
+    factorYear, dataQuality, assumptions: allAssumptions,
     unit: "kgCO2e",
   };
 }
