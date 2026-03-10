@@ -84,7 +84,11 @@ export interface IStorage {
 
   // Evidence Files
   getEvidenceFiles(companyId: string): Promise<EvidenceFile[]>;
-  createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt">): Promise<EvidenceFile>;
+  getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string): Promise<EvidenceFile[]>;
+  getEvidenceCoverage(companyId: string, period?: string): Promise<any>;
+  createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
+  updateEvidenceFile(id: string, data: Partial<EvidenceFile>): Promise<EvidenceFile | undefined>;
+  deleteEvidenceFile(id: string): Promise<void>;
 
   // Action Plans
   getActionPlans(companyId: string): Promise<ActionPlan[]>;
@@ -309,6 +313,7 @@ export class DatabaseStorage implements IStorage {
         submittedAt: metricValues.submittedAt,
         notes: metricValues.notes,
         locked: metricValues.locked,
+        dataSourceType: metricValues.dataSourceType,
         workflowStatus: metricValues.workflowStatus,
         reviewedBy: metricValues.reviewedBy,
         reviewedAt: metricValues.reviewedAt,
@@ -374,9 +379,91 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(evidenceFiles).where(eq(evidenceFiles.companyId, companyId)).orderBy(desc(evidenceFiles.uploadedAt));
   }
 
-  async createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt">) {
+  async getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string) {
+    return db.select().from(evidenceFiles).where(
+      and(
+        eq(evidenceFiles.companyId, companyId),
+        eq(evidenceFiles.linkedModule, linkedModule),
+        eq(evidenceFiles.linkedEntityId, linkedEntityId)
+      )
+    ).orderBy(desc(evidenceFiles.uploadedAt));
+  }
+
+  async getEvidenceCoverage(companyId: string, period?: string) {
+    const allEvidence = await db.select().from(evidenceFiles).where(eq(evidenceFiles.companyId, companyId));
+    const allMetrics = await db.select({ id: metrics.id, name: metrics.name, category: metrics.category }).from(metrics).where(eq(metrics.companyId, companyId));
+
+    const allMetricValues = await db.select({
+      id: metricValues.id,
+      metricId: metricValues.metricId,
+      period: metricValues.period,
+      dataSourceType: metricValues.dataSourceType,
+    }).from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(eq(metrics.companyId, companyId));
+
+    const relevantValues = period
+      ? allMetricValues.filter(v => v.period === period)
+      : allMetricValues;
+
+    const evidenceByModule = allEvidence.filter(e => e.linkedModule === "metric_value");
+    const evidencedEntityIds = new Set(evidenceByModule.map(e => e.linkedEntityId));
+
+    const metricsWithEvidence = new Set<string>();
+    for (const mv of relevantValues) {
+      if (evidencedEntityIds.has(mv.id) || mv.dataSourceType === "evidenced") {
+        metricsWithEvidence.add(mv.metricId);
+      }
+    }
+
+    const metricCoverage = allMetrics.map(m => {
+      const mvs = relevantValues.filter(v => v.metricId === m.id);
+      const hasEvidence = metricsWithEvidence.has(m.id);
+      const latestMv = mvs[0];
+      return {
+        metricId: m.id,
+        metricName: m.name,
+        category: m.category,
+        hasEvidence,
+        dataSourceType: latestMv?.dataSourceType || "manual",
+      };
+    });
+
+    const expiredEvidence = allEvidence.filter(e => e.expiryDate && new Date(e.expiryDate) < new Date());
+    const periodCoverage: Record<string, number> = {};
+    allEvidence.filter(e => e.linkedPeriod).forEach(e => {
+      periodCoverage[e.linkedPeriod!] = (periodCoverage[e.linkedPeriod!] || 0) + 1;
+    });
+
+    return {
+      totalEvidence: allEvidence.length,
+      evidencedCount: metricsWithEvidence.size,
+      totalMetrics: allMetrics.length,
+      coveragePercent: allMetrics.length > 0 ? Math.round((metricsWithEvidence.size / allMetrics.length) * 100) : 0,
+      expiredCount: expiredEvidence.length,
+      metricCoverage,
+      periodCoverage,
+      byStatus: {
+        uploaded: allEvidence.filter(e => e.evidenceStatus === "uploaded").length,
+        reviewed: allEvidence.filter(e => e.evidenceStatus === "reviewed").length,
+        approved: allEvidence.filter(e => e.evidenceStatus === "approved").length,
+        expired: expiredEvidence.length,
+      },
+    };
+  }
+
+  async createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">) {
     const [f] = await db.insert(evidenceFiles).values(file as any).returning();
     return f;
+  }
+
+  async updateEvidenceFile(id: string, data: Partial<EvidenceFile>) {
+    const [f] = await db.update(evidenceFiles).set(data).where(eq(evidenceFiles.id, id)).returning();
+    return f;
+  }
+
+  async deleteEvidenceFile(id: string) {
+    await db.delete(evidenceFiles).where(eq(evidenceFiles.id, id));
   }
 
   async getActionPlans(companyId: string) {

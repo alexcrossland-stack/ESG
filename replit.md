@@ -77,9 +77,9 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `material_topics` — Priority ESG topics
 - `metrics` — Metric definitions with metricType, calculationType, formulaText, direction, targetValue/Min/Max, displayOrder, helpText, amberThreshold, redThreshold
 - `metric_targets` — Target values per metric
-- `metric_values` — Data submissions with previousValue, targetValue, status (traffic light), percentChange
-- `raw_data_inputs` — Raw operational data inputs (electricity, gas, waste, headcount, etc.)
-- `evidence_files` — Document uploads
+- `metric_values` — Data submissions with previousValue, targetValue, status (traffic light), percentChange, dataSourceType (evidenced/estimated/manual)
+- `raw_data_inputs` — Raw operational data inputs (electricity, gas, waste, headcount, etc.), dataSourceType
+- `evidence_files` — Evidence management with linkedModule (metric_value/raw_data/policy/questionnaire_answer/report), linkedEntityId, linkedPeriod, evidenceStatus (uploaded/reviewed/approved/expired), description, expiryDate, reviewDate, reviewedBy/At
 - `action_plans` — ESG improvement actions
 - `report_runs` — Report generation history
 - `audit_logs` — Activity history
@@ -107,6 +107,14 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `GET /api/data-entry/template` — Get template structure (row names and periods) for Excel download
 - `POST /api/metrics/recalculate/:period` — Trigger recalculation
 - `GET /api/dashboard/enhanced` — Enhanced dashboard with traffic lights
+
+### Evidence
+- `GET /api/evidence` — List all evidence files for company
+- `GET /api/evidence/coverage` — Evidence coverage stats (metric coverage, period coverage, status breakdown)
+- `GET /api/evidence/entity/:module/:entityId` — Get evidence for a specific entity
+- `POST /api/evidence` — Upload evidence file (with linkedModule, linkedEntityId, linkedPeriod, expiryDate)
+- `PUT /api/evidence/:id` — Update evidence (description, status, expiry)
+- `DELETE /api/evidence/:id` — Delete evidence file
 
 ## Onboarding System
 

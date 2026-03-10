@@ -36,6 +36,7 @@ import {
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge, AiDraftBadge, ConfidenceBadge } from "@/components/workflow-badge";
+import { DataSourceBadge } from "@/pages/evidence";
 
 type QuestionnaireWithQuestions = Questionnaire & {
   questions: QuestionnaireQuestion[];
@@ -124,6 +125,7 @@ function QuestionCard({
                 </Badge>
               )}
               <ConfidenceBadge level={question.confidence} />
+              <DataSourceBadge type={(question as any).dataSourceType} />
               <WorkflowBadge status={question.workflowStatus} size="sm" />
               {question.suggestedAnswer && !question.approved && (
                 <AiDraftBadge />
@@ -355,13 +357,14 @@ function NewQuestionnaireTab() {
 
   const handleExportCsv = () => {
     if (!resultData?.questions) return;
-    const header = "Question,Answer,Category,Confidence,Source\n";
+    const header = "Question,Answer,Category,Confidence,Source,Data Source\n";
     const rows = resultData.questions
       .map((q) => {
         const answer = (q.editedAnswer || q.suggestedAnswer || "").replace(/"/g, '""');
         const question = q.questionText.replace(/"/g, '""');
         const source = (q.sourceRef || "").replace(/"/g, '""');
-        return `"${question}","${answer}","${q.category || ""}","${q.confidence || ""}","${source}"`;
+        const dsType = q.dataSourceType === "evidenced" ? "Evidenced" : (q.dataSourceType === "estimated" ? "Estimated" : "Manual");
+        return `"${question}","${answer}","${q.category || ""}","${q.confidence || ""}","${source}","${dsType}"`;
       })
       .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv" });
@@ -604,13 +607,14 @@ function PreviousQuestionnairesTab() {
 
   const handleExportCsv = () => {
     if (!detailData?.questions) return;
-    const header = "Question,Answer,Category,Confidence,Source\n";
+    const header = "Question,Answer,Category,Confidence,Source,Data Source\n";
     const rows = detailData.questions
       .map((q) => {
         const answer = (q.editedAnswer || q.suggestedAnswer || "").replace(/"/g, '""');
         const question = q.questionText.replace(/"/g, '""');
         const source = (q.sourceRef || "").replace(/"/g, '""');
-        return `"${question}","${answer}","${q.category || ""}","${q.confidence || ""}","${source}"`;
+        const dsType = q.dataSourceType === "evidenced" ? "Evidenced" : (q.dataSourceType === "estimated" ? "Estimated" : "Manual");
+        return `"${question}","${answer}","${q.category || ""}","${q.confidence || ""}","${source}","${dsType}"`;
       })
       .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv" });

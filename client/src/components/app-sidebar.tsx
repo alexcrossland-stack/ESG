@@ -7,7 +7,7 @@ import {
 import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
-  Wand2, Calculator, FileQuestion, Library,
+  Wand2, Calculator, FileQuestion, Library, FileCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,6 +23,7 @@ const navItems = [
   { title: "Metrics Library", href: "/metrics", icon: BarChart3, group: "main" },
   { title: "Data Entry", href: "/data-entry", icon: ClipboardList, group: "main" },
   { title: "Action Tracker", href: "/actions", icon: CheckSquare, group: "main" },
+  { title: "Evidence", href: "/evidence", icon: FileCheck, group: "main" },
   { title: "Reports", href: "/reports", icon: Download, group: "main" },
   { title: "Policy Templates", href: "/policy-templates", icon: Library, group: "ai" },
   { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },

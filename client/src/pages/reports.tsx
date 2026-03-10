@@ -14,6 +14,7 @@ import { Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield,
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
+import { DataSourceBadge } from "@/pages/evidence";
 
 function generatePeriods() {
   const periods = [];
@@ -26,7 +27,7 @@ function generatePeriods() {
 }
 
 function ReportPreview({ data }: { data: any }) {
-  const { company, policy, selectedTopics, metrics, values, actions } = data;
+  const { company, policy, selectedTopics, metrics, values, actions, evidenceCoverage } = data;
 
   return (
     <div className="bg-white dark:bg-card border border-border rounded-md p-8 space-y-6 text-sm max-h-[600px] overflow-y-auto" data-testid="report-preview">
@@ -96,14 +97,16 @@ function ReportPreview({ data }: { data: any }) {
               <tr className="border-b border-border">
                 <th className="text-left py-1.5 font-medium text-muted-foreground">Metric</th>
                 <th className="text-left py-1.5 font-medium text-muted-foreground">Category</th>
+                <th className="text-left py-1.5 font-medium text-muted-foreground">Source</th>
                 <th className="text-right py-1.5 font-medium text-muted-foreground">Value</th>
               </tr>
             </thead>
             <tbody>
               {values.slice(0, 10).map((v: any) => (
-                <tr key={v.id} className="border-b border-border/50">
+                <tr key={v.id} className="border-b border-border/50" data-testid={`row-report-metric-${v.id}`}>
                   <td className="py-1.5">{v.metricName}</td>
                   <td className="py-1.5 capitalize text-muted-foreground">{v.category}</td>
+                  <td className="py-1.5"><DataSourceBadge type={v.dataSourceLabel === "Evidenced" ? "evidenced" : (v.dataSourceLabel === "Estimated" ? "estimated" : (v.dataSourceType || "manual"))} /></td>
                   <td className="py-1.5 text-right font-medium">{v.value} {v.unit}</td>
                 </tr>
               ))}
@@ -131,6 +134,28 @@ function ReportPreview({ data }: { data: any }) {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {evidenceCoverage && (
+        <div className="bg-muted/50 rounded-md p-4 space-y-1" data-testid="report-evidence-coverage">
+          <h3 className="font-semibold text-xs flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5 text-primary" />
+            Evidence Coverage
+          </h3>
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <span data-testid="text-report-coverage-percent" className="font-medium">
+              Coverage: {evidenceCoverage.coveragePercent}%
+            </span>
+            <span data-testid="text-report-evidenced-count" className="text-muted-foreground">
+              {evidenceCoverage.evidencedCount} of {evidenceCoverage.totalMetrics} metrics evidenced
+            </span>
+            {evidenceCoverage.expiredCount > 0 && (
+              <span data-testid="text-report-expired-count" className="text-red-600 dark:text-red-400 font-medium">
+                {evidenceCoverage.expiredCount} files expired
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -194,7 +219,7 @@ export default function Reports() {
 
     if (includeMetrics && values?.length) {
       content += `## ESG Metrics (${selectedPeriod})\n\n`;
-      content += values.map((v: any) => `- ${v.metricName}: ${v.value} ${v.unit || ""}`).join("\n");
+      content += values.map((v: any) => `- ${v.metricName}: ${v.value} ${v.unit || ""} [${v.dataSourceLabel || "Manual"}]`).join("\n");
       content += "\n\n";
     }
 
@@ -215,9 +240,9 @@ export default function Reports() {
 
   const exportCsv = () => {
     if (!reportData?.values?.length) return;
-    const rows = [["Metric", "Category", "Period", "Value", "Unit"]];
+    const rows = [["Metric", "Category", "Period", "Value", "Unit", "Data Source"]];
     reportData.values.forEach((v: any) => {
-      rows.push([v.metricName, v.category, v.period, v.value, v.unit || ""]);
+      rows.push([v.metricName, v.category, v.period, v.value, v.unit || "", v.dataSourceLabel || "Manual"]);
     });
     const csv = rows.map(r => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });

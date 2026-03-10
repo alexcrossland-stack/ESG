@@ -15,12 +15,13 @@ import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
-  Send, Check, X,
+  Send, Check, X, FileCheck,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
+import { DataSourceBadge } from "@/pages/evidence";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -90,6 +91,11 @@ export default function DataEntry() {
   const [activeTab, setActiveTab] = useState("raw");
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
+  const [manualDataSourceTypes, setManualDataSourceTypes] = useState<Record<string, string>>({});
+
+  const { data: evidenceCoverage } = useQuery<any>({
+    queryKey: ["/api/evidence/coverage"],
+  });
 
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
@@ -118,10 +124,13 @@ export default function DataEntry() {
   useEffect(() => {
     if (entryData?.values) {
       const vals: Record<string, { value: string; notes: string }> = {};
+      const dsTypes: Record<string, string> = {};
       entryData.values.forEach((v: any) => {
         vals[v.metricId] = { value: v.value ? String(Number(v.value)) : "", notes: v.notes || "" };
+        if (v.dataSourceType) dsTypes[v.metricId] = v.dataSourceType;
       });
       setManualValues(vals);
+      setManualDataSourceTypes(dsTypes);
     }
   }, [entryData]);
 
@@ -147,7 +156,7 @@ export default function DataEntry() {
   });
 
   const saveManualMutation = useMutation({
-    mutationFn: (data: { metricId: string; period: string; value: string; notes: string }) =>
+    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string }) =>
       apiRequest("POST", "/api/data-entry", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
@@ -217,7 +226,8 @@ export default function DataEntry() {
   const handleSaveManual = async (metricId: string) => {
     const val = manualValues[metricId];
     if (!val?.value) return;
-    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes });
+    const dataSourceType = manualDataSourceTypes[metricId] || "manual";
+    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType });
     toast({ title: "Saved" });
   };
 
@@ -267,6 +277,12 @@ export default function DataEntry() {
               ))}
             </SelectContent>
           </Select>
+          {evidenceCoverage && (
+            <Badge variant="outline" className="text-xs gap-1" data-testid="badge-evidence-summary">
+              <FileCheck className="w-3 h-3" />
+              {evidenceCoverage.metricCoverage?.filter((m: any) => m.hasEvidence).length || 0}/{evidenceCoverage.metricCoverage?.length || 0} evidenced
+            </Badge>
+          )}
           {periodWorkflowStatus && <WorkflowBadge status={periodWorkflowStatus} />}
           {isLocked ? (
             <Badge variant="secondary" className="gap-1">
@@ -383,6 +399,9 @@ export default function DataEntry() {
                         <Label className="text-sm flex items-center gap-1.5">
                           {field.label}
                           <span className="text-xs text-muted-foreground">({field.unit})</span>
+                          {rawData?.find((d: any) => d.inputName === field.key)?.dataSourceType && (
+                            <DataSourceBadge type={rawData.find((d: any) => d.inputName === field.key)?.dataSourceType} />
+                          )}
                         </Label>
                         <Input
                           type="number"
@@ -490,13 +509,14 @@ export default function DataEntry() {
                           <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
+                            <DataSourceBadge type={metricValue?.dataSourceType} />
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
                           </div>
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
                           )}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Value</Label>
                               <Input
@@ -526,6 +546,23 @@ export default function DataEntry() {
                                 className="h-8 text-sm"
                                 data-testid={`input-notes-${metric.metricId}`}
                               />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Source</Label>
+                              <Select
+                                value={manualDataSourceTypes[metric.metricId] || "manual"}
+                                onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metric.metricId]: val }))}
+                                disabled={editDisabled}
+                              >
+                                <SelectTrigger className="w-28 h-8" data-testid={`select-source-type-${metric.metricId}`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="manual">Manual</SelectItem>
+                                  <SelectItem value="estimated">Estimated</SelectItem>
+                                  <SelectItem value="evidenced">Evidenced</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </div>
                           </div>
                         </div>

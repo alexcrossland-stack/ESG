@@ -13,6 +13,7 @@ export const actionStatusEnum = pgEnum("action_status", ["not_started", "in_prog
 export const policyStatusEnum = pgEnum("policy_status", ["draft", "published"]);
 export const reportTypeEnum = pgEnum("report_type", ["pdf", "csv", "word"]);
 export const workflowStatusEnum = pgEnum("workflow_status", ["draft", "submitted", "approved", "rejected", "archived"]);
+export const dataSourceTypeEnum = pgEnum("data_source_type", ["evidenced", "estimated", "manual"]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -133,6 +134,7 @@ export const metricValues = pgTable("metric_values", {
   submittedAt: timestamp("submitted_at").defaultNow(),
   notes: text("notes"),
   locked: boolean("locked").default(false),
+  dataSourceType: dataSourceTypeEnum("data_source_type").default("manual"),
   workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
@@ -152,21 +154,32 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   enteredBy: varchar("entered_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  dataSourceType: dataSourceTypeEnum("data_source_type").default("manual"),
   workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
 });
 
+export const evidenceStatusEnum = pgEnum("evidence_status", ["uploaded", "reviewed", "approved", "expired"]);
+
 export const evidenceFiles = pgTable("evidence_files", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull(),
-  metricValueId: varchar("metric_value_id"),
   filename: text("filename").notNull(),
   fileUrl: text("file_url"),
   fileType: text("file_type"),
+  description: text("description"),
+  linkedModule: text("linked_module"),
+  linkedEntityId: varchar("linked_entity_id"),
+  linkedPeriod: text("linked_period"),
+  evidenceStatus: evidenceStatusEnum("evidence_status").default("uploaded"),
+  reviewDate: timestamp("review_date"),
+  expiryDate: timestamp("expiry_date"),
   uploadedBy: varchar("uploaded_by"),
   uploadedAt: timestamp("uploaded_at").defaultNow(),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
 });
 
 export const actionPlans = pgTable("action_plans", {
@@ -291,6 +304,7 @@ export const questionnaireQuestions = pgTable("questionnaire_questions", {
   rationale: text("rationale"),
   sourceData: jsonb("source_data"),
   approved: boolean("approved").default(false),
+  dataSourceType: dataSourceTypeEnum("data_source_type").default("manual"),
   createdAt: timestamp("created_at").defaultNow(),
   workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
   reviewedBy: varchar("reviewed_by"),
@@ -349,7 +363,7 @@ export const insertEsgPolicySchema = createInsertSchema(esgPolicies).omit({ id: 
 export const insertPolicyVersionSchema = createInsertSchema(policyVersions).omit({ id: true, createdAt: true });
 export const insertMaterialTopicSchema = createInsertSchema(materialTopics).omit({ id: true });
 export const insertMetricTargetSchema = createInsertSchema(metricTargets).omit({ id: true });
-export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({ id: true, uploadedAt: true });
+export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({ id: true, uploadedAt: true, reviewedBy: true, reviewedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export const insertPolicyGenerationInputSchema = createInsertSchema(policyGenerationInputs).omit({ id: true, createdAt: true });
 export const insertRawDataInputSchema = createInsertSchema(rawDataInputs).omit({ id: true, createdAt: true, updatedAt: true });
@@ -377,6 +391,8 @@ export type MetricTarget = typeof metricTargets.$inferSelect;
 export type MetricValue = typeof metricValues.$inferSelect;
 export type InsertMetricValue = z.infer<typeof insertMetricValueSchema>;
 export type EvidenceFile = typeof evidenceFiles.$inferSelect;
+export type InsertEvidenceFile = z.infer<typeof insertEvidenceFileSchema>;
+export type DataSourceType = "evidenced" | "estimated" | "manual";
 export type ActionPlan = typeof actionPlans.$inferSelect;
 export type InsertActionPlan = z.infer<typeof insertActionPlanSchema>;
 export type ReportRun = typeof reportRuns.$inferSelect;

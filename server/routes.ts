@@ -966,9 +966,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
-      const { metricId, period, value, notes } = req.body;
+      const { metricId, period, value, notes, dataSourceType } = req.body;
 
-      // Check if value already exists for this metric/period
       const existing = await storage.getMetricValues(metricId);
       const existingForPeriod = existing.find(v => v.period === period);
 
@@ -977,9 +976,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (existingForPeriod.locked) {
           return res.status(400).json({ error: "This period is locked and cannot be edited" });
         }
-        result = await storage.updateMetricValue(existingForPeriod.id, { value, notes, submittedBy: userId });
+        const updateData: any = { value, notes, submittedBy: userId };
+        if (dataSourceType) updateData.dataSourceType = dataSourceType;
+        result = await storage.updateMetricValue(existingForPeriod.id, updateData);
       } else {
-        result = await storage.createMetricValue({ metricId, period, value, notes, submittedBy: userId, locked: false });
+        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false };
+        if (dataSourceType) createData.dataSourceType = dataSourceType;
+        result = await storage.createMetricValue(createData);
       }
 
       await storage.createAuditLog({
@@ -1516,6 +1519,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allMetrics = await storage.getMetrics(companyId);
       const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
       const actions = await storage.getActionPlans(companyId);
+      const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
+      const allEvidence = await storage.getEvidenceFiles(companyId);
+
+      const valuesWithEvidence = values.map((v: any) => {
+        const hasEvidence = allEvidence.some(e => e.linkedModule === "metric_value" && e.linkedEntityId === v.id);
+        return {
+          ...v,
+          dataSourceLabel: hasEvidence ? "Evidenced" : (v.dataSourceType === "estimated" ? "Estimated" : "Manual"),
+        };
+      });
 
       await storage.createAuditLog({
         companyId, userId,
@@ -1532,8 +1545,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           policy: latestVersion?.content,
           selectedTopics: topics.filter(t => t.selected),
           metrics: allMetrics.filter(m => m.enabled),
-          values,
+          values: valuesWithEvidence,
           actions,
+          evidenceCoverage,
         },
       });
     } catch (e: any) {
@@ -2163,6 +2177,132 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const logs = await storage.getAiGenerationLogs(companyId, req.params.entityType, req.params.entityId);
       res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const files = await storage.getEvidenceFiles(companyId);
+      res.json(files);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence/coverage", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const period = req.query.period as string | undefined;
+      const coverage = await storage.getEvidenceCoverage(companyId, period);
+      res.json(coverage);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence/entity/:module/:entityId", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const files = await storage.getEvidenceByEntity(companyId, req.params.module, req.params.entityId);
+      res.json(files);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/evidence", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate } = req.body;
+      if (!filename) {
+        return res.status(400).json({ error: "Filename is required" });
+      }
+      const validModules = ["metric_value", "raw_data", "policy", "questionnaire_answer", "report"];
+      if (linkedModule && !validModules.includes(linkedModule)) {
+        return res.status(400).json({ error: "Invalid linkedModule" });
+      }
+      const file = await storage.createEvidenceFile({
+        companyId,
+        filename,
+        fileUrl: fileUrl || null,
+        fileType: fileType || null,
+        description: description || null,
+        linkedModule: linkedModule || null,
+        linkedEntityId: linkedEntityId || null,
+        linkedPeriod: linkedPeriod || null,
+        evidenceStatus: "uploaded",
+        reviewDate: null,
+        expiryDate: expiryDate ? new Date(expiryDate) : null,
+        uploadedBy: userId,
+      });
+
+      if (linkedModule === "metric_value" && linkedEntityId) {
+        await storage.updateMetricValue(linkedEntityId, { dataSourceType: "evidenced" } as any);
+      }
+      if (linkedModule === "raw_data" && linkedEntityId) {
+        await storage.updateRawDataInput(linkedEntityId, { dataSourceType: "evidenced" } as any);
+      }
+      if (linkedModule === "questionnaire_answer" && linkedEntityId) {
+        await storage.updateQuestionnaireQuestion(linkedEntityId, { dataSourceType: "evidenced" } as any);
+      }
+
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "Evidence uploaded",
+        entityType: linkedModule || "evidence",
+        entityId: file.id,
+        details: { filename, linkedModule, linkedEntityId, linkedPeriod },
+      });
+      res.json(file);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const allFiles = await storage.getEvidenceFiles(companyId);
+      const owned = allFiles.find(f => f.id === req.params.id);
+      if (!owned) return res.status(404).json({ error: "Evidence not found" });
+      const { description, evidenceStatus, expiryDate, reviewDate } = req.body;
+      const updates: any = {};
+      if (description !== undefined) updates.description = description;
+      if (expiryDate !== undefined) updates.expiryDate = expiryDate ? new Date(expiryDate) : null;
+      if (reviewDate !== undefined) updates.reviewDate = reviewDate ? new Date(reviewDate) : null;
+      if (evidenceStatus) {
+        const validStatuses = ["uploaded", "reviewed", "approved", "expired"];
+        if (!validStatuses.includes(evidenceStatus)) {
+          return res.status(400).json({ error: "Invalid evidence status" });
+        }
+        updates.evidenceStatus = evidenceStatus;
+        if (evidenceStatus === "reviewed" || evidenceStatus === "approved") {
+          updates.reviewedBy = userId;
+          updates.reviewedAt = new Date();
+        }
+      }
+      const file = await storage.updateEvidenceFile(req.params.id, updates);
+      if (!file) return res.status(404).json({ error: "Evidence not found" });
+      res.json(file);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const allFiles = await storage.getEvidenceFiles(companyId);
+      const owned = allFiles.find(f => f.id === req.params.id);
+      if (!owned) return res.status(404).json({ error: "Evidence not found" });
+      await storage.deleteEvidenceFile(req.params.id);
+      res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
