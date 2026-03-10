@@ -1,0 +1,95 @@
+Production hardening pass only. Do not redesign or expand scope.
+
+The current backend architecture is correct and should remain as-is:
+- documents = logical document
+- document_files = uploaded file metadata
+- document_versions = version state + extracted text
+- clauses / issues / analysis runs = artifacts tied to versionId
+- documents.currentVersionId = pointer to latest version
+
+Implement only the following:
+
+1) Add DB transactions around record creation/linking
+For initial upload, make these atomic in one transaction:
+- create documents row
+- create document_files row
+- create document_versions row
+- update documents.currentVersionId
+Only start the async pipeline after commit.
+
+For re-analysis, make these atomic in one transaction:
+- lock/read target document
+- verify not already processing
+- compute next version number
+- create new document_files row if a new file was uploaded
+- create new document_versions row
+- update documents.currentVersionId
+- set document status consistently to processing if needed
+Only start the async pipeline after commit.
+
+2) Make re-analysis concurrency-safe
+The current status check is not enough.
+Use row-level locking equivalent to SELECT ... FOR UPDATE inside the transaction so two concurrent requests cannot both create a new version.
+If Drizzle needs raw SQL for this, use raw SQL. Do not use app-level mutexes.
+
+3) Enforce DB-level uniqueness for version numbering
+Add or verify a unique constraint on:
+- document_versions(documentId, versionNumber)
+
+4) Add missing indexes for version-aware queries
+Add or verify indexes on:
+- document_versions(document_id)
+- document_versions(document_id, version_number)
+- clauses(version_id)
+- issues(clause_id)
+- clause_analysis_runs.version_id (or the equivalent analysis-runs table)
+- documents(current_version_id)
+
+Do not duplicate indexes that already exist.
+
+5) Verify foreign keys and nullability
+Verify/enforce:
+- document_versions.documentId -> documents.id
+- document_versions.fileId -> document_files.id
+- clauses.versionId -> document_versions.id
+- issues.clauseId -> clauses.id
+- documents.currentVersionId -> document_versions.id
+
+Also review issues.clauseId:
+- if every issue is guaranteed to belong to a clause, make it NOT NULL
+- otherwise leave nullable and document why
+
+6) Preserve version ownership of analysis state
+Do not move clauseCount or riskScore to documents.
+They should stay on document_versions.
+
+Also verify pipeline completion/failure paths keep statuses consistent:
+- version status updates correctly
+- document status updates correctly
+- no successful run leaves version as processing
+- no failed run leaves document stuck in processing
+
+7) Preserve backward compatibility
+Do not require backfill.
+Keep fallback behavior for legacy records:
+- old documents with currentVersionId = null still work
+- old clauses / analysis runs with null versionId still work through fallback logic
+
+8) No feature expansion
+Do not add:
+- frontend UI
+- version switching UI
+- historical export params
+- object storage
+- V2 route changes
+- schema redesign
+
+Deliverables:
+- exact code changes
+- migration files, if any
+- short summary covering:
+  - where transactions were added
+  - how locking was implemented
+  - which indexes/constraints were added
+  - whether issues.clauseId became NOT NULL
+- confirm server compiles and route behavior is unchanged
