@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
+import { usePermissions } from "@/lib/permissions";
 
 type QuestionnaireWithQuestions = Questionnaire & {
   questions: QuestionnaireQuestion[];
@@ -450,6 +451,8 @@ function NewQuestionnaireTab() {
 
 function PreviousQuestionnairesTab() {
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const canDelete = can("questionnaire_access");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data: questionnaires = [], isLoading } = useQuery<Questionnaire[]>({
@@ -615,14 +618,16 @@ function PreviousQuestionnairesTab() {
                 >
                   <FileText className="w-3.5 h-3.5" />
                 </Button>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => deleteMutation.mutate(q.id)}
-                  data-testid={`button-delete-questionnaire-${q.id}`}
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                </Button>
+                {canDelete && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => deleteMutation.mutate(q.id)}
+                    data-testid={`button-delete-questionnaire-${q.id}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>
@@ -633,6 +638,9 @@ function PreviousQuestionnairesTab() {
 }
 
 export default function QuestionnairePage() {
+  const { can } = usePermissions();
+  const canAccess = can("questionnaire_access");
+
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
       <div>
@@ -645,18 +653,22 @@ export default function QuestionnairePage() {
         </p>
       </div>
 
-      <Tabs defaultValue="new" className="w-full">
+      <Tabs defaultValue={canAccess ? "new" : "previous"} className="w-full">
         <TabsList data-testid="tabs-questionnaire">
-          <TabsTrigger value="new" data-testid="tab-new-questionnaire">
-            New Questionnaire
-          </TabsTrigger>
+          {canAccess && (
+            <TabsTrigger value="new" data-testid="tab-new-questionnaire">
+              New Questionnaire
+            </TabsTrigger>
+          )}
           <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
             Previous Questionnaires
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="new">
-          <NewQuestionnaireTab />
-        </TabsContent>
+        {canAccess && (
+          <TabsContent value="new">
+            <NewQuestionnaireTab />
+          </TabsContent>
+        )}
         <TabsContent value="previous">
           <PreviousQuestionnairesTab />
         </TabsContent>

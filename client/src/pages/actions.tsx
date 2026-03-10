@@ -16,6 +16,7 @@ import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
 import { CheckSquare, Plus, Edit2, Trash2, Calendar, User, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
+import { usePermissions } from "@/lib/permissions";
 
 type ActionPlan = {
   id: string;
@@ -164,6 +165,7 @@ function ActionDialog({
 export default function Actions() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
   const [editAction, setEditAction] = useState<ActionPlan | undefined>();
   const [showCreate, setShowCreate] = useState(false);
   const [filter, setFilter] = useState<string>("all");
@@ -204,15 +206,17 @@ export default function Actions() {
             Track your ESG improvement actions and progress
           </p>
         </div>
-        <Dialog open={showCreate} onOpenChange={setShowCreate}>
-          <DialogTrigger asChild>
-            <Button size="sm" data-testid="button-new-action">
-              <Plus className="w-3.5 h-3.5 mr-1.5" />
-              New Action
-            </Button>
-          </DialogTrigger>
-          <ActionDialog onClose={() => setShowCreate(false)} />
-        </Dialog>
+        {can("metrics_data_entry") && (
+          <Dialog open={showCreate} onOpenChange={setShowCreate}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-new-action">
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                New Action
+              </Button>
+            </DialogTrigger>
+            <ActionDialog onClose={() => setShowCreate(false)} />
+          </Dialog>
+        )}
       </div>
 
       {/* Status filter */}
@@ -302,32 +306,34 @@ export default function Actions() {
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Dialog
-                      open={editAction?.id === action.id}
-                      onOpenChange={open => !open && setEditAction(undefined)}
-                    >
-                      <DialogTrigger asChild>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => setEditAction(action)}
-                          data-testid={`button-edit-action-${action.id}`}
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </Button>
-                      </DialogTrigger>
-                      <ActionDialog action={editAction} onClose={() => setEditAction(undefined)} />
-                    </Dialog>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => deleteMutation.mutate(action.id)}
-                      data-testid={`button-delete-action-${action.id}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                    </Button>
-                  </div>
+                  {can("metrics_data_entry") && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Dialog
+                        open={editAction?.id === action.id}
+                        onOpenChange={open => !open && setEditAction(undefined)}
+                      >
+                        <DialogTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => setEditAction(action)}
+                            data-testid={`button-edit-action-${action.id}`}
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </DialogTrigger>
+                        <ActionDialog action={editAction} onClose={() => setEditAction(undefined)} />
+                      </Dialog>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteMutation.mutate(action.id)}
+                        data-testid={`button-delete-action-${action.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -340,7 +346,7 @@ export default function Actions() {
             <p className="text-sm text-muted-foreground">
               {filter === "all" ? "No actions yet. Create your first improvement action." : `No ${filter.replace(/_/g, " ")} actions.`}
             </p>
-            {filter === "all" && (
+            {filter === "all" && can("metrics_data_entry") && (
               <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
                 Create First Action

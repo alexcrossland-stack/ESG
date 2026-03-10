@@ -20,6 +20,7 @@ import {
   BarChart3, Plus, Leaf, Users, Shield, ArrowUp, ArrowDown,
   Minus, Calculator, PenLine, GitBranch, ChevronRight,
 } from "lucide-react";
+import { usePermissions } from "@/lib/permissions";
 
 type MetricSummary = {
   id: string;
@@ -316,6 +317,7 @@ function AddMetricDialog({ onClose }: { onClose: () => void }) {
 }
 
 export default function Metrics() {
+  const { can } = usePermissions();
   const [selectedMetric, setSelectedMetric] = useState<MetricSummary | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
@@ -351,15 +353,17 @@ export default function Metrics() {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="secondary" data-testid="badge-metric-count">{metrics.length} metrics</Badge>
-          <Dialog open={showAdd} onOpenChange={setShowAdd}>
-            <DialogTrigger asChild>
-              <Button size="sm" data-testid="button-add-custom-metric">
-                <Plus className="w-3.5 h-3.5 mr-1.5" />
-                Add
-              </Button>
-            </DialogTrigger>
-            <AddMetricDialog onClose={() => setShowAdd(false)} />
-          </Dialog>
+          {can("metrics_data_entry") && (
+            <Dialog open={showAdd} onOpenChange={setShowAdd}>
+              <DialogTrigger asChild>
+                <Button size="sm" data-testid="button-add-custom-metric">
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />
+                  Add
+                </Button>
+              </DialogTrigger>
+              <AddMetricDialog onClose={() => setShowAdd(false)} />
+            </Dialog>
+          )}
         </div>
       </div>
 

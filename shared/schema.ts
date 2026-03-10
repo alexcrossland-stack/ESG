@@ -3,7 +3,7 @@ import { pgTable, text, varchar, boolean, integer, timestamp, jsonb, decimal, pg
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const roleEnum = pgEnum("role", ["admin", "editor"]);
+export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer"]);
 export const metricCategoryEnum = pgEnum("metric_category", ["environmental", "social", "governance"]);
 export const metricFrequencyEnum = pgEnum("metric_frequency", ["monthly", "quarterly", "annual"]);
 export const metricTypeEnum = pgEnum("metric_type", ["manual", "calculated", "derived"]);
@@ -18,7 +18,7 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
-  role: roleEnum("role").notNull().default("editor"),
+  role: roleEnum("role").notNull().default("contributor"),
   companyId: varchar("company_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -358,3 +358,51 @@ export type PolicyTemplate = typeof policyTemplates.$inferSelect;
 export type InsertPolicyTemplate = z.infer<typeof insertPolicyTemplateSchema>;
 export type GeneratedPolicy = typeof generatedPolicies.$inferSelect;
 export type InsertGeneratedPolicy = z.infer<typeof insertGeneratedPolicySchema>;
+
+export type UserRole = "admin" | "contributor" | "approver" | "viewer";
+export type PermissionModule =
+  | "metrics_data_entry"
+  | "policy_editing"
+  | "report_generation"
+  | "questionnaire_access"
+  | "settings_admin"
+  | "template_admin"
+  | "user_management";
+
+export const ROLE_PERMISSIONS: Record<UserRole, PermissionModule[]> = {
+  admin: [
+    "metrics_data_entry",
+    "policy_editing",
+    "report_generation",
+    "questionnaire_access",
+    "settings_admin",
+    "template_admin",
+    "user_management",
+  ],
+  contributor: [
+    "metrics_data_entry",
+    "policy_editing",
+    "questionnaire_access",
+  ],
+  approver: [
+    "report_generation",
+  ],
+  viewer: [],
+};
+
+function normalizeRole(role: string): UserRole {
+  if (role === "editor") return "contributor";
+  return role as UserRole;
+}
+
+export function hasPermission(role: string | undefined, module: PermissionModule): boolean {
+  if (!role) return false;
+  const permissions = ROLE_PERMISSIONS[normalizeRole(role)];
+  if (!permissions) return false;
+  return permissions.includes(module);
+}
+
+export function getUserPermissions(role: string | undefined): PermissionModule[] {
+  if (!role) return [];
+  return ROLE_PERMISSIONS[normalizeRole(role)] || [];
+}

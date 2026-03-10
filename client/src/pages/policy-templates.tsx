@@ -26,6 +26,7 @@ import {
   CheckCircle, Clock, Search, Library, FilePlus, Eye, Trash2, Edit3,
 } from "lucide-react";
 import { format } from "date-fns";
+import { usePermissions } from "@/lib/permissions";
 
 const CATEGORY_ICONS: Record<string, any> = {
   "Quality": ClipboardCheck,
@@ -55,6 +56,7 @@ type ViewState =
 export default function PolicyTemplatesPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
   const [view, setView] = useState<ViewState>({ mode: "library" });
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -280,6 +282,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
   onComplete: (policy: any) => void;
 }) {
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [initialized, setInitialized] = useState(false);
@@ -553,7 +556,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
         ) : (
           <Button
             onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
+            disabled={generateMutation.isPending || !can("policy_editing")}
             data-testid="button-generate-policy"
           >
             {generateMutation.isPending ? (
@@ -577,6 +580,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
 function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
   const [editContent, setEditContent] = useState<Record<string, string> | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -732,19 +736,19 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {isDirty && (
+        {can("policy_editing") && isDirty && (
           <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-generated">
             <Edit3 className="w-3.5 h-3.5 mr-1.5" />
             Save Changes
           </Button>
         )}
-        {policy.status === "draft" && (
+        {can("policy_editing") && policy.status === "draft" && (
           <Button size="sm" onClick={handleApprove} disabled={updateMutation.isPending} data-testid="button-approve-policy">
             <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
             Approve
           </Button>
         )}
-        {policy.status === "approved" && (
+        {can("policy_editing") && policy.status === "approved" && (
           <Button size="sm" onClick={handlePublish} disabled={updateMutation.isPending} data-testid="button-publish-generated">
             <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
             Publish
@@ -764,6 +768,7 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
                   value={content[section.key] || ""}
                   onChange={(e) => handleContentChange(section.key, e.target.value)}
                   className="min-h-32 text-sm resize-none whitespace-pre-wrap"
+                  disabled={!can("policy_editing")}
                   data-testid={`textarea-${section.key}`}
                 />
               </CardContent>

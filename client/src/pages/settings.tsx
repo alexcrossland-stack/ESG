@@ -17,8 +17,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle, Lock } from "lucide-react";
+import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle, Lock, Users } from "lucide-react";
 import { format } from "date-fns";
+import { usePermissions } from "@/lib/permissions";
 
 const INDUSTRIES = [
   "Construction", "Education", "Energy & Utilities", "Financial Services",
@@ -40,6 +41,7 @@ export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [formInitialized, setFormInitialized] = useState(false);
+  const { can, isAdmin } = usePermissions();
 
   const { data: authData, isLoading: authLoading } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: company, isLoading: companyLoading } = useQuery<any>({ queryKey: ["/api/company"] });
@@ -172,12 +174,14 @@ export default function Settings() {
                   </FormItem>
                 )} />
               </div>
-              <div className="flex justify-end pt-2">
-                <Button type="submit" size="sm" disabled={updateCompanyMutation.isPending} data-testid="button-save-company">
-                  <Save className="w-3.5 h-3.5 mr-1.5" />
-                  {updateCompanyMutation.isPending ? "Saving..." : "Save Details"}
-                </Button>
-              </div>
+              {can("settings_admin") && (
+                <div className="flex justify-end pt-2">
+                  <Button type="submit" size="sm" disabled={updateCompanyMutation.isPending} data-testid="button-save-company">
+                    <Save className="w-3.5 h-3.5 mr-1.5" />
+                    {updateCompanyMutation.isPending ? "Saving..." : "Save Details"}
+                  </Button>
+                </div>
+              )}
             </form>
           </Form>
         </CardContent>
@@ -234,9 +238,90 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {user?.role === "admin" && <MetricsAdmin />}
-      {user?.role === "admin" && <AdminTemplateEditor />}
+      {isAdmin && <UserManagement />}
+      {isAdmin && <MetricsAdmin />}
+      {isAdmin && <AdminTemplateEditor />}
     </div>
+  );
+}
+
+function UserManagement() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: users, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/users"],
+  });
+
+  const updateRoleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
+      await apiRequest("PUT", `/api/users/${userId}/role`, { role });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/audit-logs"] });
+      toast({ title: "Role updated", description: "User role has been changed successfully." });
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to update role", description: e.message || "Something went wrong", variant: "destructive" });
+    },
+  });
+
+  const ROLES = [
+    { value: "admin", label: "Admin" },
+    { value: "contributor", label: "Contributor" },
+    { value: "approver", label: "Approver" },
+    { value: "viewer", label: "Viewer" },
+  ];
+
+  return (
+    <Card>
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Users className="w-4 h-4" />
+          User Management
+        </CardTitle>
+        <CardDescription className="text-xs">Manage team members and their access levels</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24" />
+        ) : !users || users.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No users found.</p>
+        ) : (
+          <div className="space-y-2">
+            {users.map((u: any) => (
+              <div
+                key={u.id}
+                className="flex items-center justify-between py-2 px-3 border border-border rounded-md"
+                data-testid={`user-row-${u.id}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate" data-testid={`text-user-name-${u.id}`}>{u.username}</p>
+                  <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                </div>
+                <Select
+                  value={u.role}
+                  onValueChange={(role) => updateRoleMutation.mutate({ userId: u.id, role })}
+                  disabled={updateRoleMutation.isPending}
+                >
+                  <SelectTrigger className="w-[140px] h-8 text-xs" data-testid={`select-role-${u.id}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLES.map((r) => (
+                      <SelectItem key={r.value} value={r.value} data-testid={`option-role-${r.value}`}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

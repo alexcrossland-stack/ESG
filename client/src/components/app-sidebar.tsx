@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { logout } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
+import { usePermissions } from "@/lib/permissions";
 
 const navItems = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard, group: "main" },
@@ -32,6 +33,7 @@ const navItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { can, isAdmin } = usePermissions();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -40,7 +42,10 @@ export function AppSidebar() {
   const user = authData?.user;
   const company = authData?.company;
 
-  const mainItems = navItems.filter(i => i.group === "main");
+  const mainItems = navItems.filter(i => i.group === "main").filter(item => {
+    if (item.title === "Data Entry" && !can("metrics_data_entry")) return false;
+    return true;
+  });
   const aiItems = navItems.filter(i => i.group === "ai");
   const settingsItems = navItems.filter(i => i.group === "settings");
 
@@ -144,8 +149,8 @@ export function AppSidebar() {
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-medium truncate">{user?.username || "User"}</p>
-            <Badge variant="secondary" className="text-xs py-0 h-4">
-              {user?.role || "editor"}
+            <Badge variant="secondary" className="text-xs py-0 h-4" data-testid="badge-user-role">
+              {user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : "User"}
             </Badge>
           </div>
           <Button

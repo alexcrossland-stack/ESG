@@ -27,6 +27,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 import type { CarbonCalculation, EmissionFactor } from "@shared/schema";
+import { usePermissions } from "@/lib/permissions";
 
 type CarbonInputs = {
   electricity: string;
@@ -107,6 +108,8 @@ const BREAKDOWN_CONFIG: { key: keyof BreakdownResult; label: string; color: stri
 
 export default function CarbonCalculator() {
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const canEdit = can("metrics_data_entry");
   const [inputs, setInputs] = useState<CarbonInputs>(defaultInputs);
   const [reportingPeriod, setReportingPeriod] = useState(PERIOD_OPTIONS[0]);
   const [periodType, setPeriodType] = useState("monthly");
@@ -251,6 +254,7 @@ export default function CarbonCalculator() {
                 placeholder="0"
                 min={0}
                 data-testid="input-electricity"
+                disabled={!canEdit}
               />
               <p className="text-xs text-muted-foreground">Total electricity consumed</p>
             </div>
@@ -267,6 +271,7 @@ export default function CarbonCalculator() {
                 placeholder="0"
                 min={0}
                 data-testid="input-gas"
+                disabled={!canEdit}
               />
               <p className="text-xs text-muted-foreground">Natural gas consumed</p>
             </div>
@@ -283,6 +288,7 @@ export default function CarbonCalculator() {
                 placeholder="0"
                 min={0}
                 data-testid="input-diesel"
+                disabled={!canEdit}
               />
               <p className="text-xs text-muted-foreground">Diesel fuel purchased</p>
             </div>
@@ -299,6 +305,7 @@ export default function CarbonCalculator() {
                 placeholder="0"
                 min={0}
                 data-testid="input-petrol"
+                disabled={!canEdit}
               />
               <p className="text-xs text-muted-foreground">Petrol fuel purchased</p>
             </div>
@@ -315,6 +322,7 @@ export default function CarbonCalculator() {
                 placeholder="0"
                 min={0}
                 data-testid="input-vehicle-mileage"
+                disabled={!canEdit}
               />
               <p className="text-xs text-muted-foreground">Company vehicle mileage</p>
             </div>
@@ -421,7 +429,7 @@ export default function CarbonCalculator() {
       <div className="flex flex-wrap items-center gap-3">
         <Button
           onClick={handleCalculate}
-          disabled={calculateMutation.isPending}
+          disabled={calculateMutation.isPending || !canEdit}
           data-testid="button-calculate"
         >
           <Calculator className="w-4 h-4 mr-1.5" />
@@ -433,6 +441,7 @@ export default function CarbonCalculator() {
             setInputs(defaultInputs);
             setResult(null);
           }}
+          disabled={!canEdit}
           data-testid="button-reset"
         >
           Reset

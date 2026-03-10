@@ -12,6 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown } from "lucide-react";
 import { format, subMonths } from "date-fns";
+import { usePermissions } from "@/lib/permissions";
 
 function generatePeriods() {
   const periods = [];
@@ -143,6 +144,7 @@ function ReportPreview({ data }: { data: any }) {
 export default function Reports() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
@@ -289,15 +291,17 @@ export default function Reports() {
               ))}
             </div>
 
-            <Button
-              className="w-full"
-              onClick={() => generateMutation.mutate()}
-              disabled={generateMutation.isPending}
-              data-testid="button-generate-report"
-            >
-              <FileText className="w-3.5 h-3.5 mr-1.5" />
-              {generateMutation.isPending ? "Generating..." : "Generate Report"}
-            </Button>
+            {can("report_generation") && (
+              <Button
+                className="w-full"
+                onClick={() => generateMutation.mutate()}
+                disabled={generateMutation.isPending}
+                data-testid="button-generate-report"
+              >
+                <FileText className="w-3.5 h-3.5 mr-1.5" />
+                {generateMutation.isPending ? "Generating..." : "Generate Report"}
+              </Button>
+            )}
           </CardContent>
         </Card>
 

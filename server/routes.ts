@@ -6,6 +6,7 @@ import { db } from "./storage";
 import {
   insertUserSchema, insertCompanySchema, insertMetricSchema,
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
+  hasPermission, type PermissionModule,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -42,6 +43,17 @@ function requireAuth(req: Request, res: Response, next: Function) {
     return next();
   }
   return res.status(401).json({ error: "Not authenticated" });
+}
+
+function requirePermission(module: PermissionModule) {
+  return async (req: Request, res: Response, next: Function) => {
+    const userId = (req.session as any).userId;
+    const user = await storage.getUser(userId);
+    if (!user || !hasPermission(user.role, module)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    return next();
+  };
 }
 
 const ENVIRONMENTAL_RAW_KEYS = [
@@ -646,7 +658,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(company);
   });
 
-  app.put("/api/company", requireAuth, async (req, res) => {
+  app.put("/api/company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const company = await storage.updateCompany(companyId, req.body);
@@ -662,7 +674,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(settings || {});
   });
 
-  app.put("/api/company/settings", requireAuth, async (req, res) => {
+  app.put("/api/company/settings", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const settings = await storage.upsertCompanySettings(companyId, req.body);
@@ -803,7 +815,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ policy, latestVersion, versions });
   });
 
-  app.put("/api/policy", requireAuth, async (req, res) => {
+  app.put("/api/policy", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -852,7 +864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(topics);
   });
 
-  app.put("/api/topics/:id", requireAuth, async (req, res) => {
+  app.put("/api/topics/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const { selected } = req.body;
       await storage.updateMaterialTopic(req.params.id, selected);
@@ -871,7 +883,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(withTargets);
   });
 
-  app.post("/api/metrics", requireAuth, async (req, res) => {
+  app.post("/api/metrics", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const parsed = insertMetricSchema.parse({ ...req.body, companyId });
@@ -882,7 +894,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id", requireAuth, async (req, res) => {
+  app.put("/api/metrics/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const metric = await storage.updateMetric(req.params.id, req.body);
       res.json(metric);
@@ -891,7 +903,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id/target", requireAuth, async (req, res) => {
+  app.put("/api/metrics/:id/target", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const { targetValue, targetYear } = req.body;
       const target = await storage.upsertMetricTarget(req.params.id, targetValue, targetYear);
@@ -950,7 +962,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ values, metrics: allMetrics.filter(m => m.enabled) });
   });
 
-  app.post("/api/data-entry", requireAuth, async (req, res) => {
+  app.post("/api/data-entry", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
@@ -985,7 +997,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entry/:period/lock", requireAuth, async (req, res) => {
+  app.post("/api/data-entry/:period/lock", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1010,7 +1022,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(data);
   });
 
-  app.post("/api/raw-data", requireAuth, async (req, res) => {
+  app.post("/api/raw-data", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1040,7 +1052,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entry/bulk-upload", requireAuth, async (req, res) => {
+  app.post("/api/data-entry/bulk-upload", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1208,7 +1220,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Recalculate metrics for a period
-  app.post("/api/metrics/recalculate/:period", requireAuth, async (req, res) => {
+  app.post("/api/metrics/recalculate/:period", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1309,14 +1321,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Admin metric update
-  app.put("/api/metrics/:id/admin", requireAuth, async (req, res) => {
+  app.put("/api/metrics/:id/admin", requireAuth, requirePermission("template_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const user = await storage.getUser(userId);
-      if (!user || user.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
-      }
       const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner } = req.body;
       const result = await storage.updateMetric(req.params.id, {
         direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner,
@@ -1420,7 +1428,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(actions);
   });
 
-  app.post("/api/actions", requireAuth, async (req, res) => {
+  app.post("/api/actions", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1438,7 +1446,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/actions/:id", requireAuth, async (req, res) => {
+  app.put("/api/actions/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1456,7 +1464,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/actions/:id", requireAuth, async (req, res) => {
+  app.delete("/api/actions/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       await storage.deleteActionPlan(req.params.id);
       res.json({ ok: true });
@@ -1483,7 +1491,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(reports);
   });
 
-  app.post("/api/reports/generate", requireAuth, async (req, res) => {
+  app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1546,7 +1554,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
   });
 
-  app.post("/api/policy-generator/generate", requireAuth, async (req, res) => {
+  app.post("/api/policy-generator/generate", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1596,7 +1604,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(history);
   });
 
-  app.post("/api/policy-generator/save-to-policy", requireAuth, async (req, res) => {
+  app.post("/api/policy-generator/save-to-policy", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1641,7 +1649,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(calcs);
   });
 
-  app.post("/api/carbon/calculate", requireAuth, async (req, res) => {
+  app.post("/api/carbon/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1680,7 +1688,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/carbon/calculations/:id", requireAuth, async (req, res) => {
+  app.delete("/api/carbon/calculations/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const calc = await storage.getCarbonCalculation(req.params.id);
@@ -1707,7 +1715,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ...q, questions });
   });
 
-  app.post("/api/questionnaires", requireAuth, async (req, res) => {
+  app.post("/api/questionnaires", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1740,7 +1748,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/questionnaires/:id/autofill", requireAuth, async (req, res) => {
+  app.post("/api/questionnaires/:id/autofill", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1820,7 +1828,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/questionnaires/:qId/questions/:id", requireAuth, async (req, res) => {
+  app.put("/api/questionnaires/:qId/questions/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
       res.json(updated);
@@ -1829,7 +1837,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/questionnaires/:id", requireAuth, async (req, res) => {
+  app.delete("/api/questionnaires/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const q = await storage.getQuestionnaire(req.params.id);
@@ -1855,7 +1863,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(template);
   });
 
-  app.post("/api/policy-templates/:slug/generate", requireAuth, async (req, res) => {
+  app.post("/api/policy-templates/:slug/generate", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1926,7 +1934,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(policy);
   });
 
-  app.put("/api/generated-policies/:id", requireAuth, async (req, res) => {
+  app.put("/api/generated-policies/:id", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1949,7 +1957,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/generated-policies/:id", requireAuth, async (req, res) => {
+  app.delete("/api/generated-policies/:id", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const policy = await storage.getGeneratedPolicy(req.params.id);
@@ -1961,15 +1969,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/policy-templates/:slug/admin", requireAuth, async (req, res) => {
+  app.put("/api/policy-templates/:slug/admin", requireAuth, requirePermission("template_admin"), async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
-      const user = await storage.getUser(userId);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-
       const updated = await storage.updatePolicyTemplate(req.params.slug, req.body);
       if (!updated) return res.status(404).json({ error: "Template not found" });
       res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/users", requireAuth, requirePermission("user_management"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const users = await storage.getUsersByCompany(companyId);
+      const sanitized = users.map(({ password, ...rest }) => rest);
+      res.json(sanitized);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/users/:id/role", requireAuth, requirePermission("user_management"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { role } = req.body;
+      const validRoles = ["admin", "contributor", "approver", "viewer"];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: "Invalid role. Must be one of: admin, contributor, approver, viewer" });
+      }
+      const targetUser = await storage.getUser(req.params.id);
+      if (!targetUser || targetUser.companyId !== companyId) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      const previousRole = targetUser.role;
+      const updated = await storage.updateUser(req.params.id, { role });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "User role changed",
+        entityType: "user",
+        entityId: req.params.id,
+        details: { previousRole, newRole: role, targetUsername: targetUser.username },
+      });
+      if (updated) {
+        const { password, ...sanitized } = updated;
+        res.json(sanitized);
+      } else {
+        res.status(500).json({ error: "Failed to update user role" });
+      }
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

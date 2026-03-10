@@ -14,10 +14,11 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
-  Upload, Download, FileSpreadsheet, Table,
+  Upload, Download, FileSpreadsheet, Table, Eye,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
+import { usePermissions } from "@/lib/permissions";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -78,6 +79,8 @@ const CATEGORY_ICONS = {
 export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
@@ -199,6 +202,12 @@ export default function DataEntry() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {!canEdit && (
+            <Badge variant="secondary" className="gap-1" data-testid="badge-read-only">
+              <Eye className="w-3 h-3" />
+              Read Only
+            </Badge>
+          )}
           <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
             <SelectTrigger className="w-36" data-testid="select-period">
               <SelectValue />
@@ -292,7 +301,7 @@ export default function DataEntry() {
                           value={rawInputs[field.key] || ""}
                           onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
                           placeholder={`Enter ${field.unit}`}
-                          disabled={isLocked}
+                          disabled={isLocked || !canEdit}
                           className="h-8 text-sm"
                           data-testid={`input-raw-${field.key}`}
                         />
@@ -305,7 +314,7 @@ export default function DataEntry() {
             );
           })}
 
-          {!isLocked && (
+          {!isLocked && canEdit && (
             <div className="flex justify-end gap-2">
               <Button
                 onClick={handleSaveRawAndRecalc}
@@ -408,7 +417,7 @@ export default function DataEntry() {
                                   [metric.metricId]: { ...prev[metric.metricId] || { notes: "" }, value: e.target.value }
                                 }))}
                                 placeholder={`Enter ${metric.unit || "value"}`}
-                                disabled={isLocked}
+                                disabled={isLocked || !canEdit}
                                 className="h-8 text-sm"
                                 data-testid={`input-manual-${metric.metricId}`}
                               />
@@ -422,14 +431,14 @@ export default function DataEntry() {
                                   [metric.metricId]: { ...prev[metric.metricId] || { value: "" }, notes: e.target.value }
                                 }))}
                                 placeholder="Optional note"
-                                disabled={isLocked}
+                                disabled={isLocked || !canEdit}
                                 className="h-8 text-sm"
                                 data-testid={`input-notes-${metric.metricId}`}
                               />
                             </div>
                           </div>
                         </div>
-                        {!isLocked && (
+                        {!isLocked && canEdit && (
                           <div className="flex items-end">
                             <Button
                               size="sm"
@@ -460,7 +469,12 @@ export default function DataEntry() {
         </TabsContent>
 
         <TabsContent value="upload" className="mt-4 space-y-4">
-          <ExcelUploadTab />
+          {canEdit ? <ExcelUploadTab /> : (
+            <div className="text-center py-12 space-y-2">
+              <Eye className="w-8 h-8 text-muted-foreground mx-auto" />
+              <p className="text-sm text-muted-foreground">You do not have permission to upload data.</p>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </div>

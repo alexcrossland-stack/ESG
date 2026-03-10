@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Save, CheckCircle, Clock, History, Download, Eye, ChevronDown, ChevronUp, Sparkles, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
+import { usePermissions } from "@/lib/permissions";
 
 const SECTIONS = [
   { key: "purpose", label: "Purpose & Scope", placeholder: "Describe the purpose and scope of your ESG policy..." },
@@ -28,6 +29,8 @@ export default function Policy() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
+  const { can } = usePermissions();
+  const canEditPolicy = can("policy_editing");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["purpose"]));
   const [editContent, setEditContent] = useState<Record<string, string>>({});
   const [isDirty, setIsDirty] = useState(false);
@@ -135,13 +138,13 @@ export default function Policy() {
             <Download className="w-3.5 h-3.5 mr-1.5" />
             Export
           </Button>
-          {isDirty && (
+          {canEditPolicy && isDirty && (
             <Button size="sm" onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-save-policy">
               <Save className="w-3.5 h-3.5 mr-1.5" />
               {saveMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           )}
-          {policy?.status !== "published" && (
+          {canEditPolicy && policy?.status !== "published" && (
             <Button size="sm" variant="default" onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending} data-testid="button-publish-policy">
               <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
               {publishMutation.isPending ? "Publishing..." : "Publish"}
@@ -247,6 +250,7 @@ export default function Policy() {
                       onChange={e => handleChange(section.key, e.target.value)}
                       placeholder={section.placeholder}
                       className="min-h-28 text-sm resize-none"
+                      disabled={!canEditPolicy}
                       data-testid={`textarea-${section.key}`}
                     />
                   </CardContent>
@@ -255,12 +259,14 @@ export default function Policy() {
             );
           })}
 
-          <div className="flex justify-end pt-2">
-            <Button onClick={handleSave} disabled={saveMutation.isPending || !isDirty} data-testid="button-save-policy-bottom">
-              <Save className="w-3.5 h-3.5 mr-1.5" />
-              {saveMutation.isPending ? "Saving..." : "Save Policy"}
-            </Button>
-          </div>
+          {canEditPolicy && (
+            <div className="flex justify-end pt-2">
+              <Button onClick={handleSave} disabled={saveMutation.isPending || !isDirty} data-testid="button-save-policy-bottom">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {saveMutation.isPending ? "Saving..." : "Save Policy"}
+              </Button>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="history" className="mt-4">

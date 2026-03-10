@@ -14,6 +14,7 @@ import {
   Building2, Leaf, Users, Shield, ChevronRight, ChevronLeft,
   Loader2, RotateCcw, Save, FileText, CheckCircle,
 } from "lucide-react";
+import { usePermissions } from "@/lib/permissions";
 
 const STEPS = [
   { label: "Company Profile", icon: Building2 },
@@ -102,6 +103,8 @@ const initialFormData: FormData = {
 
 export default function PolicyGenerator() {
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const canEdit = can("policy_editing");
   const [step, setStep] = useState(0);
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [generatedContent, setGeneratedContent] = useState<Record<string, string> | null>(null);
@@ -417,7 +420,7 @@ export default function PolicyGenerator() {
                       <ChevronRight className="w-4 h-4 ml-1" />
                     </Button>
                   ) : (
-                    <Button onClick={handleGenerate} data-testid="button-generate">
+                    <Button onClick={handleGenerate} data-testid="button-generate" disabled={!canEdit}>
                       <FileText className="w-4 h-4 mr-1" />
                       Generate Policy
                     </Button>

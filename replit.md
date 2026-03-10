@@ -69,7 +69,7 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 
 ## Database Tables
 
-- `users` — User accounts with role (admin/editor)
+- `users` — User accounts with role (admin/contributor/approver/viewer)
 - `companies` — Company profiles
 - `company_settings` — Which ESG areas to track
 - `esg_policies` — Policy documents with status
@@ -154,6 +154,10 @@ Two-path onboarding for new users, with database persistence and autosave/resume
 - Session stored in PostgreSQL via `connect-pg-simple`
 - Frontend served by Vite in development
 - New registrations go through onboarding wizard; demo account auto-seeds on login
+- RBAC: 4 roles (admin/contributor/approver/viewer), 7 permission modules (metrics_data_entry, policy_editing, report_generation, questionnaire_access, settings_admin, template_admin, user_management)
+- Permissions defined in shared/schema.ts (ROLE_PERMISSIONS map), enforced server-side via requirePermission() middleware and client-side via usePermissions() hook
+- User management: GET /api/users, PUT /api/users/:id/role (admin only)
+- Legacy "editor" role maps to "contributor" permissions
 - Password hashing: bcrypt (12 rounds) with SHA-256 legacy fallback and auto-migration on login
 - Rate limiting: 10 login attempts/15min (keyed by normalized email), 5 register attempts/hr, 5 password changes/15min
 - Session security: SameSite=lax, httpOnly, secure cookies; session regeneration on login/register; SESSION_SECRET required (no fallback)

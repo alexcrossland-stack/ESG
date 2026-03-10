@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Target, Leaf, Users, Shield } from "lucide-react";
+import { usePermissions } from "@/lib/permissions";
 
 type Topic = {
   id: string;
@@ -41,6 +42,7 @@ const CATEGORY_CONFIG = {
 export default function Topics() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
 
   const { data: topics = [], isLoading } = useQuery<Topic[]>({ queryKey: ["/api/topics"] });
 
@@ -128,6 +130,7 @@ export default function Topics() {
                     <Switch
                       checked={topic.selected}
                       onCheckedChange={(checked) => updateMutation.mutate({ id: topic.id, selected: checked })}
+                      disabled={!can("settings_admin")}
                       data-testid={`switch-topic-${topic.id}`}
                     />
                   </div>
