@@ -1,0 +1,321 @@
+I want to keep the current ESG Manager product structure, but I need the app upgraded from a good MVP into a more robust production-ready SME SaaS platform. Please implement the following improvements in priority order.
+
+1. Replace the current authentication and security model
+
+The current auth approach is not strong enough. Update it as follows:
+	•	Replace SHA-256 password hashing with Argon2id or bcrypt
+	•	Use a proper per-user salt handled by the hashing library
+	•	Stop using a fixed salt
+	•	Replace the current token approach with a more secure session/auth design
+	•	Prefer secure HTTP-only cookies for auth if practical
+	•	If token auth remains, add:
+	•	token expiry
+	•	token revocation
+	•	secure logout
+	•	server-side session invalidation
+	•	Add rate limiting on login, register, and password reset endpoints
+	•	Add password reset flow
+	•	Add email verification flow
+	•	Add basic session management so users can be logged out securely
+	•	Add audit logging for:
+	•	login success
+	•	login failure
+	•	password reset
+	•	email verification
+	•	logout
+	•	permission changes
+
+I want all auth and security code refactored so it is appropriate for a real SaaS application, not just a demo environment.
+
+⸻
+
+2. Introduce stronger user roles and permissions
+
+The current two-role model of admin and editor is too limited. Please replace it with a more flexible role and permissions system.
+
+Implement these minimum roles:
+	•	Admin — full company access, settings, users, templates, reports, approvals
+	•	Contributor — can input data, edit assigned metrics, update questionnaires, draft policies
+	•	Approver — can review and approve policies, reports, questionnaire answers, and locked submissions
+	•	Viewer — read-only access to dashboards, reports, and approved documents
+
+Also add permission controls by module where practical, for example:
+	•	metrics data entry
+	•	policy editing
+	•	report generation
+	•	questionnaire access
+	•	settings admin
+	•	template admin
+	•	user management
+
+I want permissions enforced both in the UI and on the backend API.
+
+⸻
+
+3. Add approval states and governance workflows
+
+I want the app to distinguish clearly between draft content and approved content. Please add workflow states across the platform.
+
+Implement standard statuses such as:
+	•	draft
+	•	submitted
+	•	locked
+	•	approved
+	•	rejected
+	•	archived
+
+Apply these states to at least:
+	•	metric values
+	•	raw data submissions
+	•	generated policies
+	•	questionnaire answers
+	•	reports
+
+Examples of behaviour I want:
+	•	contributors can save drafts
+	•	approvers can approve or reject submissions
+	•	approved items become read-only unless reopened by an admin
+	•	locked periods cannot be edited except by admin override
+	•	each approval/rejection should store:
+	•	who did it
+	•	date/time
+	•	comments/reason
+
+This should create a proper governance trail for ESG data and outputs.
+
+⸻
+
+4. Make AI outputs auditable and controlled
+
+The AI tools are useful, but I need them to be safer and more defensible.
+
+Please update all AI features so that:
+	•	every AI-generated output is marked as Draft – Review Required
+	•	every generation stores:
+	•	model name/version
+	•	prompt version
+	•	generation timestamp
+	•	user who triggered it
+	•	source data used
+	•	final output
+	•	users can view the questionnaire inputs or internal company data that informed the output
+	•	AI outputs cannot be treated as approved until a human reviews and approves them
+	•	questionnaire autofill must show:
+	•	suggested answer
+	•	rationale
+	•	supporting company data used
+	•	confidence level or completeness indicator
+	•	if there is insufficient data, the AI should say so instead of inventing an answer
+
+Also add prompt protection and validation for pasted supplier questionnaires so the system is less vulnerable to bad instructions inside pasted text.
+
+I want the AI layer designed as an assisted drafting tool, not an uncontrolled auto-answer engine.
+
+⸻
+
+5. Improve evidence management
+
+Evidence should be a core part of the platform rather than just file upload storage.
+
+Please implement a proper evidence workflow with these features:
+	•	allow evidence files to be attached to:
+	•	metric values
+	•	raw data submissions
+	•	policies
+	•	questionnaire answers
+	•	reports
+	•	store metadata for each evidence file:
+	•	uploaded by
+	•	upload date
+	•	linked module
+	•	linked period
+	•	file type
+	•	description
+	•	review status
+	•	expiry/review date where relevant
+	•	add evidence statuses such as:
+	•	uploaded
+	•	reviewed
+	•	approved
+	•	expired
+	•	show evidence coverage in the UI, for example:
+	•	which metrics have evidence
+	•	which periods are missing evidence
+	•	which evidence is out of date
+
+I also want report exports and questionnaire outputs to be able to show whether the answer or metric is evidenced, estimated, or manually declared.
+
+⸻
+
+6. Improve the scoring and dashboard logic
+
+The traffic light system is useful, but the overall ESG score needs more control.
+
+Please update the scoring engine so that:
+	•	scoring supports weighting by:
+	•	category
+	•	metric importance
+	•	material topics
+	•	inactive modules do not unfairly penalise users
+	•	missing data is handled explicitly and does not silently distort the score
+	•	compliance yes/no metrics are weighted separately from continuous metrics where needed
+	•	target-range metrics are scored correctly
+	•	calculated and derived metrics can be flagged separately from manual values
+
+On the dashboard, add:
+	•	missing data alerts
+	•	overdue action alerts
+	•	upcoming policy review dates
+	•	evidence coverage indicator
+	•	percentage of metrics submitted for current period
+	•	clear explanation of how the ESG score is calculated
+
+I want the dashboard to feel more credible and less like a generic traffic-light summary.
+
+⸻
+
+7. Strengthen the carbon calculator
+
+The current carbon calculator is a good start, but I want it upgraded into a more reliable SME carbon module.
+
+Please implement the following:
+	•	store emission factor sets with versioning
+	•	make factor year visible in the UI and exports
+	•	add methodology notes to every calculation
+	•	distinguish:
+	•	actual values
+	•	estimated values
+	•	proxy values
+	•	add optional fuel-type selection where relevant
+	•	support both simple activity-based and fallback proxy-based calculations where data is incomplete
+	•	ensure calculations are rules-based in code, not AI-generated
+	•	show assumptions clearly in outputs and exports
+
+I do not want the app positioned as full enterprise carbon accounting, but it should be a trustworthy SME carbon estimator.
+
+⸻
+
+8. Improve reports so they are board-ready and customer-ready
+
+I want reports to be more usable externally.
+
+Please enhance reports so they can include:
+	•	executive summary
+	•	selected ESG metrics by category
+	•	carbon summary
+	•	policy summary
+	•	progress against actions
+	•	missing data / estimated data flags
+	•	evidence coverage summary
+	•	methodology notes
+	•	approval sign-off section
+
+I want the report generator to support at least:
+	•	internal management report
+	•	customer / supplier response pack
+	•	simple annual ESG summary
+
+Wherever possible, the report should clearly label:
+	•	approved vs draft data
+	•	evidenced vs estimated values
+	•	current reporting period
+	•	factor methodology version used
+
+⸻
+
+9. Improve data entry and Excel upload controls
+
+The data entry model is good, but I want it hardened.
+
+Please improve the Excel import and data entry process by adding:
+	•	downloadable import templates with field instructions
+	•	validation before save
+	•	visible error reporting by row and field
+	•	duplicate period detection
+	•	unit validation
+	•	rollback or cancel before final bulk save
+	•	import audit logs
+	•	lock checks before import
+	•	auto-recalculation after successful bulk import
+
+For manual and raw data entry, add:
+	•	save draft
+	•	submit for approval
+	•	lock/unlock by period
+	•	comments on submissions
+	•	owner attribution
+
+⸻
+
+10. Rationalise the database and implementation consistency
+
+Please review the database schema and implementation to make sure it is internally consistent.
+
+I want a cleanup pass that checks:
+	•	route counts match actual routes
+	•	endpoint list matches implemented APIs
+	•	page list matches actual navigation
+	•	metric formulas match available raw inputs
+	•	all generated policies and reports have consistent status/version handling
+	•	naming conventions are consistent across frontend, backend, and database
+
+If any tables are overlapping or redundant, simplify them before the system gets more complex.
+
+⸻
+
+11. Add better admin controls
+
+In settings/admin, I want stronger control over how the platform is configured per company.
+
+Please add admin controls for:
+	•	user and role management
+	•	module enable/disable by company
+	•	scoring weight configuration
+	•	metric activation/deactivation
+	•	policy template activation/deactivation
+	•	emission factor version selection
+	•	approval workflow settings
+	•	audit log review
+	•	company-specific branding for reports if feasible
+
+This should make the platform easier to tailor for different SME clients.
+
+⸻
+
+12. Add reminders and review dates
+
+Please add a reminder framework so the app can prompt users about ESG maintenance tasks.
+
+Examples:
+	•	metric submission due
+	•	overdue action
+	•	policy review due
+	•	evidence expiry due
+	•	questionnaire review needed
+	•	report approval pending
+
+At minimum I want date fields, dashboard alerts, and a notifications table. Email notifications can be phase two if needed.
+
+⸻
+
+Recommended delivery order for Replit
+
+Tell Replit to implement in this order:
+
+Phase 1 — critical platform hardening
+	1.	Auth/security rebuild
+	2.	Roles and permissions
+	3.	Approval workflow/status model
+	4.	Audit log expansion
+
+Phase 2 — trust and defensibility
+	5.	Evidence management
+	6.	AI auditability and review controls
+	7.	Dashboard and scoring improvements
+	8.	Carbon methodology and factor versioning
+
+Phase 3 — usability and commercial polish
+	9.	Better reports
+	10.	Better Excel/data-entry controls
+	11.	Admin configuration improvements
+	12.	Reminders and review dates
