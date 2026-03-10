@@ -9,10 +9,12 @@ import {
 } from "recharts";
 import {
   AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
-  Activity, Leaf, ArrowUp, ArrowDown, ClipboardList,
+  Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
+  Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { useState } from "react";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -61,9 +63,22 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
   );
 }
 
-function CategoryBar({ label, counts }: {
+function MiniRing({ value, size = 32, strokeWidth = 3, color = "stroke-primary" }: { value: number; size?: number; strokeWidth?: number; color?: string }) {
+  const r = (size - strokeWidth * 2) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (Math.min(value, 100) / 100) * circ;
+  return (
+    <svg width={size} height={size} className="-rotate-90" viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" className="stroke-muted" strokeWidth={strokeWidth} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" className={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={offset} />
+    </svg>
+  );
+}
+
+function CategoryBar({ label, counts, score }: {
   label: string;
   counts: { green: number; amber: number; red: number; missing: number; total: number };
+  score?: number;
 }) {
   const total = counts.total || 1;
   const greenPct = (counts.green / total) * 100;
@@ -73,11 +88,15 @@ function CategoryBar({ label, counts }: {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">{label}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium">{label}</p>
+          {score !== undefined && <span className="text-xs font-semibold text-muted-foreground">{score}%</span>}
+        </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><StatusDot status="green" /> {counts.green}</span>
           <span className="flex items-center gap-1"><StatusDot status="amber" /> {counts.amber}</span>
           <span className="flex items-center gap-1"><StatusDot status="red" /> {counts.red}</span>
+          {counts.missing > 0 && <span className="flex items-center gap-1"><StatusDot status="missing" /> {counts.missing}</span>}
         </div>
       </div>
       <div className="flex h-2 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800">
@@ -130,6 +149,67 @@ function SetupChecklist({ company, metricCount, hasCarbonCalc, hasPolicy }: { co
   );
 }
 
+function ScoreMethodology({ weightedScore }: { weightedScore: any }) {
+  const [open, setOpen] = useState(false);
+  if (!weightedScore) return null;
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        data-testid="button-score-methodology"
+      >
+        <Info className="w-3.5 h-3.5" />
+        {open ? "Hide" : "How is this scored?"}
+      </button>
+      {open && (
+        <div className="mt-2 p-3 rounded-md bg-muted/50 space-y-2" data-testid="panel-score-methodology">
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <span className="text-muted-foreground">Metrics scored</span>
+              <p className="font-medium">{weightedScore.scoredMetrics} of {weightedScore.totalMetrics}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Missing data</span>
+              <p className="font-medium">{weightedScore.missingCount} metrics</p>
+            </div>
+            {weightedScore.complianceCount > 0 && (
+              <div>
+                <span className="text-muted-foreground">Compliance score</span>
+                <p className="font-medium">{weightedScore.complianceScore}%</p>
+              </div>
+            )}
+            {weightedScore.continuousCount > 0 && (
+              <div>
+                <span className="text-muted-foreground">Continuous score</span>
+                <p className="font-medium">{weightedScore.continuousScore}%</p>
+              </div>
+            )}
+          </div>
+          {weightedScore.categoryScores && (
+            <div className="space-y-1 pt-1 border-t border-border">
+              <p className="text-xs font-medium text-muted-foreground">Category breakdown</p>
+              {Object.entries(weightedScore.categoryScores).map(([cat, data]: [string, any]) => (
+                <div key={cat} className="flex items-center justify-between text-xs">
+                  <span className="capitalize">{cat}</span>
+                  <span className="font-medium">{data.score}% ({data.scoredCount}/{data.metricCount} scored, weight: {data.weight.toFixed(2)}x)</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="space-y-0.5 pt-1 border-t border-border">
+            <p className="text-xs font-medium text-muted-foreground">Methodology</p>
+            {(weightedScore.methodology || []).map((line: string, i: number) => (
+              <p key={i} className="text-xs text-muted-foreground">{line}</p>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced"] });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
@@ -160,11 +240,12 @@ export default function Dashboard() {
   const categorySummary = enhanced?.categorySummary || {};
   const esgScore = enhanced?.esgScore || 0;
   const metricSummaries = enhanced?.metricSummaries || [];
-
-  const overdueActions = actions.filter((a: any) => {
-    const due = new Date(a.dueDate);
-    return due < new Date() && a.status !== "complete";
-  });
+  const weightedScore = enhanced?.weightedScore;
+  const missingDataAlerts = enhanced?.missingDataAlerts || [];
+  const overdueActions = enhanced?.overdueActions || [];
+  const upcomingPolicyReviews = enhanced?.upcomingPolicyReviews || [];
+  const evidenceCoverage = enhanced?.evidenceCoverage || 0;
+  const submissionRate = enhanced?.submissionRate || 0;
 
   const envMetrics = metricSummaries.filter((m: any) => m.category === "environmental");
   const socialMetrics = metricSummaries.filter((m: any) => m.category === "social");
@@ -196,6 +277,8 @@ export default function Dashboard() {
     .filter((m: any) => m.status === "red" || m.status === "amber")
     .slice(0, 5);
 
+  const hasAlerts = missingDataAlerts.length > 0 || overdueActions.length > 0 || upcomingPolicyReviews.length > 0;
+
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -214,14 +297,43 @@ export default function Dashboard() {
         )}
       </div>
 
-      {overdueActions.length > 0 && (
-        <Alert data-testid="alert-overdue">
-          <AlertTriangle className="w-4 h-4" />
-          <AlertDescription>
-            {overdueActions.length} action{overdueActions.length > 1 ? "s are" : " is"} overdue.{" "}
-            <Link href="/actions" className="font-medium underline underline-offset-2">Review actions</Link>
-          </AlertDescription>
-        </Alert>
+      {hasAlerts && (
+        <div className="space-y-2" data-testid="section-alerts">
+          {overdueActions.length > 0 && (
+            <Alert variant="destructive" data-testid="alert-overdue-actions">
+              <AlertTriangle className="w-4 h-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>
+                  {overdueActions.length} action{overdueActions.length > 1 ? "s" : ""} overdue
+                  {overdueActions.length <= 3 && `: ${overdueActions.map((a: any) => a.title).join(", ")}`}
+                </span>
+                <Link href="/actions"><Button variant="ghost" size="sm" className="text-xs h-6 ml-2" data-testid="link-review-overdue">Review</Button></Link>
+              </AlertDescription>
+            </Alert>
+          )}
+          {missingDataAlerts.length > 0 && (
+            <Alert data-testid="alert-missing-data">
+              <AlertCircle className="w-4 h-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>
+                  {missingDataAlerts.length} metric{missingDataAlerts.length > 1 ? "s" : ""} missing data for {enhanced?.latestPeriod}
+                </span>
+                <Link href="/data-entry"><Button variant="ghost" size="sm" className="text-xs h-6 ml-2" data-testid="link-enter-missing">Enter data</Button></Link>
+              </AlertDescription>
+            </Alert>
+          )}
+          {upcomingPolicyReviews.map((pr: any, i: number) => (
+            <Alert key={i} variant={pr.status === "overdue" ? "destructive" : undefined} data-testid={`alert-policy-review-${i}`}>
+              <Calendar className="w-4 h-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>
+                  Policy review {pr.status === "overdue" ? "overdue" : pr.status === "urgent" ? "due within 30 days" : "upcoming"} ({new Date(pr.reviewDate).toLocaleDateString()})
+                </span>
+                <Link href="/policy"><Button variant="ghost" size="sm" className="text-xs h-6 ml-2" data-testid="link-review-policy">Review</Button></Link>
+              </AlertDescription>
+            </Alert>
+          ))}
+        </div>
       )}
 
       {company?.onboardingPath === "manual" && (
@@ -233,42 +345,52 @@ export default function Dashboard() {
         />
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1">
-          <CardContent className="p-4 flex flex-col items-center justify-center">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1 row-span-2">
+          <CardContent className="p-4 flex flex-col items-center justify-center h-full">
             <ScoreRing score={esgScore} label="ESG Score" />
+            <ScoreMethodology weightedScore={weightedScore} />
           </CardContent>
         </Card>
 
-        <Card data-testid="stat-total-metrics">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">Total Metrics</p>
-            <p className="text-2xl font-bold">{enhanced?.totalMetrics || 0}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">tracked</p>
+        <Card data-testid="stat-submission-rate">
+          <CardContent className="p-3 flex items-center gap-3">
+            <MiniRing value={submissionRate} color={submissionRate >= 80 ? "stroke-emerald-500" : submissionRate >= 50 ? "stroke-amber-500" : "stroke-red-500"} />
+            <div>
+              <p className="text-xs text-muted-foreground">Submitted</p>
+              <p className="text-lg font-bold" data-testid="text-submission-rate">{submissionRate}%</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="stat-evidence-coverage">
+          <CardContent className="p-3 flex items-center gap-3">
+            <MiniRing value={evidenceCoverage} color={evidenceCoverage >= 60 ? "stroke-emerald-500" : evidenceCoverage >= 30 ? "stroke-amber-500" : "stroke-muted-foreground"} />
+            <div>
+              <p className="text-xs text-muted-foreground">Evidence</p>
+              <p className="text-lg font-bold" data-testid="text-evidence-coverage">{evidenceCoverage}%</p>
+            </div>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-on-track" className="border-emerald-200 dark:border-emerald-800">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">On Track</p>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground mb-0.5">On Track</p>
             <p className="text-2xl font-bold text-emerald-600">{statusCounts.green}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">green</p>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-at-risk" className="border-amber-200 dark:border-amber-800">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">At Risk</p>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground mb-0.5">At Risk</p>
             <p className="text-2xl font-bold text-amber-600">{statusCounts.amber}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">amber</p>
           </CardContent>
         </Card>
 
         <Card data-testid="stat-off-track" className="border-red-200 dark:border-red-800">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">Off Track</p>
+          <CardContent className="p-3">
+            <p className="text-xs text-muted-foreground mb-0.5">Off Track</p>
             <p className="text-2xl font-bold text-red-600">{statusCounts.red}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">red</p>
           </CardContent>
         </Card>
       </div>
@@ -277,12 +399,31 @@ export default function Dashboard() {
         <Card className="md:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Category Performance</CardTitle>
-            <CardDescription className="text-xs">Traffic light status by ESG category</CardDescription>
+            <CardDescription className="text-xs">Weighted scores by ESG category</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <CategoryBar label="Environmental" counts={categorySummary.environmental || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
-            <CategoryBar label="Social" counts={categorySummary.social || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
-            <CategoryBar label="Governance" counts={categorySummary.governance || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }} />
+            <CategoryBar
+              label="Environmental"
+              counts={categorySummary.environmental || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }}
+              score={weightedScore?.categoryScores?.environmental?.score}
+            />
+            <CategoryBar
+              label="Social"
+              counts={categorySummary.social || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }}
+              score={weightedScore?.categoryScores?.social?.score}
+            />
+            <CategoryBar
+              label="Governance"
+              counts={categorySummary.governance || { green: 0, amber: 0, red: 0, missing: 0, total: 0 }}
+              score={weightedScore?.categoryScores?.governance?.score}
+            />
+            <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-muted-foreground">
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1"><CircleDot className="w-3 h-3" /> {enhanced?.totalMetrics || 0} metrics</span>
+                <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> {enhanced?.calculatedMetrics || 0} calculated</span>
+                <span className="flex items-center gap-1"><FileText className="w-3 h-3" /> {enhanced?.manualMetrics || 0} manual</span>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -297,7 +438,7 @@ export default function Dashboard() {
           <CardContent>
             <div className="space-y-2">
               {attentionMetrics.map((m: any) => (
-                <div key={m.id} className="flex items-center gap-2 py-1.5 border-b border-border last:border-0">
+                <div key={m.id} className="flex items-center gap-2 py-1.5 border-b border-border last:border-0" data-testid={`row-attention-${m.id}`}>
                   <StatusDot status={m.status} size="md" />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium truncate">{m.name}</p>
@@ -446,15 +587,17 @@ export default function Dashboard() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Activity className="w-4 h-4 text-primary" />
-              Quick Summary
+              Platform Status
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2">
               {[
-                { label: "Actions Open", value: (actionSummary.total || 0) - (actionSummary.complete || 0), icon: CheckCircle, color: "text-blue-500" },
-                { label: "In Progress", value: actionSummary.inProgress || 0, icon: Clock, color: "text-purple-500" },
-                { label: "Missing Data", value: statusCounts.missing || 0, icon: AlertTriangle, color: "text-amber-500" },
+                { label: "Data submitted", value: `${submissionRate}%`, icon: FileCheck, color: submissionRate >= 80 ? "text-emerald-500" : "text-amber-500" },
+                { label: "Evidence coverage", value: `${evidenceCoverage}%`, icon: FileText, color: evidenceCoverage >= 60 ? "text-emerald-500" : "text-muted-foreground" },
+                { label: "Actions open", value: (actionSummary.total || 0) - (actionSummary.complete || 0), icon: CheckCircle, color: "text-blue-500" },
+                { label: "Overdue actions", value: overdueActions.length, icon: AlertTriangle, color: overdueActions.length > 0 ? "text-red-500" : "text-emerald-500" },
+                { label: "Missing data", value: statusCounts.missing || 0, icon: AlertCircle, color: statusCounts.missing > 0 ? "text-amber-500" : "text-emerald-500" },
               ].map(item => (
                 <div key={item.label} className="flex items-center gap-2 text-sm">
                   <item.icon className={`w-3.5 h-3.5 ${item.color}`} />

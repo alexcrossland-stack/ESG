@@ -17,7 +17,7 @@ import OpenAI from "openai";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
-import { getTrafficLightStatus, runCalculationsForPeriod, type RawInputs } from "./calculations";
+import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric } from "./calculations";
 
 const { Pool } = pg;
 
@@ -1351,6 +1351,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const settings = await storage.getCompanySettings(companyId);
+      const materialTopics = await storage.getMaterialTopics(companyId);
 
       let latestPeriod = "";
       for (const metric of enabledMetrics) {
@@ -1368,6 +1370,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
 
       const metricSummaries: any[] = [];
+      const scoredMetricInputs: ScoredMetric[] = [];
+      const missingDataAlerts: { metricName: string; category: string; period: string }[] = [];
 
       for (const metric of enabledMetrics) {
         const values = await storage.getMetricValues(metric.id);
@@ -1375,10 +1379,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const cat = metric.category;
         categorySummary[cat].total++;
 
+        const isCompliance = metric.direction === "compliance_yes_no";
+        const metricWeight = Number(metric.weight || 1);
+        const metricImportance = (metric as any).importance || "standard";
+
         if (!latestVal || latestVal.value === null) {
           statusCounts.missing++;
           categorySummary[cat].missing++;
           metricSummaries.push({ ...metric, latestValue: null, status: "missing", trend: null });
+          missingDataAlerts.push({ metricName: metric.name, category: cat, period: latestPeriod });
+          scoredMetricInputs.push({
+            id: metric.id, name: metric.name, category: cat, status: "missing",
+            weight: metricWeight, importance: metricImportance,
+            metricType: metric.metricType || "manual", direction: metric.direction || "higher_is_better",
+            isCompliance, value: null, target: metric.targetValue ? Number(metric.targetValue) : null,
+          });
           continue;
         }
 
@@ -1398,9 +1413,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const trend = sortedVals.slice(-6).map(v => ({ period: v.period, value: v.value ? Number(v.value) : null }));
 
+        scoredMetricInputs.push({
+          id: metric.id, name: metric.name, category: cat,
+          status: status as any, weight: metricWeight, importance: metricImportance,
+          metricType: metric.metricType || "manual", direction: metric.direction || "higher_is_better",
+          isCompliance, value: val, target: metric.targetValue ? Number(metric.targetValue) : null,
+        });
+
         metricSummaries.push({
           id: metric.id, name: metric.name, category: cat, unit: metric.unit,
           metricType: metric.metricType, direction: metric.direction,
+          weight: metricWeight, importance: metricImportance,
           latestValue: val, previousValue: prev, status, trend,
           percentChange: prev && prev !== 0 ? Math.round(((val - prev) / Math.abs(prev)) * 10000) / 100 : null,
           target: metric.targetValue ? Number(metric.targetValue) : null,
@@ -1408,16 +1431,49 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
-      const totalScored = statusCounts.green + statusCounts.amber + statusCounts.red;
-      const esgScore = totalScored > 0 ? Math.round((statusCounts.green / totalScored) * 100) : 0;
+      const weightedScore = calculateWeightedEsgScore(
+        scoredMetricInputs,
+        materialTopics.map(t => ({ category: t.category, selected: t.selected ?? false })),
+      );
+
+      const actions = await storage.getActionPlans(companyId);
+      const now = new Date();
+      const overdueActions = actions.filter(a => a.dueDate && new Date(a.dueDate) < now && a.status !== "complete");
+      const policy = await storage.getPolicy(companyId);
+      const upcomingPolicyReviews: { reviewDate: string; status: string }[] = [];
+      if (policy?.reviewDate) {
+        const rd = new Date(policy.reviewDate);
+        const daysUntil = Math.ceil((rd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysUntil <= 90) {
+          upcomingPolicyReviews.push({ reviewDate: rd.toISOString(), status: daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "urgent" : "upcoming" });
+        }
+      }
+
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const uniqueMetricsWithEvidence = new Set(evidenceFiles.filter(e => e.linkedModule === "metric_value" && e.linkedEntityId).map(e => e.linkedEntityId)).size;
+      const evidenceCoverage = enabledMetrics.length > 0 ? Math.min(100, Math.round((uniqueMetricsWithEvidence / enabledMetrics.length) * 100)) : 0;
+
+      const submittedCount = metricSummaries.filter(m => m.status !== "missing").length;
+      const submissionRate = enabledMetrics.length > 0 ? Math.round((submittedCount / enabledMetrics.length) * 100) : 0;
+
+      const calculatedMetrics = metricSummaries.filter(m => m.metricType === "calculated" || m.metricType === "derived").length;
+      const manualMetrics = metricSummaries.filter(m => m.metricType === "manual").length;
 
       res.json({
         totalMetrics: enabledMetrics.length,
         statusCounts,
         categorySummary,
-        esgScore,
+        esgScore: weightedScore.overallScore,
+        weightedScore,
         latestPeriod,
         metricSummaries,
+        missingDataAlerts,
+        overdueActions: overdueActions.map(a => ({ id: a.id, title: a.title, dueDate: a.dueDate, owner: a.owner })),
+        upcomingPolicyReviews,
+        evidenceCoverage,
+        submissionRate,
+        calculatedMetrics,
+        manualMetrics,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

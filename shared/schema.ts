@@ -111,6 +111,8 @@ export const metrics = pgTable("metrics", {
   helpText: text("help_text"),
   amberThreshold: decimal("amber_threshold", { precision: 5, scale: 2 }).default("5"),
   redThreshold: decimal("red_threshold", { precision: 5, scale: 2 }).default("15"),
+  weight: decimal("weight", { precision: 5, scale: 2 }).default("1"),
+  importance: text("importance").default("standard"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -8,7 +8,7 @@ This platform replaces spreadsheets and documents with a single, guided platform
 
 ## Features
 
-1. **Dashboard** — Real-time ESG performance with ESG score ring, traffic light summary (green/amber/red), category performance bars, emissions trend charts, workforce chart, needs-attention list, and action summaries
+1. **Dashboard** — Weighted ESG score ring with expandable methodology panel, category performance bars with weighted scores, submission rate and evidence coverage mini-rings, missing data/overdue action/policy review alerts, emissions trend charts, workforce chart, needs-attention list, platform status card, and action summaries
 2. **ESG Policy Builder** — Accordion-style policy editor with sections (purpose, environmental, social, governance, roles, data collection, review cycle), version history, draft/publish workflow, and export
 3. **Priority Topics** — Select which ESG topics matter most across Environmental, Social, and Governance categories
 4. **Metrics Library** — 28 default ESG metrics (10 environmental, 10 social, 8 governance) with traffic light status dots, trend arrows, metric type badges (Manual/Calculated/Derived), category/status/type filters, and detail dialog with trend charts, formulas, and current/previous/target values
@@ -40,10 +40,19 @@ This platform replaces spreadsheets and documents with a single, guided platform
 - **Derived**: Computed from other metrics (e.g. Carbon Intensity = emissions / employees)
 
 ### Traffic Light Scoring
-- **Green**: On target or improving
-- **Amber**: Within amber threshold % of target
-- **Red**: Beyond red threshold % of target
+- **Green**: On target or improving (score: 100)
+- **Amber**: Within amber threshold % of target (score: 50)
+- **Red**: Beyond red threshold % of target (score: 0)
+- **Missing**: No data for period (excluded from scoring, not penalised)
 - Directions: higher_is_better, lower_is_better, target_range, compliance_yes_no
+
+### Weighted ESG Score (calculateWeightedEsgScore in calculations.ts)
+- Per-metric weight (metrics.weight column, default 1) and importance (standard/high=1.5x/critical=2x)
+- Material topic categories receive 25% weight boost when selected
+- Category-level weighted averages, then overall = weighted avg of category scores
+- Compliance (yes/no) metrics scored separately from continuous metrics
+- Missing data explicitly excluded (tracked as missingCount, not counted as failures)
+- Inactive/disabled modules do not contribute to scoring
 
 ### Calculation Engine (server/calculations.ts)
 - Scope 1: (Gas kWh × factor + Vehicle litres × factor) / 1000
@@ -75,7 +84,7 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `esg_policies` — Policy documents with status
 - `policy_versions` — Version history for policies
 - `material_topics` — Priority ESG topics
-- `metrics` — Metric definitions with metricType, calculationType, formulaText, direction, targetValue/Min/Max, displayOrder, helpText, amberThreshold, redThreshold
+- `metrics` — Metric definitions with metricType, calculationType, formulaText, direction, targetValue/Min/Max, displayOrder, helpText, amberThreshold, redThreshold, weight (scoring weight, default 1), importance (standard/high/critical)
 - `metric_targets` — Target values per metric
 - `metric_values` — Data submissions with previousValue, targetValue, status (traffic light), percentChange, dataSourceType (evidenced/estimated/manual)
 - `raw_data_inputs` — Raw operational data inputs (electricity, gas, waste, headcount, etc.), dataSourceType
