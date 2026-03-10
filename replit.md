@@ -86,8 +86,9 @@ Stored in `raw_data_inputs` table. Categories: electricity_kwh, gas_kwh, vehicle
 - `policy_generation_inputs` — Policy generator questionnaire inputs
 - `emission_factors` — Carbon emission factors (UK DEFRA 2024)
 - `carbon_calculations` — Carbon calculation history
-- `questionnaires` / `questionnaire_questions` — ESG questionnaires
-- `policy_templates` / `generated_policies` — Policy template system
+- `questionnaires` / `questionnaire_questions` — ESG questionnaires (with workflow status, rationale, sourceData for AI transparency)
+- `policy_templates` / `generated_policies` — Policy template system (with workflow status)
+- `ai_generation_logs` — AI generation audit trail (featureType, modelName, promptVersion, generatedAt, generatedBy, sourceDataSummary, promptText, outputSummary, entityId, entityType)
 
 ## API Routes
 
@@ -162,6 +163,10 @@ Two-path onboarding for new users, with database persistence and autosave/resume
 - Rate limiting: 10 login attempts/15min (keyed by normalized email), 5 register attempts/hr, 5 password changes/15min
 - Session security: SameSite=lax, httpOnly, secure cookies; session regeneration on login/register; SESSION_SECRET required (no fallback)
 - Password change: POST /api/auth/change-password (requireAuth, validates current password, bcrypt new hash, audit logged)
+- **Workflow States**: All key entities (metric values, raw data, reports, generated policies, questionnaire questions) have workflowStatus (draft/submitted/approved/rejected/archived) with reviewedBy/reviewedAt/reviewComment. State transitions enforced: draft→submitted→approved|rejected, rejected→draft|submitted. Company ownership verified on all workflow actions.
+- **AI Safety/Governance**: All AI outputs marked as "draft" requiring human review. AI generation metadata logged to ai_generation_logs (model, prompt version, timestamp, user, source data). Questionnaire autofill returns structured rationale, confidence (high/medium/low), and source data references. Prompt sanitization strips injection patterns from user-provided question text.
+- Workflow API: POST /api/workflow/submit, POST /api/workflow/review, GET /api/workflow/pending, GET /api/ai-logs/:entityType/:entityId
+- Frontend: WorkflowBadge (color-coded status), AiDraftBadge ("Draft - Review Required"), ConfidenceBadge (high/medium/low) components
 - Design: green primary color (`hsl(158, 64%, 32%)`), Open Sans font, supports light/dark mode
 - Sidebar width: 14rem via CSS vars on SidebarProvider
 - `apiRequest` used as `apiRequest(method, url, data)` not fetch-style

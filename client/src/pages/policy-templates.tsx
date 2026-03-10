@@ -24,9 +24,11 @@ import {
   FileText, Sparkles, ChevronRight, ChevronLeft, Loader2, Shield,
   Leaf, Users, Building2, ClipboardCheck, AlertTriangle, Download,
   CheckCircle, Clock, Search, Library, FilePlus, Eye, Trash2, Edit3,
+  Send, XCircle,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { WorkflowBadge, AiDraftBadge } from "@/components/workflow-badge";
 
 const CATEGORY_ICONS: Record<string, any> = {
   "Quality": ClipboardCheck,
@@ -250,6 +252,10 @@ export default function PolicyTemplatesPage() {
                             v{p.versionNumber} · {p.policyOwner || "No owner"} · Updated {p.updatedAt ? format(new Date(p.updatedAt), "dd MMM yyyy") : "—"}
                           </p>
                         </div>
+                        <WorkflowBadge status={p.workflowStatus} size="sm" />
+                        {p.workflowStatus !== "approved" && p.status !== "approved" && p.status !== "published" && (
+                          <AiDraftBadge />
+                        )}
                         <Badge className={`text-xs ${statusColor}`}>{p.status}</Badge>
                         <Button
                           variant="ghost"
@@ -581,8 +587,10 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can } = usePermissions();
+  const isApprover = can("report_generation");
   const [editContent, setEditContent] = useState<Record<string, string> | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [reviewComment, setReviewComment] = useState("");
 
   const { data: policy, isLoading } = useQuery<any>({
     queryKey: ["/api/generated-policies", id],
@@ -605,6 +613,37 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
       toast({ title: "Policy updated" });
     },
     onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const submitMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [id],
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
+      toast({ title: "Policy submitted for review" });
+    },
+    onError: () => toast({ title: "Submit failed", variant: "destructive" }),
+  });
+
+  const workflowReviewMutation = useMutation({
+    mutationFn: (data: { action: string; comment: string }) =>
+      apiRequest("POST", "/api/workflow/review", {
+        entityType: "generated_policy",
+        entityId: id,
+        action: data.action,
+        comment: data.comment,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
+      setReviewComment("");
+      toast({ title: "Review submitted" });
+    },
+    onError: () => toast({ title: "Review failed", variant: "destructive" }),
   });
 
   if (isLoading) {
@@ -691,6 +730,8 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
     toast({ title: `Policy exported as ${format.toUpperCase()}` });
   };
 
+  const isApprovedWorkflow = policy.workflowStatus === "approved";
+
   const statusColor = policy.status === "published" ? "bg-green-100 text-green-700"
     : policy.status === "approved" ? "bg-blue-100 text-blue-700"
     : "bg-amber-100 text-amber-700";
@@ -708,12 +749,18 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
             v{policy.versionNumber} · {policy.policyOwner || "No owner"} · {policy.tone === "audit_ready" ? "Audit-ready" : "Simple SME"}
           </p>
         </div>
-        <Badge className={`text-xs ${statusColor}`} data-testid="badge-policy-status">
-          {policy.status === "published" && <CheckCircle className="w-3 h-3 mr-1" />}
-          {policy.status === "approved" && <CheckCircle className="w-3 h-3 mr-1" />}
-          {policy.status === "draft" && <Clock className="w-3 h-3 mr-1" />}
-          {policy.status}
-        </Badge>
+        <div className="flex items-center gap-2 flex-wrap">
+          <WorkflowBadge status={policy.workflowStatus} />
+          {policy.workflowStatus !== "approved" && policy.status !== "approved" && policy.status !== "published" && (
+            <AiDraftBadge />
+          )}
+          <Badge className={`text-xs ${statusColor}`} data-testid="badge-policy-status">
+            {policy.status === "published" && <CheckCircle className="w-3 h-3 mr-1" />}
+            {policy.status === "approved" && <CheckCircle className="w-3 h-3 mr-1" />}
+            {policy.status === "draft" && <Clock className="w-3 h-3 mr-1" />}
+            {policy.status}
+          </Badge>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -742,6 +789,47 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
             Save Changes
           </Button>
         )}
+        {policy.workflowStatus === "draft" && (
+          <Button
+            size="sm"
+            onClick={() => submitMutation.mutate()}
+            disabled={submitMutation.isPending}
+            data-testid="button-submit-policy-review"
+          >
+            <Send className="w-3.5 h-3.5 mr-1.5" />
+            {submitMutation.isPending ? "Submitting..." : "Submit for Review"}
+          </Button>
+        )}
+        {isApprover && policy.workflowStatus === "submitted" && (
+          <>
+            <Button
+              size="sm"
+              onClick={() => workflowReviewMutation.mutate({ action: "approve", comment: reviewComment })}
+              disabled={workflowReviewMutation.isPending}
+              data-testid="button-workflow-approve-policy"
+            >
+              <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => workflowReviewMutation.mutate({ action: "reject", comment: reviewComment })}
+              disabled={workflowReviewMutation.isPending}
+              data-testid="button-workflow-reject-policy"
+            >
+              <XCircle className="w-3.5 h-3.5 mr-1.5" />
+              Reject
+            </Button>
+            <Input
+              placeholder="Review comment (optional)"
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              className="min-w-[150px] max-w-[250px]"
+              data-testid="input-policy-review-comment"
+            />
+          </>
+        )}
         {can("policy_editing") && policy.status === "draft" && (
           <Button size="sm" onClick={handleApprove} disabled={updateMutation.isPending} data-testid="button-approve-policy">
             <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
@@ -768,7 +856,7 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
                   value={content[section.key] || ""}
                   onChange={(e) => handleContentChange(section.key, e.target.value)}
                   className="min-h-32 text-sm resize-none whitespace-pre-wrap"
-                  disabled={!can("policy_editing")}
+                  disabled={!can("policy_editing") || isApprovedWorkflow}
                   data-testid={`textarea-${section.key}`}
                 />
               </CardContent>

@@ -12,6 +12,7 @@ export const trafficLightEnum = pgEnum("traffic_light", ["green", "amber", "red"
 export const actionStatusEnum = pgEnum("action_status", ["not_started", "in_progress", "complete", "overdue"]);
 export const policyStatusEnum = pgEnum("policy_status", ["draft", "published"]);
 export const reportTypeEnum = pgEnum("report_type", ["pdf", "csv", "word"]);
+export const workflowStatusEnum = pgEnum("workflow_status", ["draft", "submitted", "approved", "rejected", "archived"]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -132,6 +133,10 @@ export const metricValues = pgTable("metric_values", {
   submittedAt: timestamp("submitted_at").defaultNow(),
   notes: text("notes"),
   locked: boolean("locked").default(false),
+  workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
 });
 
 export const rawDataInputs = pgTable("raw_data_inputs", {
@@ -147,6 +152,10 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   enteredBy: varchar("entered_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
 });
 
 export const evidenceFiles = pgTable("evidence_files", {
@@ -185,6 +194,10 @@ export const reportRuns = pgTable("report_runs", {
   includeTopics: boolean("include_topics").default(true),
   includeMetrics: boolean("include_metrics").default(true),
   includeActions: boolean("include_actions").default(true),
+  workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
 });
 
 export const auditLogs = pgTable("audit_logs", {
@@ -205,6 +218,21 @@ export const policyGenerationInputs = pgTable("policy_generation_inputs", {
   inputs: jsonb("inputs").notNull(),
   generatedContent: jsonb("generated_content"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const aiGenerationLogs = pgTable("ai_generation_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  featureType: text("feature_type").notNull(),
+  modelName: text("model_name"),
+  promptVersion: text("prompt_version"),
+  generatedAt: timestamp("generated_at").defaultNow(),
+  generatedBy: varchar("generated_by"),
+  sourceDataSummary: jsonb("source_data_summary"),
+  promptText: text("prompt_text"),
+  outputSummary: text("output_summary"),
+  entityId: varchar("entity_id"),
+  entityType: text("entity_type"),
 });
 
 // Emission Factors
@@ -260,8 +288,14 @@ export const questionnaireQuestions = pgTable("questionnaire_questions", {
   editedAnswer: text("edited_answer"),
   confidence: confidenceEnum("confidence"),
   sourceRef: text("source_ref"),
+  rationale: text("rationale"),
+  sourceData: jsonb("source_data"),
   approved: boolean("approved").default(false),
   createdAt: timestamp("created_at").defaultNow(),
+  workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
 });
 
 // Policy Templates & Generated Policies
@@ -299,6 +333,10 @@ export const generatedPolicies = pgTable("generated_policies", {
   tone: policyToneEnum("tone").default("simple_sme"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
 });
 
 // Insert schemas
@@ -321,6 +359,7 @@ export const insertQuestionnaireSchema = createInsertSchema(questionnaires).omit
 export const insertQuestionnaireQuestionSchema = createInsertSchema(questionnaireQuestions).omit({ id: true, createdAt: true });
 export const insertPolicyTemplateSchema = createInsertSchema(policyTemplates).omit({ id: true, createdAt: true });
 export const insertGeneratedPolicySchema = createInsertSchema(generatedPolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertAiGenerationLogSchema = createInsertSchema(aiGenerationLogs).omit({ id: true, generatedAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -358,6 +397,9 @@ export type PolicyTemplate = typeof policyTemplates.$inferSelect;
 export type InsertPolicyTemplate = z.infer<typeof insertPolicyTemplateSchema>;
 export type GeneratedPolicy = typeof generatedPolicies.$inferSelect;
 export type InsertGeneratedPolicy = z.infer<typeof insertGeneratedPolicySchema>;
+export type AiGenerationLog = typeof aiGenerationLogs.$inferSelect;
+export type InsertAiGenerationLog = z.infer<typeof insertAiGenerationLogSchema>;
+export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
 export type UserRole = "admin" | "contributor" | "approver" | "viewer";
 export type PermissionModule =

@@ -7,6 +7,7 @@ import {
   actionPlans, reportRuns, auditLogs, rawDataInputs,
   policyGenerationInputs, emissionFactors, carbonCalculations,
   questionnaires, questionnaireQuestions,
+  aiGenerationLogs,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
   type MaterialTopic, type Metric, type InsertMetric,
@@ -22,6 +23,7 @@ import {
   policyTemplates, generatedPolicies,
   type PolicyTemplate, type InsertPolicyTemplate,
   type GeneratedPolicy, type InsertGeneratedPolicy,
+  type AiGenerationLog, type InsertAiGenerationLog,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -143,6 +145,14 @@ export interface IStorage {
   createGeneratedPolicy(p: InsertGeneratedPolicy): Promise<GeneratedPolicy>;
   updateGeneratedPolicy(id: string, data: Partial<GeneratedPolicy>): Promise<GeneratedPolicy | undefined>;
   deleteGeneratedPolicy(id: string): Promise<void>;
+
+  // AI Generation Logs
+  createAiGenerationLog(log: InsertAiGenerationLog): Promise<AiGenerationLog>;
+  getAiGenerationLogs(companyId: string, entityType?: string, entityId?: string): Promise<AiGenerationLog[]>;
+
+  // Workflow
+  updateWorkflowStatus(table: string, id: string, status: string, reviewedBy: string, comment?: string, companyId?: string): Promise<void>;
+  getWorkflowPendingItems(companyId: string): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -299,6 +309,10 @@ export class DatabaseStorage implements IStorage {
         submittedAt: metricValues.submittedAt,
         notes: metricValues.notes,
         locked: metricValues.locked,
+        workflowStatus: metricValues.workflowStatus,
+        reviewedBy: metricValues.reviewedBy,
+        reviewedAt: metricValues.reviewedAt,
+        reviewComment: metricValues.reviewComment,
         metricName: metrics.name,
         category: metrics.category,
         unit: metrics.unit,
@@ -600,6 +614,81 @@ export class DatabaseStorage implements IStorage {
 
   async deleteGeneratedPolicy(id: string) {
     await db.delete(generatedPolicies).where(eq(generatedPolicies.id, id));
+  }
+
+  async createAiGenerationLog(log: InsertAiGenerationLog) {
+    const [r] = await db.insert(aiGenerationLogs).values(log as any).returning();
+    return r;
+  }
+
+  async getAiGenerationLogs(companyId: string, entityType?: string, entityId?: string) {
+    const conditions = [eq(aiGenerationLogs.companyId, companyId)];
+    if (entityType) conditions.push(eq(aiGenerationLogs.entityType, entityType));
+    if (entityId) conditions.push(eq(aiGenerationLogs.entityId, entityId));
+    return db.select().from(aiGenerationLogs).where(and(...conditions)).orderBy(desc(aiGenerationLogs.generatedAt));
+  }
+
+  async updateWorkflowStatus(table: string, id: string, status: string, reviewedBy: string, comment?: string, companyId?: string) {
+    const allowedTables = ["metric_values", "raw_data_inputs", "report_runs", "generated_policies", "questionnaire_questions"];
+    if (!allowedTables.includes(table)) throw new Error("Invalid table for workflow status update");
+
+    if (companyId) {
+      let ownershipQuery;
+      if (table === "metric_values") {
+        ownershipQuery = sql`SELECT mv.id FROM metric_values mv INNER JOIN metrics m ON mv.metric_id = m.id WHERE mv.id = ${id} AND m.company_id = ${companyId}`;
+      } else if (table === "questionnaire_questions") {
+        ownershipQuery = sql`SELECT qq.id FROM questionnaire_questions qq INNER JOIN questionnaires q ON qq.questionnaire_id = q.id WHERE qq.id = ${id} AND q.company_id = ${companyId}`;
+      } else {
+        ownershipQuery = sql`SELECT id FROM ${sql.raw(table)} WHERE id = ${id} AND company_id = ${companyId}`;
+      }
+      const result = await db.execute(ownershipQuery);
+      if (!result.rows || result.rows.length === 0) {
+        throw new Error("Entity not found or does not belong to your company");
+      }
+    }
+
+    const validTransitions: Record<string, string[]> = {
+      draft: ["submitted"],
+      submitted: ["approved", "rejected"],
+      rejected: ["draft", "submitted"],
+      approved: ["archived"],
+    };
+    const currentResult = await db.execute(
+      sql`SELECT workflow_status FROM ${sql.raw(table)} WHERE id = ${id}`
+    );
+    const currentStatus = currentResult.rows?.[0]?.workflow_status || "draft";
+    if (validTransitions[currentStatus as string] && !validTransitions[currentStatus as string].includes(status)) {
+      throw new Error(`Cannot transition from ${currentStatus} to ${status}`);
+    }
+
+    await db.execute(
+      sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, reviewed_by = ${reviewedBy}, reviewed_at = NOW(), review_comment = ${comment || null} WHERE id = ${id}`
+    );
+  }
+
+  async getWorkflowPendingItems(companyId: string) {
+    const pendingMetricValues = await db.execute(
+      sql`SELECT mv.id, m.name, mv.period, mv.workflow_status, mv.submitted_by, mv.submitted_at FROM metric_values mv INNER JOIN metrics m ON mv.metric_id = m.id WHERE m.company_id = ${companyId} AND mv.workflow_status = 'submitted'`
+    );
+    const pendingRawData = await db.execute(
+      sql`SELECT id, input_name as name, period, workflow_status, entered_by as submitted_by, created_at as submitted_at FROM raw_data_inputs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+    );
+    const pendingReports = await db.execute(
+      sql`SELECT id, period, report_type as name, workflow_status, generated_by as submitted_by, generated_at as submitted_at FROM report_runs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+    );
+    const pendingPolicies = await db.execute(
+      sql`SELECT id, title as name, workflow_status, created_at as submitted_at FROM generated_policies WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+    );
+    const pendingQuestions = await db.execute(
+      sql`SELECT qq.id, qq.question_text as name, qq.workflow_status, qq.created_at as submitted_at FROM questionnaire_questions qq INNER JOIN questionnaires q ON qq.questionnaire_id = q.id WHERE q.company_id = ${companyId} AND qq.workflow_status = 'submitted'`
+    );
+    return {
+      metricValues: pendingMetricValues.rows,
+      rawDataInputs: pendingRawData.rows,
+      reportRuns: pendingReports.rows,
+      generatedPolicies: pendingPolicies.rows,
+      questionnaireQuestions: pendingQuestions.rows,
+    };
   }
 }
 

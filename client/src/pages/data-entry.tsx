@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,12 @@ import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
+  Send, Check, X,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import { usePermissions } from "@/lib/permissions";
+import { WorkflowBadge } from "@/components/workflow-badge";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -79,7 +81,8 @@ const CATEGORY_ICONS = {
 export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { can } = usePermissions();
+  const { can, isApprover } = usePermissions();
+  const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
@@ -159,6 +162,49 @@ export default function DataEntry() {
     },
   });
 
+  const submitWorkflowMutation = useMutation({
+    mutationFn: async () => {
+      const metricValueIds = existingValues.map((v: any) => String(v.id));
+      const rawDataIds = (rawData || []).map((d: any) => String(d.id));
+      if (metricValueIds.length > 0) {
+        await apiRequest("POST", "/api/workflow/submit", { entityType: "metric_value", entityIds: metricValueIds });
+      }
+      if (rawDataIds.length > 0) {
+        await apiRequest("POST", "/api/workflow/submit", { entityType: "raw_data", entityIds: rawDataIds });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
+      toast({ title: "Period submitted for review" });
+    },
+    onError: (e: any) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
+  });
+
+  const approveWorkflowMutation = useMutation({
+    mutationFn: async (action: "approve" | "reject") => {
+      const comment = window.prompt(`Enter a comment for ${action}:`) || "";
+      const allIds = [
+        ...existingValues.map((v: any) => ({ entityType: "metric_value", entityId: String(v.id) })),
+        ...(rawData || []).map((d: any) => ({ entityType: "raw_data", entityId: String(d.id) })),
+      ];
+      for (const item of allIds) {
+        await apiRequest("POST", "/api/workflow/review", {
+          entityType: item.entityType,
+          entityId: item.entityId,
+          action,
+          comment,
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
+      toast({ title: "Review action completed" });
+    },
+    onError: (e: any) => toast({ title: "Review failed", description: e.message, variant: "destructive" }),
+  });
+
   const handleSaveRawAndRecalc = async () => {
     const nonEmpty: Record<string, string> = {};
     for (const [k, v] of Object.entries(rawInputs)) {
@@ -175,15 +221,18 @@ export default function DataEntry() {
     toast({ title: "Saved" });
   };
 
+  const metrics = entryData?.metrics || [];
+  const existingValues = entryData?.values || [];
+  const isLocked = existingValues.some((v: any) => v.locked);
+  const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
+  const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
+  const manualMetrics = metrics.filter((m: any) => m.metricType === "manual" || !m.metricType);
+  const editDisabled = isLocked || isApproved || !canEdit;
+
   const isLoading = rawLoading || entryLoading;
   if (isLoading) {
     return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>;
   }
-
-  const metrics = entryData?.metrics || [];
-  const existingValues = entryData?.values || [];
-  const isLocked = existingValues.some((v: any) => v.locked);
-  const manualMetrics = metrics.filter((m: any) => m.metricType === "manual" || !m.metricType);
 
   const filledRawCount = Object.values(rawInputs).filter(v => v !== undefined && v !== null && v !== "").length;
   const totalRawFields = Object.values(RAW_DATA_FIELDS).reduce((sum, fields) => sum + fields.length, 0);
@@ -218,6 +267,7 @@ export default function DataEntry() {
               ))}
             </SelectContent>
           </Select>
+          {periodWorkflowStatus && <WorkflowBadge status={periodWorkflowStatus} />}
           {isLocked ? (
             <Badge variant="secondary" className="gap-1">
               <Lock className="w-3 h-3" />
@@ -236,6 +286,45 @@ export default function DataEntry() {
             </Button>
           )}
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {canEdit && !isApproved && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => submitWorkflowMutation.mutate()}
+            disabled={submitWorkflowMutation.isPending || existingValues.length === 0}
+            data-testid="button-submit-period"
+          >
+            <Send className="w-3.5 h-3.5 mr-1.5" />
+            {submitWorkflowMutation.isPending ? "Submitting..." : "Submit Period for Review"}
+          </Button>
+        )}
+        {canApprove && periodWorkflowStatus === "submitted" && (
+          <>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => approveWorkflowMutation.mutate("approve")}
+              disabled={approveWorkflowMutation.isPending}
+              data-testid="button-approve-period"
+            >
+              <Check className="w-3.5 h-3.5 mr-1.5" />
+              Approve
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => approveWorkflowMutation.mutate("reject")}
+              disabled={approveWorkflowMutation.isPending}
+              data-testid="button-reject-period"
+            >
+              <X className="w-3.5 h-3.5 mr-1.5" />
+              Reject
+            </Button>
+          </>
+        )}
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -301,7 +390,7 @@ export default function DataEntry() {
                           value={rawInputs[field.key] || ""}
                           onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
                           placeholder={`Enter ${field.unit}`}
-                          disabled={isLocked || !canEdit}
+                          disabled={editDisabled}
                           className="h-8 text-sm"
                           data-testid={`input-raw-${field.key}`}
                         />
@@ -314,7 +403,7 @@ export default function DataEntry() {
             );
           })}
 
-          {!isLocked && canEdit && (
+          {!editDisabled && (
             <div className="flex justify-end gap-2">
               <Button
                 onClick={handleSaveRawAndRecalc}
@@ -389,6 +478,7 @@ export default function DataEntry() {
                   {catMetrics.map((metric: any) => {
                     const localVal = manualValues[metric.metricId] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
+                    const metricValue = existingValues.find((v: any) => v.metricId === metric.metricId);
 
                     return (
                       <div
@@ -397,10 +487,11 @@ export default function DataEntry() {
                         data-testid={`manual-row-${metric.metricId}`}
                       >
                         <div className="space-y-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
+                            {metricValue?.workflowStatus && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
                           </div>
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
@@ -417,7 +508,7 @@ export default function DataEntry() {
                                   [metric.metricId]: { ...prev[metric.metricId] || { notes: "" }, value: e.target.value }
                                 }))}
                                 placeholder={`Enter ${metric.unit || "value"}`}
-                                disabled={isLocked || !canEdit}
+                                disabled={editDisabled}
                                 className="h-8 text-sm"
                                 data-testid={`input-manual-${metric.metricId}`}
                               />
@@ -431,14 +522,14 @@ export default function DataEntry() {
                                   [metric.metricId]: { ...prev[metric.metricId] || { value: "" }, notes: e.target.value }
                                 }))}
                                 placeholder="Optional note"
-                                disabled={isLocked || !canEdit}
+                                disabled={editDisabled}
                                 className="h-8 text-sm"
                                 data-testid={`input-notes-${metric.metricId}`}
                               />
                             </div>
                           </div>
                         </div>
-                        {!isLocked && canEdit && (
+                        {!editDisabled && (
                           <div className="flex items-end">
                             <Button
                               size="sm"

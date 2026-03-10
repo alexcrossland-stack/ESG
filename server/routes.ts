@@ -1583,6 +1583,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       await storage.updatePolicyGenerationInput(saved.id, { generatedContent });
 
+      await storage.createAiGenerationLog({
+        companyId,
+        featureType: "policy_generator",
+        modelName: "gpt-5.2",
+        promptVersion: "v1",
+        generatedBy: userId,
+        sourceDataSummary: { inputs: req.body.inputs },
+        promptText: "<system prompt summary>",
+        outputSummary: "ESG policy generated with " + Object.keys(generatedContent).length + " sections",
+        entityId: saved.id,
+        entityType: "policy_generation_input",
+      });
+
       await storage.createAuditLog({
         companyId, userId,
         action: "ESG policy generated via AI",
@@ -1780,25 +1793,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const context = buildCompanyContext(company, latestVersion?.content, topics, metricData, actions, carbonCalcs);
 
-      // Process questions - use rules-based matching first, then AI for gaps
       const updatedQuestions = [];
       for (const q of questions) {
-        const ruleResult = matchQuestionByRules(q.questionText, context);
+        const sanitizedText = sanitizeQuestionText(q.questionText);
+        const ruleResult = matchQuestionByRules(sanitizedText, context);
         let suggestedAnswer = ruleResult.answer;
         let confidence = ruleResult.confidence;
         let sourceRef = ruleResult.source;
-        let category = categorizeQuestion(q.questionText);
+        let rationale: string | null = null;
+        let sourceData: string[] | null = null;
+        let category = categorizeQuestion(sanitizedText);
 
         if (confidence === "low" || !suggestedAnswer) {
           try {
-            const aiResult = await generateAIAnswer(openai, q.questionText, context);
-            suggestedAnswer = aiResult.answer;
+            const aiResult = await generateAIAnswer(openai, sanitizedText, context);
+            suggestedAnswer = aiResult.suggestedAnswer || aiResult.answer;
             confidence = aiResult.confidence || "medium";
             sourceRef = aiResult.source || sourceRef;
+            rationale = aiResult.rationale || null;
+            sourceData = aiResult.sourceDataUsed || null;
           } catch {
-            suggestedAnswer = "No formal data is currently recorded in the system for this area. A draft response can be prepared for management review.";
+            suggestedAnswer = "Insufficient data available to generate a reliable answer for this question.";
             confidence = "low";
             sourceRef = "No source found";
+            rationale = "Insufficient company data available in the system to provide a reliable answer.";
+            sourceData = [];
           }
         }
 
@@ -1807,11 +1826,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           suggestedAnswer,
           confidence: confidence as any,
           sourceRef,
+          rationale,
+          sourceData: sourceData as any,
+          workflowStatus: "draft",
         });
         updatedQuestions.push(updated);
       }
 
       await storage.updateQuestionnaire(questionnaireId, { status: "in_progress" });
+
+      await storage.createAiGenerationLog({
+        companyId,
+        featureType: "questionnaire_autofill",
+        modelName: "gpt-5.2",
+        promptVersion: "v1",
+        generatedBy: userId,
+        sourceDataSummary: { questionCount: questions.length },
+        promptText: "<autofill system prompt>",
+        outputSummary: questions.length + " questions autofilled",
+        entityId: questionnaireId,
+        entityType: "questionnaire",
+      });
 
       await storage.createAuditLog({
         companyId, userId,
@@ -1892,7 +1927,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const tone = answers.tone?.includes("Audit") ? "audit_ready" as const : "simple_sme" as const;
-      const policy = await storage.createGeneratedPolicy({
+      const slug = req.params.slug;
+      const generatedPolicy = await storage.createGeneratedPolicy({
         companyId,
         templateId: template.id,
         templateSlug: template.slug,
@@ -1904,17 +1940,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reviewDate: null,
         versionNumber: 1,
         tone,
+        workflowStatus: "draft",
+      });
+
+      await storage.createAiGenerationLog({
+        companyId,
+        featureType: "policy_template",
+        modelName: "gpt-5.2",
+        promptVersion: "v1",
+        generatedBy: userId,
+        sourceDataSummary: { templateSlug: slug, answers: req.body.answers },
+        promptText: "<template generation prompt>",
+        outputSummary: "Policy template generated: " + template.name,
+        entityId: generatedPolicy.id,
+        entityType: "generated_policy",
       });
 
       await storage.createAuditLog({
         companyId, userId,
         action: `Policy generated: ${template.name}`,
         entityType: "generated_policy",
-        entityId: policy.id,
+        entityId: generatedPolicy.id,
         details: { templateSlug: template.slug, tone },
       });
 
-      res.json(policy);
+      res.json(generatedPolicy);
     } catch (e: any) {
       console.error("Template generation error:", e);
       res.status(500).json({ error: e.message });
@@ -2024,7 +2074,120 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ===== WORKFLOW ROUTES =====
+  app.post("/api/workflow/submit", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user || !["admin", "contributor", "editor"].includes(user.role)) {
+        return res.status(403).json({ error: "Only contributors and admins can submit" });
+      }
+      const { entityType, entityIds } = req.body;
+      const validTypes: Record<string, string> = {
+        metric_value: "metric_values",
+        raw_data: "raw_data_inputs",
+        report: "report_runs",
+        generated_policy: "generated_policies",
+        questionnaire_question: "questionnaire_questions",
+      };
+      if (!validTypes[entityType]) {
+        return res.status(400).json({ error: "Invalid entityType. Must be one of: metric_value, raw_data, report, generated_policy, questionnaire_question" });
+      }
+      if (!Array.isArray(entityIds) || entityIds.length === 0) {
+        return res.status(400).json({ error: "entityIds must be a non-empty array" });
+      }
+      const table = validTypes[entityType];
+      for (const id of entityIds) {
+        await storage.updateWorkflowStatus(table, id, "submitted", userId, undefined, companyId);
+      }
+      await storage.createAuditLog({
+        companyId, userId,
+        action: `Workflow submitted: ${entityType}`,
+        entityType,
+        entityId: entityIds.join(","),
+        details: { entityIds, entityType },
+      });
+      res.json({ ok: true, submitted: entityIds.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/workflow/review", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { entityType, entityId, action, comment } = req.body;
+      const validTypes: Record<string, string> = {
+        metric_value: "metric_values",
+        raw_data: "raw_data_inputs",
+        report: "report_runs",
+        generated_policy: "generated_policies",
+        questionnaire_question: "questionnaire_questions",
+      };
+      if (!validTypes[entityType]) {
+        return res.status(400).json({ error: "Invalid entityType" });
+      }
+      if (!["approve", "reject"].includes(action)) {
+        return res.status(400).json({ error: "Action must be 'approve' or 'reject'" });
+      }
+      const status = action === "approve" ? "approved" : "rejected";
+      const table = validTypes[entityType];
+      await storage.updateWorkflowStatus(table, entityId, status, userId, comment, companyId);
+      await storage.createAuditLog({
+        companyId, userId,
+        action: `Workflow ${action}d: ${entityType}`,
+        entityType,
+        entityId,
+        details: { action, comment, entityType },
+      });
+      res.json({ ok: true, status });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/workflow/pending", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const pending = await storage.getWorkflowPendingItems(companyId);
+      res.json(pending);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/ai-logs/:entityType/:entityId", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const logs = await storage.getAiGenerationLogs(companyId, req.params.entityType, req.params.entityId);
+      res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
+}
+
+function sanitizeQuestionText(text: string): string {
+  let sanitized = text;
+  const injectionPatterns = [
+    /ignore previous instructions/gi,
+    /forget your instructions/gi,
+    /you are now/gi,
+    /system:/gi,
+    /assistant:/gi,
+    /disregard all previous/gi,
+    /override your/gi,
+  ];
+  for (const pattern of injectionPatterns) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+  sanitized = sanitized.replace(/<[^>]*>/g, "");
+  sanitized = sanitized.slice(0, 2000);
+  return sanitized.trim();
 }
 
 // ===== HELPER FUNCTIONS =====
@@ -2363,13 +2526,19 @@ TONE: ${tone}
   return prompt;
 }
 
-async function generateAIAnswer(openai: OpenAI, question: string, context: string): Promise<{ answer: string; confidence: string; source: string }> {
+async function generateAIAnswer(openai: OpenAI, question: string, context: string): Promise<{ answer: string; suggestedAnswer?: string; confidence: string; source: string; rationale?: string; sourceDataUsed?: string[] }> {
   const completion = await openai.chat.completions.create({
     model: "gpt-5.2",
     messages: [
       {
         role: "system",
-        content: `You are an ESG questionnaire assistant for SME businesses. Generate concise, professional answers based ONLY on the company data provided. Never invent facts. If no data is available, clearly state that. Return JSON with keys: answer, confidence (high/medium/low), source (the data source used).`,
+        content: `You are an ESG questionnaire assistant for SME businesses. Generate concise, professional answers based ONLY on the company data provided. Never invent facts. Return JSON with these fields:
+- suggestedAnswer: the answer text
+- rationale: brief explanation of how the answer was derived
+- sourceDataUsed: array of strings describing data sources used
+- confidence: "high", "medium", or "low"
+
+When insufficient data is available, set suggestedAnswer to "Insufficient data available to generate a reliable answer for this question.", confidence to "low", and rationale explaining what data is missing.`,
       },
       {
         role: "user",
@@ -2382,7 +2551,15 @@ async function generateAIAnswer(openai: OpenAI, question: string, context: strin
 
   const text = completion.choices[0]?.message?.content || "{}";
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    return {
+      answer: parsed.suggestedAnswer || parsed.answer || text,
+      suggestedAnswer: parsed.suggestedAnswer,
+      confidence: parsed.confidence || "low",
+      source: parsed.sourceDataUsed?.join(", ") || "AI generated",
+      rationale: parsed.rationale,
+      sourceDataUsed: parsed.sourceDataUsed,
+    };
   } catch {
     return { answer: text, confidence: "low", source: "AI generated" };
   }

@@ -11,6 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   ClipboardList,
   Plus,
   Trash2,
@@ -22,9 +27,15 @@ import {
   ArrowLeft,
   Pencil,
   X,
+  AlertTriangle,
+  ChevronDown,
+  Send,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
+import { WorkflowBadge, AiDraftBadge, ConfidenceBadge } from "@/components/workflow-badge";
 
 type QuestionnaireWithQuestions = Questionnaire & {
   questions: QuestionnaireQuestion[];
@@ -52,10 +63,13 @@ function QuestionCard({
   questionnaireId: string;
 }) {
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const isApprover = can("report_generation");
   const [editedAnswer, setEditedAnswer] = useState(
     question.editedAnswer || question.suggestedAnswer || ""
   );
   const [isEditing, setIsEditing] = useState(false);
+  const [reviewComment, setReviewComment] = useState("");
 
   const updateMutation = useMutation({
     mutationFn: (data: { editedAnswer: string; approved: boolean }) =>
@@ -68,10 +82,27 @@ function QuestionCard({
     onError: () => toast({ title: "Failed to update", variant: "destructive" }),
   });
 
+  const reviewMutation = useMutation({
+    mutationFn: (data: { action: string; comment: string }) =>
+      apiRequest("POST", "/api/workflow/review", {
+        entityType: "questionnaire_question",
+        entityId: question.id,
+        action: data.action,
+        comment: data.comment,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/questionnaires", questionnaireId] });
+      setReviewComment("");
+      toast({ title: "Review submitted" });
+    },
+    onError: () => toast({ title: "Review failed", variant: "destructive" }),
+  });
+
   const confidenceKey = question.confidence || "low";
   const confidenceConfig = CONFIDENCE_CONFIG[confidenceKey] || CONFIDENCE_CONFIG.low;
   const categoryKey = (question.category || "").toLowerCase();
   const categoryConfig = CATEGORY_CONFIG[categoryKey];
+  const sourceData = (question.sourceData as string[] | null) || [];
 
   return (
     <Card data-testid={`question-card-${question.id}`}>
@@ -92,9 +123,11 @@ function QuestionCard({
                   {question.category}
                 </Badge>
               )}
-              <Badge variant="outline" className={`text-xs ${confidenceConfig.className}`} data-testid={`badge-confidence-${question.id}`}>
-                {confidenceConfig.label} confidence
-              </Badge>
+              <ConfidenceBadge level={question.confidence} />
+              <WorkflowBadge status={question.workflowStatus} size="sm" />
+              {question.suggestedAnswer && !question.approved && (
+                <AiDraftBadge />
+              )}
               {question.approved && (
                 <Badge variant="default" className="text-xs">
                   <Check className="w-3 h-3 mr-1" />
@@ -102,6 +135,12 @@ function QuestionCard({
                 </Badge>
               )}
             </div>
+            {confidenceKey === "low" && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300" data-testid={`warning-low-confidence-${question.id}`}>
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                Insufficient data - requires manual review
+              </div>
+            )}
             {isEditing ? (
               <Textarea
                 value={editedAnswer}
@@ -113,6 +152,31 @@ function QuestionCard({
               <p className="text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md" data-testid={`text-answer-${question.id}`}>
                 {editedAnswer || "No answer generated yet"}
               </p>
+            )}
+            {question.rationale && (
+              <Collapsible>
+                <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid={`trigger-rationale-${question.id}`}>
+                  <ChevronDown className="w-3 h-3" />
+                  AI Rationale
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <p className="text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded-md mt-1" data-testid={`text-rationale-${question.id}`}>
+                    {question.rationale}
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+            {sourceData.length > 0 && (
+              <div className="space-y-1" data-testid={`source-data-${question.id}`}>
+                <p className="text-xs font-medium text-muted-foreground">Supporting Data</p>
+                <ul className="text-xs text-muted-foreground space-y-0.5 pl-3">
+                  {sourceData.map((item, idx) => (
+                    <li key={idx} data-testid={`source-data-item-${question.id}-${idx}`}>
+                      &bull; {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {question.sourceRef && (
               <p className="text-xs text-muted-foreground italic" data-testid={`text-source-${question.id}`}>
@@ -169,6 +233,36 @@ function QuestionCard({
                 </>
               )}
             </div>
+            {isApprover && question.workflowStatus === "submitted" && (
+              <div className="flex items-center gap-2 pt-1 flex-wrap" data-testid={`review-controls-${question.id}`}>
+                <Button
+                  size="sm"
+                  onClick={() => reviewMutation.mutate({ action: "approve", comment: reviewComment })}
+                  disabled={reviewMutation.isPending}
+                  data-testid={`button-approve-question-${question.id}`}
+                >
+                  <CheckCircle className="w-3.5 h-3.5 mr-1" />
+                  Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => reviewMutation.mutate({ action: "reject", comment: reviewComment })}
+                  disabled={reviewMutation.isPending}
+                  data-testid={`button-reject-question-${question.id}`}
+                >
+                  <XCircle className="w-3.5 h-3.5 mr-1" />
+                  Reject
+                </Button>
+                <Input
+                  placeholder="Review comment (optional)"
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                  className="flex-1 min-w-[150px]"
+                  data-testid={`input-review-comment-${question.id}`}
+                />
+              </div>
+            )}
           </div>
         </div>
       </CardContent>
@@ -286,6 +380,19 @@ function NewQuestionnaireTab() {
     setManualQuestions([]);
   };
 
+  const submitAllMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/workflow/submit", {
+        entityType: "questionnaire_question",
+        entityIds: resultData?.questions.map((q) => q.id) || [],
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/questionnaires", resultId] });
+      toast({ title: "All questions submitted for review" });
+    },
+    onError: () => toast({ title: "Submit failed", variant: "destructive" }),
+  });
+
   if (resultId && resultData) {
     return (
       <div className="space-y-4">
@@ -303,6 +410,15 @@ function NewQuestionnaireTab() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              size="sm"
+              onClick={() => submitAllMutation.mutate()}
+              disabled={submitAllMutation.isPending}
+              data-testid="button-submit-all-review"
+            >
+              <Send className="w-3.5 h-3.5 mr-1" />
+              {submitAllMutation.isPending ? "Submitting..." : "Submit All for Review"}
+            </Button>
             <Button variant="outline" size="sm" onClick={handleCopyAll} data-testid="button-copy-all">
               <Copy className="w-3.5 h-3.5 mr-1" />
               Copy All

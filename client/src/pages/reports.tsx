@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown } from "lucide-react";
+import { Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send, Check, X } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { WorkflowBadge } from "@/components/workflow-badge";
 
 function generatePeriods() {
   const periods = [];
@@ -145,6 +146,7 @@ export default function Reports() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can } = usePermissions();
+  const canApprove = can("report_generation");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
@@ -227,6 +229,34 @@ export default function Reports() {
     URL.revokeObjectURL(url);
     toast({ title: "CSV exported" });
   };
+
+  const submitReportMutation = useMutation({
+    mutationFn: async (reportId: string) => {
+      await apiRequest("POST", "/api/workflow/submit", { entityType: "report", entityIds: [reportId] });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      toast({ title: "Report submitted for review" });
+    },
+    onError: (e: any) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
+  });
+
+  const reviewReportMutation = useMutation({
+    mutationFn: async ({ reportId, action }: { reportId: string; action: "approve" | "reject" }) => {
+      const comment = window.prompt(`Enter a comment for ${action}:`) || "";
+      await apiRequest("POST", "/api/workflow/review", {
+        entityType: "report",
+        entityId: reportId,
+        action,
+        comment,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      toast({ title: "Review action completed" });
+    },
+    onError: (e: any) => toast({ title: "Review failed", description: e.message, variant: "destructive" }),
+  });
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
@@ -349,7 +379,7 @@ export default function Reports() {
         ) : (
           <div className="space-y-2">
             {reports.map(report => (
-              <div key={report.id} className="flex items-center gap-3 p-3 rounded-md border border-border" data-testid={`report-history-${report.id}`}>
+              <div key={report.id} className="flex flex-wrap items-center gap-3 p-3 rounded-md border border-border" data-testid={`report-history-${report.id}`}>
                 <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">ESG Report — {report.period || "All Periods"}</p>
@@ -357,7 +387,44 @@ export default function Reports() {
                     Generated {format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm")}
                   </p>
                 </div>
+                <WorkflowBadge status={report.workflowStatus} size="sm" />
                 <Badge variant="outline" className="text-xs">{report.reportType?.toUpperCase()}</Badge>
+                {report.workflowStatus !== "approved" && report.workflowStatus !== "submitted" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => submitReportMutation.mutate(String(report.id))}
+                    disabled={submitReportMutation.isPending}
+                    data-testid={`button-submit-report-${report.id}`}
+                  >
+                    <Send className="w-3.5 h-3.5 mr-1.5" />
+                    Submit for Review
+                  </Button>
+                )}
+                {canApprove && report.workflowStatus === "submitted" && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => reviewReportMutation.mutate({ reportId: String(report.id), action: "approve" })}
+                      disabled={reviewReportMutation.isPending}
+                      data-testid={`button-approve-report-${report.id}`}
+                    >
+                      <Check className="w-3.5 h-3.5 mr-1.5" />
+                      Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => reviewReportMutation.mutate({ reportId: String(report.id), action: "reject" })}
+                      disabled={reviewReportMutation.isPending}
+                      data-testid={`button-reject-report-${report.id}`}
+                    >
+                      <X className="w-3.5 h-3.5 mr-1.5" />
+                      Reject
+                    </Button>
+                  </>
+                )}
               </div>
             ))}
           </div>
