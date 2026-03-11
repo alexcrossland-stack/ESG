@@ -57,6 +57,14 @@ The application is a full-stack SaaS web application.
     - **Improved Exports:** New presentation-ready export packs (Board, Customer, Compliance, Assurance).
     - **Guided Demo Mode:** Provides a guided tour and seeded data for new users.
     - **Trust & Source-Status Layer:** `SourceBadge` component to display data status, owner, date, and evidence.
+- **Phase 6 — Product Readiness & Commercial Value:**
+    - **AI Rate Limiting:** `aiLimiter` (20 req/min) applied to all AI endpoints including `policy-templates/:slug/generate`, `policy-generator/generate`, `questionnaires/:id/autofill`, `questionnaires/generate-responses`. File upload limits 5MB, row import limits 10,000.
+    - **ESG Control Centre Upgrade** (`client/src/pages/control-centre.tsx`): Filter tabs (All/Data/Actions/Compliance/Approvals), priority sort, bulk complete overdue actions, improved empty states, 3-stat header row.
+    - **Recommendations Engine** (`/api/recommendations`, `client/src/pages/recommendations.tsx`): 7 rule-based recommendations (missing_data, expiring_evidence, expired_evidence, overdue_actions, low_quality, compliance_gap, draft_policies), priority sorted high→medium→low. Dashboard widget shows top 3. Sidebar nav link added.
+    - **Simplified Report Types** (`client/src/pages/reports.tsx`): 4 named report types (Board Summary, Customer Response Pack, Compliance Summary, Full ESG Report) with audience and time estimates shown as cards.
+    - **Questionnaire AI Response Generator** (`client/src/pages/questionnaire.tsx`): New "AI Response Generator" tab (default). Paste questionnaire text → POST `/api/questionnaires/generate-responses` → Q&A pairs with confidence & source. Copy-per-answer and bulk export.
+    - **Demo Mode Guided Scenarios** (`client/src/components/product-tour.tsx`): 3 scenarios (customer ESG request, board report, ESG gap review) with step-by-step walkthrough UI.
+    - **Expanded CSV Import Templates** (`/api/raw-data/import/templates`, `/api/raw-data/import/template?type=`): 4 template types (energy, travel, workforce, all). Import dialog shows template selector cards with download.
 - **Phase 5 — Performance & Onboarding:**
     - **Test Data Generator** (`server/seed-generator.ts`): Deterministic seed with small/medium/large presets (1126/6435+ records). `server/perf-test.ts` benchmarks 24 workflows all under 200ms.
     - **Database Optimization** (`server/ensure-indexes.ts`): 40 targeted indexes, ensured at server startup.

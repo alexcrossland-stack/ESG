@@ -25,6 +25,7 @@ import CarbonCalculator from "@/pages/carbon-calculator";
 import PolicyTemplatesPage from "@/pages/policy-templates";
 import Evidence from "@/pages/evidence";
 import Onboarding from "@/pages/onboarding";
+import Recommendations from "@/pages/recommendations";
 import MyTasks from "@/pages/my-tasks";
 import MyApprovals from "@/pages/my-approvals";
 import Compliance from "@/pages/compliance";
@@ -126,6 +127,7 @@ function ProtectedApp() {
               <Route path="/admin/health" component={AdminHealthPage} />
               <Route path="/admin/analytics" component={AdminAnalyticsPage} />
               <Route path="/onboarding" component={Onboarding} />
+              <Route path="/recommendations" component={Recommendations} />
               <Route component={NotFound} />
             </Switch>
           </main>

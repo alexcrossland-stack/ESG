@@ -36,6 +36,9 @@ import {
   XCircle,
   Upload,
   FileSpreadsheet,
+  Sparkles,
+  ChevronUp,
+  Info,
 } from "lucide-react";
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
@@ -932,6 +935,153 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
   );
 }
 
+function AIResponseGeneratorTab() {
+  const { toast } = useToast();
+  const [text, setText] = useState("");
+  const [results, setResults] = useState<Array<{ question: string; suggestedAnswer: string; confidence: string; source: string }> | null>(null);
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  const generateMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/questionnaires/generate-responses", { text }),
+    onSuccess: async (res) => {
+      const data = await res.json();
+      setResults(data.questions || []);
+    },
+    onError: async (err: any) => {
+      const body = await err.response?.json().catch(() => ({}));
+      toast({ title: "Error", description: body?.error || "Failed to generate responses", variant: "destructive" });
+    },
+  });
+
+  function copyAll() {
+    if (!results) return;
+    const out = results.map((r, i) => `Q${i + 1}: ${r.question}\n\nAnswer: ${r.suggestedAnswer}`).join("\n\n---\n\n");
+    navigator.clipboard.writeText(out);
+    toast({ title: "Copied", description: "All answers copied to clipboard" });
+  }
+
+  function copyOne(idx: number) {
+    if (!results) return;
+    navigator.clipboard.writeText(results[idx].suggestedAnswer);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 2000);
+  }
+
+  const confColor: Record<string, string> = {
+    high: "text-green-600 dark:text-green-400",
+    medium: "text-amber-600 dark:text-amber-400",
+    low: "text-red-600 dark:text-red-400",
+  };
+
+  return (
+    <div className="mt-4 space-y-4">
+      <Card>
+        <CardContent className="pt-5 space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-blue-800 dark:text-blue-300">
+              Paste your questionnaire questions below (one per line or numbered). The AI will draft answers using your answer library, policies, and ESG metrics.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="questionnaire-text" className="text-xs font-medium">
+              Paste questionnaire questions
+            </Label>
+            <Textarea
+              id="questionnaire-text"
+              placeholder={"1. What is your company's approach to reducing carbon emissions?\n2. Do you have a formal environmental policy?\n3. What percentage of your workforce have completed ESG training?"}
+              value={text}
+              onChange={e => setText(e.target.value)}
+              rows={8}
+              className="font-mono text-xs resize-none"
+              data-testid="textarea-questionnaire-input"
+            />
+            <p className="text-xs text-muted-foreground">{text.split("\n").filter(l => l.trim()).length} lines detected</p>
+          </div>
+          <Button
+            onClick={() => generateMutation.mutate()}
+            disabled={!text.trim() || generateMutation.isPending}
+            className="w-full"
+            data-testid="button-generate-ai-responses"
+          >
+            {generateMutation.isPending ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating responses...</>
+            ) : (
+              <><Sparkles className="w-4 h-4 mr-2" />Generate AI Responses</>
+            )}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {results && (
+        <div className="space-y-3" data-testid="section-generated-responses">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">{results.length} suggested answer{results.length !== 1 ? "s" : ""}</p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={copyAll} data-testid="button-copy-all">
+                <Copy className="w-3.5 h-3.5 mr-1.5" />Copy All
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => {
+                const out = results.map((r, i) => `Q${i + 1}: ${r.question}\n\nAnswer: ${r.suggestedAnswer}`).join("\n\n---\n\n");
+                const blob = new Blob([out], { type: "text/plain" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = "questionnaire-responses.txt"; a.click();
+                URL.revokeObjectURL(url);
+              }} data-testid="button-export-responses">
+                <Download className="w-3.5 h-3.5 mr-1.5" />Export
+              </Button>
+            </div>
+          </div>
+          {results.map((r, i) => (
+            <Card key={i} data-testid={`card-response-${i}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <button
+                      className="w-full text-left flex items-start justify-between gap-2"
+                      onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+                      data-testid={`button-expand-response-${i}`}
+                    >
+                      <p className="text-sm font-medium">{i + 1}. {r.question}</p>
+                      {expandedIdx === i ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />}
+                    </button>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <span className={`text-xs font-medium ${confColor[r.confidence] || confColor.low}`}>
+                        {r.confidence.charAt(0).toUpperCase() + r.confidence.slice(1)} confidence
+                      </span>
+                      {r.source && (
+                        <span className="text-xs text-muted-foreground">Source: {r.source}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {expandedIdx === i && (
+                  <div className="mt-3 space-y-3">
+                    <div className="p-3 bg-muted/40 rounded-md text-sm leading-relaxed whitespace-pre-wrap">
+                      {r.suggestedAnswer}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => copyOne(i)}
+                      data-testid={`button-copy-response-${i}`}
+                    >
+                      {copiedIdx === i ? <><Check className="w-3 h-3 mr-1" />Copied</> : <><Copy className="w-3 h-3 mr-1" />Copy answer</>}
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function QuestionnairePage() {
   const { can } = usePermissions();
   const canAccess = can("questionnaire_access");
@@ -959,17 +1109,28 @@ export default function QuestionnairePage() {
 
       <ImportQuestionnaireDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
-      <Tabs defaultValue={canAccess ? "new" : "previous"} className="w-full">
+      <Tabs defaultValue={canAccess ? "generator" : "previous"} className="w-full">
         <TabsList data-testid="tabs-questionnaire">
           {canAccess && (
+            <TabsTrigger value="generator" data-testid="tab-ai-generator">
+              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+              AI Response Generator
+            </TabsTrigger>
+          )}
+          {canAccess && (
             <TabsTrigger value="new" data-testid="tab-new-questionnaire">
-              New Questionnaire
+              Questionnaire Builder
             </TabsTrigger>
           )}
           <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
-            Previous Questionnaires
+            History
           </TabsTrigger>
         </TabsList>
+        {canAccess && (
+          <TabsContent value="generator">
+            <AIResponseGeneratorTab />
+          </TabsContent>
+        )}
         {canAccess && (
           <TabsContent value="new">
             <NewQuestionnaireTab />

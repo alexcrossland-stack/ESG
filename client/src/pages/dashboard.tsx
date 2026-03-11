@@ -942,10 +942,63 @@ export default function Dashboard() {
         <BenchmarkSummaryCard />
       </div>
 
+      <RecommendationsWidget />
+
       <ActivityFeed />
 
       <NotificationsPanel />
     </div>
+  );
+}
+
+function RecommendationsWidget() {
+  const { data, isLoading } = useQuery<{ recommendations: Array<{ id: string; title: string; description: string; impact: string; actionUrl: string }>; total: number }>({
+    queryKey: ["/api/recommendations"],
+  });
+
+  const high = data?.recommendations.filter(r => r.impact === "high") || [];
+  const topItems = data?.recommendations.slice(0, 3) || [];
+
+  if (isLoading) return null;
+  if (!data || data.total === 0) return null;
+
+  return (
+    <Card data-testid="card-recommendations-widget">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-primary" />
+            ESG Recommendations
+            {high.length > 0 && (
+              <Badge variant="destructive" className="text-xs ml-1">{high.length} high impact</Badge>
+            )}
+          </CardTitle>
+          <Link href="/recommendations">
+            <button className="text-xs text-primary hover:underline" data-testid="link-view-all-recommendations">
+              View all {data.total}
+            </button>
+          </Link>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-2">
+        {topItems.map(rec => (
+          <div key={rec.id} className="flex items-start gap-2.5 p-2.5 rounded-lg bg-muted/40" data-testid={`recommendation-${rec.id}`}>
+            <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${rec.impact === "high" ? "bg-red-500" : rec.impact === "medium" ? "bg-amber-500" : "bg-muted-foreground"}`} />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium">{rec.title}</p>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{rec.description}</p>
+            </div>
+          </div>
+        ))}
+        {data.total > 3 && (
+          <Link href="/recommendations">
+            <p className="text-xs text-muted-foreground text-center pt-1 hover:text-primary cursor-pointer">
+              +{data.total - 3} more recommendations
+            </p>
+          </Link>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

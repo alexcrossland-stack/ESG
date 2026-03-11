@@ -21,22 +21,40 @@ import { WorkflowBadge } from "@/components/workflow-badge";
 
 const REPORT_TEMPLATES = [
   {
-    id: "management",
-    label: "Internal Management Report",
-    description: "Full ESG performance review for internal stakeholders",
-    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
+    id: "board",
+    label: "Board Summary",
+    description: "One-page executive overview for board meetings and investor briefings",
+    audience: "Board, investors, executives",
+    timeEstimate: "~2 min",
+    icon: "🏛️",
+    defaults: { includeSummary: true, includePolicy: false, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: false, includeMethodology: false, includeSignoff: true, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: true },
   },
   {
     id: "customer",
-    label: "Customer / Supplier Response Pack",
-    description: "Concise ESG summary for external supply chain requests",
+    label: "Customer Response Pack",
+    description: "Concise ESG summary for responding to supply chain or procurement requests",
+    audience: "Customers, procurement teams",
+    timeEstimate: "~2 min",
+    icon: "📦",
     defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: false, includeEvidence: true, includeMethodology: false, includeSignoff: false, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
   },
   {
-    id: "annual",
-    label: "Annual ESG Summary",
-    description: "High-level annual overview with key metrics and progress",
-    defaults: { includeSummary: true, includePolicy: true, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: false, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
+    id: "compliance",
+    label: "Compliance Summary",
+    description: "Detailed mapping against reporting frameworks for regulatory or audit purposes",
+    audience: "Regulators, auditors, legal",
+    timeEstimate: "~3 min",
+    icon: "⚖️",
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: false, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: false },
+  },
+  {
+    id: "management",
+    label: "Full ESG Report",
+    description: "Comprehensive report covering all ESG areas for internal stakeholders",
+    audience: "Management, sustainability team",
+    timeEstimate: "~3 min",
+    icon: "📋",
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: true },
   },
 ];
 
@@ -860,7 +878,7 @@ export default function Reports() {
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
-  const [selectedTemplate, setSelectedTemplate] = useState("management");
+  const [selectedTemplate, setSelectedTemplate] = useState("board");
   const [reportData, setReportData] = useState<any>(null);
 
   const templateConfig = REPORT_TEMPLATES.find(t => t.id === selectedTemplate) || REPORT_TEMPLATES[0];
@@ -1310,9 +1328,9 @@ export default function Reports() {
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Report Template</CardTitle>
+              <CardTitle className="text-sm">Report Type</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2.5">
               {REPORT_TEMPLATES.map(t => (
                 <div
                   key={t.id}
@@ -1320,8 +1338,28 @@ export default function Reports() {
                   className={`p-3 rounded-md border cursor-pointer transition-colors ${selectedTemplate === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
                   data-testid={`template-${t.id}`}
                 >
-                  <p className="text-sm font-medium">{t.label}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{(t as any).icon}</span>
+                      <div>
+                        <p className="text-sm font-medium">{t.label}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>
+                      </div>
+                    </div>
+                    {selectedTemplate === t.id && (
+                      <div className="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5">
+                        <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                      </div>
+                    )}
+                  </div>
+                  {selectedTemplate === t.id && (
+                    <div className="flex items-center gap-3 mt-2 pt-2 border-t border-primary/20">
+                      <span className="text-xs text-muted-foreground">
+                        <span className="font-medium">For:</span> {(t as any).audience}
+                      </span>
+                      <span className="text-xs text-muted-foreground">{(t as any).timeEstimate}</span>
+                    </div>
+                  )}
                 </div>
               ))}
             </CardContent>

@@ -559,6 +559,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     validate: false,
   });
 
+  const aiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    message: { error: "Too many AI requests. Please wait a moment before trying again." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
   // Auth routes
   app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
@@ -2263,7 +2272,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
   });
 
-  app.post("/api/policy-generator/generate", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.post("/api/policy-generator/generate", requireAuth, aiLimiter, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2534,7 +2543,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/questionnaires/:id/autofill", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
+  app.post("/api/questionnaires/:id/autofill", requireAuth, aiLimiter, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2671,7 +2680,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(template);
   });
 
-  app.post("/api/policy-templates/:slug/generate", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.post("/api/policy-templates/:slug/generate", requireAuth, aiLimiter, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -3704,6 +3713,132 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/recommendations", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const recommendations: Array<{ id: string; title: string; description: string; impact: string; category: string; actionUrl: string; type: string }> = [];
+      let id = 1;
+
+      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+      const values = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
+      const valueMap = new Map(values.map((v: any) => [v.metricId, v]));
+
+      const missingCount = enabledMetrics.filter((m: any) => !valueMap.has(m.id)).length;
+      if (missingCount > 0) {
+        recommendations.push({
+          id: String(id++), type: "missing_data",
+          title: `Enter missing data for ${missingCount} metric${missingCount > 1 ? "s" : ""}`,
+          description: `${missingCount} enabled metric${missingCount > 1 ? "s are" : " is"} missing data for the current period. Complete your data entry to improve your ESG score and data completeness rating.`,
+          impact: missingCount >= 5 ? "high" : missingCount >= 2 ? "medium" : "low",
+          category: "data", actionUrl: "/data-entry",
+        });
+      }
+
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const soonExpiring = evidenceFiles.filter((e: any) => {
+        if (!e.expiryDate) return false;
+        const daysLeft = (new Date(e.expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+        return daysLeft > 0 && daysLeft <= 60;
+      });
+      if (soonExpiring.length > 0) {
+        recommendations.push({
+          id: String(id++), type: "expiring_evidence",
+          title: `${soonExpiring.length} evidence file${soonExpiring.length > 1 ? "s" : ""} expiring soon`,
+          description: `You have ${soonExpiring.length} evidence file${soonExpiring.length > 1 ? "s" : ""} expiring within 60 days. Renew or replace them to maintain your evidence coverage score.`,
+          impact: soonExpiring.length >= 3 ? "high" : "medium",
+          category: "evidence", actionUrl: "/evidence",
+        });
+      }
+
+      const alreadyExpiredEvidence = evidenceFiles.filter((e: any) => e.expiryDate && new Date(e.expiryDate) < new Date());
+      if (alreadyExpiredEvidence.length > 0) {
+        recommendations.push({
+          id: String(id++), type: "expired_evidence",
+          title: `Replace ${alreadyExpiredEvidence.length} expired evidence file${alreadyExpiredEvidence.length > 1 ? "s" : ""}`,
+          description: `${alreadyExpiredEvidence.length} evidence file${alreadyExpiredEvidence.length > 1 ? "s have" : " has"} passed their expiry date. Expired evidence reduces your data quality and ESG score.`,
+          impact: "high", category: "evidence", actionUrl: "/evidence",
+        });
+      }
+
+      const actions = await storage.getActionPlans(companyId);
+      const overdueActions = actions.filter((a: any) => a.status !== "complete" && a.dueDate && new Date(a.dueDate) < new Date());
+      if (overdueActions.length > 0) {
+        recommendations.push({
+          id: String(id++), type: "overdue_actions",
+          title: `Resolve ${overdueActions.length} overdue action${overdueActions.length > 1 ? "s" : ""}`,
+          description: `You have ${overdueActions.length} action${overdueActions.length > 1 ? "s" : ""} past their due date. Overdue actions signal poor ESG governance to stakeholders and auditors.`,
+          impact: "high", category: "actions", actionUrl: "/actions",
+        });
+      }
+
+      const lowQualityMetrics = enabledMetrics.map((m: any) => {
+        const val = valueMap.get(m.id);
+        if (!val) return null;
+        const evidenceLinkedIds = new Set(evidenceFiles.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId));
+        let score = 0;
+        if (val.value != null) score += 30;
+        if (evidenceLinkedIds.has(val.id)) score += 20;
+        if (val.workflowStatus === "approved") score += 20;
+        if (val.value != null && val.dataSourceType !== "estimated") score += 15;
+        if (val.notes) score += 15;
+        return score < 40 ? { name: m.name, score } : null;
+      }).filter(Boolean);
+      if (lowQualityMetrics.length > 0) {
+        recommendations.push({
+          id: String(id++), type: "low_quality",
+          title: `Improve data quality for ${lowQualityMetrics.length} metric${lowQualityMetrics.length > 1 ? "s" : ""}`,
+          description: `${lowQualityMetrics.length} metric${lowQualityMetrics.length > 1 ? "s have" : " has"} low data quality scores. Adding evidence, getting approvals, and adding notes will raise your quality ratings.`,
+          impact: lowQualityMetrics.length >= 3 ? "high" : "medium",
+          category: "data", actionUrl: "/data-entry",
+        });
+      }
+
+      try {
+        const fws = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
+        const reqs = await db.execute(sql`SELECT * FROM compliance_requirements`);
+        const metricNamesWithData = new Set(values.filter((v: any) => v.value != null).map((v: any) => {
+          const m = enabledMetrics.find((met: any) => met.id === v.metricId);
+          return m?.name;
+        }).filter(Boolean));
+        const unmetCount = reqs.rows.filter((r: any) => {
+          const linked = r.linked_metric_ids || [];
+          return linked.length > 0 && !linked.some((name: string) => metricNamesWithData.has(name));
+        }).length;
+        if (unmetCount > 0) {
+          recommendations.push({
+            id: String(id++), type: "compliance_gap",
+            title: `Address ${unmetCount} unmet compliance requirement${unmetCount > 1 ? "s" : ""}`,
+            description: `Your ESG data doesn't yet satisfy ${unmetCount} compliance framework requirement${unmetCount > 1 ? "s" : ""}. Enter the missing metric data to improve your compliance status.`,
+            impact: unmetCount >= 5 ? "high" : "medium",
+            category: "compliance", actionUrl: "/compliance",
+          });
+        }
+      } catch {}
+
+      const pendingPolicies = await storage.getGeneratedPolicies(companyId);
+      const draftPolicies = pendingPolicies.filter((p: any) => p.workflowStatus === "draft");
+      if (draftPolicies.length > 0) {
+        recommendations.push({
+          id: String(id++), type: "draft_policies",
+          title: `Review and approve ${draftPolicies.length} draft polic${draftPolicies.length > 1 ? "ies" : "y"}`,
+          description: `You have ${draftPolicies.length} AI-generated polic${draftPolicies.length > 1 ? "ies" : "y"} in draft state. Review and approve them to strengthen your ESG governance posture.`,
+          impact: "medium", category: "governance", actionUrl: "/policy-templates",
+        });
+      }
+
+      recommendations.sort((a, b) => {
+        const order = { high: 0, medium: 1, low: 2 };
+        return (order[a.impact as keyof typeof order] ?? 3) - (order[b.impact as keyof typeof order] ?? 3);
+      });
+
+      res.json({ recommendations, total: recommendations.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/procurement-answers", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
@@ -4066,6 +4201,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const { format, content, title } = req.body;
       if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
+      if (title.length > 200) { res.status(400).json({ error: "Title must be 200 characters or fewer" }); return; }
+      const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+      if (content.length > MAX_IMPORT_BYTES) { res.status(400).json({ error: "File exceeds 5MB limit" }); return; }
 
       let questions: string[] = [];
       if (format === "text") {
@@ -4178,6 +4316,96 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/questionnaires/generate-responses", requireAuth, aiLimiter, requirePermission("questionnaire_access"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { text, title } = req.body;
+      if (!text || typeof text !== "string") { res.status(400).json({ error: "Questionnaire text is required" }); return; }
+      if (text.length > 50000) { res.status(400).json({ error: "Text exceeds 50,000 character limit" }); return; }
+
+      const questions = text
+        .split(/\n+/)
+        .map((l: string) => l.trim())
+        .filter((l: string) => l.length > 5 && (l.includes("?") || /^\d+[\.\)]\s/.test(l) || /^[a-z][\.\)]\s/i.test(l) || l.length > 20))
+        .slice(0, 50);
+
+      if (questions.length === 0) { res.status(400).json({ error: "No questions detected. Please paste your questionnaire with one question per line." }); return; }
+
+      const company = await storage.getCompany(companyId);
+      const policy = await storage.getPolicy(companyId);
+      const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
+      const topics = await storage.getMaterialTopics(companyId);
+      const allMetrics = await storage.getMetrics(companyId);
+      const actions = await storage.getActionPlans(companyId);
+      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+
+      const metricData: Record<string, any> = {};
+      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      for (const m of allMetrics.filter((m: any) => m.enabled)) {
+        const vals = await storage.getMetricValues(m.id);
+        if (vals.length > 0) {
+          metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
+        }
+      }
+
+      const existingAnswers = await db.execute(sql`SELECT question, answer, category FROM procurement_answers WHERE company_id = ${companyId} ORDER BY created_at DESC`);
+      const answerLibrary = (existingAnswers as any).rows || [];
+
+      const context = buildCompanyContext(company, latestVersion?.content, topics, metricData, actions, carbonCalcs);
+
+      const results: any[] = [];
+      for (const q of questions) {
+        const qLower = q.toLowerCase();
+        const qWords = qLower.split(/\s+/).filter((w: string) => w.length > 3);
+
+        let bestAnswer = "";
+        let bestConfidence: "high" | "medium" | "low" = "low";
+        let bestSource = "";
+
+        for (const ans of answerLibrary) {
+          const ansQ = (ans.question || "").toLowerCase();
+          const ansWords = ansQ.split(/\s+/).filter((w: string) => w.length > 3);
+          const overlap = qWords.filter((w: string) => ansWords.includes(w)).length;
+          const score = ansWords.length > 0 ? (overlap / Math.max(qWords.length, ansWords.length)) * 100 : 0;
+          if (score >= 70 && score > (bestConfidence === "high" ? 95 : 0)) {
+            bestAnswer = ans.answer || "";
+            bestConfidence = score >= 85 ? "high" : "medium";
+            bestSource = "Answer Library";
+          }
+        }
+
+        const ruleResult = matchQuestionByRules(sanitizeQuestionText(q), context);
+        if (ruleResult.confidence === "high" || (!bestAnswer && ruleResult.answer)) {
+          bestAnswer = ruleResult.answer;
+          bestConfidence = ruleResult.confidence as any;
+          bestSource = ruleResult.source;
+        }
+
+        if (!bestAnswer || bestConfidence === "low") {
+          try {
+            const aiResult = await generateAIAnswer(openai, q, context);
+            if (aiResult.confidence !== "low" || !bestAnswer) {
+              bestAnswer = aiResult.suggestedAnswer || aiResult.answer;
+              bestConfidence = (aiResult.confidence || "low") as any;
+              bestSource = aiResult.sourceDataUsed?.join(", ") || "AI generated from company data";
+            }
+          } catch {}
+        }
+
+        results.push({
+          question: q,
+          suggestedAnswer: bestAnswer || "Insufficient data available to generate a reliable answer.",
+          confidence: bestAnswer ? bestConfidence : "low",
+          source: bestSource || "No source found",
+        });
+      }
+
+      res.json({ questions: results, total: results.length });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to generate responses" });
+    }
+  });
+
   const CARBON_COLUMN_MAP: Record<string, string> = {
     "electricity": "elec", "electricity (kwh)": "elec", "elec_kwh": "elec", "elec": "elec",
     "gas": "gas", "natural gas": "gas", "gas (kwh)": "gas", "gas_kwh": "gas",
@@ -4214,6 +4442,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { format, content } = req.body;
       if (!content) { res.status(400).json({ error: "Content is required" }); return; }
+      const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+      if (typeof content === "string" && content.length > MAX_IMPORT_BYTES) { res.status(400).json({ error: "File exceeds 5MB limit" }); return; }
       let columns: string[] = [];
       let rows: any[] = [];
 
@@ -4246,6 +4476,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const { mappings, rows, period } = req.body;
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
+      if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
+      if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
 
       let imported = 0;
       let skipped = 0;
@@ -4287,12 +4519,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/raw-data/import/template", requireAuth, async (_req, res) => {
-    const headers = ["Electricity (kWh)", "Gas (kWh)", "Diesel (Litres)", "Petrol (Litres)", "Waste General (Tonnes)", "Waste Recycled (Tonnes)", "Water (m3)", "Employees", "Flights Domestic", "Flights Short Haul", "Flights Long Haul", "Rail (km)", "Hotel Nights", "Company Car Miles"];
-    const example = ["12500", "8000", "500", "200", "2.5", "1.8", "150", "50", "5", "3", "2", "1200", "25", "15000"];
-    const csv = [headers.join(","), example.join(",")].join("\n");
+  const CSV_TEMPLATES: Record<string, { name: string; filename: string; description: string; headers: string[]; example: string[]; required: string[] }> = {
+    energy: {
+      name: "Energy & Emissions",
+      filename: "energy_data_template.csv",
+      description: "Electricity, gas, fuel, and water consumption data",
+      headers: ["Period (YYYY-MM)", "Electricity (kWh)", "Gas (kWh)", "Diesel (Litres)", "Petrol (Litres)", "Water (m3)", "Waste General (Tonnes)", "Waste Recycled (Tonnes)"],
+      example: ["2024-03", "12500", "8000", "500", "200", "150", "2.5", "1.8"],
+      required: ["Period (YYYY-MM)", "Electricity (kWh)"],
+    },
+    travel: {
+      name: "Travel & Transport",
+      filename: "travel_data_template.csv",
+      description: "Business travel including flights, rail, and company vehicles",
+      headers: ["Period (YYYY-MM)", "Flights Domestic (km)", "Flights Short Haul (km)", "Flights Long Haul (km)", "Rail (km)", "Hotel Nights", "Company Car Miles"],
+      example: ["2024-03", "1200", "3500", "8000", "4500", "25", "15000"],
+      required: ["Period (YYYY-MM)"],
+    },
+    workforce: {
+      name: "Workforce & People",
+      filename: "workforce_data_template.csv",
+      description: "Headcount, diversity, training, and wellbeing data",
+      headers: ["Period (YYYY-MM)", "Employee Headcount", "Employee Leavers", "Female Managers", "Total Managers", "Absence Days", "Total Working Days", "Training Hours", "Living Wage Employees"],
+      example: ["2024-03", "48", "3", "4", "10", "12", "960", "320", "45"],
+      required: ["Period (YYYY-MM)", "Employee Headcount"],
+    },
+    all: {
+      name: "All Data (Combined)",
+      filename: "carbon_data_template.csv",
+      description: "All ESG raw data fields in a single template",
+      headers: ["Electricity (kWh)", "Gas (kWh)", "Diesel (Litres)", "Petrol (Litres)", "Waste General (Tonnes)", "Waste Recycled (Tonnes)", "Water (m3)", "Employees", "Flights Domestic", "Flights Short Haul", "Flights Long Haul", "Rail (km)", "Hotel Nights", "Company Car Miles"],
+      example: ["12500", "8000", "500", "200", "2.5", "1.8", "150", "50", "5", "3", "2", "1200", "25", "15000"],
+      required: [],
+    },
+  };
+
+  app.get("/api/raw-data/import/templates", requireAuth, async (_req, res) => {
+    res.json(Object.entries(CSV_TEMPLATES).map(([key, t]) => ({
+      key,
+      name: t.name,
+      description: t.description,
+      filename: t.filename,
+      columns: t.headers.length,
+    })));
+  });
+
+  app.get("/api/raw-data/import/template", requireAuth, async (req, res) => {
+    const type = (req.query.type as string) || "all";
+    const template = CSV_TEMPLATES[type] || CSV_TEMPLATES.all;
+    const csv = [template.headers.join(","), template.example.join(",")].join("\n");
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", "attachment; filename=carbon_data_template.csv");
+    res.setHeader("Content-Disposition", `attachment; filename=${template.filename}`);
     res.send(csv);
   });
 

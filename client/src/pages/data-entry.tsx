@@ -689,6 +689,13 @@ export default function DataEntry() {
   );
 }
 
+const TEMPLATE_OPTIONS = [
+  { key: "energy", name: "Energy & Emissions", description: "Electricity, gas, fuel, water", columns: 8 },
+  { key: "travel", name: "Travel & Transport", description: "Flights, rail, hotel, company cars", columns: 7 },
+  { key: "workforce", name: "Workforce & People", description: "Headcount, diversity, training", columns: 9 },
+  { key: "all", name: "All Data (Combined)", description: "Complete set of ESG raw data fields", columns: 14 },
+];
+
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -696,6 +703,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
   const [parsedResult, setParsedResult] = useState<any>(null);
   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
   const [importResult, setImportResult] = useState<any>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState("all");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const parseMutation = useMutation({
@@ -744,16 +752,19 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const handleDownloadTemplate = async () => {
+  const handleDownloadTemplate = async (type?: string) => {
     try {
-      const res = await authFetch("/api/raw-data/import/template");
+      const t = type || selectedTemplate;
+      const res = await authFetch(`/api/raw-data/import/template?type=${t}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "carbon-data-template.csv";
+      const templateInfo = TEMPLATE_OPTIONS.find(o => o.key === t);
+      a.download = `${t}_data_template.csv`;
       a.click();
       URL.revokeObjectURL(url);
+      toast({ title: `${templateInfo?.name || "Template"} downloaded` });
     } catch {
       toast({ title: "Template download failed", variant: "destructive" });
     }
@@ -786,12 +797,28 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
         {step === "upload" && (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">Upload a CSV or Excel file with your raw operational data. Column names will be automatically mapped to input fields.</p>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleDownloadTemplate} data-testid="button-import-template">
-                <Download className="w-3.5 h-3.5 mr-1.5" />
-                Download Template
-              </Button>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Download a template to get started</p>
+              <div className="grid grid-cols-2 gap-2">
+                {TEMPLATE_OPTIONS.map(tmpl => (
+                  <button
+                    key={tmpl.key}
+                    onClick={() => { setSelectedTemplate(tmpl.key); handleDownloadTemplate(tmpl.key); }}
+                    className={`text-left p-3 rounded-lg border transition-colors hover:bg-muted/60 ${selectedTemplate === tmpl.key ? "border-primary bg-primary/5" : "border-border"}`}
+                    data-testid={`button-template-${tmpl.key}`}
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <p className="text-xs font-medium leading-tight">{tmpl.name}</p>
+                      <Download className="w-3 h-3 text-muted-foreground shrink-0 mt-0.5" />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-tight">{tmpl.description}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{tmpl.columns} columns</p>
+                  </button>
+                ))}
+              </div>
             </div>
+
             <div className="border-2 border-dashed rounded-lg p-8 text-center">
               <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-sm text-muted-foreground mb-3">Drop a CSV or Excel file here</p>
