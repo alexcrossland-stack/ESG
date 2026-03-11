@@ -9,7 +9,7 @@ import {
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
-  TrendingUp, Building2, Activity, HeartPulse, Sparkles,
+  TrendingUp, Building2, Activity, HeartPulse, Sparkles, HelpCircle, MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -38,8 +38,10 @@ const navItems = [
   { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
   { title: "Answer Library", href: "/answer-library", icon: Bookmark, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
+  { title: "Help & Support", href: "/help", icon: HelpCircle, group: "settings" },
   { title: "Platform Health", href: "/admin/health", icon: HeartPulse, group: "admin" },
   { title: "Analytics", href: "/admin/analytics", icon: Activity, group: "admin" },
+  { title: "Support Requests", href: "/admin/support", icon: MessageSquare, group: "admin" },
 ];
 
 export function AppSidebar() {

@@ -36,6 +36,10 @@ import EsgProfilePage from "@/pages/esg-profile";
 import PublicProfilePage from "@/pages/public-profile";
 import AdminHealthPage from "@/pages/admin-health";
 import AdminAnalyticsPage from "@/pages/admin-analytics";
+import HelpPage from "@/pages/help";
+import AdminSupportPage from "@/pages/admin-support";
+import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
+import { AppFooter } from "@/components/app-footer";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -126,11 +130,14 @@ function ProtectedApp() {
               <Route path="/esg-profile" component={EsgProfilePage} />
               <Route path="/admin/health" component={AdminHealthPage} />
               <Route path="/admin/analytics" component={AdminAnalyticsPage} />
+              <Route path="/admin/support" component={AdminSupportPage} />
               <Route path="/onboarding" component={Onboarding} />
               <Route path="/recommendations" component={Recommendations} />
+              <Route path="/help" component={HelpPage} />
               <Route component={NotFound} />
             </Switch>
           </main>
+          <AppFooter />
         </div>
       </div>
     </SidebarProvider>
@@ -141,6 +148,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/auth" component={Auth} />
+      <Route path="/terms" component={TermsPage} />
+      <Route path="/privacy" component={PrivacyPage} />
+      <Route path="/cookies" component={CookiesPage} />
+      <Route path="/dpa" component={DpaPage} />
       <Route path="/public/esg/:token" component={PublicProfilePage} />
       <Route component={ProtectedApp} />
     </Switch>

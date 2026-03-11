@@ -117,42 +117,91 @@ function CategoryBar({ label, counts, score }: {
   );
 }
 
-function SetupChecklist({ company, metricCount, hasCarbonCalc, hasPolicy }: { company: any; metricCount: number; hasCarbonCalc: boolean; hasPolicy: boolean }) {
-  const items = [
-    { label: "Add company profile", done: !!company?.industry, link: "/settings" },
-    { label: "Enable ESG metrics", done: metricCount > 0, link: "/metrics" },
-    { label: "Configure carbon calculator", done: hasCarbonCalc, link: "/carbon-calculator" },
-    { label: "Generate policies", done: hasPolicy, link: "/policy-generator" },
-    { label: "Set up supplier questionnaire", done: false, link: "/questionnaire" },
-    { label: "Enter first month of data", done: metricCount > 0, link: "/data-entry" },
-  ];
-  const doneCount = items.filter(i => i.done).length;
-  if (doneCount === items.length) return null;
+function ActivationCard() {
+  const queryClient = useQueryClient();
+  const { data: status, isLoading } = useQuery<any>({
+    queryKey: ["/api/onboarding/status"],
+    refetchOnWindowFocus: true,
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/onboarding/dismiss-card", { dismiss: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+    },
+  });
+
+  if (isLoading || !status || status.complete) return null;
+  if (status.dismissedAt) return null;
+
+  const completedCount = status.completedCount ?? 0;
+  const totalSteps = status.totalSteps ?? 6;
+  const overallPercent = status.overallPercent ?? 0;
+  const steps: any[] = status.steps ?? [];
+  const nextStep = status.nextStep;
+  const allDone = completedCount >= totalSteps;
+  if (allDone) return null;
 
   return (
-    <Card className="border-primary/30 bg-primary/5" data-testid="card-setup-checklist">
+    <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <ClipboardList className="w-4 h-4 text-primary" />
-          Setup Checklist
-        </CardTitle>
-        <CardDescription className="text-xs">{doneCount} of {items.length} complete</CardDescription>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-primary" />
+            Get up and running
+          </CardTitle>
+          <button
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => dismissMutation.mutate()}
+            disabled={dismissMutation.isPending}
+            data-testid="button-dismiss-activation-card"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <CardDescription className="text-xs">{completedCount} of {totalSteps} steps complete</CardDescription>
+            <span className="text-xs font-medium text-primary">{overallPercent}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${overallPercent}%` }} />
+          </div>
+        </div>
       </CardHeader>
-      <CardContent>
-        <div className="space-y-1.5">
-          {items.map(item => (
-            <Link key={item.label} href={item.link}>
-              <div className="flex items-center gap-2 p-2 rounded-md hover:bg-background/60 cursor-pointer transition-colors">
-                {item.done ? (
-                  <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+      <CardContent className="pb-3">
+        <div className="space-y-1">
+          {steps.map((step: any) => (
+            <Link key={step.key} href={step.actionUrl || "/"}>
+              <div
+                className="flex items-start gap-2.5 p-2 rounded-md hover:bg-background/60 cursor-pointer transition-colors group"
+                data-testid={`activation-step-${step.key}`}
+              >
+                {step.complete ? (
+                  <CheckCircle2 className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                 ) : (
-                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0" />
+                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0 mt-0.5 group-hover:border-primary/50 transition-colors" />
                 )}
-                <span className={`text-sm ${item.done ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm leading-snug ${step.complete ? "text-muted-foreground line-through" : "font-medium"}`}>{step.label}</p>
+                  {!step.complete && <p className="text-xs text-muted-foreground">{step.description}</p>}
+                </div>
+                {!step.complete && step.key === nextStep?.key && (
+                  <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium shrink-0">Next</span>
+                )}
               </div>
             </Link>
           ))}
         </div>
+        {nextStep && (
+          <div className="mt-3 pt-3 border-t">
+            <Link href={nextStep.actionUrl || "/"}>
+              <Button size="sm" className="w-full" data-testid="button-activation-primary-cta">
+                Start: {nextStep.label}
+              </Button>
+            </Link>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -470,35 +519,7 @@ export default function Dashboard() {
       </div>
       {showTour && <ProductTour onComplete={() => setShowTour(false)} />}
 
-      {company && !company.onboardingComplete && (
-        <Card className="border-primary/30 bg-primary/5" data-testid="card-onboarding-activation">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                <Sparkles className="w-5 h-5 text-primary" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium">Complete your setup</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Finish onboarding to unlock all features
-                </p>
-                <div className="mt-2 h-2 rounded-full bg-muted overflow-hidden max-w-xs">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all"
-                    style={{ width: `${company.onboardingProgressPercent || 0}%` }}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {company.onboardingProgressPercent || 0}% complete - Step {company.onboardingStep || 0}
-                </p>
-              </div>
-              <Link href="/onboarding">
-                <Button size="sm" data-testid="button-resume-onboarding">Resume Setup</Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <ActivationCard />
 
       {hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">
@@ -539,14 +560,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {company?.onboardingPath === "manual" && (
-        <SetupChecklist
-          company={company}
-          metricCount={metricSummaries.length}
-          hasCarbonCalc={Array.isArray(carbonCalcs) && carbonCalcs.length > 0}
-          hasPolicy={!!policyData?.id}
-        />
-      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1 row-span-2">

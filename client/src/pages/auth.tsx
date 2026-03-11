@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Leaf } from "lucide-react";
+import { LEGAL_VERSION } from "@/lib/legal-content";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email"),
@@ -23,6 +25,8 @@ const registerSchema = z.object({
   email: z.string().email("Please enter a valid email"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   companyName: z.string().min(2, "Company name must be at least 2 characters"),
+  termsAccepted: z.boolean().refine(v => v === true, { message: "You must accept the Terms of Service to continue" }),
+  privacyAccepted: z.boolean().refine(v => v === true, { message: "You must accept the Privacy Policy to continue" }),
 });
 
 export default function Auth() {
@@ -37,7 +41,14 @@ export default function Auth() {
 
   const registerForm = useForm<z.infer<typeof registerSchema>>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { username: "", email: "", password: "", companyName: "" },
+    defaultValues: {
+      username: "",
+      email: "",
+      password: "",
+      companyName: "",
+      termsAccepted: false,
+      privacyAccepted: false,
+    },
   });
 
   const loginMutation = useMutation({
@@ -58,7 +69,16 @@ export default function Auth() {
 
   const registerMutation = useMutation({
     mutationFn: async (data: z.infer<typeof registerSchema>) => {
-      const res = await apiRequest("POST", "/api/auth/register", data);
+      const res = await apiRequest("POST", "/api/auth/register", {
+        username: data.username,
+        email: data.email,
+        password: data.password,
+        companyName: data.companyName,
+        termsAccepted: data.termsAccepted,
+        privacyAccepted: data.privacyAccepted,
+        termsVersion: LEGAL_VERSION,
+        privacyVersion: LEGAL_VERSION,
+      });
       return res.json();
     },
     onSuccess: async (data) => {
@@ -78,27 +98,25 @@ export default function Auth() {
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
           <div className="flex items-center justify-center">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary shadow-lg">
-              <Leaf className="w-6 h-6 text-primary-foreground" />
+            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+              <Leaf className="w-6 h-6 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">ESG Manager</h1>
-          <p className="text-sm text-muted-foreground">
-            Simple ESG management for growing businesses
-          </p>
+          <h1 className="text-2xl font-bold">ESG Manager</h1>
+          <p className="text-muted-foreground text-sm">Sustainability management for growing businesses</p>
         </div>
 
         <Card>
           <Tabs defaultValue="login">
-            <CardHeader className="pb-0">
-              <TabsList className="w-full">
-                <TabsTrigger value="login" className="flex-1" data-testid="tab-login">Sign In</TabsTrigger>
-                <TabsTrigger value="register" className="flex-1" data-testid="tab-register">Get Started</TabsTrigger>
+            <CardHeader>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="login" data-testid="tab-login">Sign In</TabsTrigger>
+                <TabsTrigger value="register" data-testid="tab-register">Create Account</TabsTrigger>
               </TabsList>
             </CardHeader>
 
             <TabsContent value="login">
-              <CardContent className="pt-6">
+              <CardContent className="pt-2">
                 <Form {...loginForm}>
                   <form onSubmit={loginForm.handleSubmit(d => loginMutation.mutate(d))} className="space-y-4">
                     <FormField control={loginForm.control} name="email" render={({ field }) => (
@@ -124,32 +142,29 @@ export default function Auth() {
                     </Button>
                   </form>
                 </Form>
-                <div className="relative my-5">
-                  <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
-                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">or</span></div>
+
+                <div className="mt-4 pt-4 border-t">
+                  <CardDescription className="text-center mb-3 text-xs">Try before you commit</CardDescription>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    data-testid="button-demo"
+                    disabled={loginMutation.isPending}
+                    onClick={() => {
+                      loginMutation.mutate({ email: "demo@example.com", password: "password123" });
+                    }}
+                  >
+                    {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
+                  </Button>
+                  <p className="text-xs text-muted-foreground text-center mt-2">
+                    Pre-loaded with sample ESG data so you can explore every feature
+                  </p>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  disabled={loginMutation.isPending}
-                  data-testid="button-demo-login"
-                  onClick={() => {
-                    loginForm.setValue("email", "demo@example.com");
-                    loginForm.setValue("password", "password123");
-                    loginMutation.mutate({ email: "demo@example.com", password: "password123" });
-                  }}
-                >
-                  {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
-                </Button>
-                <p className="text-xs text-muted-foreground text-center mt-2">
-                  Pre-loaded with sample ESG data so you can explore every feature
-                </p>
               </CardContent>
             </TabsContent>
 
             <TabsContent value="register">
-              <CardContent className="pt-6">
+              <CardContent className="pt-2">
                 <Form {...registerForm}>
                   <form onSubmit={registerForm.handleSubmit(d => registerMutation.mutate(d))} className="space-y-4">
                     <FormField control={registerForm.control} name="companyName" render={({ field }) => (
@@ -188,6 +203,53 @@ export default function Auth() {
                         <FormMessage />
                       </FormItem>
                     )} />
+
+                    <div className="space-y-3 pt-2 border-t">
+                      <FormField control={registerForm.control} name="termsAccepted" render={({ field }) => (
+                        <FormItem className="flex items-start gap-2 space-y-0">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              data-testid="checkbox-terms"
+                              id="checkbox-terms"
+                            />
+                          </FormControl>
+                          <div className="space-y-0.5">
+                            <label htmlFor="checkbox-terms" className="text-sm leading-snug cursor-pointer">
+                              I have read and agree to the{" "}
+                              <Link href="/terms">
+                                <a className="text-primary underline hover:no-underline" target="_blank">Terms of Service</a>
+                              </Link>
+                            </label>
+                            <FormMessage />
+                          </div>
+                        </FormItem>
+                      )} />
+
+                      <FormField control={registerForm.control} name="privacyAccepted" render={({ field }) => (
+                        <FormItem className="flex items-start gap-2 space-y-0">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              data-testid="checkbox-privacy"
+                              id="checkbox-privacy"
+                            />
+                          </FormControl>
+                          <div className="space-y-0.5">
+                            <label htmlFor="checkbox-privacy" className="text-sm leading-snug cursor-pointer">
+                              I have read and agree to the{" "}
+                              <Link href="/privacy">
+                                <a className="text-primary underline hover:no-underline" target="_blank">Privacy Policy</a>
+                              </Link>
+                            </label>
+                            <FormMessage />
+                          </div>
+                        </FormItem>
+                      )} />
+                    </div>
+
                     <Button type="submit" className="w-full" disabled={registerMutation.isPending} data-testid="button-register">
                       {registerMutation.isPending ? "Setting up..." : "Create Account"}
                     </Button>
@@ -198,9 +260,12 @@ export default function Auth() {
           </Tabs>
         </Card>
 
-        <p className="text-center text-xs text-muted-foreground">
-          By using ESG Manager you agree to our terms of service
-        </p>
+        <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <Link href="/terms"><a className="hover:underline">Terms</a></Link>
+          <Link href="/privacy"><a className="hover:underline">Privacy</a></Link>
+          <Link href="/cookies"><a className="hover:underline">Cookies</a></Link>
+          <Link href="/dpa"><a className="hover:underline">DPA</a></Link>
+        </nav>
       </div>
     </div>
   );

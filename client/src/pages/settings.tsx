@@ -26,6 +26,7 @@ import {
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { OwnerAssignment } from "@/components/owner-assignment";
+import { Link } from "wouter";
 
 const INDUSTRIES = [
   "Construction", "Education", "Energy & Utilities", "Financial Services",
@@ -108,9 +109,10 @@ export default function Settings() {
       </div>
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className={`w-full justify-start ${isAdmin ? "" : "hidden"}`}>
+        <TabsList className="w-full justify-start">
           <TabsTrigger value="general" data-testid="tab-general">General</TabsTrigger>
           {isAdmin && <TabsTrigger value="admin" data-testid="tab-admin">Administration</TabsTrigger>}
+          <TabsTrigger value="privacy" data-testid="tab-privacy">Privacy &amp; Data</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="space-y-5 mt-4">
@@ -224,7 +226,186 @@ export default function Settings() {
             <AdminPanel />
           </TabsContent>
         )}
+
+        <TabsContent value="privacy" className="space-y-5 mt-4">
+          <PrivacyDataTab />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function PrivacyDataTab() {
+  const { toast } = useToast();
+  const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const user = authData?.user;
+  const company = authData?.company;
+
+  const [requestType, setRequestType] = useState<string | null>(null);
+  const [requestNote, setRequestNote] = useState("");
+
+  const submitRightsMutation = useMutation({
+    mutationFn: async (data: { subject: string; message: string }) => {
+      const res = await apiRequest("POST", "/api/support-requests", {
+        category: "privacy",
+        subject: data.subject,
+        message: data.message,
+        userName: user?.username,
+        userEmail: user?.email,
+        companyName: company?.name,
+        pageContext: "/settings?tab=privacy",
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Request submitted",
+        description: `Your data rights request has been received. Reference: ${data.refNumber}`,
+      });
+      setRequestType(null);
+      setRequestNote("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to submit", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const handleSubmitRight = (type: string) => {
+    const labels: Record<string, string> = {
+      access: "Data Access Request",
+      rectification: "Data Rectification Request",
+      erasure: "Right to Erasure (Data Deletion) Request",
+      portability: "Data Portability Request",
+      objection: "Objection to Processing",
+    };
+    submitRightsMutation.mutate({
+      subject: labels[type] || "Data Rights Request",
+      message: `Request type: ${labels[type]}\n\nAdditional notes:\n${requestNote || "(none provided)"}`,
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Shield className="w-4 h-4 text-primary" />
+            Your Legal Agreements
+          </CardTitle>
+          <CardDescription className="text-xs">Documents you accepted when creating your account</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {[
+            { label: "Terms of Service", href: "/terms", version: user?.termsVersionAccepted, accepted: user?.termsAcceptedAt },
+            { label: "Privacy Policy", href: "/privacy", version: user?.privacyVersionAccepted, accepted: user?.privacyAcceptedAt },
+          ].map(doc => (
+            <div key={doc.label} className="flex items-center justify-between py-2 border-b last:border-0">
+              <div>
+                <p className="text-sm font-medium">{doc.label}</p>
+                {doc.version && <p className="text-xs text-muted-foreground">Version {doc.version}{doc.accepted ? ` — accepted ${format(new Date(doc.accepted), "d MMM yyyy")}` : ""}</p>}
+              </div>
+              <Link href={doc.href}>
+                <Button size="sm" variant="outline" data-testid={`button-view-${doc.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                  View
+                </Button>
+              </Link>
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-2 pt-2">
+            <Link href="/cookies"><Button size="sm" variant="ghost" className="text-xs text-muted-foreground" data-testid="link-cookie-policy">Cookie Policy</Button></Link>
+            <Link href="/dpa"><Button size="sm" variant="ghost" className="text-xs text-muted-foreground" data-testid="link-dpa">Data Processing Agreement</Button></Link>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Lock className="w-4 h-4 text-primary" />
+            Your Data Rights
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Under UK GDPR, you have rights over your personal data. Use the options below to submit a formal request.
+            Requests are processed within 30 days.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[
+            { key: "access", label: "Request data access", description: "Receive a copy of all personal data we hold about you" },
+            { key: "rectification", label: "Correct my data", description: "Request correction of inaccurate or incomplete data" },
+            { key: "erasure", label: "Delete my data", description: "Request erasure of your personal data (right to be forgotten)" },
+            { key: "portability", label: "Export my data", description: "Receive your data in a portable, machine-readable format" },
+            { key: "objection", label: "Object to processing", description: "Object to how we process your personal data" },
+          ].map(right => (
+            <div key={right.key} className="flex items-start justify-between gap-3 py-2 border-b last:border-0">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{right.label}</p>
+                <p className="text-xs text-muted-foreground">{right.description}</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setRequestType(requestType === right.key ? null : right.key)}
+                data-testid={`button-data-right-${right.key}`}
+              >
+                Request
+              </Button>
+            </div>
+          ))}
+
+          {requestType && (
+            <div className="bg-muted/40 rounded-lg p-3 space-y-2 mt-2">
+              <p className="text-sm font-medium">
+                {requestType === "access" && "Data Access Request"}
+                {requestType === "rectification" && "Data Rectification Request"}
+                {requestType === "erasure" && "Right to Erasure Request"}
+                {requestType === "portability" && "Data Portability Request"}
+                {requestType === "objection" && "Objection to Processing"}
+              </p>
+              <textarea
+                className="w-full text-sm border rounded-md p-2 bg-background resize-y min-h-[60px]"
+                placeholder="Add any additional details or context (optional)..."
+                value={requestNote}
+                onChange={e => setRequestNote(e.target.value)}
+                data-testid="textarea-rights-note"
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => handleSubmitRight(requestType)}
+                  disabled={submitRightsMutation.isPending}
+                  data-testid="button-submit-rights-request"
+                >
+                  {submitRightsMutation.isPending ? "Submitting..." : "Submit Request"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setRequestType(null); setRequestNote(""); }}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Leaf className="w-4 h-4 text-primary" />
+            Data Use
+          </CardTitle>
+          <CardDescription className="text-xs">How ESG Manager uses your company data</CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground space-y-2">
+          <p>ESG data you enter is stored securely and used only to provide the ESG Manager service to your company.</p>
+          <p>We do not sell your data, share it with third parties for advertising, or use it to train AI models without your explicit consent.</p>
+          <p>AI features (policy generation, questionnaire autofill) send limited context to OpenAI for processing under a data processing agreement. Personal details are not included in these requests.</p>
+          <div className="pt-1">
+            <Link href="/privacy">
+              <Button size="sm" variant="link" className="p-0 h-auto text-xs" data-testid="link-full-privacy-policy">Read the full Privacy Policy</Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

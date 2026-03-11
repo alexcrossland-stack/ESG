@@ -1,0 +1,474 @@
+Objective
+
+I want you to implement three launch-readiness workstreams for the ESG Manager platform:
+	1.	Onboarding clarity — make the product easier for new SME users to understand and complete.
+	2.	Legal documentation — add the core legal pages, acceptance capture, and legal access points needed before launch.
+	3.	Support capability — add a lightweight but professional in-app help and support system for early customers.
+
+The goal is to make the platform easier to activate, safer to launch, and easier to support with real users.
+
+Please implement this in the order shown below.
+
+⸻
+
+Workstream 1 — Onboarding clarity
+
+What I want built
+
+I want onboarding to feel like a guided success journey, not just a setup wizard. A new SME user should immediately understand:
+	•	what they need to do
+	•	why it matters
+	•	what step they are on
+	•	what to do next
+	•	how to get value quickly
+
+Scope
+
+1. Redesign onboarding flow around outcomes
+
+Create or improve the onboarding flow so it is based on real business actions, not only configuration choices.
+
+The onboarding should have these steps:
+	1.	Complete company profile
+	2.	Choose ESG focus areas
+	3.	Set up reporting basics
+	4.	Enter first data
+	5.	Upload first evidence
+	6.	Generate first output
+
+Each step should include:
+	•	a short plain-English explanation
+	•	why the step matters
+	•	one clear primary action
+	•	what counts as completion
+
+2. Add visible onboarding progress
+
+I want a clear progress tracker that shows:
+	•	percentage complete
+	•	completed steps
+	•	current step
+	•	next recommended action
+
+This should appear:
+	•	inside the onboarding flow
+	•	on the dashboard for incomplete companies
+	•	in key empty states where relevant
+
+3. Make step completion action-based
+
+A step should only count as complete when the user has actually done the relevant action.
+
+Examples:
+	•	company profile complete only when required fields are saved
+	•	reporting basics complete only when reporting frequency and active metrics are set
+	•	first data entry complete only when at least one real value is entered
+	•	first evidence complete only when at least one evidence file is uploaded and linked
+	•	first output complete only when at least one real output is generated, such as a report, policy, or questionnaire response
+
+Do not rely on manual ticking unless there is an explicit admin override.
+
+4. Add a quick-start path
+
+Add a shorter onboarding path for smaller/simple users.
+
+This quick-start path should focus on:
+	•	complete profile
+	•	enter first metrics
+	•	upload one evidence file
+	•	generate one report
+
+This quick-start path should still feed into the full onboarding progress model properly.
+
+5. Improve empty states across early-use pages
+
+Review and improve empty states for:
+	•	dashboard
+	•	data entry
+	•	evidence
+	•	reports
+	•	policies
+	•	questionnaires
+	•	compliance
+	•	control centre
+
+Each empty state should include:
+	•	a short plain-English explanation
+	•	why the page matters
+	•	one recommended next action
+	•	a clear button to do that action
+
+6. Add contextual helper text
+
+Add short helper text and help prompts for common SME questions such as:
+	•	what counts as evidence
+	•	why a metric matters
+	•	what a board report is for
+	•	what a customer ESG pack is for
+	•	why compliance mapping is useful
+	•	what data quality means
+
+Keep this light and clear, not overwhelming.
+
+7. Add dashboard activation guidance
+
+For incomplete companies, add a dashboard card showing:
+	•	onboarding progress
+	•	remaining tasks
+	•	next recommended action
+	•	quick links to complete the next step
+
+This card should disappear once onboarding is complete.
+
+8. Preserve backward compatibility
+
+Make sure the onboarding redesign does not break:
+	•	existing completed companies
+	•	companies part-way through the old onboarding
+	•	demo companies
+
+Completed companies should not be forced back into onboarding.
+
+9. Add resume and re-entry support
+
+Users should be able to:
+	•	leave onboarding
+	•	come back later
+	•	continue where they left off
+
+Admins should also be able to reopen onboarding if needed without corrupting progress.
+
+Deliverable for this workstream
+
+At the end, provide:
+	•	a summary of the onboarding flow implemented
+	•	step completion logic for each step
+	•	quick-start behaviour
+	•	any remaining activation friction points
+
+Done looks like
+	•	new users are guided through a clear 6-step onboarding flow
+	•	progress is visible and accurate
+	•	step completion is based on real actions
+	•	quick-start path exists and works
+	•	dashboard shows activation guidance for incomplete companies
+	•	empty states help new users understand what to do next
+	•	existing companies are not broken by the redesign
+
+Relevant files
+	•	client/src/pages/onboarding.tsx
+	•	client/src/pages/dashboard.tsx
+	•	client/src/pages/data-entry.tsx
+	•	client/src/pages/evidence.tsx
+	•	client/src/pages/reports.tsx
+	•	client/src/pages/policy.tsx
+	•	client/src/pages/questionnaire.tsx
+	•	client/src/pages/compliance.tsx
+	•	client/src/pages/control-centre.tsx
+	•	client/src/App.tsx
+	•	server/routes.ts
+	•	server/storage.ts
+	•	shared/schema.ts
+
+⸻
+
+Workstream 2 — Legal documentation
+
+What I want built
+
+I want the platform to be legally presentable for launch. I understand final legal wording may still need review by a solicitor, but I want the product structure and user flows in place now.
+
+Scope
+
+1. Add core legal pages
+
+Create the following pages:
+	•	Terms of Service
+	•	Privacy Policy
+	•	Cookie Policy
+	•	Data Processing Agreement (DPA)
+
+Each page should:
+	•	be clean and readable
+	•	show a last updated date
+	•	support future editing without major code changes
+	•	be accessible from the app footer and public-facing areas
+
+2. Add legal acceptance capture
+
+During signup or company registration, require acceptance of:
+	•	Terms of Service
+	•	Privacy Policy
+
+Store:
+	•	user ID
+	•	company ID if relevant
+	•	timestamp
+	•	document version if practical
+
+Do not allow account creation without required acceptance.
+
+3. Add legal footer links
+
+Add footer links in the app and any public pages for:
+	•	Terms of Service
+	•	Privacy Policy
+	•	Cookie Policy
+	•	DPA
+	•	Support / Contact
+
+4. Add cookie / analytics notice if relevant
+
+If analytics or tracking beyond essential product functionality is in use, add:
+	•	a cookie or analytics notice
+	•	basic consent capture if required by current implementation
+	•	a way to update consent later if practical
+
+5. Add basic data rights / privacy support
+
+Prepare the product for privacy and data rights requests by adding:
+	•	a clear privacy contact point
+	•	ability to request data export
+	•	ability to request account or company deletion or deactivation
+	•	a basic process description for privacy-related requests
+
+This does not need to be fully automated if not practical yet, but it should be clear in the UI and documented.
+
+6. Make legal content maintainable
+
+If practical, store legal content in a manageable way such as:
+	•	a simple content table
+	•	structured markdown files
+	•	versioned documents
+
+At minimum, do not hard-code it in a fragile way across many components.
+
+7. Make public-share features legally safe
+
+Because the platform includes public ESG profile sharing, make sure:
+	•	sharing is clearly optional
+	•	what is public is clearly explained
+	•	users can enable/disable sharing
+	•	users can rotate or disable share links
+	•	private/internal sections are not exposed by default
+
+8. Add legal/admin visibility where needed
+
+If useful, add a simple admin/legal management view or content structure so legal pages can be updated later without major redevelopment.
+
+Deliverable for this workstream
+
+At the end, provide:
+	•	a list of legal pages added
+	•	where they are accessible in the UI
+	•	what acceptance is captured and where
+	•	what still needs professional legal review before public launch
+
+Done looks like
+	•	all 4 core legal pages exist and are accessible
+	•	signup captures required acceptance of terms and privacy policy
+	•	footer links are visible in app/public pages
+	•	cookie or analytics notice exists if relevant
+	•	privacy/support contact points are visible
+	•	public ESG profile sharing has clear controls and safe defaults
+
+Relevant files
+	•	client/src/App.tsx
+	•	client/src/components/footer.tsx or equivalent
+	•	client/src/pages/terms.tsx
+	•	client/src/pages/privacy.tsx
+	•	client/src/pages/cookies.tsx
+	•	client/src/pages/dpa.tsx
+	•	client/src/pages/auth.tsx
+	•	client/src/pages/esg-profile.tsx
+	•	server/routes.ts
+	•	server/storage.ts
+	•	shared/schema.ts
+
+⸻
+
+Workstream 3 — Support capability
+
+What I want built
+
+I want the platform to have a lightweight but professional support capability for early customers. Users should be able to find help, understand common tasks, and submit support requests without needing ad hoc manual intervention.
+
+Scope
+
+1. Add an in-app help entry point
+
+Add a visible Help or Support access point in the app.
+
+This should be accessible from:
+	•	main navigation or top bar
+	•	settings/account area
+	•	footer
+	•	relevant empty states if useful
+
+2. Build a lightweight help centre
+
+Create a simple in-app help centre with grouped articles or sections such as:
+	•	Getting started
+	•	Onboarding guide
+	•	How to enter ESG data
+	•	How to upload evidence
+	•	How to generate reports
+	•	How to respond to customer ESG questionnaires
+	•	How compliance mapping works
+	•	How reminders and approvals work
+	•	Troubleshooting common issues
+
+This does not need to be a full documentation platform. A searchable or grouped article view is enough.
+
+3. Add a support request form
+
+Add an in-app support form that captures:
+	•	user name
+	•	email
+	•	company
+	•	category
+	•	message
+	•	current page or context if possible
+	•	optional screenshot or file attachment if feasible
+
+Support categories should include:
+	•	bug
+	•	billing
+	•	onboarding help
+	•	report issue
+	•	data import issue
+	•	feature request
+	•	general question
+
+4. Add support request tracking
+
+Create a support_requests table or equivalent to store requests.
+
+Suggested fields:
+	•	id
+	•	companyId
+	•	userId
+	•	category
+	•	subject or title
+	•	message
+	•	pageContext
+	•	attachment reference if applicable
+	•	status
+	•	priority
+	•	createdAt
+	•	updatedAt
+
+Suggested statuses:
+	•	new
+	•	in_review
+	•	resolved
+	•	closed
+
+5. Add an internal admin support view
+
+Create a simple internal/admin support page to view:
+	•	incoming support requests
+	•	company
+	•	category
+	•	status
+	•	priority
+	•	created date
+	•	page/context
+	•	user
+	•	response notes if practical
+
+This does not need to be a full ticketing platform, but it should allow early support management.
+
+6. Add contextual help links
+
+On important pages, add small help links such as:
+	•	What counts as evidence?
+	•	How do I complete this report?
+	•	How does data quality scoring work?
+	•	How do I respond to customer ESG questionnaires?
+
+These should link to relevant help centre articles.
+
+7. Add visible support contact information
+
+Add visible support contact details in:
+	•	help centre
+	•	footer
+	•	support form
+	•	possibly settings/account area
+
+Include:
+	•	support email
+	•	privacy/legal contact if separate
+	•	simple wording on how to get help
+
+8. Add launch-ready support basics
+
+For early launch, I want the product to support:
+	•	help centre
+	•	support request form
+	•	internal support/admin view
+	•	contextual help links
+	•	visible support contact
+
+That is enough for beta and early paid users.
+
+Deliverable for this workstream
+
+At the end, provide:
+	•	a summary of support features added
+	•	where users can access help
+	•	how support requests are stored and managed
+	•	any gaps that still exist before scaling support further
+
+Done looks like
+	•	users can access help from inside the app
+	•	a help centre exists with core getting-started content
+	•	users can submit support requests from inside the platform
+	•	support requests are stored and visible to admins
+	•	contextual help links exist on key pages
+	•	support contact information is visible and consistent
+
+Relevant files
+	•	client/src/App.tsx
+	•	client/src/components/app-sidebar.tsx
+	•	client/src/pages/help.tsx
+	•	client/src/pages/settings.tsx
+	•	client/src/pages/dashboard.tsx
+	•	client/src/pages/data-entry.tsx
+	•	client/src/pages/evidence.tsx
+	•	client/src/pages/reports.tsx
+	•	client/src/pages/questionnaire.tsx
+	•	client/src/pages/compliance.tsx
+	•	client/src/pages/control-centre.tsx
+	•	client/src/pages/admin-support.tsx
+	•	server/routes.ts
+	•	server/storage.ts
+	•	shared/schema.ts
+
+⸻
+
+Implementation order
+
+Please implement in this order:
+	1.	Onboarding clarity
+	2.	Legal documentation
+	3.	Support capability
+
+That order is important because:
+	•	onboarding affects user activation immediately
+	•	legal pages are required for launch readiness
+	•	support capability is needed before real customer usage begins
+
+⸻
+
+General requirements for all three workstreams
+
+Please apply these requirements across all work:
+	•	preserve backward compatibility for existing companies and demo accounts
+	•	include permission checks where relevant
+	•	include audit logging where relevant
+	•	include clear loading and error states in the UI
+	•	keep the UX simple and plain-English for SME users
+	•	avoid over-engineering; use a lightweight, maintainable implementation
+	•	provide a short completion summary for each workstream including any remaining gaps or risks

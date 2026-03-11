@@ -571,20 +571,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Auth routes
   app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
-      const { username, email, password, companyName } = req.body;
+      const { username, email, password, companyName, termsAccepted, privacyAccepted, termsVersion, privacyVersion } = req.body;
       if (!username || !email || !password) return res.status(400).json({ error: "Missing required fields" });
+      if (!termsAccepted) return res.status(400).json({ error: "You must accept the Terms of Service to create an account" });
+      if (!privacyAccepted) return res.status(400).json({ error: "You must accept the Privacy Policy to create an account" });
 
       const existing = await storage.getUserByEmail(email);
       if (existing) return res.status(409).json({ error: "Email already registered" });
 
       const hashedPassword = await hashPassword(password);
       const company = await storage.createCompany({ name: companyName || "My Company" });
+      const now = new Date();
       const user = await storage.createUser({
         username,
         email,
         password: hashedPassword,
         role: "admin",
         companyId: company.id,
+        termsAcceptedAt: now,
+        privacyAcceptedAt: now,
+        termsVersionAccepted: termsVersion || "1.0",
+        privacyVersionAccepted: privacyVersion || "1.0",
       });
 
       await storage.createAuditLog({
@@ -594,6 +601,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityType: "user",
         entityId: user.id,
         details: { email: user.email },
+      });
+
+      await storage.createAuditLog({
+        companyId: company.id,
+        userId: user.id,
+        action: "legal_acceptance",
+        entityType: "user",
+        entityId: user.id,
+        details: { termsVersion: termsVersion || "1.0", privacyVersion: privacyVersion || "1.0", acceptedAt: now.toISOString() },
       });
 
       const token = generateToken();
@@ -890,6 +906,156 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const company = await storage.getCompany(companyId);
       res.json(company);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/onboarding/status", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      if (company.onboardingComplete) {
+        return res.json({ complete: true, steps: [], overallPercent: 100 });
+      }
+
+      const now = new Date();
+      const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+      const [metrics, rawDataList, evidenceList, reportsList, policiesList, questList, metricValues] = await Promise.all([
+        storage.getMetrics(companyId),
+        storage.getRawDataByPeriod(companyId, currentPeriod).catch(() => []),
+        storage.getEvidenceFiles(companyId),
+        storage.getReportRuns(companyId),
+        storage.getPolicy(companyId),
+        storage.getQuestionnaires(companyId),
+        storage.getMetricValuesByPeriod(companyId, currentPeriod),
+      ]);
+
+      const step1Complete = !!(company.name && company.name.trim() && company.industry && company.country);
+      const answers = (company.onboardingAnswers as any) || {};
+      const step2Complete = !!(answers.selectedTopics && Array.isArray(answers.selectedTopics) && answers.selectedTopics.length > 0);
+      const step3Complete = !!(answers.reportingFrequency && metrics.length > 0);
+      const step4Complete = rawDataList.length > 0 || metricValues.length > 0;
+      const step5Complete = evidenceList.length > 0;
+      const hasReport = reportsList.length > 0;
+      const hasPolicy = !!(policiesList);
+      const hasPolicyContent = hasPolicy;
+      const hasQuestionnaire = questList.some((q: any) => q.status !== "draft");
+      const step6Complete = hasReport || hasPolicyContent || hasQuestionnaire;
+
+      const steps = [
+        { key: "profile", label: "Complete company profile", complete: step1Complete, actionUrl: "/onboarding", description: "Name, industry, country and size", hint: "Complete when: company name, industry, and country are all saved" },
+        { key: "focus", label: "Choose ESG focus areas", complete: step2Complete, actionUrl: "/onboarding", description: "Select your priority ESG topics", hint: "Complete when: at least one ESG topic is selected" },
+        { key: "reporting", label: "Set up reporting basics", complete: step3Complete, actionUrl: "/onboarding", description: "Reporting frequency and active metrics", hint: "Complete when: reporting frequency is set and at least one metric is active" },
+        { key: "data_entry", label: "Enter first data", complete: step4Complete, actionUrl: "/data-entry", description: "Add your first metric value or raw data", hint: "Complete when: at least one real value is recorded for any metric or input" },
+        { key: "evidence", label: "Upload first evidence", complete: step5Complete, actionUrl: "/evidence", description: "Link a supporting document or file", hint: "Complete when: at least one evidence file is uploaded and linked" },
+        { key: "output", label: "Generate first output", complete: step6Complete, actionUrl: "/reports", description: "Create a report, policy, or questionnaire response", hint: "Complete when: at least one report is generated, a policy draft exists, or a questionnaire is submitted" },
+      ];
+
+      const completedCount = steps.filter(s => s.complete).length;
+      const overallPercent = Math.round((completedCount / steps.length) * 100);
+      const nextStep = steps.find(s => !s.complete) || null;
+
+      res.json({ complete: false, steps, overallPercent, completedCount, totalSteps: steps.length, nextStep, dismissedAt: company.activationCardDismissedAt });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/onboarding/dismiss-card", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { dismiss } = req.body;
+      await storage.updateCompany(companyId, { activationCardDismissedAt: dismiss ? new Date() : null });
+      res.json({ dismissed: !!dismiss });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/support-requests", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { category, subject, message, pageContext, userName, userEmail, companyName } = req.body;
+      if (!subject?.trim() || !message?.trim()) return res.status(400).json({ error: "Subject and message are required" });
+      if (subject.length > 200) return res.status(400).json({ error: "Subject too long" });
+      if (message.length > 5000) return res.status(400).json({ error: "Message too long" });
+
+      const year = new Date().getFullYear().toString().slice(-2);
+      const rand = Math.floor(100000 + Math.random() * 900000);
+      const refNumber = `SR-${year}-${rand}`;
+
+      const supportReq = await storage.createSupportRequest({
+        companyId, userId, refNumber,
+        category: category || "general",
+        subject: subject.trim(),
+        message: message.trim(),
+        pageContext: pageContext || null,
+        userName: userName || null,
+        userEmail: userEmail || null,
+        companyName: companyName || null,
+        adminNotes: null,
+        status: "new",
+        priority: "normal",
+      });
+
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "support_request_created",
+        entityType: "support_request",
+        entityId: supportReq.id,
+        details: { refNumber, category: supportReq.category, subject: supportReq.subject },
+      });
+
+      res.json({ id: supportReq.id, refNumber });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/support-requests", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const reqs = await storage.getSupportRequests(500);
+      res.json(reqs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/support-requests/:id", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const req_ = await storage.getSupportRequest(req.params.id);
+      if (!req_) return res.status(404).json({ error: "Not found" });
+      res.json(req_);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/admin/support-requests/:id", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const { status, priority, adminNotes } = req.body;
+      const userId = (req.session as any).userId;
+      const existing = await storage.getSupportRequest(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+      const updated = await storage.updateSupportRequest(req.params.id, {
+        ...(status && { status }),
+        ...(priority && { priority }),
+        ...(adminNotes !== undefined && { adminNotes }),
+      });
+      await storage.createAuditLog({
+        companyId: existing.companyId || undefined,
+        userId,
+        action: "support_request_updated",
+        entityType: "support_request",
+        entityId: req.params.id,
+        details: { status, priority, hasNotes: !!adminNotes },
+      });
+      res.json(updated);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

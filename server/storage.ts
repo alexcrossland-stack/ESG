@@ -33,6 +33,8 @@ import {
   type PlatformHealthEvent, type InsertPlatformHealthEvent,
   type GeneratedFile, type InsertGeneratedFile,
   type UserActivity, type InsertUserActivity,
+  supportRequests,
+  type SupportRequest,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -214,6 +216,13 @@ export interface IStorage {
   getActivityAnalytics(days?: number): Promise<any>;
   getActivityTimeline(days?: number): Promise<any[]>;
   cleanupOldActivity(retentionDays?: number): Promise<number>;
+
+  // Support Requests
+  createSupportRequest(data: Omit<SupportRequest, "id" | "createdAt" | "updatedAt">): Promise<SupportRequest>;
+  getSupportRequests(limit?: number): Promise<SupportRequest[]>;
+  getSupportRequest(id: string): Promise<SupportRequest | undefined>;
+  updateSupportRequest(id: string, data: Partial<SupportRequest>): Promise<SupportRequest | undefined>;
+  getSupportRequestsByCompany(companyId: string): Promise<SupportRequest[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1223,6 +1232,29 @@ export class DatabaseStorage implements IStorage {
       sql`DELETE FROM user_activity WHERE created_at < ${cutoff}`
     );
     return (result as any).rowCount || 0;
+  }
+
+  async createSupportRequest(data: Omit<SupportRequest, "id" | "createdAt" | "updatedAt">) {
+    const [req] = await db.insert(supportRequests).values({ ...data, updatedAt: new Date() }).returning();
+    return req;
+  }
+
+  async getSupportRequests(limit = 200) {
+    return db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit);
+  }
+
+  async getSupportRequest(id: string) {
+    const [req] = await db.select().from(supportRequests).where(eq(supportRequests.id, id));
+    return req;
+  }
+
+  async updateSupportRequest(id: string, data: Partial<SupportRequest>) {
+    const [req] = await db.update(supportRequests).set({ ...data, updatedAt: new Date() }).where(eq(supportRequests.id, id)).returning();
+    return req;
+  }
+
+  async getSupportRequestsByCompany(companyId: string) {
+    return db.select().from(supportRequests).where(eq(supportRequests.companyId, companyId)).orderBy(desc(supportRequests.createdAt));
   }
 }
 

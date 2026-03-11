@@ -15,6 +15,10 @@ export const reportTypeEnum = pgEnum("report_type", ["pdf", "csv", "word"]);
 export const workflowStatusEnum = pgEnum("workflow_status", ["draft", "submitted", "approved", "rejected", "archived"]);
 export const dataSourceTypeEnum = pgEnum("data_source_type", ["evidenced", "estimated", "manual"]);
 
+export const supportRequestCategoryEnum = pgEnum("support_request_category", ["bug", "billing", "onboarding", "report_issue", "import_issue", "feature_request", "data_rights", "general"]);
+export const supportRequestStatusEnum = pgEnum("support_request_status", ["new", "in_review", "resolved", "closed"]);
+export const supportRequestPriorityEnum = pgEnum("support_request_priority", ["low", "normal", "high", "urgent"]);
+
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -23,6 +27,10 @@ export const users = pgTable("users", {
   role: roleEnum("role").notNull().default("contributor"),
   companyId: varchar("company_id"),
   createdAt: timestamp("created_at").defaultNow(),
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  privacyAcceptedAt: timestamp("privacy_accepted_at"),
+  termsVersionAccepted: text("terms_version_accepted"),
+  privacyVersionAccepted: text("privacy_version_accepted"),
 });
 
 export const companies = pgTable("companies", {
@@ -54,6 +62,7 @@ export const companies = pgTable("companies", {
   selectedModules: jsonb("selected_modules"),
   selectedMetrics: jsonb("selected_metrics"),
   onboardingAnswers: jsonb("onboarding_answers"),
+  activationCardDismissedAt: timestamp("activation_card_dismissed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -287,6 +296,29 @@ export const auditLogs = pgTable("audit_logs", {
   details: jsonb("details"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const supportRequests = pgTable("support_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  refNumber: text("ref_number").notNull(),
+  category: supportRequestCategoryEnum("category").notNull().default("general"),
+  subject: text("subject").notNull(),
+  message: text("message").notNull(),
+  pageContext: text("page_context"),
+  userName: text("user_name"),
+  userEmail: text("user_email"),
+  companyName: text("company_name"),
+  adminNotes: text("admin_notes"),
+  status: supportRequestStatusEnum("status").notNull().default("new"),
+  priority: supportRequestPriorityEnum("priority").notNull().default("normal"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertSupportRequestSchema = createInsertSchema(supportRequests).omit({ id: true, refNumber: true, createdAt: true, updatedAt: true });
+export type InsertSupportRequest = z.infer<typeof insertSupportRequestSchema>;
+export type SupportRequest = typeof supportRequests.$inferSelect;
 
 // Policy Generation Inputs
 export const policyGenerationInputs = pgTable("policy_generation_inputs", {
