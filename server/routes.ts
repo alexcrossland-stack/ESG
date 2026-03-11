@@ -496,9 +496,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: "auto" as any,
+      secure: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      sameSite: "lax" as const,
+      sameSite: "none" as const,
       httpOnly: true,
     },
     proxy: true,
