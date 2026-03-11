@@ -1,0 +1,14 @@
+The revised phased plan is approved in principle. Before implementation starts, please apply these final corrections:
+	1.	Treat all new user reference fields such as assignedUserId, requestedByUserId, and acknowledgedByUserId as true relational references matching users.id, not generic text values.
+	2.	Keep assignedUserId on metrics only as the standing metric owner. Do not confuse metric ownership with period submission ownership.
+	3.	Before building My Approvals, verify that all workflow-enabled tables use a consistent review model with fields such as workflowStatus, submittedBy, submittedAt, reviewComment, and compatible approve/reject handling. Standardise this first if needed.
+	4.	Confirm that the existing /api/workflow/review endpoint fully supports all approval entity types used in the plan. If not, standardise it before connecting the frontend.
+	5.	Maintain backward compatibility for legacy records that do not yet have reportingPeriodId. Existing sample/demo data and historical records must continue to work.
+	6.	For board reports and customer packs, clearly distinguish approved, draft, estimated, and missing data. Customer-facing packs should prefer approved content only unless the user explicitly chooses otherwise.
+	7.	If no approved policy exists for a compliance statement, do not generate a strong compliance claim from a default template. Use cautious “requires review” wording instead.
+	8.	Define policy acknowledgment progress using active company users only, with future support for applicability-based audiences.
+	9.	For subscription limits, use a structured application error such as PLAN_LIMIT_EXCEEDED rather than depending only on HTTP 402.
+	10.	Add confirmation safeguards and full audit logging for super-admin actions such as deactivate/reactivate company and reset onboarding.
+	11.	Include regression testing, permission testing, and backward compatibility checks in every release.
+
+Once these adjustments are incorporated, proceed with Release 1 first and do not start Releases 2 or 3 until Release 1 is stable.

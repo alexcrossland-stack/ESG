@@ -1,0 +1,19 @@
+The overall plan is good, but I want the implementation tightened before build starts.
+
+Please revise the plan with the following changes:
+	1.	Split delivery into 3 releases:
+
+	•	Release 1: task ownership, my tasks/my approvals, evidence requests, reporting periods, owner assignment UI
+	•	Release 2: answer bank, board report, customer response pack, dashboard comparisons, policy register and acknowledgments
+	•	Release 3: multi-site, super-admin, subscription controls, advanced policy comparison/applicability
+
+	2.	Replace all free-text ownership fields with proper relational user ID fields. Use consistent foreign key naming such as assignedUserId, requestedByUserId, acknowledgedByUserId.
+	3.	Re-check siteId placement. Prefer site-level linkage on transactional/value tables such as metric values, raw data, actions, evidence, and reports, rather than on master metric definitions unless there is a clear business reason.
+	4.	Strengthen acceptance criteria for every task. “Compiles” or “works” is not enough. Each task should include API behaviour, permission enforcement, UI validation, and audit log expectations where relevant.
+	5.	Add audit logging requirements for owner assignment, evidence request changes, reporting period close/copy-forward, policy acknowledgment, company deactivation, and onboarding reset.
+	6.	Add explicit permission rules for all new features, especially sites, periods, answer bank, super-admin, and subscriptions.
+	7.	Avoid destructive schema deployment. Do not use db:push –force unless unavoidable. Apply migrations safely and preserve existing data.
+	8.	For board report and customer pack generation, create a structured report data model first, then render to export formats. Do not rely only on unstructured text output.
+	9.	Confirm approval workflow coverage before building My Approvals inline actions. Approve/reject actions must map to real workflow-enabled entities and support comments where appropriate.
+
+Please return the revised plan in phased order with tightened task definitions and stronger acceptance criteria.
