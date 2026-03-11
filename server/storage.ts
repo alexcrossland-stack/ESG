@@ -24,6 +24,8 @@ import {
   type PolicyTemplate, type InsertPolicyTemplate,
   type GeneratedPolicy, type InsertGeneratedPolicy,
   type AiGenerationLog, type InsertAiGenerationLog,
+  notifications,
+  type Notification, type InsertNotification,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -102,6 +104,14 @@ export interface IStorage {
   createReportRun(report: Omit<ReportRun, "id" | "generatedAt">): Promise<ReportRun>;
 
   // Audit Logs
+  getNotifications(companyId: string): Promise<Notification[]>;
+  getActiveNotifications(companyId: string): Promise<Notification[]>;
+  createNotification(n: InsertNotification): Promise<Notification>;
+  dismissNotification(id: string, companyId: string, userId: string): Promise<Notification | undefined>;
+  dismissAllNotifications(companyId: string, userId: string): Promise<void>;
+  deleteNotificationsBySourceKey(sourceKeyPrefix: string, companyId: string): Promise<void>;
+  getNotificationBySourceKey(sourceKey: string, companyId: string): Promise<Notification | undefined>;
+
   getAuditLogs(companyId: string): Promise<AuditLog[]>;
   createAuditLog(log: Omit<AuditLog, "id" | "createdAt">): Promise<AuditLog>;
 
@@ -495,6 +505,48 @@ export class DatabaseStorage implements IStorage {
 
   async createReportRun(report: Omit<ReportRun, "id" | "generatedAt">) {
     const [r] = await db.insert(reportRuns).values(report as any).returning();
+    return r;
+  }
+
+  async getNotifications(companyId: string) {
+    return db.select().from(notifications).where(eq(notifications.companyId, companyId)).orderBy(desc(notifications.createdAt)).limit(200);
+  }
+
+  async getActiveNotifications(companyId: string) {
+    return db.select().from(notifications)
+      .where(and(eq(notifications.companyId, companyId), eq(notifications.dismissed, false)))
+      .orderBy(desc(notifications.createdAt)).limit(100);
+  }
+
+  async createNotification(n: InsertNotification) {
+    const [r] = await db.insert(notifications).values(n as any).onConflictDoNothing().returning();
+    return r;
+  }
+
+  async dismissNotification(id: string, companyId: string, userId: string) {
+    const [r] = await db.update(notifications)
+      .set({ dismissed: true, dismissedAt: new Date(), dismissedBy: userId })
+      .where(and(eq(notifications.id, id), eq(notifications.companyId, companyId))).returning();
+    return r;
+  }
+
+  async dismissAllNotifications(companyId: string, userId: string) {
+    await db.update(notifications)
+      .set({ dismissed: true, dismissedAt: new Date(), dismissedBy: userId })
+      .where(and(eq(notifications.companyId, companyId), eq(notifications.dismissed, false)));
+  }
+
+  async deleteNotificationsBySourceKey(sourceKeyPrefix: string, companyId: string) {
+    await db.delete(notifications)
+      .where(and(
+        eq(notifications.companyId, companyId),
+        sql`${notifications.sourceKey} LIKE ${sourceKeyPrefix + '%'}`
+      ));
+  }
+
+  async getNotificationBySourceKey(sourceKey: string, companyId: string) {
+    const [r] = await db.select().from(notifications)
+      .where(and(eq(notifications.sourceKey, sourceKey), eq(notifications.companyId, companyId)));
     return r;
   }
 

@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,10 +12,12 @@ import {
   AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
+  Bell, X, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
+import { format } from "date-fns";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -290,11 +293,13 @@ export default function Dashboard() {
             Your ESG performance at a glance
           </p>
         </div>
-        {enhanced?.latestPeriod && (
-          <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
-            Latest: {enhanced.latestPeriod}
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {enhanced?.latestPeriod && (
+            <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
+              Latest: {enhanced.latestPeriod}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {hasAlerts && (
@@ -616,6 +621,155 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <NotificationsPanel />
     </div>
+  );
+}
+
+function NotificationsPanel() {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: notifications = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/notifications"],
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/notifications/refresh"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications/count"] });
+    },
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/notifications/${id}/dismiss`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications/count"] });
+    },
+  });
+
+  const dismissAllMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/notifications/dismiss-all"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications/count"] });
+    },
+  });
+
+  const severityIcon = (sev: string) => {
+    if (sev === "critical") return <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0" />;
+    if (sev === "warning") return <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
+    return <Info className="w-3.5 h-3.5 text-blue-500 shrink-0" />;
+  };
+
+  const severityBg = (sev: string) => {
+    if (sev === "critical") return "border-l-red-500";
+    if (sev === "warning") return "border-l-amber-500";
+    return "border-l-blue-500";
+  };
+
+  const displayed = expanded ? notifications : notifications.slice(0, 5);
+
+  return (
+    <Card data-testid="section-notifications">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Bell className="w-4 h-4 text-primary" />
+            Notifications & Reminders
+            {notifications.length > 0 && (
+              <Badge variant="secondary" className="text-xs" data-testid="badge-notification-total">
+                {notifications.length}
+              </Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost" size="sm" className="text-xs h-7"
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending}
+              data-testid="button-refresh-notifications"
+            >
+              {refreshMutation.isPending ? "Scanning..." : "Refresh"}
+            </Button>
+            {notifications.length > 0 && (
+              <Button
+                variant="ghost" size="sm" className="text-xs h-7"
+                onClick={() => dismissAllMutation.mutate()}
+                disabled={dismissAllMutation.isPending}
+                data-testid="button-dismiss-all-notifications"
+              >
+                Dismiss all
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-10" />
+          </div>
+        ) : notifications.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-4" data-testid="text-no-notifications">
+            No active notifications. Click Refresh to scan for reminders.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {displayed.map((n: any) => (
+              <div
+                key={n.id}
+                className={`flex items-start gap-2 p-2 rounded border-l-2 bg-muted/30 ${severityBg(n.severity)}`}
+                data-testid={`notification-item-${n.id}`}
+              >
+                {severityIcon(n.severity)}
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium leading-tight" data-testid={`text-notification-title-${n.id}`}>{n.title}</p>
+                  <p className="text-xs text-muted-foreground leading-tight mt-0.5">{n.message}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    {n.linkUrl && (
+                      <Link href={n.linkUrl}>
+                        <Button variant="link" size="sm" className="text-xs h-5 p-0" data-testid={`link-notification-${n.id}`}>
+                          View
+                        </Button>
+                      </Link>
+                    )}
+                    {n.dueDate && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {format(new Date(n.dueDate), "MMM d, yyyy")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost" size="icon" className="w-5 h-5 shrink-0"
+                  onClick={() => dismissMutation.mutate(n.id)}
+                  data-testid={`button-dismiss-notification-${n.id}`}
+                >
+                  <X className="w-3 h-3" />
+                </Button>
+              </div>
+            ))}
+            {notifications.length > 5 && (
+              <Button
+                variant="ghost" size="sm" className="w-full text-xs h-7 mt-1"
+                onClick={() => setExpanded(!expanded)}
+                data-testid="button-toggle-notifications"
+              >
+                {expanded ? (
+                  <><ChevronUp className="w-3 h-3 mr-1" /> Show less</>
+                ) : (
+                  <><ChevronDown className="w-3 h-3 mr-1" /> Show {notifications.length - 5} more</>
+                )}
+              </Button>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

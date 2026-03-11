@@ -59,6 +59,20 @@ The application is a full-stack SaaS web application.
     - **Policy Templates:** Offers 28 structured templates with guided drafting, compliance mapping, and multi-format export.
 - **Calculation Engine:** Centralized service (`server/calculations.ts`) handles 12 automated ESG metric calculations using DB emission factors via `buildEmissionFactorMap()`. Raw inputs collected: 26 fields across environmental (12), social (8), governance (5 including annual_revenue), plus water_m3 (tracked but no formula).
 
+## Notification & Reminder Framework
+
+Auto-generated notifications scanned on dashboard load and via manual refresh button. Types:
+- **metric_due** — Enabled metrics without data for current period
+- **action_overdue** — Action plans past due date that aren't complete
+- **policy_review** — ESG policy or generated policy reviews within 90 days
+- **evidence_expiry** — Evidence files expiring within 60 days
+- **questionnaire_review** — Stale questionnaires (no updates for 14+ days)
+- **report_approval** — Reports in submitted/pending approval state
+
+Deduplication via `source_key` column prevents duplicate notifications. Dashboard shows NotificationsPanel with dismiss individual/all, severity-coded items (critical/warning/info), and expand/collapse for 5+ items. Sidebar bell icon shows active notification count with polling every 60s.
+
+DB table: `notifications` with company_id, user_id, type, title, message, severity, linked_module, linked_entity_id, link_url, due_date, dismissed, dismissed_at, dismissed_by, auto_generated, source_key, created_at.
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`) for AI-assisted features like policy generation and questionnaire autofill.

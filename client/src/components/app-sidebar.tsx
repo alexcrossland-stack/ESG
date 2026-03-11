@@ -7,7 +7,7 @@ import {
 import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
-  Wand2, Calculator, FileQuestion, Library, FileCheck,
+  Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -40,8 +40,14 @@ export function AppSidebar() {
     queryKey: ["/api/auth/me"],
   });
 
+  const { data: notifCount } = useQuery<{ count: number }>({
+    queryKey: ["/api/notifications/count"],
+    refetchInterval: 60000,
+  });
+
   const user = authData?.user;
   const company = authData?.company;
+  const activeNotifs = notifCount?.count || 0;
 
   const mainItems = navItems.filter(i => i.group === "main").filter(item => {
     if (item.title === "Data Entry" && !can("metrics_data_entry")) return false;
@@ -57,12 +63,22 @@ export function AppSidebar() {
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary">
             <Leaf className="w-4 h-4 text-primary-foreground" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-sidebar-foreground leading-tight">ESG Manager</p>
             <p className="text-xs text-muted-foreground leading-tight">
               {company?.name || "Your Company"}
             </p>
           </div>
+          {activeNotifs > 0 && (
+            <Link href="/">
+              <Button variant="ghost" size="icon" className="relative w-8 h-8" data-testid="button-notification-bell">
+                <Bell className="w-4 h-4" />
+                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center" data-testid="badge-notification-count">
+                  {activeNotifs > 9 ? "9+" : activeNotifs}
+                </span>
+              </Button>
+            </Link>
+          )}
         </div>
       </SidebarHeader>
 
