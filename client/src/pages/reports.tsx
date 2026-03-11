@@ -882,6 +882,13 @@ export default function Reports() {
   };
 
   const { data: reports = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/reports"] });
+  const { data: companyData } = useQuery<any>({ queryKey: ["/api/company"] });
+  const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
+  const { data: complianceStatus } = useQuery<any>({ queryKey: ["/api/compliance/status"] });
+  const { data: evidenceCoverageData } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
+  const { data: actionsData = [] } = useQuery<any[]>({ queryKey: ["/api/actions"] });
+  const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
+  const [exportingAssurance, setExportingAssurance] = useState(false);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -929,6 +936,288 @@ export default function Reports() {
     a.click();
     URL.revokeObjectURL(url);
     toast({ title: "CSV exported" });
+  };
+
+  const downloadTextFile = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportBoardPack = () => {
+    const hr = "=".repeat(60);
+    const sr = "-".repeat(40);
+    const companyName = companyData?.name || "Company";
+    const esgScore = reportData?.weightedScore?.overallScore ?? "N/A";
+    const categoryScores = reportData?.weightedScore?.categoryScores || {};
+    const carbon = reportData?.carbonSummary;
+    const actions = actionsData || [];
+    const topActions = actions.slice(0, 5);
+    const frameworks = complianceStatus || [];
+    const overallCompliance = Array.isArray(frameworks) && frameworks.length > 0
+      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.compliancePercent || 0), 0) / frameworks.length)
+      : 0;
+
+    const dataStatus = reportData ? "[APPROVED]" : companyData ? "[DRAFT]" : "[MISSING]";
+
+    const pack = {
+      companyName,
+      esgScore,
+      categoryScores,
+      carbonSummary: carbon ? { scope1: carbon.scope1, scope2: carbon.scope2, scope3: carbon.scope3, total: carbon.total } : null,
+      topActions: topActions.map((a: any) => ({ title: a.title, status: a.status, dueDate: a.dueDate })),
+      compliancePercent: overallCompliance,
+      dataStatus,
+    };
+
+    const lines: string[] = [];
+    lines.push(hr);
+    lines.push(`BOARD PACK - ${pack.companyName}`);
+    lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(`Status: ${pack.dataStatus}`);
+    lines.push(hr);
+    lines.push("");
+    lines.push("ESG SCORE");
+    lines.push(sr);
+    lines.push(`Overall Score: ${pack.esgScore}`);
+    for (const [cat, info] of Object.entries(pack.categoryScores) as [string, any][]) {
+      lines.push(`  ${cat.charAt(0).toUpperCase() + cat.slice(1)}: ${info.score ?? "N/A"} (${info.scoredCount}/${info.metricCount} metrics)`);
+    }
+    lines.push("");
+    if (pack.carbonSummary) {
+      lines.push("CARBON SUMMARY");
+      lines.push(sr);
+      lines.push(`Scope 1: ${pack.carbonSummary.scope1?.toFixed(1) || "0.0"} kgCO2e`);
+      lines.push(`Scope 2: ${pack.carbonSummary.scope2?.toFixed(1) || "0.0"} kgCO2e`);
+      lines.push(`Scope 3: ${pack.carbonSummary.scope3?.toFixed(1) || "0.0"} kgCO2e`);
+      lines.push(`Total: ${pack.carbonSummary.total?.toFixed(1) || "0.0"} kgCO2e`);
+      lines.push("");
+    }
+    lines.push("TOP 5 ACTION ITEMS");
+    lines.push(sr);
+    if (pack.topActions.length === 0) {
+      lines.push("  No actions recorded.");
+    } else {
+      pack.topActions.forEach((a: any, i: number) => {
+        const status = a.status === "complete" ? "[APPROVED]" : a.status === "not_started" ? "[MISSING]" : "[DRAFT]";
+        const due = a.dueDate ? format(new Date(a.dueDate), "dd MMM yyyy") : "No date";
+        lines.push(`  ${i + 1}. ${a.title} ${status} - Due: ${due}`);
+      });
+    }
+    lines.push("");
+    lines.push("COMPLIANCE");
+    lines.push(sr);
+    lines.push(`Requirements Met: ${pack.compliancePercent}%`);
+    lines.push("");
+    lines.push(hr);
+
+    downloadTextFile(lines.join("\n"), `board-pack-${format(new Date(), "yyyy-MM-dd")}.txt`);
+    toast({ title: "Board Pack exported" });
+  };
+
+  const exportCustomerPack = () => {
+    const hr = "=".repeat(60);
+    const sr = "-".repeat(40);
+    const metrics = metricsData || [];
+    const policy = policyData;
+    const evidCoverage = evidenceCoverageData;
+    const frameworks = complianceStatus || [];
+    const overallCompliance = Array.isArray(frameworks) && frameworks.length > 0
+      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.compliancePercent || 0), 0) / frameworks.length)
+      : 0;
+
+    const pack = {
+      metrics: metrics.map((m: any) => ({ name: m.name, category: m.category, unit: m.unit, enabled: m.enabled })),
+      policySummary: policy ? { status: policy.workflowStatus || "draft", purpose: policy.purpose } : null,
+      evidenceCoverage: evidCoverage?.coveragePercent ?? 0,
+      compliancePercent: overallCompliance,
+      dataQuality: {
+        evidenced: evidCoverage?.evidencedCount ?? 0,
+        total: evidCoverage?.totalMetrics ?? 0,
+      },
+    };
+
+    const lines: string[] = [];
+    lines.push(hr);
+    lines.push(`CUSTOMER PACK - ${companyData?.name || "Company"}`);
+    lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(hr);
+    lines.push("");
+    lines.push("METRIC SUMMARY");
+    lines.push(sr);
+    lines.push(`${"Metric".padEnd(35)} ${"Category".padEnd(15)} ${"Unit".padEnd(10)}`);
+    lines.push("-".repeat(60));
+    const enabledMetrics = pack.metrics.filter((m: any) => m.enabled !== false);
+    if (enabledMetrics.length === 0) {
+      lines.push("  No metrics configured.");
+    } else {
+      enabledMetrics.forEach((m: any) => {
+        lines.push(`${(m.name || "").padEnd(35)} ${(m.category || "").padEnd(15)} ${(m.unit || "").padEnd(10)}`);
+      });
+    }
+    lines.push("");
+    lines.push("POLICY SUMMARY");
+    lines.push(sr);
+    if (pack.policySummary) {
+      lines.push(`Status: ${pack.policySummary.status === "published" ? "Published" : "Draft"}`);
+      if (pack.policySummary.purpose) lines.push(`Purpose: ${pack.policySummary.purpose}`);
+    } else {
+      lines.push("  No policy configured.");
+    }
+    lines.push("");
+    lines.push("DATA QUALITY INDICATORS");
+    lines.push(sr);
+    lines.push(`Evidence Coverage: ${pack.evidenceCoverage}%`);
+    lines.push(`Compliance: ${pack.compliancePercent}%`);
+    lines.push(`Evidenced Metrics: ${pack.dataQuality.evidenced} of ${pack.dataQuality.total}`);
+    lines.push("");
+    lines.push(hr);
+
+    downloadTextFile(lines.join("\n"), `customer-pack-${format(new Date(), "yyyy-MM-dd")}.txt`);
+    toast({ title: "Customer Pack exported" });
+  };
+
+  const exportComplianceSummary = () => {
+    const hr = "=".repeat(60);
+    const sr = "-".repeat(40);
+    const frameworks = complianceStatus || [];
+
+    const pack = Array.isArray(frameworks)
+      ? frameworks.map((fw: any) => ({
+          name: fw.name,
+          compliancePercent: fw.compliancePercent || 0,
+          requirements: (fw.requirements || []).map((r: any) => ({
+            code: r.code, title: r.title, isMet: r.isMet,
+          })),
+        }))
+      : [];
+
+    const lines: string[] = [];
+    lines.push(hr);
+    lines.push(`COMPLIANCE SUMMARY - ${companyData?.name || "Company"}`);
+    lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(hr);
+    lines.push("");
+
+    if (pack.length === 0) {
+      lines.push("No compliance frameworks configured.");
+    } else {
+      pack.forEach((fw: any) => {
+        lines.push(`${fw.name} (${fw.compliancePercent}% met)`);
+        lines.push(sr);
+        if (fw.requirements.length === 0) {
+          lines.push("  No requirements defined.");
+        } else {
+          fw.requirements.forEach((r: any) => {
+            const status = r.isMet ? "[MET]" : "[UNMET]";
+            lines.push(`  ${status} ${r.code} - ${r.title}`);
+          });
+        }
+        lines.push("");
+      });
+    }
+    lines.push(hr);
+
+    downloadTextFile(lines.join("\n"), `compliance-summary-${format(new Date(), "yyyy-MM-dd")}.txt`);
+    toast({ title: "Compliance Summary exported" });
+  };
+
+  const exportAssurancePack = async () => {
+    setExportingAssurance(true);
+    try {
+      const res = await apiRequest("GET", "/api/assurance-pack");
+      const data = await res.json();
+
+      const hr = "=".repeat(60);
+      const sr = "-".repeat(40);
+
+      const pack = {
+        auditLogs: data.auditLogs || [],
+        approvalHistory: data.approvalHistory || [],
+        evidenceHistory: data.evidenceHistory || [],
+        policyVersions: data.policyVersions || [],
+        periodSubmissions: data.periodSubmissions || [],
+      };
+
+      const lines: string[] = [];
+      lines.push(hr);
+      lines.push(`ASSURANCE PACK - ${companyData?.name || "Company"}`);
+      lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+      lines.push(hr);
+      lines.push("");
+
+      lines.push("1. AUDIT LOGS");
+      lines.push(sr);
+      if (pack.auditLogs.length === 0) {
+        lines.push("  No audit logs recorded.");
+      } else {
+        pack.auditLogs.forEach((log: any) => {
+          const ts = log.createdAt ? format(new Date(log.createdAt), "dd MMM yyyy HH:mm") : "";
+          lines.push(`  [${ts}] ${log.actor || log.userId} - ${log.action} ${log.entityType ? `(${log.entityType})` : ""}`);
+        });
+      }
+      lines.push("");
+
+      lines.push("2. APPROVAL HISTORY");
+      lines.push(sr);
+      if (pack.approvalHistory.length === 0) {
+        lines.push("  No approval history recorded.");
+      } else {
+        pack.approvalHistory.forEach((entry: any) => {
+          const ts = entry.createdAt ? format(new Date(entry.createdAt), "dd MMM yyyy HH:mm") : "";
+          lines.push(`  [${ts}] ${entry.actor || entry.userId} - ${entry.action} ${entry.entityType ? `(${entry.entityType})` : ""}`);
+        });
+      }
+      lines.push("");
+
+      lines.push("3. EVIDENCE HISTORY");
+      lines.push(sr);
+      if (pack.evidenceHistory.length === 0) {
+        lines.push("  No evidence files recorded.");
+      } else {
+        pack.evidenceHistory.forEach((ev: any) => {
+          const uploaded = ev.uploadedAt ? format(new Date(ev.uploadedAt), "dd MMM yyyy") : "";
+          const expiry = ev.expiryDate ? format(new Date(ev.expiryDate), "dd MMM yyyy") : "N/A";
+          lines.push(`  ${ev.fileName} - Status: ${ev.status || "uploaded"} - Module: ${ev.linkedModule || "N/A"} - Uploaded: ${uploaded} - Expires: ${expiry}`);
+        });
+      }
+      lines.push("");
+
+      lines.push("4. POLICY VERSIONS");
+      lines.push(sr);
+      if (pack.policyVersions.length === 0) {
+        lines.push("  No policy versions recorded.");
+      } else {
+        pack.policyVersions.forEach((v: any) => {
+          const ts = v.createdAt ? format(new Date(v.createdAt), "dd MMM yyyy HH:mm") : "";
+          lines.push(`  Version ${v.versionNumber} - Created: ${ts} - Sections: ${(v.sections || []).join(", ") || "N/A"}`);
+        });
+      }
+      lines.push("");
+
+      lines.push("5. PERIOD SUBMISSIONS");
+      lines.push(sr);
+      if (pack.periodSubmissions.length === 0) {
+        lines.push("  No period submissions recorded.");
+      } else {
+        pack.periodSubmissions.forEach((ps: any) => {
+          lines.push(`  ${ps.period}: ${ps.totalValues} values (Approved: ${ps.approved}, Submitted: ${ps.submitted}, Draft: ${ps.draft})`);
+        });
+      }
+      lines.push("");
+      lines.push(hr);
+
+      downloadTextFile(lines.join("\n"), `assurance-pack-${format(new Date(), "yyyy-MM-dd")}.txt`);
+      toast({ title: "Assurance Pack exported" });
+    } catch {
+      toast({ title: "Failed to export Assurance Pack", variant: "destructive" });
+    } finally {
+      setExportingAssurance(false);
+    }
   };
 
   const submitReportMutation = useMutation({
@@ -1153,6 +1442,55 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Download className="w-4 h-4" />
+            Export Packs
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Button
+              variant="outline"
+              onClick={exportBoardPack}
+              disabled={isLoading}
+              data-testid="button-export-board-pack"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Board Pack
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportCustomerPack}
+              disabled={isLoading}
+              data-testid="button-export-customer-pack"
+            >
+              <Users className="w-3.5 h-3.5 mr-1.5" />
+              Customer Pack
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportComplianceSummary}
+              disabled={isLoading}
+              data-testid="button-export-compliance"
+            >
+              <Shield className="w-3.5 h-3.5 mr-1.5" />
+              Compliance Summary
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportAssurancePack}
+              disabled={isLoading || exportingAssurance}
+              data-testid="button-export-assurance-pack"
+            >
+              <FileText className="w-3.5 h-3.5 mr-1.5" />
+              Assurance Pack
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

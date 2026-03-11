@@ -43,6 +43,7 @@ export const companies = pgTable("companies", {
   onboardingProgressPercent: integer("onboarding_progress_percent").default(0),
   onboardingStartedAt: timestamp("onboarding_started_at"),
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
+  demoMode: boolean("demo_mode").default(false),
   esgMaturity: text("esg_maturity"),
   selectedModules: jsonb("selected_modules"),
   selectedMetrics: jsonb("selected_metrics"),
@@ -69,6 +70,8 @@ export const companySettings = pgTable("company_settings", {
   reportBrandingColor: text("report_branding_color"),
   reportBrandingFooter: text("report_branding_footer"),
   emissionFactorSet: text("emission_factor_set").default("UK_DEFRA_2024"),
+  reminderEnabled: boolean("reminder_enabled").default(true),
+  reminderFrequency: text("reminder_frequency").default("daily"),
 });
 
 export const esgPolicies = pgTable("esg_policies", {
@@ -564,10 +567,12 @@ export const procurementAnswers = pgTable("procurement_answers", {
   linkedEvidenceIds: text("linked_evidence_ids").array(),
   linkedComplianceReqIds: text("linked_compliance_req_ids").array(),
   status: procurementAnswerStatusEnum("status").default("draft"),
-  approvedBy: varchar("approved_by"),
+  approvedByUserId: varchar("approved_by_user_id"),
   approvedAt: timestamp("approved_at"),
   lastReviewedAt: timestamp("last_reviewed_at"),
   flaggedReason: text("flagged_reason"),
+  usageCount: integer("usage_count").default(0),
+  lastUsedAt: timestamp("last_used_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

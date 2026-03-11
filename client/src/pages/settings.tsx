@@ -240,6 +240,7 @@ function AdminPanel() {
     { key: "templates", label: "Policy Templates", icon: Library },
     { key: "factors", label: "Emission Factors", icon: Leaf },
     { key: "workflow", label: "Approval Workflow", icon: ClipboardCheck },
+    { key: "reminders", label: "Reminders", icon: Clock },
     { key: "branding", label: "Report Branding", icon: Palette },
     { key: "periods", label: "Reporting Periods", icon: Calendar },
     { key: "audit", label: "Audit Log", icon: Search },
@@ -270,6 +271,7 @@ function AdminPanel() {
       {section === "templates" && <PolicyTemplateAdmin />}
       {section === "factors" && <EmissionFactorAdmin />}
       {section === "workflow" && <WorkflowSettings />}
+      {section === "reminders" && <ReminderSettings />}
       {section === "branding" && <ReportBranding />}
       {section === "periods" && <ReportingPeriodsAdmin />}
       {section === "audit" && <AuditLogAdmin />}
@@ -1172,6 +1174,74 @@ function WorkflowSettings() {
           <p className="text-[10px] text-muted-foreground mt-1.5">
             Items move through these states: Draft → Submitted → Approved/Rejected. Rejected items can be resubmitted. Approved items can be archived.
           </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReminderSettings() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery<any>({ queryKey: ["/api/company/settings"] });
+  const updateMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("PUT", "/api/company/settings", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/settings"] });
+      toast({ title: "Reminder settings updated" });
+    },
+  });
+
+  return (
+    <Card data-testid="card-reminder-settings">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Clock className="w-4 h-4" />
+          Automated Reminders
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Configure automated reminder generation for missing data, expiring evidence, and overdue items
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-start justify-between gap-4 py-2 px-3 border border-border rounded-md">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">Enable automated reminders</p>
+            <p className="text-xs text-muted-foreground mt-0.5">When enabled, the system generates reminders for missing data, expiring evidence, overdue actions, and pending approvals</p>
+          </div>
+          <Switch
+            checked={settings?.reminderEnabled ?? true}
+            onCheckedChange={(v) => updateMutation.mutate({ ...settings, reminderEnabled: v })}
+            disabled={updateMutation.isPending}
+            data-testid="switch-reminder-enabled"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Reminder frequency</Label>
+          <Select
+            value={settings?.reminderFrequency || "daily"}
+            onValueChange={(v) => updateMutation.mutate({ ...settings, reminderFrequency: v })}
+          >
+            <SelectTrigger className="w-40" data-testid="select-reminder-frequency">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="daily">Daily</SelectItem>
+              <SelectItem value="weekly">Weekly</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="p-3 bg-muted/50 rounded-md">
+          <p className="text-xs font-medium">Reminder schedule</p>
+          <ul className="text-[10px] text-muted-foreground mt-1.5 space-y-0.5 list-disc pl-3">
+            <li>Missing metric data: start of each reporting period</li>
+            <li>Evidence expiry: 60, 30, 14, 7 days before expiry</li>
+            <li>Overdue actions: daily after due date</li>
+            <li>Pending approvals: every 3 days after submission</li>
+          </ul>
         </div>
       </CardContent>
     </Card>

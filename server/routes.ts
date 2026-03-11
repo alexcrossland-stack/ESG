@@ -3633,9 +3633,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       } catch {}
 
+      const weights = { missingData: 3, lowQuality: 2, expiredEvidence: 2, overdueActions: 3, pendingApprovals: 1, unapprovedPolicies: 1, unmetCompliance: 2 };
+      const maxScore = enabledMetrics.length * weights.missingData + enabledMetrics.length * weights.lowQuality + 10 * weights.expiredEvidence + 10 * weights.overdueActions + 10 * weights.pendingApprovals + 5 * weights.unapprovedPolicies + 24 * weights.unmetCompliance;
+      const rawGap = missingData.length * weights.missingData + lowQuality.length * weights.lowQuality + expiredEvidence.length * weights.expiredEvidence + overdueActions.length * weights.overdueActions + pendingApprovals.length * weights.pendingApprovals + unapprovedPolicies.length * weights.unapprovedPolicies + unmetCompliance.length * weights.unmetCompliance;
+      const gapScore = maxScore > 0 ? Math.round(Math.min(100, (rawGap / maxScore) * 100)) : 0;
+
       res.json({
         missingData, lowQuality, expiredEvidence, overdueActions,
         pendingApprovals, unapprovedPolicies, unmetCompliance,
+        gapScore,
         summary: {
           missingData: missingData.length, lowQuality: lowQuality.length,
           expiredEvidence: expiredEvidence.length, overdueActions: overdueActions.length,
@@ -3665,7 +3671,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (a.status === "approved" && a.approved_at) {
           const approvedAt = new Date(a.approved_at);
           if (a.linked_metric_ids?.length) {
+            const linkedIds = new Set(a.linked_metric_ids);
             const changedMetrics = values.filter((v: any) => {
+              if (!linkedIds.has(v.metricId)) return false;
               const met = v.updatedAt ? new Date(v.updatedAt) : null;
               return met && met > approvedAt;
             });
@@ -3709,7 +3717,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { question, answer, category, linkedMetricIds, linkedPolicySection, linkedEvidenceIds, linkedComplianceReqIds, status } = req.body;
-      const approvedFields = status === "approved" ? sql`, approved_by = ${userId}, approved_at = NOW(), last_reviewed_at = NOW()` : sql``;
+      const approvedFields = status === "approved" ? sql`, approved_by_user_id = ${userId}, approved_at = NOW(), last_reviewed_at = NOW()` : sql``;
       const result = await db.execute(
         sql`UPDATE procurement_answers SET question = COALESCE(${question}, question), answer = COALESCE(${answer}, answer),
             category = COALESCE(${category || null}, category), linked_metric_ids = COALESCE(${linkedMetricIds || null}, linked_metric_ids),
@@ -3742,21 +3750,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/evidence/suggestions", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { metricId, category, context } = req.query;
+      const { metricId, policySection, complianceReqId, category } = req.query;
       const allEvidence = await storage.getEvidenceFiles(companyId);
-      let suggestions = allEvidence.filter((e: any) => e.status === "approved" || !e.expiryDate || new Date(e.expiryDate) > new Date());
-      if (metricId) {
-        suggestions = suggestions.filter((e: any) => e.linkedModule === "metric_value" || e.linkedModule === "metric");
-      }
-      if (category) {
-        suggestions = suggestions.filter((e: any) => e.linkedModule === category || !e.linkedModule);
-      }
-      suggestions.sort((a: any, b: any) => {
-        if (a.status === "approved" && b.status !== "approved") return -1;
-        if (b.status === "approved" && a.status !== "approved") return 1;
-        return 0;
+      const valid = allEvidence.filter((e: any) => !e.expiryDate || new Date(e.expiryDate) > new Date());
+      const scored = valid.map((e: any) => {
+        let relevance = 0;
+        if (metricId && (e.linkedEntityId === metricId || e.linkedModule === "metric_value")) relevance = 50;
+        else if (policySection && e.linkedModule === "policy") relevance = 40;
+        else if (complianceReqId && e.linkedModule === "compliance") relevance = 30;
+        else if (category && e.linkedModule === category) relevance = 20;
+        else if (e.status === "approved") relevance = 10;
+        if (e.status === "approved") relevance += 5;
+        return { ...e, relevance };
       });
-      res.json(suggestions.slice(0, 10));
+      scored.sort((a: any, b: any) => b.relevance - a.relevance);
+      res.json(scored.filter((s: any) => s.relevance > 0).slice(0, 10));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -3824,7 +3832,158 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/demo/seed", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      await db.execute(sql`UPDATE companies SET demo_mode = true WHERE id = ${companyId}`);
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled).slice(0, 28);
+      const now = new Date();
+      const statuses = ["approved", "submitted", "draft"];
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const period = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        for (const m of enabledMetrics) {
+          const ws = statuses[Math.floor(Math.random() * (i < 2 ? 3 : 2))];
+          const val = Math.round(Math.random() * 1000) / 10;
+          try {
+            await db.execute(sql`INSERT INTO metric_values (metric_id, period, value, workflow_status, data_source_type, notes) VALUES (${m.id}, ${period}, ${val}, ${ws}, ${Math.random() > 0.3 ? "manual" : "estimated"}, ${"Demo data"}) ON CONFLICT DO NOTHING`);
+          } catch {}
+        }
+      }
+      try {
+        await db.execute(sql`INSERT INTO action_plans (company_id, title, status, due_date, assigned_user_id) VALUES (${companyId}, 'Implement waste sorting program', 'complete', ${new Date(now.getFullYear(), now.getMonth() - 1, 15).toISOString()}, ${userId})`);
+        await db.execute(sql`INSERT INTO action_plans (company_id, title, status, due_date, assigned_user_id) VALUES (${companyId}, 'Conduct energy audit', 'in_progress', ${new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).toISOString()}, ${userId})`);
+      } catch {}
+      const demoAnswers = [
+        { q: "What is your carbon reduction strategy?", a: "We target a 30% reduction in Scope 1 and 2 emissions by 2030 through energy efficiency, renewable procurement, and fleet electrification.", cat: "Environmental", st: "approved" },
+        { q: "Do you have a modern slavery statement?", a: "Yes. Our Modern Slavery Statement is reviewed annually by the Board and published on our website.", cat: "Social", st: "approved" },
+        { q: "How do you monitor supply chain ESG risks?", a: "We conduct annual supplier assessments covering environmental, labour, and governance criteria.", cat: "Supply Chain", st: "flagged" },
+      ];
+      for (const da of demoAnswers) {
+        try {
+          await db.execute(sql`INSERT INTO procurement_answers (company_id, question, answer, category, status) VALUES (${companyId}, ${da.q}, ${da.a}, ${da.cat}, ${da.st})`);
+        } catch {}
+      }
+      for (let i = 0; i < 5; i++) {
+        await storage.createAuditLog({ companyId, userId, action: `Demo action ${i + 1}`, entityType: "system", entityId: companyId, details: { demo: true } });
+      }
+      res.json({ success: true, message: "Demo data seeded" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/company/demo-status", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const result = await db.execute(sql`SELECT demo_mode FROM companies WHERE id = ${companyId}`);
+      res.json({ demoMode: result.rows[0]?.demo_mode || false });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/procurement-answers/:id/record-usage", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      await db.execute(sql`UPDATE procurement_answers SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = NOW() WHERE id = ${req.params.id} AND company_id = ${companyId}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/reminders/generate", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const settings = await storage.getCompanySettings(companyId);
+      if (settings && !settings.reminderEnabled) { res.json({ generated: 0 }); return; }
+      const generated = await generateScheduledReminders(companyId, storage, db, sql);
+      res.json({ generated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  async function runDailyReminderJob() {
+    try {
+      const dayOfWeek = new Date().getDay();
+      const result = await db.execute(sql`SELECT c.id, cs.reminder_frequency FROM companies c JOIN company_settings cs ON cs.company_id = c.id WHERE cs.reminder_enabled = true`);
+      for (const row of result.rows) {
+        try {
+          if (row.reminder_frequency === "weekly" && dayOfWeek !== 1) continue;
+          await generateScheduledReminders(row.id as string, storage, db, sql);
+        } catch {}
+      }
+    } catch {}
+  }
+
+  setInterval(runDailyReminderJob, 24 * 60 * 60 * 1000);
+  setTimeout(runDailyReminderJob, 60000);
+
   return httpServer;
+}
+
+async function generateScheduledReminders(companyId: string, storage: any, db: any, sql: any) {
+  let count = 0;
+  const now = new Date();
+  const allMetrics = await storage.getMetrics(companyId);
+  const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const values = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
+  const valueMetricIds = new Set(values.map((v: any) => v.metricId));
+  for (const m of enabledMetrics) {
+    if (!valueMetricIds.has(m.id)) {
+      const key = `metric_submission:${m.id}:${currentPeriod}`;
+      try {
+        await storage.createNotification({ companyId, type: "reminder", title: `Missing data: ${m.name}`, message: `No value submitted for ${m.name} in ${currentPeriod}`, sourceKey: key, link: "/data-entry" });
+        count++;
+      } catch {}
+    }
+  }
+  const evidence = await storage.getEvidenceFiles(companyId);
+  const tiers = [60, 30, 14, 7];
+  for (const e of evidence) {
+    if (e.expiryDate) {
+      const daysUntil = Math.floor((new Date(e.expiryDate).getTime() - now.getTime()) / 86400000);
+      for (const tier of tiers) {
+        if (daysUntil <= tier && daysUntil > (tier === 60 ? 30 : tier === 30 ? 14 : tier === 14 ? 7 : 0)) {
+          const key = `evidence_expiry:${e.id}:${tier}d`;
+          try {
+            await storage.createNotification({ companyId, type: "reminder", title: `Evidence expiring in ${daysUntil} days`, message: `${e.filename || e.fileName} expires ${new Date(e.expiryDate).toLocaleDateString()}`, sourceKey: key, link: "/evidence" });
+            count++;
+          } catch {}
+          break;
+        }
+      }
+    }
+  }
+  const actions = await storage.getActionPlans(companyId);
+  for (const a of actions) {
+    if (a.status !== "complete" && a.dueDate && new Date(a.dueDate) < now) {
+      const key = `overdue_action:${a.id}:${currentPeriod}`;
+      try {
+        await storage.createNotification({ companyId, type: "reminder", title: `Overdue: ${a.title}`, message: `This action was due ${new Date(a.dueDate).toLocaleDateString()}`, sourceKey: key, link: "/actions" });
+        count++;
+      } catch {}
+    }
+  }
+  const pendingValues = values.filter((v: any) => v.workflowStatus === "submitted");
+  for (const v of pendingValues) {
+    const daysSinceSubmit = v.updatedAt ? Math.floor((now.getTime() - new Date(v.updatedAt).getTime()) / 86400000) : 0;
+    if (daysSinceSubmit >= 3) {
+      const bucket = Math.floor(daysSinceSubmit / 3);
+      const key = `pending_approval:${v.id}:bucket${bucket}`;
+      try {
+        const m = enabledMetrics.find((met: any) => met.id === v.metricId);
+        await storage.createNotification({ companyId, type: "reminder", title: `Pending approval: ${m?.name || "Metric"}`, message: `Awaiting approval for ${daysSinceSubmit} days`, sourceKey: key, link: "/my-approvals" });
+        count++;
+      } catch {}
+    }
+  }
+  return count;
 }
 
 function sanitizeQuestionText(text: string): string {

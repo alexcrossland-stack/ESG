@@ -8,6 +8,7 @@ interface SourceBadgeProps {
   owner?: string | null;
   reviewedAt?: string | Date | null;
   dataSourceType?: string | null;
+  hasEvidence?: boolean;
 }
 
 function formatOwner(owner: string | null | undefined): string {
@@ -44,7 +45,7 @@ function getStatusLabel(status: string | undefined, dataSourceType: string | nul
   return "Draft";
 }
 
-export function SourceBadge({ entityType, entityId, status, owner, reviewedAt, dataSourceType }: SourceBadgeProps) {
+export function SourceBadge({ entityType, entityId, status, owner, reviewedAt, dataSourceType, hasEvidence }: SourceBadgeProps) {
   const colorClass = getStatusColor(status, dataSourceType);
   const statusLabel = getStatusLabel(status, dataSourceType);
   const ownerDisplay = formatOwner(owner);
@@ -52,6 +53,8 @@ export function SourceBadge({ entityType, entityId, status, owner, reviewedAt, d
 
   const parts = [statusLabel, ownerDisplay];
   if (dateDisplay) parts.push(dateDisplay);
+  if (hasEvidence === true) parts.push("Evidence");
+  if (hasEvidence === false) parts.push("No Evidence");
 
   return (
     <Badge

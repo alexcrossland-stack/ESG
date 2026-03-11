@@ -92,6 +92,7 @@ function ProtectedApp() {
               <Route path="/my-tasks" component={MyTasks} />
               <Route path="/my-approvals" component={MyApprovals} />
               <Route path="/compliance" component={Compliance} />
+              <Route path="/answer-library" component={AnswerLibrary} />
               <Route component={NotFound} />
             </Switch>
           </main>

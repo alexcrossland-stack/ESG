@@ -23,6 +23,7 @@ import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { DataSourceBadge } from "@/pages/evidence";
 import { SourceBadge } from "@/components/source-badge";
+import { EvidenceSuggestions } from "@/components/evidence-suggestions";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -578,8 +579,10 @@ export default function DataEntry() {
                               owner={metricValue?.owner || metricValue?.submittedBy}
                               reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
                               dataSourceType={metricValue?.dataSourceType}
+                              hasEvidence={metricValue?.dataSourceType === "evidenced"}
                             />
                           </div>
+                          <EvidenceSuggestions metricId={metric.metricId} category={metric.category} />
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
                           )}

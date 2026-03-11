@@ -307,6 +307,7 @@ function DataQualityCard() {
 
 export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
+  const [showTour, setShowTour] = useState(false);
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
   const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => fetch(`/api/dashboard/enhanced${periodParam}`, { credentials: "include" }).then(r => r.json()) });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
@@ -315,6 +316,7 @@ export default function Dashboard() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
+  const { data: demoStatus } = useQuery<any>({ queryKey: ["/api/company/demo-status"] });
   const { can, isAdmin } = usePermissions();
 
   const isLoading = enhancedLoading || oldLoading;
@@ -410,8 +412,15 @@ export default function Dashboard() {
               {activePeriod ? activePeriod.name : `Latest: ${enhanced.latestPeriod}`}
             </Badge>
           )}
+          {demoStatus?.demoMode && (
+            <Button variant="outline" size="sm" onClick={() => setShowTour(true)} data-testid="button-start-tour">
+              <Info className="w-3.5 h-3.5 mr-1" />
+              Tour
+            </Button>
+          )}
         </div>
       </div>
+      {showTour && <ProductTour onComplete={() => setShowTour(false)} />}
 
       {hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">

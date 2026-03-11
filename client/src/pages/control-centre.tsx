@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,11 +20,16 @@ import {
   Shield,
   BarChart3,
   ExternalLink,
+  Upload,
+  Send,
+  Eye,
+  CheckSquare,
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "wouter";
 
 interface ControlCentreData {
+  gapScore: number;
   missingData: Array<{ id: string; name: string; category: string; owner: string; linkUrl: string }>;
   lowQuality: Array<{ id: string; name: string; category: string; score: number; owner: string; linkUrl: string }>;
   expiredEvidence: Array<{ id: string; name: string; expiryDate: string; linkedModule: string; linkUrl: string }>;
@@ -72,6 +78,14 @@ function SectionRow({ item, type }: { item: any; type: SectionType }) {
         : null;
   const linkUrl = item.linkUrl || "/";
 
+  const completeAction = useMutation({
+    mutationFn: () =>
+      apiRequest("PUT", `/api/actions/${item.id}`, { status: "complete" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/control-centre"] });
+    },
+  });
+
   return (
     <div className="flex items-center justify-between gap-2 py-2 px-3 border-b border-border last:border-b-0">
       <div className="flex-1 min-w-0">
@@ -101,6 +115,42 @@ function SectionRow({ item, type }: { item: any; type: SectionType }) {
         >
           {severity}
         </Badge>
+      )}
+      {type === "missingData" && (
+        <Link href="/data-entry">
+          <Button variant="outline" size="sm" data-testid={`button-quick-action-missingData-${item.id}`}>
+            <Send className="w-3 h-3 mr-1" />
+            Submit Data
+          </Button>
+        </Link>
+      )}
+      {type === "overdueActions" && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid={`button-quick-action-overdueActions-${item.id}`}
+          disabled={completeAction.isPending}
+          onClick={() => completeAction.mutate()}
+        >
+          <CheckSquare className="w-3 h-3 mr-1" />
+          {completeAction.isPending ? "Completing..." : "Mark Complete"}
+        </Button>
+      )}
+      {type === "pendingApprovals" && (
+        <Link href="/my-approvals">
+          <Button variant="outline" size="sm" data-testid={`button-quick-action-pendingApprovals-${item.id}`}>
+            <Eye className="w-3 h-3 mr-1" />
+            Review
+          </Button>
+        </Link>
+      )}
+      {type === "expiredEvidence" && (
+        <Link href="/evidence">
+          <Button variant="outline" size="sm" data-testid={`button-quick-action-expiredEvidence-${item.id}`}>
+            <Upload className="w-3 h-3 mr-1" />
+            Upload
+          </Button>
+        </Link>
       )}
       <Link href={linkUrl}>
         <Button variant="ghost" size="icon" data-testid={`link-go-to-${type}-${item.id}`}>
@@ -192,6 +242,38 @@ export default function ControlCentre() {
           </Badge>
         )}
       </div>
+
+      {!isLoading && data && (
+        <Card
+          data-testid="card-gap-score"
+          className="flex flex-row items-center justify-between gap-4 p-4"
+        >
+          <div className="flex items-center gap-3 flex-wrap">
+            <div
+              className={`w-3 h-3 rounded-full shrink-0 ${
+                data.gapScore < 20
+                  ? "bg-green-500"
+                  : data.gapScore <= 50
+                    ? "bg-amber-500"
+                    : "bg-red-500"
+              }`}
+            />
+            <span className="text-sm font-medium">ESG Gap Score</span>
+          </div>
+          <span
+            className={`text-2xl font-bold ${
+              data.gapScore < 20
+                ? "text-green-600 dark:text-green-400"
+                : data.gapScore <= 50
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-red-600 dark:text-red-400"
+            }`}
+            data-testid="text-gap-score-value"
+          >
+            {data.gapScore}
+          </span>
+        </Card>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">

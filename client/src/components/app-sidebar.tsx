@@ -32,6 +32,7 @@ const navItems = [
   { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
   { title: "Questionnaire", href: "/questionnaire", icon: FileQuestion, group: "ai" },
   { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
+  { title: "Answer Library", href: "/answer-library", icon: Bookmark, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
 ];
 
