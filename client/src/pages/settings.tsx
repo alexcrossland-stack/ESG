@@ -17,7 +17,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { Settings as SettingsIcon, Building2, Clock, Save, Library, FileText, ChevronRight, BarChart3, Target, AlertTriangle, Lock, Users } from "lucide-react";
+import {
+  Settings as SettingsIcon, Building2, Clock, Save, Library, FileText,
+  ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
+  Scale, Leaf, Palette, ClipboardCheck, Search,
+} from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 
@@ -45,7 +49,6 @@ export default function Settings() {
 
   const { data: authData, isLoading: authLoading } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: company, isLoading: companyLoading } = useQuery<any>({ queryKey: ["/api/company"] });
-  const { data: auditLogs = [], isLoading: logsLoading } = useQuery<any[]>({ queryKey: ["/api/audit-logs"] });
 
   const companyForm = useForm({
     defaultValues: {
@@ -91,156 +94,181 @@ export default function Settings() {
   const user = authData?.user;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-3xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
       <div>
         <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
           <SettingsIcon className="w-5 h-5 text-primary" />
           Settings
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Manage your company profile and account preferences
+          Manage your company profile, account, and platform configuration
         </p>
       </div>
 
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-primary" />
-            Company Details
-          </CardTitle>
-          <CardDescription className="text-xs">
-            This information is used in your ESG reports
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...companyForm}>
-            <form onSubmit={companyForm.handleSubmit(d => updateCompanyMutation.mutate(d))} className="space-y-4">
-              <FormField control={companyForm.control} name="name" render={({ field }) => (
-                <FormItem>
-                  <FormLabel className="text-xs">Company Name</FormLabel>
-                  <FormControl><Input {...field} data-testid="input-company-name" /></FormControl>
-                </FormItem>
-              )} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={companyForm.control} name="industry" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs">Industry</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </FormItem>
-                )} />
-                <FormField control={companyForm.control} name="country" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs">Country</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-country"><SelectValue placeholder="Select country" /></SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </FormItem>
-                )} />
-                <FormField control={companyForm.control} name="employeeCount" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs">Number of Employees</FormLabel>
-                    <FormControl><Input type="number" placeholder="e.g. 50" {...field} data-testid="input-employee-count" /></FormControl>
-                  </FormItem>
-                )} />
-                <FormField control={companyForm.control} name="revenueBand" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs">Revenue Band</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-revenue"><SelectValue placeholder="Select range" /></SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {REVENUE_BANDS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </FormItem>
-                )} />
-                <FormField control={companyForm.control} name="locations" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs">Number of Locations</FormLabel>
-                    <FormControl><Input type="number" min="1" placeholder="1" {...field} data-testid="input-locations" /></FormControl>
-                  </FormItem>
-                )} />
-              </div>
-              {can("settings_admin") && (
-                <div className="flex justify-end pt-2">
-                  <Button type="submit" size="sm" disabled={updateCompanyMutation.isPending} data-testid="button-save-company">
-                    <Save className="w-3.5 h-3.5 mr-1.5" />
-                    {updateCompanyMutation.isPending ? "Saving..." : "Save Details"}
-                  </Button>
-                </div>
-              )}
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="general" className="w-full">
+        <TabsList className={`w-full justify-start ${isAdmin ? "" : "hidden"}`}>
+          <TabsTrigger value="general" data-testid="tab-general">General</TabsTrigger>
+          {isAdmin && <TabsTrigger value="admin" data-testid="tab-admin">Administration</TabsTrigger>}
+        </TabsList>
 
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-sm">Account Information</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between py-2 border-b border-border">
-            <div>
-              <p className="text-sm font-medium" data-testid="text-username">{user?.username}</p>
-              <p className="text-xs text-muted-foreground">{user?.email}</p>
-            </div>
-            <Badge variant="secondary">{user?.role}</Badge>
-          </div>
-        </CardContent>
-      </Card>
-
-      <PasswordChangeCard />
-
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Clock className="w-4 h-4" />
-            Activity Log
-          </CardTitle>
-          <CardDescription className="text-xs">Recent changes in your ESG platform</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {logsLoading ? (
-            <Skeleton className="h-32" />
-          ) : auditLogs.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No activity recorded yet.</p>
-          ) : (
-            <div className="space-y-1 max-h-64 overflow-y-auto">
-              {auditLogs.map((log: any) => (
-                <div key={log.id} className="flex items-start gap-3 py-2 border-b border-border last:border-0 text-xs" data-testid={`log-${log.id}`}>
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium">{log.action}</p>
-                    {log.entityType && (
-                      <p className="text-muted-foreground capitalize">{log.entityType}</p>
-                    )}
+        <TabsContent value="general" className="space-y-5 mt-4">
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-primary" />
+                Company Details
+              </CardTitle>
+              <CardDescription className="text-xs">
+                This information is used in your ESG reports
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Form {...companyForm}>
+                <form onSubmit={companyForm.handleSubmit(d => updateCompanyMutation.mutate(d))} className="space-y-4">
+                  <FormField control={companyForm.control} name="name" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-xs">Company Name</FormLabel>
+                      <FormControl><Input {...field} data-testid="input-company-name" /></FormControl>
+                    </FormItem>
+                  )} />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <FormField control={companyForm.control} name="industry" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Industry</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )} />
+                    <FormField control={companyForm.control} name="country" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Country</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-country"><SelectValue placeholder="Select country" /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )} />
+                    <FormField control={companyForm.control} name="employeeCount" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Number of Employees</FormLabel>
+                        <FormControl><Input type="number" placeholder="e.g. 50" {...field} data-testid="input-employee-count" /></FormControl>
+                      </FormItem>
+                    )} />
+                    <FormField control={companyForm.control} name="revenueBand" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Revenue Band</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-revenue"><SelectValue placeholder="Select range" /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {REVENUE_BANDS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )} />
+                    <FormField control={companyForm.control} name="locations" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Number of Locations</FormLabel>
+                        <FormControl><Input type="number" min="1" placeholder="1" {...field} data-testid="input-locations" /></FormControl>
+                      </FormItem>
+                    )} />
                   </div>
-                  <p className="text-muted-foreground shrink-0">
-                    {log.createdAt ? format(new Date(log.createdAt), "dd MMM HH:mm") : ""}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  {can("settings_admin") && (
+                    <div className="flex justify-end pt-2">
+                      <Button type="submit" size="sm" disabled={updateCompanyMutation.isPending} data-testid="button-save-company">
+                        <Save className="w-3.5 h-3.5 mr-1.5" />
+                        {updateCompanyMutation.isPending ? "Saving..." : "Save Details"}
+                      </Button>
+                    </div>
+                  )}
+                </form>
+              </Form>
+            </CardContent>
+          </Card>
 
-      {isAdmin && <UserManagement />}
-      {isAdmin && <MetricsAdmin />}
-      {isAdmin && <AdminTemplateEditor />}
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-sm">Account Information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between py-2 border-b border-border">
+                <div>
+                  <p className="text-sm font-medium" data-testid="text-username">{user?.username}</p>
+                  <p className="text-xs text-muted-foreground">{user?.email}</p>
+                </div>
+                <Badge variant="secondary">{user?.role}</Badge>
+              </div>
+            </CardContent>
+          </Card>
+
+          <PasswordChangeCard />
+
+          <ActivityLogCard />
+        </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="admin" className="space-y-5 mt-4">
+            <AdminPanel />
+          </TabsContent>
+        )}
+      </Tabs>
+    </div>
+  );
+}
+
+function AdminPanel() {
+  const [section, setSection] = useState("users");
+
+  const sections = [
+    { key: "users", label: "Users & Roles", icon: Users },
+    { key: "modules", label: "Module Configuration", icon: ToggleLeft },
+    { key: "scoring", label: "Scoring Weights", icon: Scale },
+    { key: "metrics", label: "Metric Settings", icon: BarChart3 },
+    { key: "templates", label: "Policy Templates", icon: Library },
+    { key: "factors", label: "Emission Factors", icon: Leaf },
+    { key: "workflow", label: "Approval Workflow", icon: ClipboardCheck },
+    { key: "branding", label: "Report Branding", icon: Palette },
+    { key: "audit", label: "Audit Log", icon: Search },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1.5">
+        {sections.map(s => (
+          <Button
+            key={s.key}
+            variant={section === s.key ? "default" : "outline"}
+            size="sm"
+            className="text-xs h-8"
+            onClick={() => setSection(s.key)}
+            data-testid={`admin-section-${s.key}`}
+          >
+            <s.icon className="w-3.5 h-3.5 mr-1.5" />
+            {s.label}
+          </Button>
+        ))}
+      </div>
+
+      {section === "users" && <UserManagement />}
+      {section === "modules" && <ModuleConfiguration />}
+      {section === "scoring" && <ScoringWeights />}
+      {section === "metrics" && <MetricsAdmin />}
+      {section === "templates" && <PolicyTemplateAdmin />}
+      {section === "factors" && <EmissionFactorAdmin />}
+      {section === "workflow" && <WorkflowSettings />}
+      {section === "branding" && <ReportBranding />}
+      {section === "audit" && <AuditLogAdmin />}
     </div>
   );
 }
@@ -268,22 +296,30 @@ function UserManagement() {
   });
 
   const ROLES = [
-    { value: "admin", label: "Admin" },
-    { value: "contributor", label: "Contributor" },
-    { value: "approver", label: "Approver" },
-    { value: "viewer", label: "Viewer" },
+    { value: "admin", label: "Admin", desc: "Full access to all features and settings" },
+    { value: "contributor", label: "Contributor", desc: "Can enter data, edit policies, answer questionnaires" },
+    { value: "approver", label: "Approver", desc: "Can review submissions and generate reports" },
+    { value: "viewer", label: "Viewer", desc: "Read-only access across the platform" },
   ];
 
   return (
-    <Card>
+    <Card data-testid="card-admin-users">
       <CardHeader className="pb-4">
         <CardTitle className="text-sm flex items-center gap-2">
           <Users className="w-4 h-4" />
-          User Management
+          User & Role Management
         </CardTitle>
-        <CardDescription className="text-xs">Manage team members and their access levels</CardDescription>
+        <CardDescription className="text-xs">Assign roles to control what each team member can access</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {ROLES.map(r => (
+            <div key={r.value} className="border border-border rounded-md p-2">
+              <p className="text-xs font-medium capitalize">{r.label}</p>
+              <p className="text-[10px] text-muted-foreground">{r.desc}</p>
+            </div>
+          ))}
+        </div>
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : !users || users.length === 0 ? (
@@ -316,6 +352,985 @@ function UserManagement() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ModuleConfiguration() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<any>({
+    queryKey: ["/api/company/settings"],
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PUT", "/api/company/settings", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/settings"] });
+      toast({ title: "Module settings updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const modules = [
+    { key: "trackEnergy", label: "Energy & Emissions", desc: "Track electricity, gas, and fuel consumption" },
+    { key: "trackWaste", label: "Waste Management", desc: "Track waste generation, recycling, and landfill diversion" },
+    { key: "trackWater", label: "Water Usage", desc: "Track water consumption and efficiency" },
+    { key: "trackDiversity", label: "Diversity & Inclusion", desc: "Track workforce diversity and gender pay gap" },
+    { key: "trackTraining", label: "Training & Development", desc: "Track employee training hours and investment" },
+    { key: "trackHealthSafety", label: "Health & Safety", desc: "Track incidents, near-misses, and safety metrics" },
+    { key: "trackGovernance", label: "Governance", desc: "Track governance policies, whistleblowing, and compliance" },
+  ];
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  const handleToggle = (key: string, value: boolean) => {
+    updateMutation.mutate({ ...settings, [key]: value });
+  };
+
+  return (
+    <Card data-testid="card-admin-modules">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ToggleLeft className="w-4 h-4" />
+          Module Configuration
+        </CardTitle>
+        <CardDescription className="text-xs">Enable or disable ESG tracking modules for your company</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {modules.map(m => (
+            <div key={m.key} className="flex items-center justify-between py-2 px-3 border border-border rounded-md" data-testid={`module-row-${m.key}`}>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{m.label}</p>
+                <p className="text-xs text-muted-foreground">{m.desc}</p>
+              </div>
+              <Switch
+                checked={settings?.[m.key] ?? true}
+                onCheckedChange={(v) => handleToggle(m.key, v)}
+                disabled={updateMutation.isPending}
+                data-testid={`switch-module-${m.key}`}
+              />
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ScoringWeights() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: metrics = [] } = useQuery<any[]>({ queryKey: ["/api/metrics/all"] });
+
+  const categories = ["Environmental", "Social", "Governance"];
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, weight, importance }: { id: string; weight: string; importance: string }) => {
+      return apiRequest("PUT", `/api/metrics/${id}/admin`, { weight, importance });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      toast({ title: "Scoring weight updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const enabledMetrics = metrics.filter((m: any) => m.enabled !== false);
+  const grouped = categories.map(cat => ({
+    category: cat,
+    items: enabledMetrics.filter((m: any) => m.category?.toLowerCase() === cat.toLowerCase()),
+  }));
+
+  const totalWeight = enabledMetrics.reduce((sum: number, m: any) => sum + (parseFloat(m.weight) || 1), 0);
+
+  return (
+    <Card data-testid="card-admin-scoring">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Scale className="w-4 h-4" />
+          Scoring Weight Configuration
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Set weights and importance for each metric. Higher weights increase a metric's influence on the overall ESG score. Total weight across all metrics: {totalWeight.toFixed(1)}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {grouped.map(g => (
+            <div key={g.category}>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{g.category}</p>
+              <div className="space-y-1.5">
+                {g.items.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No metrics in this category.</p>
+                ) : g.items.map((m: any) => (
+                  <div key={m.id} className="flex items-center gap-3 py-1.5 px-2 border border-border rounded-md text-xs" data-testid={`scoring-metric-${m.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{m.name}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Label className="text-[10px] text-muted-foreground">Weight</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="10"
+                        className="w-16 h-7 text-xs"
+                        defaultValue={m.weight || "1"}
+                        onBlur={(e) => {
+                          const newWeight = e.target.value;
+                          if (newWeight !== String(m.weight || "1")) {
+                            updateMutation.mutate({ id: m.id, weight: newWeight, importance: m.importance || "standard" });
+                          }
+                        }}
+                        data-testid={`input-weight-${m.id}`}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Label className="text-[10px] text-muted-foreground">Priority</Label>
+                      <Select
+                        defaultValue={m.importance || "standard"}
+                        onValueChange={(v) => updateMutation.mutate({ id: m.id, weight: String(m.weight || "1"), importance: v })}
+                      >
+                        <SelectTrigger className="w-24 h-7 text-xs" data-testid={`select-importance-${m.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="critical">Critical</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="standard">Standard</SelectItem>
+                          <SelectItem value="low">Low</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MetricsAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [editingMetric, setEditingMetric] = useState<any | null>(null);
+
+  const { data: metrics = [] } = useQuery<any[]>({ queryKey: ["/api/metrics/all"] });
+
+  const [direction, setDirection] = useState("");
+  const [targetValue, setTargetValue] = useState("");
+  const [targetMin, setTargetMin] = useState("");
+  const [targetMax, setTargetMax] = useState("");
+  const [amberThreshold, setAmberThreshold] = useState("");
+  const [redThreshold, setRedThreshold] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [helpText, setHelpText] = useState("");
+  const [dataOwner, setDataOwner] = useState("");
+
+  const openEditor = (m: any) => {
+    setEditingMetric(m);
+    setDirection(m.direction || "higher_is_better");
+    setTargetValue(m.targetValue ? String(m.targetValue) : "");
+    setTargetMin(m.targetMin ? String(m.targetMin) : "");
+    setTargetMax(m.targetMax ? String(m.targetMax) : "");
+    setAmberThreshold(m.amberThreshold ? String(m.amberThreshold) : "5");
+    setRedThreshold(m.redThreshold ? String(m.redThreshold) : "15");
+    setEnabled(m.enabled !== false);
+    setHelpText(m.helpText || "");
+    setDataOwner(m.dataOwner || "");
+  };
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return apiRequest("PUT", `/api/metrics/${editingMetric.id}/admin`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      setEditingMetric(null);
+      toast({ title: "Metric settings updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const handleSave = () => {
+    updateMutation.mutate({
+      direction,
+      targetValue: targetValue || null,
+      targetMin: targetMin || null,
+      targetMax: targetMax || null,
+      amberThreshold: amberThreshold || "5",
+      redThreshold: redThreshold || "15",
+      enabled,
+      helpText,
+      dataOwner,
+    });
+  };
+
+  const enabledCount = metrics.filter((m: any) => m.enabled !== false).length;
+
+  return (
+    <>
+      <Card data-testid="card-admin-metrics">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            Metric Activation & Thresholds
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Enable/disable metrics, set targets, and configure traffic-light thresholds. {enabledCount} of {metrics.length} metrics active.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-1 max-h-96 overflow-y-auto">
+            {metrics.map((m: any) => (
+              <div
+                key={m.id}
+                className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer text-xs"
+                onClick={() => openEditor(m)}
+                data-testid={`admin-metric-${m.id}`}
+              >
+                <div className={`w-2 h-2 rounded-full shrink-0 ${m.enabled === false ? "bg-gray-300" : "bg-emerald-500"}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`font-medium truncate ${m.enabled === false ? "text-muted-foreground line-through" : ""}`}>{m.name}</p>
+                  <p className="text-muted-foreground">{m.category} · {m.metricType || "manual"} · {(m.direction || "higher_is_better").replace(/_/g, " ")}</p>
+                </div>
+                {m.enabled === false && <Badge variant="outline" className="text-[10px]">Disabled</Badge>}
+                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editingMetric} onOpenChange={(open) => !open && setEditingMetric(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Configure: {editingMetric?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Scoring Direction</Label>
+              <Select value={direction} onValueChange={setDirection}>
+                <SelectTrigger data-testid="select-direction"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="higher_is_better">Higher is better</SelectItem>
+                  <SelectItem value="lower_is_better">Lower is better</SelectItem>
+                  <SelectItem value="target_range">Target range</SelectItem>
+                  <SelectItem value="compliance_yes_no">Compliance (Yes/No)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {direction === "target_range" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Target Min</Label>
+                  <Input type="number" step="any" value={targetMin} onChange={e => setTargetMin(e.target.value)} data-testid="input-target-min" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Target Max</Label>
+                  <Input type="number" step="any" value={targetMax} onChange={e => setTargetMax(e.target.value)} data-testid="input-target-max" />
+                </div>
+              </div>
+            ) : direction !== "compliance_yes_no" ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Target Value ({editingMetric?.unit})</Label>
+                <Input type="number" step="any" value={targetValue} onChange={e => setTargetValue(e.target.value)} data-testid="input-target-value" />
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1">
+                  Amber Threshold
+                  <span className="text-muted-foreground">(% deviation)</span>
+                </Label>
+                <Input type="number" step="any" value={amberThreshold} onChange={e => setAmberThreshold(e.target.value)} data-testid="input-amber-threshold" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1">
+                  Red Threshold
+                  <span className="text-muted-foreground">(% deviation)</span>
+                </Label>
+                <Input type="number" step="any" value={redThreshold} onChange={e => setRedThreshold(e.target.value)} data-testid="input-red-threshold" />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Data Owner</Label>
+              <Input value={dataOwner} onChange={e => setDataOwner(e.target.value)} data-testid="input-data-owner" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Help Text</Label>
+              <Textarea value={helpText} onChange={e => setHelpText(e.target.value)} className="text-xs min-h-12 resize-none" data-testid="input-help-text" />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Metric Enabled</Label>
+              <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="switch-metric-enabled" />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setEditingMetric(null)}>Cancel</Button>
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-metric-admin">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {updateMutation.isPending ? "Saving..." : "Save Settings"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function PolicyTemplateAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [editSections, setEditSections] = useState<any[]>([]);
+  const [editReviewCycle, setEditReviewCycle] = useState("");
+  const [editCompliance, setEditCompliance] = useState<any>({});
+  const [editDescription, setEditDescription] = useState("");
+  const [editEnabled, setEditEnabled] = useState(true);
+
+  const { data: templates = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/policy-templates"],
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ slug, data }: { slug: string; data: any }) => {
+      const res = await apiRequest("PUT", `/api/policy-templates/${slug}/admin`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-templates"] });
+      setEditingSlug(null);
+      toast({ title: "Template updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ slug, enabled }: { slug: string; enabled: boolean }) => {
+      return apiRequest("PUT", `/api/policy-templates/${slug}/admin`, { enabled });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-templates"] });
+      toast({ title: "Template status updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  const openEditor = (t: any) => {
+    setEditSections(JSON.parse(JSON.stringify(t.sections)));
+    setEditReviewCycle(t.defaultReviewCycle || "annual");
+    setEditCompliance(JSON.parse(JSON.stringify(t.complianceMapping || {})));
+    setEditDescription(t.description || "");
+    setEditEnabled(t.enabled !== false);
+    setEditingSlug(t.slug);
+  };
+
+  const handleSectionChange = (index: number, field: string, value: string) => {
+    setEditSections(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    if (!editingSlug) return;
+    updateMutation.mutate({
+      slug: editingSlug,
+      data: {
+        sections: editSections,
+        defaultReviewCycle: editReviewCycle,
+        description: editDescription,
+        complianceMapping: editCompliance,
+        enabled: editEnabled,
+      },
+    });
+  };
+
+  const editingTemplate = templates.find((t: any) => t.slug === editingSlug);
+  const activeCount = templates.filter((t: any) => t.enabled !== false).length;
+
+  return (
+    <>
+      <Card data-testid="card-admin-templates">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Library className="w-4 h-4 text-primary" />
+            Policy Template Administration
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Activate/deactivate templates and edit clause text. {activeCount} of {templates.length} templates active.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <Skeleton className="h-32" />
+          ) : (
+            <div className="space-y-1 max-h-96 overflow-y-auto">
+              {templates.map((t: any) => (
+                <div
+                  key={t.slug}
+                  className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 text-xs"
+                  data-testid={`admin-template-${t.slug}`}
+                >
+                  <Switch
+                    checked={t.enabled !== false}
+                    onCheckedChange={(v) => toggleMutation.mutate({ slug: t.slug, enabled: v })}
+                    className="shrink-0"
+                    data-testid={`switch-template-${t.slug}`}
+                  />
+                  <div
+                    className="flex-1 min-w-0 cursor-pointer"
+                    onClick={() => openEditor(t)}
+                  >
+                    <p className={`font-medium truncate ${t.enabled === false ? "text-muted-foreground line-through" : ""}`}>{t.name}</p>
+                    <p className="text-muted-foreground">{t.category} · Review: {t.defaultReviewCycle}</p>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground cursor-pointer" onClick={() => openEditor(t)} />
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editingSlug} onOpenChange={(open) => !open && setEditingSlug(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Edit: {editingTemplate?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Template Active</Label>
+              <Switch checked={editEnabled} onCheckedChange={setEditEnabled} data-testid="switch-template-edit-enabled" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Template Description</Label>
+              <Textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                className="text-xs min-h-12 resize-none"
+                data-testid="admin-template-description"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Default Review Cycle</Label>
+                <Select value={editReviewCycle} onValueChange={setEditReviewCycle}>
+                  <SelectTrigger data-testid="select-review-cycle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="bi-annual">Bi-annual</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                    <SelectItem value="every-2-years">Every 2 years</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">ISO Standards (comma-separated)</Label>
+                <Input
+                  value={(editCompliance.isoStandards || []).join(", ")}
+                  onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, isoStandards: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
+                  className="text-xs"
+                  data-testid="admin-iso-standards"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Legal Drivers (comma-separated)</Label>
+              <Input
+                value={(editCompliance.legalDrivers || []).join(", ")}
+                onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, legalDrivers: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
+                className="text-xs"
+                data-testid="admin-legal-drivers"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-xs font-semibold">Section Clause Text & Prompt Hints</Label>
+              {editSections.map((section: any, i: number) => (
+                <Card key={section.key} className="p-3 space-y-2">
+                  <p className="text-xs font-medium">{section.label}</p>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Default Clause Text</Label>
+                    <Textarea
+                      value={section.defaultClauseText || ""}
+                      onChange={(e) => handleSectionChange(i, "defaultClauseText", e.target.value)}
+                      placeholder="Default clause text (used as fallback if generation is not available)"
+                      className="text-xs min-h-16 resize-none"
+                      data-testid={`admin-clause-${section.key}`}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Prompt Hint</Label>
+                    <Textarea
+                      value={section.aiPromptHint || ""}
+                      onChange={(e) => handleSectionChange(i, "aiPromptHint", e.target.value)}
+                      className="text-xs min-h-12 resize-none"
+                      data-testid={`admin-hint-${section.key}`}
+                    />
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setEditingSlug(null)}>Cancel</Button>
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-template-admin">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function EmissionFactorAdmin() {
+  const { data: factorSets = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/emission-factor-sets"],
+  });
+
+  const { data: settings, isLoading: settingsLoading } = useQuery<any>({
+    queryKey: ["/api/company/settings"],
+  });
+
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PUT", "/api/company/settings", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/settings"] });
+      toast({ title: "Emission factor set updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  if (isLoading || settingsLoading) return <Skeleton className="h-32" />;
+
+  const currentSet = settings?.emissionFactorSet || "UK_DEFRA_2024";
+
+  return (
+    <Card data-testid="card-admin-factors">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Leaf className="w-4 h-4" />
+          Emission Factor Version
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Select which emission factor dataset to use for carbon calculations
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          {factorSets.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No emission factor sets available.</p>
+          ) : factorSets.map((fs: any) => (
+            <div
+              key={fs.key}
+              className={`flex items-center justify-between py-3 px-3 border rounded-md cursor-pointer transition-colors ${
+                currentSet === fs.key ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+              }`}
+              onClick={() => updateMutation.mutate({ ...settings, emissionFactorSet: fs.key })}
+              data-testid={`factor-set-${fs.key}`}
+            >
+              <div>
+                <p className="text-sm font-medium">{fs.label}</p>
+                <p className="text-xs text-muted-foreground">{fs.count} factors · Year {fs.year}</p>
+              </div>
+              {currentSet === fs.key && (
+                <Badge variant="default" className="text-[10px]">Active</Badge>
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          Changing the emission factor set affects all future carbon calculations. Existing calculations retain the factor set used at the time of calculation.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WorkflowSettings() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<any>({
+    queryKey: ["/api/company/settings"],
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PUT", "/api/company/settings", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/settings"] });
+      toast({ title: "Workflow settings updated" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  const handleToggle = (key: string, value: boolean) => {
+    updateMutation.mutate({ ...settings, [key]: value });
+  };
+
+  const workflowItems = [
+    {
+      key: "requireApprovalMetrics",
+      label: "Require approval for metric data submissions",
+      desc: "When enabled, metric values submitted by contributors must be approved before they are included in reports and scoring.",
+    },
+    {
+      key: "requireApprovalReports",
+      label: "Require approval for generated reports",
+      desc: "When enabled, generated reports are marked as draft until reviewed and approved by an approver.",
+    },
+    {
+      key: "requireApprovalPolicies",
+      label: "Require approval for policy documents",
+      desc: "When enabled, generated policies must go through the review workflow before being finalised.",
+    },
+    {
+      key: "autoLockApproved",
+      label: "Auto-lock approved items",
+      desc: "When enabled, approved items are automatically locked to prevent further edits without re-submitting.",
+    },
+  ];
+
+  return (
+    <Card data-testid="card-admin-workflow">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ClipboardCheck className="w-4 h-4" />
+          Approval Workflow Settings
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Configure which items require formal approval before being finalised
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {workflowItems.map(w => (
+            <div key={w.key} className="flex items-start justify-between gap-4 py-2 px-3 border border-border rounded-md" data-testid={`workflow-row-${w.key}`}>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{w.label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+              </div>
+              <Switch
+                checked={settings?.[w.key] ?? (w.key === "requireApprovalMetrics" ? false : true)}
+                onCheckedChange={(v) => handleToggle(w.key, v)}
+                disabled={updateMutation.isPending}
+                className="shrink-0 mt-0.5"
+                data-testid={`switch-workflow-${w.key}`}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 p-3 bg-muted/50 rounded-md">
+          <p className="text-xs font-medium flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5" />
+            Workflow States
+          </p>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {["Draft", "Submitted", "Approved", "Rejected", "Archived"].map(s => (
+              <Badge key={s} variant="outline" className="text-[10px]">{s}</Badge>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1.5">
+            Items move through these states: Draft → Submitted → Approved/Rejected. Rejected items can be resubmitted. Approved items can be archived.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReportBranding() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<any>({
+    queryKey: ["/api/company/settings"],
+  });
+
+  const [brandName, setBrandName] = useState("");
+  const [brandTagline, setBrandTagline] = useState("");
+  const [brandColor, setBrandColor] = useState("#228B53");
+  const [brandFooter, setBrandFooter] = useState("");
+  const [initialized, setInitialized] = useState(false);
+
+  if (settings && !initialized) {
+    setBrandName(settings.reportBrandingName || "");
+    setBrandTagline(settings.reportBrandingTagline || "");
+    setBrandColor(settings.reportBrandingColor || "#228B53");
+    setBrandFooter(settings.reportBrandingFooter || "");
+    setInitialized(true);
+  }
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PUT", "/api/company/settings", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/settings"] });
+      toast({ title: "Report branding saved" });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  const handleSave = () => {
+    updateMutation.mutate({
+      ...settings,
+      reportBrandingName: brandName || null,
+      reportBrandingTagline: brandTagline || null,
+      reportBrandingColor: brandColor || null,
+      reportBrandingFooter: brandFooter || null,
+    });
+  };
+
+  return (
+    <Card data-testid="card-admin-branding">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Palette className="w-4 h-4" />
+          Report Branding
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Customise the appearance of generated ESG reports with your company branding
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Report Header Name</Label>
+            <Input
+              value={brandName}
+              onChange={e => setBrandName(e.target.value)}
+              placeholder="e.g. Acme Corp ESG Report"
+              data-testid="input-brand-name"
+            />
+            <p className="text-[10px] text-muted-foreground">Appears at the top of all generated reports</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Tagline / Subtitle</Label>
+            <Input
+              value={brandTagline}
+              onChange={e => setBrandTagline(e.target.value)}
+              placeholder="e.g. Committed to sustainable growth"
+              data-testid="input-brand-tagline"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Brand Colour</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={brandColor}
+                onChange={e => setBrandColor(e.target.value)}
+                className="w-8 h-8 rounded border border-border cursor-pointer"
+                data-testid="input-brand-color"
+              />
+              <Input
+                value={brandColor}
+                onChange={e => setBrandColor(e.target.value)}
+                className="flex-1"
+                placeholder="#228B53"
+                data-testid="input-brand-color-text"
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground">Used for report headers and accent elements</p>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-xs">Report Footer Text</Label>
+          <Textarea
+            value={brandFooter}
+            onChange={e => setBrandFooter(e.target.value)}
+            placeholder="e.g. Confidential — For internal use only. © 2025 Acme Corp."
+            className="text-xs min-h-16 resize-none"
+            data-testid="input-brand-footer"
+          />
+          <p className="text-[10px] text-muted-foreground">Appears at the bottom of each report page</p>
+        </div>
+
+        <div className="border border-border rounded-md p-4">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Preview</p>
+          <div className="border-l-4 pl-3" style={{ borderColor: brandColor }}>
+            <p className="text-sm font-semibold" style={{ color: brandColor }}>{brandName || "Company ESG Report"}</p>
+            {brandTagline && <p className="text-xs text-muted-foreground">{brandTagline}</p>}
+          </div>
+          {brandFooter && (
+            <div className="mt-3 pt-2 border-t border-border">
+              <p className="text-[10px] text-muted-foreground">{brandFooter}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-branding">
+            <Save className="w-3.5 h-3.5 mr-1.5" />
+            {updateMutation.isPending ? "Saving..." : "Save Branding"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuditLogAdmin() {
+  const [filter, setFilter] = useState("");
+  const { data: auditLogs = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/audit-logs"] });
+
+  const filtered = filter
+    ? auditLogs.filter((log: any) => {
+        const search = filter.toLowerCase();
+        return (
+          (log.action || "").toLowerCase().includes(search) ||
+          (log.entityType || "").toLowerCase().includes(search) ||
+          (log.performedBy || "").toLowerCase().includes(search)
+        );
+      })
+    : auditLogs;
+
+  const entityTypes = [...new Set(auditLogs.map((l: any) => l.entityType).filter(Boolean))];
+
+  return (
+    <Card data-testid="card-admin-audit">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Search className="w-4 h-4" />
+          Audit Log Review
+        </CardTitle>
+        <CardDescription className="text-xs">
+          {auditLogs.length} total events · {entityTypes.length} entity types tracked
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Input
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Filter by action, entity type, or user..."
+          className="text-xs"
+          data-testid="input-audit-filter"
+        />
+
+        {entityTypes.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            <Badge
+              variant={filter === "" ? "default" : "outline"}
+              className="text-[10px] cursor-pointer"
+              onClick={() => setFilter("")}
+            >
+              All
+            </Badge>
+            {entityTypes.map(et => (
+              <Badge
+                key={et}
+                variant={filter === et ? "default" : "outline"}
+                className="text-[10px] cursor-pointer capitalize"
+                onClick={() => setFilter(filter === et ? "" : et)}
+                data-testid={`badge-audit-${et}`}
+              >
+                {et}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {isLoading ? (
+          <Skeleton className="h-48" />
+        ) : filtered.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No matching audit log entries.</p>
+        ) : (
+          <div className="space-y-1 max-h-[500px] overflow-y-auto">
+            {filtered.map((log: any) => (
+              <div key={log.id} className="flex items-start gap-3 py-2 px-2 border-b border-border last:border-0 text-xs" data-testid={`audit-log-${log.id}`}>
+                <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{log.action}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    {log.entityType && <Badge variant="outline" className="text-[10px] capitalize">{log.entityType}</Badge>}
+                    {log.performedBy && <span className="text-muted-foreground">{log.performedBy}</span>}
+                  </div>
+                </div>
+                <p className="text-muted-foreground shrink-0">
+                  {log.createdAt ? format(new Date(log.createdAt), "dd MMM yyyy HH:mm") : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActivityLogCard() {
+  const { data: auditLogs = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/audit-logs"] });
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Clock className="w-4 h-4" />
+          Activity Log
+        </CardTitle>
+        <CardDescription className="text-xs">Recent changes in your ESG platform</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-32" />
+        ) : auditLogs.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No activity recorded yet.</p>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {auditLogs.slice(0, 20).map((log: any) => (
+              <div key={log.id} className="flex items-start gap-3 py-2 border-b border-border last:border-0 text-xs" data-testid={`log-${log.id}`}>
+                <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{log.action}</p>
+                  {log.entityType && (
+                    <p className="text-muted-foreground capitalize">{log.entityType}</p>
+                  )}
+                </div>
+                <p className="text-muted-foreground shrink-0">
+                  {log.createdAt ? format(new Date(log.createdAt), "dd MMM HH:mm") : ""}
+                </p>
               </div>
             ))}
           </div>
@@ -410,370 +1425,5 @@ function PasswordChangeCard() {
         </form>
       </CardContent>
     </Card>
-  );
-}
-
-function MetricsAdmin() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [editingMetric, setEditingMetric] = useState<any | null>(null);
-
-  const { data: enhanced } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced"] });
-  const metrics = enhanced?.metricSummaries || [];
-
-  const [direction, setDirection] = useState("");
-  const [targetValue, setTargetValue] = useState("");
-  const [targetMin, setTargetMin] = useState("");
-  const [targetMax, setTargetMax] = useState("");
-  const [amberThreshold, setAmberThreshold] = useState("");
-  const [redThreshold, setRedThreshold] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [helpText, setHelpText] = useState("");
-  const [dataOwner, setDataOwner] = useState("");
-
-  const openEditor = (m: any) => {
-    setEditingMetric(m);
-    setDirection(m.direction || "higher_is_better");
-    setTargetValue(m.target ? String(m.target) : "");
-    setTargetMin(m.targetMin ? String(m.targetMin) : "");
-    setTargetMax(m.targetMax ? String(m.targetMax) : "");
-    setAmberThreshold("5");
-    setRedThreshold("15");
-    setEnabled(true);
-    setHelpText(m.helpText || "");
-    setDataOwner(m.dataOwner || "");
-  };
-
-  const updateMutation = useMutation({
-    mutationFn: async (data: any) => {
-      return apiRequest("PUT", `/api/metrics/${editingMetric.id}/admin`, data);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      setEditingMetric(null);
-      toast({ title: "Metric settings updated" });
-    },
-    onError: () => toast({ title: "Update failed", variant: "destructive" }),
-  });
-
-  const handleSave = () => {
-    updateMutation.mutate({
-      direction,
-      targetValue: targetValue || null,
-      targetMin: targetMin || null,
-      targetMax: targetMax || null,
-      amberThreshold: amberThreshold || "5",
-      redThreshold: redThreshold || "15",
-      enabled,
-      helpText,
-      dataOwner,
-    });
-  };
-
-  const statusColors: Record<string, string> = {
-    green: "bg-emerald-500",
-    amber: "bg-amber-500",
-    red: "bg-red-500",
-    missing: "bg-gray-300",
-  };
-
-  return (
-    <>
-      <Card data-testid="card-admin-metrics">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-primary" />
-            Metric Configuration
-          </CardTitle>
-          <CardDescription className="text-xs">
-            Configure targets, thresholds, and scoring for each metric
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-1 max-h-72 overflow-y-auto">
-            {metrics.map((m: any) => (
-              <div
-                key={m.id}
-                className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer text-xs"
-                onClick={() => openEditor(m)}
-                data-testid={`admin-metric-${m.id}`}
-              >
-                <div className={`w-2 h-2 rounded-full shrink-0 ${statusColors[m.status] || statusColors.missing}`} />
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{m.name}</p>
-                  <p className="text-muted-foreground">{m.category} · {m.metricType} · {m.direction?.replace(/_/g, " ")}</p>
-                </div>
-                <span className="text-muted-foreground">{m.latestValue !== null ? `${m.latestValue} ${m.unit || ""}` : "—"}</span>
-                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Dialog open={!!editingMetric} onOpenChange={(open) => !open && setEditingMetric(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Configure: {editingMetric?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Scoring Direction</Label>
-              <Select value={direction} onValueChange={setDirection}>
-                <SelectTrigger data-testid="select-direction"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="higher_is_better">Higher is better</SelectItem>
-                  <SelectItem value="lower_is_better">Lower is better</SelectItem>
-                  <SelectItem value="target_range">Target range</SelectItem>
-                  <SelectItem value="compliance_yes_no">Compliance (Yes/No)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {direction === "target_range" ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Target Min</Label>
-                  <Input type="number" step="any" value={targetMin} onChange={e => setTargetMin(e.target.value)} data-testid="input-target-min" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Target Max</Label>
-                  <Input type="number" step="any" value={targetMax} onChange={e => setTargetMax(e.target.value)} data-testid="input-target-max" />
-                </div>
-              </div>
-            ) : direction !== "compliance_yes_no" ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs">Target Value ({editingMetric?.unit})</Label>
-                <Input type="number" step="any" value={targetValue} onChange={e => setTargetValue(e.target.value)} data-testid="input-target-value" />
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs flex items-center gap-1">
-                  Amber Threshold
-                  <span className="text-muted-foreground">(% deviation)</span>
-                </Label>
-                <Input type="number" step="any" value={amberThreshold} onChange={e => setAmberThreshold(e.target.value)} data-testid="input-amber-threshold" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs flex items-center gap-1">
-                  Red Threshold
-                  <span className="text-muted-foreground">(% deviation)</span>
-                </Label>
-                <Input type="number" step="any" value={redThreshold} onChange={e => setRedThreshold(e.target.value)} data-testid="input-red-threshold" />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs">Data Owner</Label>
-              <Input value={dataOwner} onChange={e => setDataOwner(e.target.value)} data-testid="input-data-owner" />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs">Help Text</Label>
-              <Textarea value={helpText} onChange={e => setHelpText(e.target.value)} className="text-xs min-h-12 resize-none" data-testid="input-help-text" />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Metric Enabled</Label>
-              <Switch checked={enabled} onCheckedChange={setEnabled} data-testid="switch-metric-enabled" />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => setEditingMetric(null)}>Cancel</Button>
-              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-metric-admin">
-                <Save className="w-3.5 h-3.5 mr-1.5" />
-                {updateMutation.isPending ? "Saving..." : "Save Settings"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-function AdminTemplateEditor() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [editingSlug, setEditingSlug] = useState<string | null>(null);
-  const [editSections, setEditSections] = useState<any[]>([]);
-  const [editReviewCycle, setEditReviewCycle] = useState("");
-  const [editCompliance, setEditCompliance] = useState<any>({});
-  const [editDescription, setEditDescription] = useState("");
-
-  const { data: templates = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/policy-templates"],
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: async ({ slug, data }: { slug: string; data: any }) => {
-      const res = await apiRequest("PUT", `/api/policy-templates/${slug}/admin`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/policy-templates"] });
-      setEditingSlug(null);
-      toast({ title: "Template updated" });
-    },
-    onError: () => toast({ title: "Update failed", variant: "destructive" }),
-  });
-
-  const openEditor = (t: any) => {
-    setEditSections(JSON.parse(JSON.stringify(t.sections)));
-    setEditReviewCycle(t.defaultReviewCycle || "annual");
-    setEditCompliance(JSON.parse(JSON.stringify(t.complianceMapping || {})));
-    setEditDescription(t.description || "");
-    setEditingSlug(t.slug);
-  };
-
-  const handleSectionChange = (index: number, field: string, value: string) => {
-    setEditSections(prev => {
-      const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
-      return next;
-    });
-  };
-
-  const handleSave = () => {
-    if (!editingSlug) return;
-    updateMutation.mutate({
-      slug: editingSlug,
-      data: { sections: editSections, defaultReviewCycle: editReviewCycle, description: editDescription, complianceMapping: editCompliance },
-    });
-  };
-
-  const editingTemplate = templates.find((t: any) => t.slug === editingSlug);
-
-  return (
-    <>
-      <Card data-testid="card-admin-templates">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Library className="w-4 h-4 text-primary" />
-            Policy Template Admin
-          </CardTitle>
-          <CardDescription className="text-xs">
-            Edit clause text, review cycles, and legal references for policy templates
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-32" />
-          ) : (
-            <div className="space-y-1 max-h-72 overflow-y-auto">
-              {templates.map((t: any) => (
-                <div
-                  key={t.slug}
-                  className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-muted/50 cursor-pointer text-xs"
-                  onClick={() => openEditor(t)}
-                  data-testid={`admin-template-${t.slug}`}
-                >
-                  <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{t.name}</p>
-                    <p className="text-muted-foreground">{t.category} · Review: {t.defaultReviewCycle}</p>
-                  </div>
-                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Dialog open={!!editingSlug} onOpenChange={(open) => !open && setEditingSlug(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Edit: {editingTemplate?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Template Description</Label>
-              <Textarea
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-                className="text-xs min-h-12 resize-none"
-                data-testid="admin-template-description"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">Default Review Cycle</Label>
-                <Select value={editReviewCycle} onValueChange={setEditReviewCycle}>
-                  <SelectTrigger data-testid="select-review-cycle">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="bi-annual">Bi-annual</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
-                    <SelectItem value="every-2-years">Every 2 years</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">ISO Standards (comma-separated)</Label>
-                <Input
-                  value={(editCompliance.isoStandards || []).join(", ")}
-                  onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, isoStandards: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
-                  className="text-xs"
-                  data-testid="admin-iso-standards"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs">Legal Drivers (comma-separated)</Label>
-              <Input
-                value={(editCompliance.legalDrivers || []).join(", ")}
-                onChange={(e) => setEditCompliance((prev: any) => ({ ...prev, legalDrivers: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) }))}
-                className="text-xs"
-                data-testid="admin-legal-drivers"
-              />
-            </div>
-
-            <div className="space-y-3">
-              <Label className="text-xs font-semibold">Section Clause Text & Prompt Hints</Label>
-              {editSections.map((section: any, i: number) => (
-                <Card key={section.key} className="p-3 space-y-2">
-                  <p className="text-xs font-medium">{section.label}</p>
-                  <div className="space-y-1">
-                    <Label className="text-[10px] text-muted-foreground">Default Clause Text</Label>
-                    <Textarea
-                      value={section.defaultClauseText || ""}
-                      onChange={(e) => handleSectionChange(i, "defaultClauseText", e.target.value)}
-                      placeholder="Default clause text (used as fallback if generation is not available)"
-                      className="text-xs min-h-16 resize-none"
-                      data-testid={`admin-clause-${section.key}`}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[10px] text-muted-foreground">Prompt Hint</Label>
-                    <Textarea
-                      value={section.aiPromptHint || ""}
-                      onChange={(e) => handleSectionChange(i, "aiPromptHint", e.target.value)}
-                      className="text-xs min-h-12 resize-none"
-                      data-testid={`admin-hint-${section.key}`}
-                    />
-                  </div>
-                </Card>
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => setEditingSlug(null)}>Cancel</Button>
-              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-template-admin">
-                <Save className="w-3.5 h-3.5 mr-1.5" />
-                {updateMutation.isPending ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }

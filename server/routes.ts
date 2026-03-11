@@ -1361,13 +1361,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Admin metric update
+  app.get("/api/metrics/all", requireAuth, requirePermission("template_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const allMetrics = await storage.getMetrics(companyId);
+      res.json(allMetrics);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.put("/api/metrics/:id/admin", requireAuth, requirePermission("template_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner } = req.body;
+      const allMetrics = await storage.getMetrics(companyId);
+      const metricBelongs = allMetrics.find((m: any) => m.id === req.params.id);
+      if (!metricBelongs) return res.status(403).json({ error: "Metric does not belong to your company" });
+      const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner, weight, importance } = req.body;
       const result = await storage.updateMetric(req.params.id, {
-        direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner,
+        direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner, weight, importance,
       });
       await storage.createAuditLog({
         companyId, userId,
@@ -1461,6 +1474,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           id: metric.id, name: metric.name, category: cat, unit: metric.unit,
           metricType: metric.metricType, direction: metric.direction,
           weight: metricWeight, importance: metricImportance,
+          enabled: metric.enabled, dataOwner: metric.dataOwner,
+          amberThreshold: metric.amberThreshold, redThreshold: metric.redThreshold,
+          targetMin: metric.targetMin, targetMax: metric.targetMax,
           latestValue: val, previousValue: prev, status, trend,
           percentChange: prev && prev !== 0 ? Math.round(((val - prev) / Math.abs(prev)) * 10000) / 100 : null,
           target: metric.targetValue ? Number(metric.targetValue) : null,
@@ -1716,12 +1732,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         categories: [...new Set(emissionFactors.map((f: any) => f.category))],
       };
 
+      const companySettings = await storage.getCompanySettings(companyId);
+      const branding = companySettings ? {
+        name: companySettings.reportBrandingName || null,
+        tagline: companySettings.reportBrandingTagline || null,
+        color: companySettings.reportBrandingColor || null,
+        footer: companySettings.reportBrandingFooter || null,
+      } : null;
+
       const reportData = {
         generatedAt: new Date().toISOString(),
         generatedBy: generatingUser?.username || userId,
         reportTemplate: reportTemplate || "management",
         period,
         company,
+        branding,
         policySummary,
         selectedTopics,
         metricsByCategory,
@@ -1766,7 +1791,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/audit-logs", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
     const logs = await storage.getAuditLogs(companyId);
-    res.json(logs);
+    const users = await storage.getUsersByCompany(companyId);
+    const userMap = new Map(users.map(u => [u.id, u.username]));
+    const enriched = logs.map(log => ({
+      ...log,
+      performedBy: log.userId ? userMap.get(log.userId) || null : null,
+    }));
+    res.json(enriched);
   });
 
   // ===== AI POLICY GENERATOR =====
@@ -2191,6 +2222,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const template = await storage.getPolicyTemplate(req.params.slug);
       if (!template) return res.status(404).json({ error: "Template not found" });
+      if (template.enabled === false) return res.status(400).json({ error: "This template has been deactivated by your administrator" });
 
       const prompt = buildTemplatePrompt(template, answers);
       const completion = await openai.chat.completions.create({
@@ -2309,6 +2341,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const updated = await storage.updatePolicyTemplate(req.params.slug, req.body);
       if (!updated) return res.status(404).json({ error: "Template not found" });
       res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/emission-factor-sets", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const factors = await db.select({
+        factorYear: emissionFactorsTable.factorYear,
+        sourceLabel: emissionFactorsTable.sourceLabel,
+      }).from(emissionFactorsTable);
+      const setMap = new Map<string, { key: string; label: string; year: number; count: number }>();
+      for (const f of factors) {
+        const key = `UK_DEFRA_${f.factorYear}`;
+        if (!setMap.has(key)) {
+          setMap.set(key, { key, label: f.sourceLabel || `DEFRA ${f.factorYear}`, year: f.factorYear || 2024, count: 0 });
+        }
+        setMap.get(key)!.count++;
+      }
+      res.json(Array.from(setMap.values()));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

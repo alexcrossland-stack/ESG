@@ -60,6 +60,15 @@ export const companySettings = pgTable("company_settings", {
   trackTraining: boolean("track_training").default(true),
   trackHealthSafety: boolean("track_health_safety").default(true),
   trackGovernance: boolean("track_governance").default(true),
+  requireApprovalMetrics: boolean("require_approval_metrics").default(false),
+  requireApprovalReports: boolean("require_approval_reports").default(true),
+  requireApprovalPolicies: boolean("require_approval_policies").default(true),
+  autoLockApproved: boolean("auto_lock_approved").default(true),
+  reportBrandingName: text("report_branding_name"),
+  reportBrandingTagline: text("report_branding_tagline"),
+  reportBrandingColor: text("report_branding_color"),
+  reportBrandingFooter: text("report_branding_footer"),
+  emissionFactorSet: text("emission_factor_set").default("UK_DEFRA_2024"),
 });
 
 export const esgPolicies = pgTable("esg_policies", {
@@ -343,6 +352,7 @@ export const policyTemplates = pgTable("policy_templates", {
   complianceMapping: jsonb("compliance_mapping"),
   defaultReviewCycle: text("default_review_cycle").default("annual"),
   isSystem: boolean("is_system").default(true),
+  enabled: boolean("enabled").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

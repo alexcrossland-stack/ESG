@@ -8,6 +8,21 @@ The ESG Manager is a SaaS web application designed for Small and Medium-sized En
 
 No explicit user preferences were provided in the original `replit.md` file. The agent should infer best practices for coding and communication based on the project's nature (production-style SaaS application).
 
+## Admin Controls (Settings → Administration tab)
+
+The admin panel is organized into 9 sections accessible via button bar:
+1. **Users & Roles** — Assign admin/contributor/approver/viewer roles
+2. **Module Configuration** — Enable/disable 7 ESG tracking modules per company (stored in company_settings)
+3. **Scoring Weights** — Set weight (0-10) and importance (critical/high/standard/low) per metric
+4. **Metric Settings** — Enable/disable individual metrics, set targets, thresholds, scoring direction, data owner
+5. **Policy Templates** — Activate/deactivate templates with inline toggle + full editor dialog
+6. **Emission Factors** — Select which emission factor dataset version to use for carbon calculations
+7. **Approval Workflow** — Toggle approval requirements for metrics/reports/policies, auto-lock approved items
+8. **Report Branding** — Custom report header name, tagline, brand colour, footer text (with live preview)
+9. **Audit Log** — Searchable/filterable audit log with entity type badges
+
+New DB columns on company_settings: require_approval_metrics, require_approval_reports, require_approval_policies, auto_lock_approved, report_branding_name, report_branding_tagline, report_branding_color, report_branding_footer, emission_factor_set. Policy templates gained an `enabled` column.
+
 ## System Architecture
 
 The application is a full-stack SaaS web application.

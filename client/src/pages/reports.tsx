@@ -83,19 +83,24 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
     company, policySummary, selectedTopics, metricsByCategory, values,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
     evidenceCoverage, factorMethodology, period, generatedAt, generatedBy, reportTemplate,
+    branding,
   } = data;
 
   const templateLabel = REPORT_TEMPLATES.find(t => t.id === reportTemplate)?.label || "ESG Report";
+  const brandColor = branding?.color || undefined;
 
   return (
     <div className="bg-white dark:bg-card border border-border rounded-md p-8 space-y-6 text-sm max-h-[700px] overflow-y-auto" data-testid="report-preview">
       <div className="text-center space-y-1 pb-4 border-b border-border">
         <div className="flex items-center justify-center gap-2 mb-3">
-          <div className="p-2 rounded-lg bg-primary">
-            <Leaf className="w-5 h-5 text-primary-foreground" />
+          <div className="p-2 rounded-lg" style={{ backgroundColor: brandColor || "hsl(var(--primary))" }}>
+            <Leaf className="w-5 h-5 text-white" />
           </div>
         </div>
-        <h1 className="text-xl font-bold" data-testid="text-report-title">{company?.name}</h1>
+        <h1 className="text-xl font-bold" data-testid="text-report-title" style={brandColor ? { color: brandColor } : undefined}>
+          {branding?.name || company?.name}
+        </h1>
+        {branding?.tagline && <p className="text-muted-foreground text-xs italic">{branding.tagline}</p>}
         <p className="text-muted-foreground font-medium">{templateLabel}</p>
         <p className="text-xs text-muted-foreground">Reporting Period: {period}</p>
         <p className="text-xs text-muted-foreground">Generated {generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy 'at' HH:mm") : ""} by {generatedBy}</p>
@@ -550,6 +555,12 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         </div>
       )}
 
+      {branding?.footer && (
+        <div className="pt-3 border-t border-border text-center text-xs text-muted-foreground">
+          <p>{branding.footer}</p>
+        </div>
+      )}
+
       <div className="pt-4 border-t border-border text-center text-xs text-muted-foreground space-y-1" data-testid="text-disclaimer">
         <p>This report was generated using ESG Manager. Data is provided by {company?.name}.</p>
         <p>Emission factors: {factorMethodology?.source || "UK DEFRA"} {factorMethodology?.factorYear || "2024"}. All data should be independently verified before external disclosure.</p>
@@ -563,6 +574,7 @@ function buildTextExport(data: any, sections: Record<string, boolean>): string {
     company, policySummary, metricsByCategory, values,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
     evidenceCoverage, factorMethodology, period, generatedAt, generatedBy, reportTemplate,
+    branding,
   } = data;
 
   const templateLabel = REPORT_TEMPLATES.find(t => t.id === reportTemplate)?.label || "ESG Report";
@@ -571,7 +583,8 @@ function buildTextExport(data: any, sections: Record<string, boolean>): string {
   const sr = "-".repeat(40);
 
   lines.push(hr);
-  lines.push(`${company?.name} - ${templateLabel}`);
+  lines.push(branding?.name || `${company?.name} - ${templateLabel}`);
+  if (branding?.tagline) lines.push(branding.tagline);
   lines.push(`Reporting Period: ${period}`);
   lines.push(`Generated: ${generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy HH:mm") : ""} by ${generatedBy}`);
   lines.push(`Factor Year: ${factorMethodology?.factorYear || "2024"} | Source: ${factorMethodology?.source || "UK DEFRA"}`);
@@ -725,6 +738,11 @@ function buildTextExport(data: any, sections: Record<string, boolean>): string {
     lines.push("");
     lines.push(`Data Quality: ${dataQualityFlags?.approvalRate || 0}% approved, ${dataQualityFlags?.evidenceRate || 0}% evidenced, ${dataQualityFlags?.missingCount || 0} missing.`);
     if (dataQualityFlags?.estimatedCount > 0) lines.push(`Note: ${dataQualityFlags.estimatedCount} values are based on estimated data.`);
+    lines.push("");
+  }
+
+  if (branding?.footer) {
+    lines.push(branding.footer);
     lines.push("");
   }
 
