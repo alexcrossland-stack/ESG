@@ -3755,12 +3755,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const valid = allEvidence.filter((e: any) => !e.expiryDate || new Date(e.expiryDate) > new Date());
       const scored = valid.map((e: any) => {
         let relevance = 0;
+        const eStatus = e.evidenceStatus || e.status;
         if (metricId && (e.linkedEntityId === metricId || e.linkedModule === "metric_value")) relevance = 50;
         else if (policySection && e.linkedModule === "policy") relevance = 40;
         else if (complianceReqId && e.linkedModule === "compliance") relevance = 30;
         else if (category && e.linkedModule === category) relevance = 20;
-        else if (e.status === "approved") relevance = 10;
-        if (e.status === "approved") relevance += 5;
+        else if (eStatus === "approved") relevance = 10;
+        if (eStatus === "approved") relevance += 5;
         return { ...e, relevance };
       });
       scored.sort((a: any, b: any) => b.relevance - a.relevance);
