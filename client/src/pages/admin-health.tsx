@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Activity, Server, AlertTriangle, CheckCircle, XCircle,
   Clock, FileText, RefreshCw, Database, Gauge, TrendingUp,
-  Zap, HardDrive,
+  Zap, HardDrive, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -76,6 +76,7 @@ function PerfBar({ label, value, max, unit = "ms" }: { label: string; value: num
 
 export default function AdminHealthPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [severityFilter, setSeverityFilter] = useState<string>("all");
 
   const { data: health, isLoading: loadingHealth } = useQuery<any>({
     queryKey: ["/api/admin/health"],
@@ -97,6 +98,16 @@ export default function AdminHealthPage() {
     refetchInterval: 60000,
   });
 
+  const { data: eventCounts } = useQuery<any>({
+    queryKey: ["/api/admin/health/counts"],
+    refetchInterval: 60000,
+  });
+
+  const { data: securityAudit, isLoading: loadingSecurity, refetch: refetchSecurity } = useQuery<any>({
+    queryKey: ["/api/admin/security-audit"],
+    staleTime: 5 * 60 * 1000,
+  });
+
   if (loadingHealth) {
     return (
       <div className="p-6 space-y-4">
@@ -113,6 +124,7 @@ export default function AdminHealthPage() {
   const reportStatus = health?.reportFailures?.count24h === 0 ? "green" : "red";
 
   const filteredJobs = statusFilter === "all" ? (jobs || []) : (jobs || []).filter(j => j.status === statusFilter);
+  const filteredEvents = severityFilter === "all" ? (events || []) : (events || []).filter(e => e.severity === severityFilter);
 
   const uptimeHours = health?.uptime ? Math.floor(health.uptime / 3600000) : 0;
   const uptimeMinutes = health?.uptime ? Math.floor((health.uptime % 3600000) / 60000) : 0;
@@ -120,6 +132,9 @@ export default function AdminHealthPage() {
   const dbStats = perfData?.database;
   const tableStats = perfData?.tables || [];
   const indexCount = perfData?.indexCount || 0;
+
+  const errorCount24h = eventCounts?.bySeverity?.error || 0;
+  const errorStatus: "green" | "amber" | "red" = errorCount24h === 0 ? "green" : errorCount24h < 10 ? "amber" : "red";
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -131,30 +146,65 @@ export default function AdminHealthPage() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatusCard title="Scheduler" icon={Server} status={schedulerStatus} value={`${health?.backgroundJobs?.completed24h || 0} completed`} subtitle={`${health?.backgroundJobs?.failed24h || 0} failed (24h)`} />
         <StatusCard title="API Errors" icon={AlertTriangle} status={apiStatus} value={`${health?.apiErrors?.count24h || 0}`} subtitle="errors in last 24h" />
-        <StatusCard title="Reports" icon={FileText} status={reportStatus} value={`${health?.reportFailures?.count24h || 0} failures`} subtitle="in last 24h" />
+        <StatusCard title="Error Events" icon={AlertTriangle} status={errorStatus} value={`${errorCount24h}`} subtitle="health error events (24h)" />
         <StatusCard title="Uptime" icon={Activity} status="green" value={`${uptimeHours}h ${uptimeMinutes}m`} subtitle="since last restart" />
       </div>
+
+      {eventCounts && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Event Breakdown (24h)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2" data-testid="event-counts">
+              {Object.entries(eventCounts.byType || {}).map(([type, count]) => (
+                <div key={type} className="flex items-center gap-1.5 text-xs bg-muted rounded-lg px-2.5 py-1">
+                  <span className="text-muted-foreground capitalize">{type.replace(/_/g, " ")}</span>
+                  <span className="font-semibold">{count as number}</span>
+                </div>
+              ))}
+              {Object.keys(eventCounts.byType || {}).length === 0 && (
+                <p className="text-xs text-muted-foreground">No health events in the last 24 hours</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="events" className="space-y-4">
         <TabsList data-testid="health-tabs">
           <TabsTrigger value="events" data-testid="tab-events">Health Events</TabsTrigger>
           <TabsTrigger value="jobs" data-testid="tab-jobs">Background Jobs</TabsTrigger>
           <TabsTrigger value="performance" data-testid="tab-performance">Performance</TabsTrigger>
+          <TabsTrigger value="security" data-testid="tab-security">Security Audit</TabsTrigger>
         </TabsList>
 
         <TabsContent value="events">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Recent Health Events</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">Recent Health Events</CardTitle>
+                <Select value={severityFilter} onValueChange={setSeverityFilter}>
+                  <SelectTrigger className="w-32 h-8 text-xs" data-testid="select-severity-filter">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All severities</SelectItem>
+                    <SelectItem value="error">Error</SelectItem>
+                    <SelectItem value="warning">Warning</SelectItem>
+                    <SelectItem value="info">Info</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
               {loadingEvents ? (
                 <Skeleton className="h-32" />
-              ) : (events || []).length === 0 ? (
+              ) : filteredEvents.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No health events recorded</p>
               ) : (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {(events || []).slice(0, 20).map((e: any) => (
+                  {filteredEvents.slice(0, 50).map((e: any) => (
                     <div key={e.id} className="flex items-start gap-3 p-2 rounded-lg border text-sm" data-testid={`event-${e.id}`}>
                       <SeverityBadge severity={e.severity} />
                       <div className="flex-1 min-w-0">
@@ -302,6 +352,60 @@ export default function AdminHealthPage() {
                   </ul>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="security">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  Security Configuration Audit
+                </CardTitle>
+                <button
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => refetchSecurity()}
+                  data-testid="button-refresh-security"
+                >
+                  Refresh
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loadingSecurity ? (
+                <Skeleton className="h-48" />
+              ) : securityAudit ? (
+                <div className="space-y-3" data-testid="security-audit-results">
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="text-muted-foreground text-xs">Generated {new Date(securityAudit.generatedAt).toLocaleString()}</span>
+                    <Badge variant={securityAudit.summary.failed > 0 ? "destructive" : "default"} className="ml-auto">
+                      {securityAudit.summary.passed}/{securityAudit.summary.total} passed
+                    </Badge>
+                  </div>
+                  <div className="space-y-2">
+                    {securityAudit.checks.map((check: any, i: number) => (
+                      <div key={i} className="flex items-start gap-3 p-2.5 rounded-lg border text-sm" data-testid={`security-check-${i}`}>
+                        {check.pass ? (
+                          <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                        ) : (
+                          <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-xs">{check.check}</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">{check.detail}</p>
+                        </div>
+                        <Badge variant={check.pass ? "outline" : "destructive"} className="text-[10px] shrink-0">
+                          {check.pass ? "Pass" : "Fail"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-4">Security audit unavailable</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

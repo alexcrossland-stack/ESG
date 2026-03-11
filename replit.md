@@ -87,6 +87,19 @@ The application is a full-stack SaaS web application.
 - **Policy Templates:** 28 structured templates with guided drafting.
 - **Calculation Engine:** Centralized service for 12 automated ESG metric calculations using database emission factors.
 
+- **Phase 7 — Launch Readiness:**
+    - **Security Hardening** (`server/index.ts`): Helmet.js with production CSP (disabled in dev for Vite HMR), CORS restricted to REPLIT_DOMAINS in production, 2MB body size limit, startup validation for DATABASE_URL/SESSION_SECRET, slow route health events (>2s threshold), 5xx error handler logs health events.
+    - **Email Service** (`server/email.ts`): Resend integration with graceful fallback if API key absent. `generateSecureToken()` returns `{plaintext, hash}`. 5 HTML email templates: invitation, password reset, report ready, support confirmation, evidence expiry. Support confirmation emails sent on ticket creation.
+    - **Password Reset Flow**: `POST /api/auth/forgot-password` and `POST /api/auth/reset-password` routes. Token stored as SHA-256 hash in `auth_tokens` table with 1-hour expiry. Auth page shows forgot-password form and "Check your inbox" confirmation. Reset link shows new password form.
+    - **Stripe Billing** (`client/src/pages/billing.tsx`): Billing page with Free vs Pro plan cards. `POST /api/billing/create-checkout` creates Stripe Checkout session. `POST /api/billing/webhook` verifies Stripe signatures and handles checkout.session.completed, invoice.payment_succeeded, invoice.payment_failed, customer.subscription.deleted events. `GET /api/billing/status` returns current plan tier. Cancel subscription endpoint. Billing link in sidebar.
+    - **Database Schema Extensions**: `auth_tokens` table (token_hash, type, email, expires_at, used_at). Billing fields on companies (plan_tier, plan_status, current_period_end, stripe_customer_id, stripe_subscription_id). New enums: plan_tier, plan_status, auth_token_type.
+    - **Health Monitoring Expansion** (`client/src/pages/admin-health.tsx`): Event severity filtering, event breakdown by type (24h summary), Security Audit tab. `GET /api/admin/health/counts` returns 24h event counts by type/severity. `GET /api/admin/security-audit` runs environment config checks. CSV import failures and AI failures log health events.
+    - **Demo Reset** (`POST /api/admin/demo/reset`): Super-admin only, requires `{confirm: "RESET_DEMO"}`, scoped to demo company only.
+    - **Client Error Boundary** (`client/src/App.tsx`): React class-based error boundary wrapping all routes. Reports errors to `POST /api/health/client-error`. Shows branded error UI with reload button.
+    - **Branded 404** (`client/src/pages/not-found.tsx`): Redesigned with ESG Manager branding, "Go to dashboard" and "Get help" buttons.
+    - **Demo Banner** (`client/src/pages/dashboard.tsx`): Shows amber banner when on demo account with link to create own account.
+    - **Environment Config** (`.env.example`): Documents all required and optional environment variables.
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`).
@@ -95,4 +108,7 @@ The application is a full-stack SaaS web application.
 - **Password Hashing:** `bcrypt`.
 - **UI Frameworks:** React, Tailwind CSS, Shadcn UI.
 - **Data Visualization:** Recharts.
+- **Security:** Helmet.js for HTTP security headers.
+- **Email:** Resend (gracefully disabled if RESEND_API_KEY not set).
+- **Billing:** Stripe (gracefully disabled if STRIPE_SECRET_KEY not set).
 - **Data Fetching:** TanStack Query.

@@ -1,18 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, setAuthToken } from "@/lib/queryClient";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Leaf } from "lucide-react";
+import { Leaf, CheckCircle2 } from "lucide-react";
 import { LEGAL_VERSION } from "@/lib/legal-content";
 
 const loginSchema = z.object({
@@ -29,10 +29,25 @@ const registerSchema = z.object({
   privacyAccepted: z.boolean().refine(v => v === true, { message: "You must accept the Privacy Policy to continue" }),
 });
 
+const forgotSchema = z.object({
+  email: z.string().email("Please enter a valid email"),
+});
+
+const resetSchema = z.object({
+  newPassword: z.string().min(8, "Password must be at least 8 characters"),
+  confirmPassword: z.string(),
+}).refine(d => d.newPassword === d.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] });
+
 export default function Auth() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const params = new URLSearchParams(window.location.search);
+  const resetToken = params.get("reset");
+  const [view, setView] = useState<"tabs" | "forgot" | "reset" | "forgot-sent" | "reset-done">(
+    resetToken ? "reset" : "tabs"
+  );
 
   const loginForm = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -41,14 +56,17 @@ export default function Auth() {
 
   const registerForm = useForm<z.infer<typeof registerSchema>>({
     resolver: zodResolver(registerSchema),
-    defaultValues: {
-      username: "",
-      email: "",
-      password: "",
-      companyName: "",
-      termsAccepted: false,
-      privacyAccepted: false,
-    },
+    defaultValues: { username: "", email: "", password: "", companyName: "", termsAccepted: false, privacyAccepted: false },
+  });
+
+  const forgotForm = useForm<z.infer<typeof forgotSchema>>({
+    resolver: zodResolver(forgotSchema),
+    defaultValues: { email: "" },
+  });
+
+  const resetForm = useForm<z.infer<typeof resetSchema>>({
+    resolver: zodResolver(resetSchema),
+    defaultValues: { newPassword: "", confirmPassword: "" },
   });
 
   const loginMutation = useMutation({
@@ -93,6 +111,28 @@ export default function Auth() {
     },
   });
 
+  const forgotMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof forgotSchema>) => {
+      const res = await apiRequest("POST", "/api/auth/forgot-password", data);
+      return res.json();
+    },
+    onSuccess: () => setView("forgot-sent"),
+    onError: (e: any) => {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof resetSchema>) => {
+      const res = await apiRequest("POST", "/api/auth/reset-password", { token: resetToken, newPassword: data.newPassword });
+      return res.json();
+    },
+    onSuccess: () => setView("reset-done"),
+    onError: (e: any) => {
+      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30 flex items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
@@ -106,165 +146,247 @@ export default function Auth() {
           <p className="text-muted-foreground text-sm">Sustainability management for growing businesses</p>
         </div>
 
-        <Card>
-          <Tabs defaultValue="login">
+        {view === "forgot" && (
+          <Card>
             <CardHeader>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login" data-testid="tab-login">Sign In</TabsTrigger>
-                <TabsTrigger value="register" data-testid="tab-register">Create Account</TabsTrigger>
-              </TabsList>
+              <p className="font-semibold text-base">Reset your password</p>
+              <p className="text-sm text-muted-foreground">Enter your email and we'll send a reset link if there's an account.</p>
             </CardHeader>
-
-            <TabsContent value="login">
-              <CardContent className="pt-2">
-                <Form {...loginForm}>
-                  <form onSubmit={loginForm.handleSubmit(d => loginMutation.mutate(d))} className="space-y-4">
-                    <FormField control={loginForm.control} name="email" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email</FormLabel>
-                        <FormControl>
-                          <Input type="email" placeholder="you@company.com" {...field} data-testid="input-email" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={loginForm.control} name="password" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Password</FormLabel>
-                        <FormControl>
-                          <Input type="password" placeholder="••••••••" {...field} data-testid="input-password" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <Button type="submit" className="w-full" disabled={loginMutation.isPending} data-testid="button-login">
-                      {loginMutation.isPending ? "Signing in..." : "Sign In"}
-                    </Button>
-                  </form>
-                </Form>
-
-                <div className="mt-4 pt-4 border-t">
-                  <CardDescription className="text-center mb-3 text-xs">Try before you commit</CardDescription>
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    data-testid="button-demo"
-                    disabled={loginMutation.isPending}
-                    onClick={() => {
-                      loginMutation.mutate({ email: "demo@example.com", password: "password123" });
-                    }}
-                  >
-                    {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
+            <CardContent>
+              <Form {...forgotForm}>
+                <form onSubmit={forgotForm.handleSubmit(d => forgotMutation.mutate(d))} className="space-y-4">
+                  <FormField control={forgotForm.control} name="email" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Email address</FormLabel>
+                      <FormControl>
+                        <Input type="email" placeholder="you@company.com" {...field} data-testid="input-forgot-email" autoFocus />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <Button type="submit" className="w-full" disabled={forgotMutation.isPending} data-testid="button-forgot-submit">
+                    {forgotMutation.isPending ? "Sending..." : "Send reset link"}
                   </Button>
-                  <p className="text-xs text-muted-foreground text-center mt-2">
-                    Pre-loaded with sample ESG data so you can explore every feature
-                  </p>
-                </div>
-              </CardContent>
-            </TabsContent>
+                  <Button type="button" variant="ghost" className="w-full" onClick={() => setView("tabs")}>Back to sign in</Button>
+                </form>
+              </Form>
+            </CardContent>
+          </Card>
+        )}
 
-            <TabsContent value="register">
-              <CardContent className="pt-2">
-                <Form {...registerForm}>
-                  <form onSubmit={registerForm.handleSubmit(d => registerMutation.mutate(d))} className="space-y-4">
-                    <FormField control={registerForm.control} name="companyName" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Company Name</FormLabel>
-                        <FormControl>
-                          <Input placeholder="Acme Ltd" {...field} data-testid="input-company" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={registerForm.control} name="username" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Your Name</FormLabel>
-                        <FormControl>
-                          <Input placeholder="Jane Smith" {...field} data-testid="input-username" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={registerForm.control} name="email" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email</FormLabel>
-                        <FormControl>
-                          <Input type="email" placeholder="jane@company.com" {...field} data-testid="input-register-email" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={registerForm.control} name="password" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Password</FormLabel>
-                        <FormControl>
-                          <Input type="password" placeholder="••••••••" {...field} data-testid="input-register-password" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
+        {view === "forgot-sent" && (
+          <Card>
+            <CardContent className="pt-6 text-center space-y-3">
+              <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
+              <p className="font-semibold">Check your inbox</p>
+              <p className="text-sm text-muted-foreground">If an account exists for that email address, you'll receive a password reset link shortly.</p>
+              <Button variant="ghost" className="w-full" onClick={() => setView("tabs")}>Back to sign in</Button>
+            </CardContent>
+          </Card>
+        )}
 
-                    <div className="space-y-3 pt-2 border-t">
-                      <FormField control={registerForm.control} name="termsAccepted" render={({ field }) => (
-                        <FormItem className="flex items-start gap-2 space-y-0">
+        {view === "reset" && (
+          <Card>
+            <CardHeader>
+              <p className="font-semibold text-base">Choose a new password</p>
+              <p className="text-sm text-muted-foreground">Enter and confirm your new password below.</p>
+            </CardHeader>
+            <CardContent>
+              <Form {...resetForm}>
+                <form onSubmit={resetForm.handleSubmit(d => resetMutation.mutate(d))} className="space-y-4">
+                  <FormField control={resetForm.control} name="newPassword" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>New password</FormLabel>
+                      <FormControl>
+                        <Input type="password" placeholder="••••••••" {...field} data-testid="input-new-password" autoFocus />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <FormField control={resetForm.control} name="confirmPassword" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Confirm password</FormLabel>
+                      <FormControl>
+                        <Input type="password" placeholder="••••••••" {...field} data-testid="input-confirm-password" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <Button type="submit" className="w-full" disabled={resetMutation.isPending} data-testid="button-reset-submit">
+                    {resetMutation.isPending ? "Updating..." : "Set new password"}
+                  </Button>
+                </form>
+              </Form>
+            </CardContent>
+          </Card>
+        )}
+
+        {view === "reset-done" && (
+          <Card>
+            <CardContent className="pt-6 text-center space-y-3">
+              <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
+              <p className="font-semibold">Password updated</p>
+              <p className="text-sm text-muted-foreground">Your password has been changed. You can now sign in with your new credentials.</p>
+              <Button className="w-full" onClick={() => { setView("tabs"); setLocation("/auth"); }}>Sign in</Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {view === "tabs" && (
+          <Card>
+            <Tabs defaultValue="login">
+              <CardHeader>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="login" data-testid="tab-login">Sign In</TabsTrigger>
+                  <TabsTrigger value="register" data-testid="tab-register">Create Account</TabsTrigger>
+                </TabsList>
+              </CardHeader>
+
+              <TabsContent value="login">
+                <CardContent className="pt-2">
+                  <Form {...loginForm}>
+                    <form onSubmit={loginForm.handleSubmit(d => loginMutation.mutate(d))} className="space-y-4">
+                      <FormField control={loginForm.control} name="email" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Email</FormLabel>
                           <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                              data-testid="checkbox-terms"
-                              id="checkbox-terms"
-                            />
+                            <Input type="email" placeholder="you@company.com" {...field} data-testid="input-email" />
                           </FormControl>
-                          <div className="space-y-0.5">
-                            <label htmlFor="checkbox-terms" className="text-sm leading-snug cursor-pointer">
-                              I have read and agree to the{" "}
-                              <Link href="/terms">
-                                <a className="text-primary underline hover:no-underline" target="_blank">Terms of Service</a>
-                              </Link>
-                            </label>
-                            <FormMessage />
-                          </div>
+                          <FormMessage />
                         </FormItem>
                       )} />
-
-                      <FormField control={registerForm.control} name="privacyAccepted" render={({ field }) => (
-                        <FormItem className="flex items-start gap-2 space-y-0">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                              data-testid="checkbox-privacy"
-                              id="checkbox-privacy"
-                            />
-                          </FormControl>
-                          <div className="space-y-0.5">
-                            <label htmlFor="checkbox-privacy" className="text-sm leading-snug cursor-pointer">
-                              I have read and agree to the{" "}
-                              <Link href="/privacy">
-                                <a className="text-primary underline hover:no-underline" target="_blank">Privacy Policy</a>
-                              </Link>
-                            </label>
-                            <FormMessage />
+                      <FormField control={loginForm.control} name="password" render={({ field }) => (
+                        <FormItem>
+                          <div className="flex items-center justify-between">
+                            <FormLabel>Password</FormLabel>
+                            <button
+                              type="button"
+                              className="text-xs text-primary hover:underline"
+                              onClick={() => setView("forgot")}
+                              data-testid="link-forgot-password"
+                            >
+                              Forgot password?
+                            </button>
                           </div>
+                          <FormControl>
+                            <Input type="password" placeholder="••••••••" {...field} data-testid="input-password" />
+                          </FormControl>
+                          <FormMessage />
                         </FormItem>
                       )} />
-                    </div>
+                      <Button type="submit" className="w-full" disabled={loginMutation.isPending} data-testid="button-login">
+                        {loginMutation.isPending ? "Signing in..." : "Sign In"}
+                      </Button>
+                    </form>
+                  </Form>
 
-                    <Button type="submit" className="w-full" disabled={registerMutation.isPending} data-testid="button-register">
-                      {registerMutation.isPending ? "Setting up..." : "Create Account"}
+                  <div className="mt-4 pt-4 border-t">
+                    <p className="text-center text-xs text-muted-foreground mb-3">Try before you commit</p>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      data-testid="button-demo"
+                      disabled={loginMutation.isPending}
+                      onClick={() => loginMutation.mutate({ email: "demo@example.com", password: "password123" })}
+                    >
+                      {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
                     </Button>
-                  </form>
-                </Form>
-              </CardContent>
-            </TabsContent>
-          </Tabs>
-        </Card>
+                    <p className="text-xs text-muted-foreground text-center mt-2">
+                      Pre-loaded with sample ESG data so you can explore every feature
+                    </p>
+                  </div>
+                </CardContent>
+              </TabsContent>
+
+              <TabsContent value="register">
+                <CardContent className="pt-2">
+                  <Form {...registerForm}>
+                    <form onSubmit={registerForm.handleSubmit(d => registerMutation.mutate(d))} className="space-y-4">
+                      <FormField control={registerForm.control} name="companyName" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Company Name</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Acme Ltd" {...field} data-testid="input-company" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={registerForm.control} name="username" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Your Name</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Jane Smith" {...field} data-testid="input-username" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={registerForm.control} name="email" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Email</FormLabel>
+                          <FormControl>
+                            <Input type="email" placeholder="jane@company.com" {...field} data-testid="input-register-email" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={registerForm.control} name="password" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Password</FormLabel>
+                          <FormControl>
+                            <Input type="password" placeholder="••••••••" {...field} data-testid="input-register-password" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+
+                      <div className="space-y-3 pt-2 border-t">
+                        <FormField control={registerForm.control} name="termsAccepted" render={({ field }) => (
+                          <FormItem className="flex items-start gap-2 space-y-0">
+                            <FormControl>
+                              <Checkbox checked={field.value} onCheckedChange={field.onChange} data-testid="checkbox-terms" id="checkbox-terms" />
+                            </FormControl>
+                            <div className="space-y-0.5">
+                              <label htmlFor="checkbox-terms" className="text-sm leading-snug cursor-pointer">
+                                I have read and agree to the{" "}
+                                <Link href="/terms" className="text-primary underline hover:no-underline" target="_blank">Terms of Service</Link>
+                              </label>
+                              <FormMessage />
+                            </div>
+                          </FormItem>
+                        )} />
+
+                        <FormField control={registerForm.control} name="privacyAccepted" render={({ field }) => (
+                          <FormItem className="flex items-start gap-2 space-y-0">
+                            <FormControl>
+                              <Checkbox checked={field.value} onCheckedChange={field.onChange} data-testid="checkbox-privacy" id="checkbox-privacy" />
+                            </FormControl>
+                            <div className="space-y-0.5">
+                              <label htmlFor="checkbox-privacy" className="text-sm leading-snug cursor-pointer">
+                                I have read and agree to the{" "}
+                                <Link href="/privacy" className="text-primary underline hover:no-underline" target="_blank">Privacy Policy</Link>
+                              </label>
+                              <FormMessage />
+                            </div>
+                          </FormItem>
+                        )} />
+                      </div>
+
+                      <Button type="submit" className="w-full" disabled={registerMutation.isPending} data-testid="button-register">
+                        {registerMutation.isPending ? "Setting up..." : "Create Account"}
+                      </Button>
+                    </form>
+                  </Form>
+                </CardContent>
+              </TabsContent>
+            </Tabs>
+          </Card>
+        )}
 
         <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <Link href="/terms"><a className="hover:underline">Terms</a></Link>
-          <Link href="/privacy"><a className="hover:underline">Privacy</a></Link>
-          <Link href="/cookies"><a className="hover:underline">Cookies</a></Link>
-          <Link href="/dpa"><a className="hover:underline">DPA</a></Link>
+          <Link href="/terms" className="hover:underline">Terms</Link>
+          <Link href="/privacy" className="hover:underline">Privacy</Link>
+          <Link href="/cookies" className="hover:underline">Cookies</Link>
+          <Link href="/dpa" className="hover:underline">DPA</Link>
         </nav>
       </div>
     </div>

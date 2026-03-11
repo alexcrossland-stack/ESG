@@ -481,6 +481,15 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
+      {demoStatus?.isDemo && (
+        <div className="flex items-center gap-3 p-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 text-sm" data-testid="banner-demo">
+          <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <p className="text-amber-800 dark:text-amber-300 flex-1">
+            You're exploring the demo account — pre-loaded with sample data. <Link href="/auth"><span className="underline cursor-pointer font-medium">Create your own account</span></Link> to get started.
+          </p>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">

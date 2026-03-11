@@ -4,6 +4,9 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer"]);
+export const planTierEnum = pgEnum("plan_tier", ["free", "pro"]);
+export const planStatusEnum = pgEnum("plan_status", ["active", "past_due", "cancelled", "over_limit"]);
+export const authTokenTypeEnum = pgEnum("auth_token_type", ["invitation", "password_reset"]);
 export const metricCategoryEnum = pgEnum("metric_category", ["environmental", "social", "governance"]);
 export const metricFrequencyEnum = pgEnum("metric_frequency", ["monthly", "quarterly", "annual"]);
 export const metricTypeEnum = pgEnum("metric_type", ["manual", "calculated", "derived"]);
@@ -63,6 +66,11 @@ export const companies = pgTable("companies", {
   selectedMetrics: jsonb("selected_metrics"),
   onboardingAnswers: jsonb("onboarding_answers"),
   activationCardDismissedAt: timestamp("activation_card_dismissed_at"),
+  planTier: planTierEnum("plan_tier").default("free"),
+  planStatus: planStatusEnum("plan_status").default("active"),
+  currentPeriodEnd: timestamp("current_period_end"),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -319,6 +327,21 @@ export const supportRequests = pgTable("support_requests", {
 export const insertSupportRequestSchema = createInsertSchema(supportRequests).omit({ id: true, refNumber: true, createdAt: true, updatedAt: true });
 export type InsertSupportRequest = z.infer<typeof insertSupportRequestSchema>;
 export type SupportRequest = typeof supportRequests.$inferSelect;
+
+export const authTokens = pgTable("auth_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tokenHash: text("token_hash").notNull().unique(),
+  type: authTokenTypeEnum("type").notNull(),
+  userId: varchar("user_id"),
+  email: text("email").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAuthTokenSchema = createInsertSchema(authTokens).omit({ id: true, createdAt: true });
+export type AuthToken = typeof authTokens.$inferSelect;
+export type InsertAuthToken = z.infer<typeof insertAuthTokenSchema>;
 
 // Policy Generation Inputs
 export const policyGenerationInputs = pgTable("policy_generation_inputs", {

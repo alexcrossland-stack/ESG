@@ -7,8 +7,9 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Moon, Sun, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 import NotFound from "@/pages/not-found";
 import Auth from "@/pages/auth";
 import Dashboard from "@/pages/dashboard";
@@ -38,8 +39,58 @@ import AdminHealthPage from "@/pages/admin-health";
 import AdminAnalyticsPage from "@/pages/admin-analytics";
 import HelpPage from "@/pages/help";
 import AdminSupportPage from "@/pages/admin-support";
+import BillingPage from "@/pages/billing";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  message: string;
+}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message || "An unexpected error occurred" };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    fetch("/api/health/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: error.message,
+        stack: error.stack,
+        componentStack: info.componentStack,
+        url: window.location.href,
+      }),
+    }).catch(() => {});
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-background p-4">
+          <div className="max-w-md w-full text-center space-y-4">
+            <div className="w-12 h-12 rounded-xl bg-destructive/10 flex items-center justify-center mx-auto">
+              <TriangleAlert className="w-6 h-6 text-destructive" />
+            </div>
+            <h1 className="text-xl font-semibold">Something went wrong</h1>
+            <p className="text-sm text-muted-foreground">{this.state.message}</p>
+            <Button onClick={() => window.location.reload()} data-testid="button-reload">
+              Reload page
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -107,35 +158,38 @@ function ProtectedApp() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
-            <Switch>
-              <Route path="/" component={Dashboard} />
-              <Route path="/control-centre" component={ControlCentre} />
-              <Route path="/policy" component={Policy} />
-              <Route path="/topics" component={Topics} />
-              <Route path="/metrics" component={Metrics} />
-              <Route path="/data-entry" component={DataEntry} />
-              <Route path="/actions" component={Actions} />
-              <Route path="/evidence" component={Evidence} />
-              <Route path="/reports" component={Reports} />
-              <Route path="/policy-generator" component={PolicyGenerator} />
-              <Route path="/policy-templates" component={PolicyTemplatesPage} />
-              <Route path="/carbon-calculator" component={CarbonCalculator} />
-              <Route path="/settings" component={Settings} />
-              <Route path="/questionnaire" component={QuestionnairePage} />
-              <Route path="/my-tasks" component={MyTasks} />
-              <Route path="/my-approvals" component={MyApprovals} />
-              <Route path="/compliance" component={Compliance} />
-              <Route path="/answer-library" component={AnswerLibrary} />
-              <Route path="/benchmarks" component={BenchmarksPage} />
-              <Route path="/esg-profile" component={EsgProfilePage} />
-              <Route path="/admin/health" component={AdminHealthPage} />
-              <Route path="/admin/analytics" component={AdminAnalyticsPage} />
-              <Route path="/admin/support" component={AdminSupportPage} />
-              <Route path="/onboarding" component={Onboarding} />
-              <Route path="/recommendations" component={Recommendations} />
-              <Route path="/help" component={HelpPage} />
-              <Route component={NotFound} />
-            </Switch>
+            <AppErrorBoundary>
+              <Switch>
+                <Route path="/" component={Dashboard} />
+                <Route path="/control-centre" component={ControlCentre} />
+                <Route path="/policy" component={Policy} />
+                <Route path="/topics" component={Topics} />
+                <Route path="/metrics" component={Metrics} />
+                <Route path="/data-entry" component={DataEntry} />
+                <Route path="/actions" component={Actions} />
+                <Route path="/evidence" component={Evidence} />
+                <Route path="/reports" component={Reports} />
+                <Route path="/policy-generator" component={PolicyGenerator} />
+                <Route path="/policy-templates" component={PolicyTemplatesPage} />
+                <Route path="/carbon-calculator" component={CarbonCalculator} />
+                <Route path="/settings" component={Settings} />
+                <Route path="/questionnaire" component={QuestionnairePage} />
+                <Route path="/my-tasks" component={MyTasks} />
+                <Route path="/my-approvals" component={MyApprovals} />
+                <Route path="/compliance" component={Compliance} />
+                <Route path="/answer-library" component={AnswerLibrary} />
+                <Route path="/benchmarks" component={BenchmarksPage} />
+                <Route path="/esg-profile" component={EsgProfilePage} />
+                <Route path="/admin/health" component={AdminHealthPage} />
+                <Route path="/admin/analytics" component={AdminAnalyticsPage} />
+                <Route path="/admin/support" component={AdminSupportPage} />
+                <Route path="/billing" component={BillingPage} />
+                <Route path="/onboarding" component={Onboarding} />
+                <Route path="/recommendations" component={Recommendations} />
+                <Route path="/help" component={HelpPage} />
+                <Route component={NotFound} />
+              </Switch>
+            </AppErrorBoundary>
           </main>
           <AppFooter />
         </div>

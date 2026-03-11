@@ -1,3 +1,4 @@
+import express from "express";
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
@@ -17,12 +18,14 @@ import crypto from "crypto";
 import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import OpenAI from "openai";
+import Stripe from "stripe";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
 import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
 import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } from "./scheduler";
 import { generatePdf, generateDocx } from "./report-engine";
+import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
@@ -730,6 +733,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/auth/forgot-password", loginLimiter, async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email || typeof email !== "string" || !email.includes("@")) {
+        return res.status(400).json({ error: "Valid email is required" });
+      }
+      const user = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (user) {
+        const { plaintext, hash } = generateSecureToken();
+        await storage.createAuthToken({
+          tokenHash: hash,
+          type: "password_reset",
+          userId: user.id,
+          email: user.email,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        });
+        const emailData = buildPasswordResetEmail({ token: plaintext });
+        emailData.to = user.email;
+        await sendEmail(emailData);
+      }
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/auth/reset-password", loginLimiter, async (req, res) => {
+    try {
+      const { token, newPassword } = req.body;
+      if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required" });
+      if (newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+      const hash = crypto.createHash("sha256").update(token).digest("hex");
+      const record = await storage.getAuthTokenByHash(hash);
+      if (!record || record.type !== "password_reset") return res.status(400).json({ error: "Invalid or expired reset link" });
+      if (record.usedAt) return res.status(400).json({ error: "This reset link has already been used" });
+      if (new Date(record.expiresAt) < new Date()) return res.status(400).json({ error: "This reset link has expired" });
+      const newHash = await hashPassword(newPassword);
+      if (record.userId) await storage.updateUser(record.userId, { password: newHash });
+      await storage.markAuthTokenUsed(record.id);
+      await storage.createAuditLog({
+        userId: record.userId || undefined,
+        action: "password_reset",
+        entityType: "auth",
+        details: { email: record.email },
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/auth/me", async (req, res) => {
     const auth = resolveAuth(req);
     if (!auth) return res.status(401).json({ error: "Not authenticated" });
@@ -1010,6 +1064,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: supportReq.id,
         details: { refNumber, category: supportReq.category, subject: supportReq.subject },
       });
+
+      if (userEmail) {
+        const emailData = buildSupportConfirmationEmail({
+          userName: userName || userEmail.split("@")[0],
+          refNumber,
+          subject: subject.trim(),
+        });
+        emailData.to = userEmail;
+        sendEmail(emailData).catch(() => {});
+      }
 
       res.json({ id: supportReq.id, refNumber });
     } catch (e: any) {
@@ -1480,6 +1544,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ rawSaved, metricSaved, skipped, periodsRecalculated: periodsAffected.size });
     } catch (e: any) {
+      try {
+        await storage.createPlatformHealthEvent({
+          eventType: "csv_import_failure",
+          severity: "error",
+          message: `Bulk data upload failed: ${e.message}`,
+          details: { companyId: (req.session as any).companyId },
+          companyId: (req.session as any).companyId,
+        });
+      } catch {}
       res.status(500).json({ error: e.message });
     }
   });
@@ -2491,6 +2564,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ id: saved.id, generatedContent });
     } catch (e: any) {
       console.error("Policy generation error:", e);
+      try {
+        await storage.createPlatformHealthEvent({
+          eventType: "ai_failure",
+          severity: "error",
+          message: `Policy generation AI failure: ${e.message}`,
+          details: { companyId: (req.session as any).companyId },
+          companyId: (req.session as any).companyId,
+        });
+      } catch {}
       res.status(500).json({ error: e.message });
     }
   });
@@ -5067,6 +5149,228 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch {}
     if (!res.headersSent) {
       res.status(500).json({ error: message });
+    }
+  });
+
+  const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+
+  app.post("/api/billing/create-checkout", requireAuth, async (req, res) => {
+    try {
+      if (!stripe) return res.status(503).json({ error: "Billing is not configured" });
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const priceId = process.env.STRIPE_PRO_PRICE_ID;
+      if (!priceId) return res.status(503).json({ error: "Pro plan price not configured" });
+      const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        customer_email: user.email,
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${baseUrl}/billing?success=1`,
+        cancel_url: `${baseUrl}/billing?cancelled=1`,
+        metadata: { companyId, userId },
+      });
+      res.json({ url: session.url });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/billing/cancel", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      if (!stripe) return res.status(503).json({ error: "Billing is not configured" });
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company || !company.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription found" });
+      await stripe.subscriptions.update(company.stripeSubscriptionId, { cancel_at_period_end: true });
+      await storage.updateCompanyBilling(companyId, { planStatus: "cancelled" });
+      await storage.createAuditLog({
+        companyId,
+        userId: (req.session as any).userId,
+        action: "subscription_cancelled",
+        entityType: "billing",
+        details: { subscriptionId: company.stripeSubscriptionId },
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/billing/status", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json({
+        planTier: company.planTier || "free",
+        planStatus: company.planStatus || "active",
+        currentPeriodEnd: company.currentPeriodEnd,
+        stripeCustomerId: company.stripeCustomerId,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/billing/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+    if (!stripe) return res.status(503).send("Billing not configured");
+    const sig = req.headers["stripe-signature"] as string;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) return res.status(503).send("Webhook secret not configured");
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("[Stripe] Webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    try {
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const companyId = session.metadata?.companyId;
+        if (companyId && session.subscription) {
+          const sub = await stripe.subscriptions.retrieve(session.subscription as string);
+          await storage.updateCompanyBilling(companyId, {
+            planTier: "pro",
+            planStatus: "active",
+            stripeCustomerId: session.customer as string,
+            stripeSubscriptionId: session.subscription as string,
+            currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
+          });
+        }
+      } else if (event.type === "invoice.payment_succeeded") {
+        const invoice = event.data.object as any;
+        if (invoice.subscription) {
+          const sub = await stripe.subscriptions.retrieve(invoice.subscription);
+          const result = await db.execute(sql`SELECT id FROM companies WHERE stripe_subscription_id = ${invoice.subscription} LIMIT 1`);
+          const rows = (result as any).rows;
+          if (rows?.length) {
+            await storage.updateCompanyBilling(rows[0].id, {
+              planStatus: "active",
+              currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
+            });
+          }
+        }
+      } else if (event.type === "invoice.payment_failed") {
+        const invoice = event.data.object as any;
+        if (invoice.subscription) {
+          const result = await db.execute(sql`SELECT id FROM companies WHERE stripe_subscription_id = ${invoice.subscription} LIMIT 1`);
+          const rows = (result as any).rows;
+          if (rows?.length) {
+            await storage.updateCompanyBilling(rows[0].id, { planStatus: "past_due" });
+          }
+        }
+      } else if (event.type === "customer.subscription.deleted") {
+        const sub = event.data.object as Stripe.Subscription;
+        const result = await db.execute(sql`SELECT id FROM companies WHERE stripe_subscription_id = ${sub.id} LIMIT 1`);
+        const rows = (result as any).rows;
+        if (rows?.length) {
+          await storage.updateCompanyBilling(rows[0].id, {
+            planTier: "free",
+            planStatus: "active",
+            stripeSubscriptionId: null as any,
+            currentPeriodEnd: null,
+          });
+        }
+      }
+      res.json({ received: true });
+    } catch (e: any) {
+      console.error("[Stripe] Webhook handler error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/demo/reset", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const { confirm } = req.body;
+      if (confirm !== "RESET_DEMO") return res.status(400).json({ error: "Confirm field must be 'RESET_DEMO'" });
+      const result = await db.execute(sql`SELECT id FROM companies WHERE is_super_admin = true LIMIT 1`);
+      const rows = (result as any).rows;
+      if (!rows?.length) return res.status(404).json({ error: "Demo company not found" });
+      const demoCompanyId = rows[0].id;
+
+      await db.execute(sql`DELETE FROM metric_values WHERE metric_id IN (SELECT id FROM metrics WHERE company_id = ${demoCompanyId})`);
+      await db.execute(sql`DELETE FROM raw_data_inputs WHERE company_id = ${demoCompanyId}`);
+      await db.execute(sql`DELETE FROM carbon_calculations WHERE company_id = ${demoCompanyId}`);
+      await db.execute(sql`DELETE FROM action_plans WHERE company_id = ${demoCompanyId}`);
+      await db.execute(sql`DELETE FROM audit_logs WHERE company_id = ${demoCompanyId}`);
+      await db.execute(sql`DELETE FROM evidence_files WHERE company_id = ${demoCompanyId}`);
+      await db.execute(sql`DELETE FROM report_runs WHERE company_id = ${demoCompanyId}`);
+
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId,
+        userId: (req.session as any).userId,
+        action: "demo_reset",
+        entityType: "platform",
+        details: { demoCompanyId },
+      });
+      await storage.createPlatformHealthEvent({
+        eventType: "demo_reset",
+        severity: "warning",
+        message: `Demo environment reset by ${(req.session as any).userId}`,
+        details: { demoCompanyId, resetBy: (req.session as any).userId },
+        companyId: null,
+      });
+      res.json({ ok: true, message: "Demo environment has been reset" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/health/client-error", async (req, res) => {
+    try {
+      const { message, stack, componentStack, url } = req.body;
+      if (message && typeof message === "string") {
+        await storage.createPlatformHealthEvent({
+          eventType: "client_error",
+          severity: "error",
+          message: `Client error: ${message.slice(0, 200)}`,
+          details: { stack: stack?.slice(0, 500), componentStack: componentStack?.slice(0, 500), url },
+          companyId: (req.session as any)?.companyId || null,
+        });
+      }
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
+    }
+  });
+
+  app.get("/api/admin/security-audit", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const checks = [];
+      const sessionSecretOk = (process.env.SESSION_SECRET || "").length >= 32;
+      checks.push({ check: "SESSION_SECRET strength", pass: sessionSecretOk, detail: sessionSecretOk ? "OK" : "Too short or missing" });
+      checks.push({ check: "RESEND_API_KEY configured", pass: !!process.env.RESEND_API_KEY, detail: process.env.RESEND_API_KEY ? "OK" : "Not set — email disabled" });
+      checks.push({ check: "STRIPE_SECRET_KEY configured", pass: !!process.env.STRIPE_SECRET_KEY, detail: process.env.STRIPE_SECRET_KEY ? "OK" : "Not set — billing disabled" });
+      checks.push({ check: "STRIPE_WEBHOOK_SECRET configured", pass: !!process.env.STRIPE_WEBHOOK_SECRET, detail: process.env.STRIPE_WEBHOOK_SECRET ? "OK" : "Not set — webhook verification disabled" });
+      checks.push({ check: "NODE_ENV is production", pass: process.env.NODE_ENV === "production", detail: `NODE_ENV=${process.env.NODE_ENV}` });
+      checks.push({ check: "APP_BASE_URL configured", pass: !!process.env.APP_BASE_URL, detail: process.env.APP_BASE_URL || "Not set" });
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const counts = await storage.getHealthEventCounts(since24h);
+      const errorCount = (counts.bySeverity["error"] || 0);
+      checks.push({ check: "Error rate (24h)", pass: errorCount < 50, detail: `${errorCount} error events in last 24 hours` });
+      const expiredResult = await db.execute(sql`SELECT COUNT(*) as count FROM auth_tokens WHERE expires_at < NOW() AND used_at IS NULL`);
+      const expiredTokens = parseInt((expiredResult as any).rows?.[0]?.count || "0");
+      checks.push({ check: "Expired auth tokens", pass: expiredTokens < 100, detail: `${expiredTokens} expired unused tokens pending cleanup` });
+      res.json({ generatedAt: new Date().toISOString(), checks, summary: { passed: checks.filter(c => c.pass).length, failed: checks.filter(c => !c.pass).length, total: checks.length } });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/health/counts", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const hours = parseInt(req.query.hours as string) || 24;
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+      const counts = await storage.getHealthEventCounts(since);
+      res.json({ hours, since: since.toISOString(), ...counts });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

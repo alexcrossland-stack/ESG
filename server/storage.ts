@@ -9,6 +9,8 @@ import {
   questionnaires, questionnaireQuestions,
   aiGenerationLogs, evidenceRequests, reportingPeriods,
   backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
+  authTokens,
+  type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
   type MaterialTopic, type Metric, type InsertMetric,
@@ -223,6 +225,16 @@ export interface IStorage {
   getSupportRequest(id: string): Promise<SupportRequest | undefined>;
   updateSupportRequest(id: string, data: Partial<SupportRequest>): Promise<SupportRequest | undefined>;
   getSupportRequestsByCompany(companyId: string): Promise<SupportRequest[]>;
+
+  // Auth Tokens
+  createAuthToken(data: InsertAuthToken): Promise<AuthToken>;
+  getAuthTokenByHash(hash: string): Promise<AuthToken | undefined>;
+  markAuthTokenUsed(id: string): Promise<void>;
+  cleanupExpiredAuthTokens(): Promise<number>;
+
+  // Billing
+  updateCompanyBilling(companyId: string, data: { planTier?: string; planStatus?: string; currentPeriodEnd?: Date | null; stripeCustomerId?: string; stripeSubscriptionId?: string }): Promise<void>;
+  getHealthEventCounts(since: Date): Promise<{ total: number; byType: Record<string, number>; bySeverity: Record<string, number> }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1255,6 +1267,48 @@ export class DatabaseStorage implements IStorage {
 
   async getSupportRequestsByCompany(companyId: string) {
     return db.select().from(supportRequests).where(eq(supportRequests.companyId, companyId)).orderBy(desc(supportRequests.createdAt));
+  }
+
+  async createAuthToken(data: InsertAuthToken) {
+    const [token] = await db.insert(authTokens).values(data).returning();
+    return token;
+  }
+
+  async getAuthTokenByHash(hash: string) {
+    const [token] = await db.select().from(authTokens).where(eq(authTokens.tokenHash, hash));
+    return token;
+  }
+
+  async markAuthTokenUsed(id: string) {
+    await db.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, id));
+  }
+
+  async cleanupExpiredAuthTokens() {
+    const result = await db.execute(
+      sql`DELETE FROM auth_tokens WHERE expires_at < NOW() AND used_at IS NULL`
+    );
+    return (result as any).rowCount || 0;
+  }
+
+  async updateCompanyBilling(companyId: string, data: { planTier?: string; planStatus?: string; currentPeriodEnd?: Date | null; stripeCustomerId?: string; stripeSubscriptionId?: string }) {
+    await db.update(companies).set(data as any).where(eq(companies.id, companyId));
+  }
+
+  async getHealthEventCounts(since: Date) {
+    const result = await db.execute(
+      sql`SELECT event_type, severity, COUNT(*) as count FROM platform_health_events WHERE created_at >= ${since} GROUP BY event_type, severity`
+    );
+    const rows = (result as any).rows || [];
+    let total = 0;
+    const byType: Record<string, number> = {};
+    const bySeverity: Record<string, number> = {};
+    for (const row of rows) {
+      const n = parseInt(row.count);
+      total += n;
+      byType[row.event_type] = (byType[row.event_type] || 0) + n;
+      bySeverity[row.severity] = (bySeverity[row.severity] || 0) + n;
+    }
+    return { total, byType, bySeverity };
   }
 }
 
