@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { Link } from "wouter";
+import { SourceBadge } from "@/components/source-badge";
 
 const CATEGORY_ICONS: Record<string, any> = {
   environmental: Leaf,
@@ -125,6 +126,13 @@ function FrameworkCard({ framework }: { framework: any }) {
                                     {name}
                                   </Badge>
                                 ))}
+                                <SourceBadge
+                                  entityType="requirement"
+                                  entityId={req.id}
+                                  status={req.isMet ? "approved" : "draft"}
+                                  owner={req.owner}
+                                  reviewedAt={req.lastReviewedAt}
+                                />
                               </div>
                             )}
                           </div>

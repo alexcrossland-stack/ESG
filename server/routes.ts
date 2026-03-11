@@ -3561,6 +3561,269 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/control-centre", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+      const values = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
+      const valueMap = new Map(values.map((v: any) => [v.metricId, v]));
+
+      const missingData = enabledMetrics
+        .filter((m: any) => !valueMap.has(m.id))
+        .map((m: any) => ({ id: m.id, name: m.name, category: m.category, owner: m.dataOwner, linkUrl: "/data-entry" }));
+
+      const dqResult = await db.execute(
+        sql`SELECT metric_id, value, notes, workflow_status, data_source_type FROM metric_values mv JOIN metrics met ON mv.metric_id = met.id WHERE met.company_id = ${companyId} AND mv.period = ${currentPeriod}`
+      );
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const evidenceLinkedIds = new Set(evidenceFiles.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId));
+      const lowQuality = enabledMetrics.map((m: any) => {
+        const val = valueMap.get(m.id);
+        if (!val) return null;
+        let score = 0;
+        if (val.value != null) score += 30;
+        if (evidenceLinkedIds.has(val.id) || val.dataSourceType === "evidenced") score += 20;
+        if (val.workflowStatus === "approved") score += 20;
+        if (val.value != null && val.dataSourceType !== "estimated") score += 15;
+        if (val.notes) score += 15;
+        return score < 40 ? { id: m.id, name: m.name, category: m.category, score, owner: m.dataOwner, linkUrl: "/data-entry" } : null;
+      }).filter(Boolean);
+
+      const expiredEvidence = evidenceFiles
+        .filter((e: any) => e.expiryDate && new Date(e.expiryDate) < new Date())
+        .map((e: any) => ({ id: e.id, name: e.filename, expiryDate: e.expiryDate, linkedModule: e.linkedModule, linkUrl: "/evidence" }));
+
+      const actions = await storage.getActionPlans(companyId);
+      const overdueActions = actions
+        .filter((a: any) => a.status !== "complete" && a.dueDate && new Date(a.dueDate) < new Date())
+        .map((a: any) => ({ id: a.id, name: a.title, dueDate: a.dueDate, owner: a.assignedUserId, linkUrl: "/actions" }));
+
+      const pendingApprovals: any[] = [];
+      values.filter((v: any) => v.workflowStatus === "submitted").forEach((v: any) => {
+        const m = enabledMetrics.find((met: any) => met.id === v.metricId);
+        pendingApprovals.push({ id: v.id, name: m?.name || "Metric", entityType: "metric_value", period: v.period, linkUrl: "/my-approvals" });
+      });
+      const reports = await storage.getReportRuns(companyId);
+      reports.filter((r: any) => r.workflowStatus === "submitted").forEach((r: any) => {
+        pendingApprovals.push({ id: r.id, name: `Report — ${r.period}`, entityType: "report", linkUrl: "/my-approvals" });
+      });
+
+      const genPolicies = await storage.getGeneratedPolicies(companyId);
+      const unapprovedPolicies = genPolicies
+        .filter((p: any) => p.workflowStatus !== "approved")
+        .map((p: any) => ({ id: p.id, name: p.templateId || "Policy", status: p.workflowStatus, linkUrl: "/policy-templates" }));
+
+      let unmetCompliance: any[] = [];
+      try {
+        const fws = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
+        const reqs = await db.execute(sql`SELECT * FROM compliance_requirements`);
+        const metricNamesWithData = new Set(values.filter((v: any) => v.value != null).map((v: any) => {
+          const m = enabledMetrics.find((met: any) => met.id === v.metricId);
+          return m?.name;
+        }).filter(Boolean));
+        reqs.rows.forEach((r: any) => {
+          const linked = r.linked_metric_ids || [];
+          const isMet = linked.length > 0 && linked.some((name: string) => metricNamesWithData.has(name));
+          if (!isMet) {
+            const fw = fws.rows.find((f: any) => f.id === r.framework_id);
+            unmetCompliance.push({ id: r.id, code: r.code, title: r.title, framework: fw?.name || "", linkUrl: "/compliance" });
+          }
+        });
+      } catch {}
+
+      res.json({
+        missingData, lowQuality, expiredEvidence, overdueActions,
+        pendingApprovals, unapprovedPolicies, unmetCompliance,
+        summary: {
+          missingData: missingData.length, lowQuality: lowQuality.length,
+          expiredEvidence: expiredEvidence.length, overdueActions: overdueActions.length,
+          pendingApprovals: pendingApprovals.length, unapprovedPolicies: unapprovedPolicies.length,
+          unmetCompliance: unmetCompliance.length,
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/procurement-answers", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const rows = await db.execute(
+        sql`SELECT * FROM procurement_answers WHERE company_id = ${companyId} ORDER BY created_at DESC`
+      );
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const values = await storage.getMetricValuesByPeriod(companyId,
+        `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`
+      );
+
+      const answers = rows.rows.map((a: any) => {
+        let needsReview = false;
+        const reasons: string[] = [];
+        if (a.status === "approved" && a.approved_at) {
+          const approvedAt = new Date(a.approved_at);
+          if (a.linked_metric_ids?.length) {
+            const changedMetrics = values.filter((v: any) => {
+              const met = v.updatedAt ? new Date(v.updatedAt) : null;
+              return met && met > approvedAt;
+            });
+            if (changedMetrics.length > 0) { needsReview = true; reasons.push("Linked metric data updated"); }
+          }
+          if (a.linked_evidence_ids?.length) {
+            const expiredEvidence = evidenceFiles.filter((e: any) =>
+              a.linked_evidence_ids.includes(e.id) && e.expiryDate && new Date(e.expiryDate) < new Date()
+            );
+            if (expiredEvidence.length > 0) { needsReview = true; reasons.push("Linked evidence expired"); }
+          }
+        }
+        return { ...a, needsReview, reviewReasons: reasons };
+      });
+
+      res.json(answers);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/procurement-answers", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { question, answer, category, linkedMetricIds, linkedPolicySection, linkedEvidenceIds, linkedComplianceReqIds, status } = req.body;
+      if (!question || !answer) { res.status(400).json({ error: "Question and answer required" }); return; }
+      const result = await db.execute(
+        sql`INSERT INTO procurement_answers (company_id, question, answer, category, linked_metric_ids, linked_policy_section, linked_evidence_ids, linked_compliance_req_ids, status)
+            VALUES (${companyId}, ${question}, ${answer}, ${category || null}, ${linkedMetricIds || null}, ${linkedPolicySection || null}, ${linkedEvidenceIds || null}, ${linkedComplianceReqIds || null}, ${status || "draft"})
+            RETURNING *`
+      );
+      await storage.createAuditLog({ companyId, userId: (req.session as any).userId, action: "Procurement answer created", entityType: "procurement_answer", entityId: result.rows[0].id, details: { question } });
+      res.json(result.rows[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/procurement-answers/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { question, answer, category, linkedMetricIds, linkedPolicySection, linkedEvidenceIds, linkedComplianceReqIds, status } = req.body;
+      const approvedFields = status === "approved" ? sql`, approved_by = ${userId}, approved_at = NOW(), last_reviewed_at = NOW()` : sql``;
+      const result = await db.execute(
+        sql`UPDATE procurement_answers SET question = COALESCE(${question}, question), answer = COALESCE(${answer}, answer),
+            category = COALESCE(${category || null}, category), linked_metric_ids = COALESCE(${linkedMetricIds || null}, linked_metric_ids),
+            linked_policy_section = COALESCE(${linkedPolicySection || null}, linked_policy_section),
+            linked_evidence_ids = COALESCE(${linkedEvidenceIds || null}, linked_evidence_ids),
+            linked_compliance_req_ids = COALESCE(${linkedComplianceReqIds || null}, linked_compliance_req_ids),
+            status = COALESCE(${status || null}, status), flagged_reason = ${req.body.flaggedReason || null}
+            ${approvedFields}
+            WHERE id = ${req.params.id} AND company_id = ${companyId} RETURNING *`
+      );
+      if (result.rows.length === 0) { res.status(404).json({ error: "Not found" }); return; }
+      await storage.createAuditLog({ companyId, userId, action: "Procurement answer updated", entityType: "procurement_answer", entityId: req.params.id, details: { status } });
+      res.json(result.rows[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/procurement-answers/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      await db.execute(sql`DELETE FROM procurement_answers WHERE id = ${req.params.id} AND company_id = ${companyId}`);
+      await storage.createAuditLog({ companyId, userId: (req.session as any).userId, action: "Procurement answer deleted", entityType: "procurement_answer", entityId: req.params.id, details: {} });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence/suggestions", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { metricId, category, context } = req.query;
+      const allEvidence = await storage.getEvidenceFiles(companyId);
+      let suggestions = allEvidence.filter((e: any) => e.status === "approved" || !e.expiryDate || new Date(e.expiryDate) > new Date());
+      if (metricId) {
+        suggestions = suggestions.filter((e: any) => e.linkedModule === "metric_value" || e.linkedModule === "metric");
+      }
+      if (category) {
+        suggestions = suggestions.filter((e: any) => e.linkedModule === category || !e.linkedModule);
+      }
+      suggestions.sort((a: any, b: any) => {
+        if (a.status === "approved" && b.status !== "approved") return -1;
+        if (b.status === "approved" && a.status !== "approved") return 1;
+        return 0;
+      });
+      res.json(suggestions.slice(0, 10));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/assurance-pack", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const auditLogs = await storage.getAuditLogs(companyId);
+      const users = await storage.getUsersByCompany(companyId);
+      const userMap = new Map(users.map((u: any) => [u.id, u.username]));
+
+      const approvalHistory = auditLogs
+        .filter((l: any) => ["approved", "rejected", "submitted"].some(a => l.action?.toLowerCase().includes(a)))
+        .map((l: any) => ({ ...l, actor: userMap.get(l.userId) || l.userId }));
+
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const evidenceHistory = evidenceFiles.map((e: any) => ({
+        id: e.id, fileName: e.fileName, status: e.status,
+        linkedModule: e.linkedModule, linkedEntityId: e.linkedEntityId,
+        uploadedAt: e.createdAt, expiryDate: e.expiryDate,
+      }));
+
+      const policy = await storage.getPolicy(companyId);
+      let policyVersions: any[] = [];
+      if (policy) {
+        const versions = await storage.getPolicyVersions(policy.id);
+        policyVersions = versions.map((v: any) => ({
+          versionNumber: v.versionNumber, createdAt: v.createdAt,
+          sections: v.content ? Object.keys(v.content) : [],
+        }));
+      }
+
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+      const periodSubmissions: any[] = [];
+      const periods = [];
+      const now = new Date();
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        periods.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+      for (const period of periods) {
+        const vals = await storage.getMetricValuesByPeriod(companyId, period);
+        if (vals.length > 0) {
+          periodSubmissions.push({
+            period, totalValues: vals.length,
+            approved: vals.filter((v: any) => v.workflowStatus === "approved").length,
+            submitted: vals.filter((v: any) => v.workflowStatus === "submitted").length,
+            draft: vals.filter((v: any) => v.workflowStatus === "draft").length,
+          });
+        }
+      }
+
+      res.json({
+        generatedAt: new Date().toISOString(),
+        auditLogs: auditLogs.slice(0, 200).map((l: any) => ({ ...l, actor: userMap.get(l.userId) || l.userId })),
+        approvalHistory,
+        evidenceHistory,
+        policyVersions,
+        periodSubmissions,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
 }
 

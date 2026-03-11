@@ -8,7 +8,7 @@ import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
-  ClipboardCheck, ListChecks, Shield,
+  ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -18,6 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/lib/permissions";
 
 const navItems = [
+  { title: "Control Centre", href: "/control-centre", icon: Gauge, group: "main" },
   { title: "Dashboard", href: "/", icon: LayoutDashboard, group: "main" },
   { title: "ESG Policy", href: "/policy", icon: FileText, group: "main" },
   { title: "Priority Topics", href: "/topics", icon: Target, group: "main" },

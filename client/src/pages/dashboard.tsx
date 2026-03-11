@@ -22,6 +22,8 @@ import { format } from "date-fns";
 import { ActivityFeed } from "@/components/activity-feed";
 import { Progress } from "@/components/ui/progress";
 import { usePermissions } from "@/lib/permissions";
+import { ProductTour } from "@/components/product-tour";
+import { SourceBadge } from "@/components/source-badge";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -555,7 +557,17 @@ export default function Dashboard() {
                 <div key={m.id} className="flex items-center gap-2 py-1.5 border-b border-border last:border-0" data-testid={`row-attention-${m.id}`}>
                   <StatusDot status={m.status} size="md" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{m.name}</p>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <p className="text-xs font-medium truncate">{m.name}</p>
+                      <SourceBadge
+                        entityType="metric"
+                        entityId={m.id}
+                        status={m.workflowStatus}
+                        owner={m.owner}
+                        reviewedAt={m.approvedAt || m.lastReviewedAt}
+                        dataSourceType={m.dataSourceType}
+                      />
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       {m.latestValue !== null ? `${m.latestValue} ${m.unit || ""}` : "No data"}
                     </p>

@@ -22,6 +22,7 @@ import * as XLSX from "xlsx";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { DataSourceBadge } from "@/pages/evidence";
+import { SourceBadge } from "@/components/source-badge";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -570,6 +571,14 @@ export default function DataEntry() {
                                 metricId={metric.metricId}
                               />
                             )}
+                            <SourceBadge
+                              entityType="metric"
+                              entityId={metric.metricId}
+                              status={metricValue?.workflowStatus}
+                              owner={metricValue?.owner || metricValue?.submittedBy}
+                              reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
+                              dataSourceType={metricValue?.dataSourceType}
+                            />
                           </div>
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>

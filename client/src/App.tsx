@@ -27,6 +27,8 @@ import Onboarding from "@/pages/onboarding";
 import MyTasks from "@/pages/my-tasks";
 import MyApprovals from "@/pages/my-approvals";
 import Compliance from "@/pages/compliance";
+import AnswerLibrary from "@/pages/answer-library";
+import ControlCentre from "@/pages/control-centre";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -74,6 +76,7 @@ function ProtectedApp() {
           <main className="flex-1 overflow-auto">
             <Switch>
               <Route path="/" component={Dashboard} />
+              <Route path="/control-centre" component={ControlCentre} />
               <Route path="/policy" component={Policy} />
               <Route path="/topics" component={Topics} />
               <Route path="/metrics" component={Metrics} />

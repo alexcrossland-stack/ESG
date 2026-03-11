@@ -551,6 +551,30 @@ export type InsertComplianceFramework = z.infer<typeof insertComplianceFramework
 export type ComplianceRequirement = typeof complianceRequirements.$inferSelect;
 export type InsertComplianceRequirement = z.infer<typeof insertComplianceRequirementSchema>;
 
+export const procurementAnswerStatusEnum = pgEnum("procurement_answer_status", ["draft", "approved", "flagged"]);
+
+export const procurementAnswers = pgTable("procurement_answers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  category: text("category"),
+  linkedMetricIds: text("linked_metric_ids").array(),
+  linkedPolicySection: text("linked_policy_section"),
+  linkedEvidenceIds: text("linked_evidence_ids").array(),
+  linkedComplianceReqIds: text("linked_compliance_req_ids").array(),
+  status: procurementAnswerStatusEnum("status").default("draft"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  lastReviewedAt: timestamp("last_reviewed_at"),
+  flaggedReason: text("flagged_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProcurementAnswerSchema = createInsertSchema(procurementAnswers).omit({ id: true, createdAt: true });
+export type ProcurementAnswer = typeof procurementAnswers.$inferSelect;
+export type InsertProcurementAnswer = z.infer<typeof insertProcurementAnswerSchema>;
+
 export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
 export type UserRole = "admin" | "contributor" | "approver" | "viewer";
