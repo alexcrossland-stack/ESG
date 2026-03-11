@@ -80,6 +80,16 @@ const CATEGORY_ICONS = {
   governance: { icon: Shield, color: "text-purple-500", bg: "bg-purple-500/10", label: "Governance" },
 };
 
+function QualityBadge({ score, metricId }: { score: number; metricId: string }) {
+  const variant = score > 70 ? "default" : score >= 40 ? "secondary" : "outline";
+  const color = score > 70 ? "text-emerald-600 dark:text-emerald-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
+  return (
+    <Badge variant={variant} className={`text-xs gap-0.5 ${color}`} data-testid={`badge-quality-${metricId}`}>
+      Q:{score}
+    </Badge>
+  );
+}
+
 export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -88,6 +98,7 @@ export default function DataEntry() {
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
+  const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState("raw");
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
@@ -97,6 +108,17 @@ export default function DataEntry() {
   const { data: evidenceCoverage } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
   });
+
+  const { data: dataQuality } = useQuery<any>({
+    queryKey: ["/api/data-quality"],
+  });
+
+  const { data: reportingPeriods = [] } = useQuery<any[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
+
+  const activeReportingPeriod = reportingPeriods.find((rp: any) => rp.id === selectedReportingPeriodId);
+  const isReportingPeriodLocked = activeReportingPeriod?.status === "locked";
 
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
@@ -238,7 +260,7 @@ export default function DataEntry() {
   const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
   const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
   const manualMetrics = metrics.filter((m: any) => m.metricType === "manual" || !m.metricType);
-  const editDisabled = isLocked || isApproved || !canEdit;
+  const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
 
   const isLoading = rawLoading || entryLoading;
   if (isLoading) {
@@ -278,6 +300,35 @@ export default function DataEntry() {
               ))}
             </SelectContent>
           </Select>
+          {reportingPeriods.length > 0 && (
+            <Select value={selectedReportingPeriodId} onValueChange={setSelectedReportingPeriodId}>
+              <SelectTrigger className="w-44" data-testid="select-reporting-period">
+                <SelectValue placeholder="All Periods" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Periods</SelectItem>
+                {reportingPeriods.map((rp: any) => (
+                  <SelectItem key={rp.id} value={rp.id}>{rp.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {activeReportingPeriod && (
+            <Badge
+              variant={activeReportingPeriod.status === "locked" ? "secondary" : activeReportingPeriod.status === "closed" ? "outline" : "default"}
+              className="text-xs gap-1"
+              data-testid="badge-period-status"
+            >
+              {activeReportingPeriod.status === "locked" && <Lock className="w-3 h-3" />}
+              {activeReportingPeriod.status}
+            </Badge>
+          )}
+          {isReportingPeriodLocked && (
+            <Badge variant="destructive" className="text-xs gap-1" data-testid="text-period-locked">
+              <Lock className="w-3 h-3" />
+              Period Locked
+            </Badge>
+          )}
           {evidenceCoverage && (
             <Badge variant="outline" className="text-xs gap-1" data-testid="badge-evidence-summary">
               <FileCheck className="w-3 h-3" />
@@ -513,6 +564,12 @@ export default function DataEntry() {
                             <DataSourceBadge type={metricValue?.dataSourceType} />
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
+                            {dataQuality?.perMetric?.find((q: any) => q.metricId === metric.metricId) && (
+                              <QualityBadge
+                                score={dataQuality.perMetric.find((q: any) => q.metricId === metric.metricId).score}
+                                metricId={metric.metricId}
+                              />
+                            )}
                           </div>
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>

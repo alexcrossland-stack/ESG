@@ -522,6 +522,35 @@ export type EvidenceRequest = typeof evidenceRequests.$inferSelect;
 export type InsertEvidenceRequest = z.infer<typeof insertEvidenceRequestSchema>;
 export type ReportingPeriod = typeof reportingPeriods.$inferSelect;
 export type InsertReportingPeriod = z.infer<typeof insertReportingPeriodSchema>;
+export const complianceFrameworks = pgTable("compliance_frameworks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  version: text("version"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const complianceRequirements = pgTable("compliance_requirements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  frameworkId: varchar("framework_id").notNull(),
+  code: text("code").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  category: text("category"),
+  linkedMetricIds: text("linked_metric_ids").array(),
+  linkedPolicySection: text("linked_policy_section"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertComplianceFrameworkSchema = createInsertSchema(complianceFrameworks).omit({ id: true, createdAt: true });
+export const insertComplianceRequirementSchema = createInsertSchema(complianceRequirements).omit({ id: true, createdAt: true });
+
+export type ComplianceFramework = typeof complianceFrameworks.$inferSelect;
+export type InsertComplianceFramework = z.infer<typeof insertComplianceFrameworkSchema>;
+export type ComplianceRequirement = typeof complianceRequirements.$inferSelect;
+export type InsertComplianceRequirement = z.infer<typeof insertComplianceRequirementSchema>;
+
 export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
 export type UserRole = "admin" | "contributor" | "approver" | "viewer";

@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
+  Gauge, Scale, ArrowUpDown,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -23,19 +24,19 @@ const REPORT_TEMPLATES = [
     id: "management",
     label: "Internal Management Report",
     description: "Full ESG performance review for internal stakeholders",
-    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true },
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
   },
   {
     id: "customer",
     label: "Customer / Supplier Response Pack",
     description: "Concise ESG summary for external supply chain requests",
-    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: false, includeEvidence: true, includeMethodology: false, includeSignoff: false },
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: false, includeEvidence: true, includeMethodology: false, includeSignoff: false, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
   },
   {
     id: "annual",
     label: "Annual ESG Summary",
     description: "High-level annual overview with key metrics and progress",
-    defaults: { includeSummary: true, includePolicy: true, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: false, includeMethodology: true, includeSignoff: true },
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: false, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: false, includeComplianceStatus: false, includePeriodComparison: false },
   },
 ];
 
@@ -49,6 +50,9 @@ const SECTIONS = [
   { key: "includeEvidence", label: "Evidence Coverage", icon: Eye },
   { key: "includeMethodology", label: "Methodology Notes", icon: BookOpen },
   { key: "includeSignoff", label: "Approval Sign-off", icon: PenLine },
+  { key: "includeDataQualityAssessment", label: "Data Quality Assessment", icon: Gauge },
+  { key: "includeComplianceStatus", label: "Compliance Status", icon: Scale },
+  { key: "includePeriodComparison", label: "Period Comparison", icon: ArrowUpDown },
 ];
 
 function generatePeriods() {
@@ -83,7 +87,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
     company, policySummary, selectedTopics, metricsByCategory, values,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
     evidenceCoverage, factorMethodology, period, generatedAt, generatedBy, reportTemplate,
-    branding,
+    branding, dataQualityAssessment, complianceStatus, periodComparison,
   } = data;
 
   const templateLabel = REPORT_TEMPLATES.find(t => t.id === reportTemplate)?.label || "ESG Report";
@@ -551,6 +555,100 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
               <p>Data quality summary: {dataQualityFlags?.approvalRate || 0}% approved, {dataQualityFlags?.evidenceRate || 0}% evidenced, {dataQualityFlags?.missingCount || 0} metrics missing data.</p>
               {dataQualityFlags?.estimatedCount > 0 && <p className="text-amber-600 dark:text-amber-400 mt-0.5">{dataQualityFlags.estimatedCount} metric values are based on estimated data.</p>}
             </div>
+          </div>
+        </div>
+      )}
+
+      {sections.includeDataQualityAssessment && dataQualityAssessment && (
+        <div data-testid="section-data-quality-assessment">
+          <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
+            <Gauge className="w-4 h-4 text-primary" />
+            Data Quality Assessment
+          </h2>
+          <div className="grid grid-cols-4 gap-3 mb-3">
+            <div className="bg-muted/50 rounded-md p-3 text-center text-xs col-span-1">
+              <p className={`font-bold text-2xl ${dataQualityAssessment.overallScore >= 70 ? "text-emerald-600 dark:text-emerald-400" : dataQualityAssessment.overallScore >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"}`}>
+                {dataQualityAssessment.overallScore}%
+              </p>
+              <p className="text-muted-foreground mt-1">Overall Quality</p>
+            </div>
+            {Object.entries(dataQualityAssessment.categoryBreakdown || {}).map(([cat, score]: [string, any]) => (
+              <div key={cat} className="bg-muted/50 rounded-md p-3 text-center text-xs">
+                <p className="font-bold text-lg">{score}%</p>
+                <p className="text-muted-foreground capitalize">{cat}</p>
+              </div>
+            ))}
+          </div>
+          {dataQualityAssessment.recommendations?.length > 0 && (
+            <div className="bg-blue-50 dark:bg-blue-900/10 rounded-md p-3 text-xs">
+              <p className="font-medium text-blue-800 dark:text-blue-400 mb-1">Recommendations</p>
+              <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                {dataQualityAssessment.recommendations.map((rec: string, i: number) => (
+                  <li key={i}>{rec}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {sections.includeComplianceStatus && complianceStatus && (
+        <div data-testid="section-compliance-status">
+          <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
+            <Scale className="w-4 h-4 text-primary" />
+            Compliance Status
+          </h2>
+          <div className="space-y-3">
+            {complianceStatus.map((fw: any) => (
+              <div key={fw.id} className="bg-muted/50 rounded-md p-3 text-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-medium">{fw.name} {fw.version && <span className="text-muted-foreground">(v{fw.version})</span>}</p>
+                  <Badge variant={fw.compliancePercent >= 70 ? "default" : "secondary"} className={`text-[10px] ${fw.compliancePercent >= 70 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : ""}`}>
+                    {fw.compliancePercent}% compliant
+                  </Badge>
+                </div>
+                <div className="w-full bg-muted rounded-full h-1.5 mb-2">
+                  <div className={`h-1.5 rounded-full ${fw.compliancePercent >= 70 ? "bg-emerald-500" : fw.compliancePercent >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${fw.compliancePercent}%` }} />
+                </div>
+                <p className="text-muted-foreground">{fw.metRequirements}/{fw.totalRequirements} requirements met</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sections.includePeriodComparison && periodComparison && (
+        <div data-testid="section-period-comparison">
+          <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
+            <ArrowUpDown className="w-4 h-4 text-primary" />
+            Period Comparison
+          </h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            {periodComparison.currentPeriod} vs {periodComparison.previousPeriod}
+          </p>
+          <div className="border border-border rounded-md overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left p-2 font-medium">Metric</th>
+                  <th className="text-right p-2 font-medium">Previous</th>
+                  <th className="text-right p-2 font-medium">Current</th>
+                  <th className="text-right p-2 font-medium">Change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {periodComparison.metrics?.map((m: any, i: number) => (
+                  <tr key={i} className="border-t border-border">
+                    <td className="p-2">{m.name}</td>
+                    <td className="p-2 text-right text-muted-foreground">{m.previousValue ?? "—"}</td>
+                    <td className="p-2 text-right font-medium">{m.currentValue ?? "—"}</td>
+                    <td className={`p-2 text-right font-medium ${m.delta > 0 ? "text-emerald-600 dark:text-emerald-400" : m.delta < 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+                      {m.delta != null ? `${m.delta > 0 ? "+" : ""}${m.delta.toFixed(1)}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

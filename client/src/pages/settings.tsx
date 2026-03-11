@@ -17,10 +17,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Settings as SettingsIcon, Building2, Clock, Save, Library, FileText,
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
-  Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon,
+  Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon, UserPlus,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -530,8 +531,11 @@ function MetricsAdmin() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [editingMetric, setEditingMetric] = useState<any | null>(null);
+  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
+  const [bulkAssignUserId, setBulkAssignUserId] = useState("");
 
   const { data: metrics = [] } = useQuery<any[]>({ queryKey: ["/api/metrics/all"] });
+  const { data: companyUsers = [] } = useQuery<any[]>({ queryKey: ["/api/users"] });
 
   const [direction, setDirection] = useState("");
   const [targetValue, setTargetValue] = useState("");
@@ -570,6 +574,31 @@ function MetricsAdmin() {
     onError: () => toast({ title: "Update failed", variant: "destructive" }),
   });
 
+  const bulkAssignMutation = useMutation({
+    mutationFn: async ({ entityIds, assignedUserId }: { entityIds: string[]; assignedUserId: string }) => {
+      const resp = await apiRequest("PUT", "/api/assign/bulk", {
+        entityType: "metrics",
+        entityIds,
+        assignedUserId,
+      });
+      return resp.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics/all"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/audit-logs"] });
+      const assignedUser = companyUsers.find((u: any) => u.id === bulkAssignUserId);
+      const userName = assignedUser?.username || "selected user";
+      toast({
+        title: `${data.succeeded} metrics assigned to ${userName}`,
+        description: data.failed > 0 ? `${data.failed} failed` : undefined,
+      });
+      setSelectedMetrics(new Set());
+      setBulkAssignUserId("");
+    },
+    onError: () => toast({ title: "Bulk assign failed", variant: "destructive" }),
+  });
+
   const handleSave = () => {
     updateMutation.mutate({
       direction,
@@ -581,6 +610,31 @@ function MetricsAdmin() {
       enabled,
       helpText,
       dataOwner,
+    });
+  };
+
+  const toggleMetricSelection = (id: string) => {
+    setSelectedMetrics(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedMetrics.size === metrics.length) {
+      setSelectedMetrics(new Set());
+    } else {
+      setSelectedMetrics(new Set(metrics.map((m: any) => m.id)));
+    }
+  };
+
+  const handleBulkAssign = () => {
+    if (!bulkAssignUserId || selectedMetrics.size === 0) return;
+    bulkAssignMutation.mutate({
+      entityIds: Array.from(selectedMetrics),
+      assignedUserId: bulkAssignUserId,
     });
   };
 
@@ -599,6 +653,41 @@ function MetricsAdmin() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                checked={metrics.length > 0 && selectedMetrics.size === metrics.length}
+                onCheckedChange={toggleSelectAll}
+                data-testid="checkbox-select-all-metrics"
+              />
+              <span className="text-xs text-muted-foreground" data-testid="text-selected-count">
+                {selectedMetrics.size > 0 ? `${selectedMetrics.size} selected` : "Select all"}
+              </span>
+            </div>
+            {selectedMetrics.size > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <Select value={bulkAssignUserId} onValueChange={setBulkAssignUserId}>
+                  <SelectTrigger className="w-[180px] text-xs" data-testid="select-bulk-assign-user">
+                    <SelectValue placeholder="Choose user..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {companyUsers.map((u: any) => (
+                      <SelectItem key={u.id} value={u.id}>{u.username}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  disabled={!bulkAssignUserId || bulkAssignMutation.isPending}
+                  onClick={handleBulkAssign}
+                  data-testid="button-bulk-assign"
+                >
+                  <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+                  {bulkAssignMutation.isPending ? "Assigning..." : "Assign Selected"}
+                </Button>
+              </div>
+            )}
+          </div>
           <div className="space-y-1 max-h-96 overflow-y-auto">
             {metrics.map((m: any) => (
               <div
@@ -607,6 +696,13 @@ function MetricsAdmin() {
                 onClick={() => openEditor(m)}
                 data-testid={`admin-metric-${m.id}`}
               >
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Checkbox
+                    checked={selectedMetrics.has(m.id)}
+                    onCheckedChange={() => toggleMetricSelection(m.id)}
+                    data-testid={`checkbox-metric-${m.id}`}
+                  />
+                </div>
                 <div className={`w-2 h-2 rounded-full shrink-0 ${m.enabled === false ? "bg-gray-300" : "bg-emerald-500"}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`font-medium truncate ${m.enabled === false ? "text-muted-foreground line-through" : ""}`}>{m.name}</p>

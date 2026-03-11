@@ -26,6 +26,7 @@ import Evidence from "@/pages/evidence";
 import Onboarding from "@/pages/onboarding";
 import MyTasks from "@/pages/my-tasks";
 import MyApprovals from "@/pages/my-approvals";
+import Compliance from "@/pages/compliance";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -87,6 +88,7 @@ function ProtectedApp() {
               <Route path="/questionnaire" component={QuestionnairePage} />
               <Route path="/my-tasks" component={MyTasks} />
               <Route path="/my-approvals" component={MyApprovals} />
+              <Route path="/compliance" component={Compliance} />
               <Route component={NotFound} />
             </Switch>
           </main>

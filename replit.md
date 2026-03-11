@@ -111,6 +111,48 @@ DB table: `notifications` with company_id, user_id, type, title, message, severi
 ### Admin Sections (Updated)
 10 sections in Settings Administration tab (added "Reporting Periods" with Calendar icon)
 
+## Phase 2 — Release 2 Features
+
+### Period-Filtered Views
+- Data entry page: Reporting period selector dropdown, locked periods disable inputs
+- Dashboard: Reporting period selector, filters enhanced query by reportingPeriodId
+
+### Enhanced Notifications
+- 4 new notification types: `task_assigned`, `evidence_request_pending`, `period_closing`, `approval_waiting`
+- Deduplication via source_key
+
+### Bulk Operations
+- Bulk approve/reject on My Approvals page (`POST /api/workflow/bulk-review`)
+- Bulk owner assignment on settings metrics admin (`PUT /api/assign/bulk`)
+
+### Activity Feed
+- `client/src/components/activity-feed.tsx` — Timeline component from audit log, filterable, collapsible
+- Added to dashboard below main content
+
+## Phase 2 — Release 3 Features
+
+### Data Quality Score System
+- `GET /api/data-quality` — Per-metric quality scores (0-100) based on 5 criteria: value (30pt), evidence (20pt), approved (20pt), evidenced source (15pt), notes (15pt)
+- `DataQualityCard` on dashboard with ring visualization and category breakdown
+- Quality badges on data entry page per metric
+
+### Compliance Framework Mapping
+- New tables: `compliance_frameworks`, `compliance_requirements`
+- 3 seeded frameworks: GRI Standards (10 reqs), ISO 14001 (8 reqs), UN SDGs (6 reqs)
+- `GET /api/compliance/frameworks`, `GET /api/compliance/status`
+- New page: `/compliance` with framework cards, expandable requirements, met/unmet status
+- Sidebar: "Compliance" with Shield icon in Navigation group
+
+### Enhanced Report Sections
+- 3 new toggleable report sections (default off for backward compat):
+  - Data Quality Assessment — per-category quality scores + recommendations
+  - Compliance Status — per-framework compliance percentage
+  - Period Comparison — side-by-side metrics vs previous period with deltas
+
+### Dashboard Completeness Indicators
+- Data Completeness card: metrics entered, evidence coverage, approval rate (with progress bars)
+- Quick Actions card: metrics needing data, items awaiting approval, evidence requests pending, overdue actions (with count badges and links)
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`) for AI-assisted features like policy generation and questionnaire autofill.

@@ -12,12 +12,16 @@ import {
   AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
-  Bell, X, ChevronDown, ChevronUp,
+  Bell, X, ChevronDown, ChevronUp, Sparkles, Target,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useState } from "react";
 import { format } from "date-fns";
+import { ActivityFeed } from "@/components/activity-feed";
+import { Progress } from "@/components/ui/progress";
+import { usePermissions } from "@/lib/permissions";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -213,14 +217,106 @@ function ScoreMethodology({ weightedScore }: { weightedScore: any }) {
   );
 }
 
+function DataQualityCard() {
+  const { data: quality, isLoading } = useQuery<any>({ queryKey: ["/api/data-quality"] });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+  if (!quality || quality.totalMetrics === 0) return null;
+
+  const score = quality.overallScore || 0;
+  const radius = 36;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (score / 100) * circumference;
+  const ringColor = score >= 70 ? "stroke-emerald-500" : score >= 40 ? "stroke-amber-500" : "stroke-red-500";
+  const textColor = score >= 70 ? "text-emerald-500" : score >= 40 ? "text-amber-500" : "text-red-500";
+
+  const criteria = [
+    { label: "Has value", count: quality.perMetric.filter((m: any) => m.hasValue).length, pts: 30 },
+    { label: "Has evidence", count: quality.perMetric.filter((m: any) => m.hasEvidence).length, pts: 20 },
+    { label: "Approved", count: quality.perMetric.filter((m: any) => m.isApproved).length, pts: 20 },
+    { label: "Actual data", count: quality.perMetric.filter((m: any) => m.isActual).length, pts: 15 },
+    { label: "Has notes", count: quality.perMetric.filter((m: any) => m.hasNotes).length, pts: 15 },
+  ];
+
+  return (
+    <Card data-testid="card-data-quality">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-primary" />
+          Data Quality
+        </CardTitle>
+        <CardDescription className="text-xs">Score based on 5 quality criteria</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-center shrink-0">
+            <div className="relative w-20 h-20">
+              <svg className="w-20 h-20 -rotate-90" viewBox="0 0 90 90">
+                <circle cx="45" cy="45" r={radius} fill="none" className="stroke-muted" strokeWidth="7" />
+                <circle
+                  cx="45" cy="45" r={radius} fill="none"
+                  className={ringColor}
+                  strokeWidth="7"
+                  strokeLinecap="round"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={strokeDashoffset}
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className={`text-lg font-bold ${textColor}`} data-testid="text-quality-score">{score}%</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Overall</p>
+          </div>
+          <div className="flex-1 space-y-1.5">
+            {criteria.map(c => {
+              const pct = quality.totalMetrics > 0 ? Math.round((c.count / quality.totalMetrics) * 100) : 0;
+              return (
+                <div key={c.label} className="flex items-center gap-2 text-xs">
+                  <span className="w-20 text-muted-foreground truncate">{c.label}</span>
+                  <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${pct >= 70 ? "bg-emerald-500" : pct >= 40 ? "bg-amber-500" : "bg-red-500"}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="w-14 text-right font-medium">{c.count}/{quality.totalMetrics}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {quality.categoryBreakdown && (
+          <div className="flex items-center gap-3 mt-3 pt-2 border-t border-border">
+            {Object.entries(quality.categoryBreakdown).map(([cat, catScore]: [string, any]) => (
+              <div key={cat} className="flex items-center gap-1.5 text-xs">
+                <span className="capitalize text-muted-foreground">{cat}:</span>
+                <Badge variant={catScore >= 70 ? "default" : catScore >= 40 ? "secondary" : "outline"} className="text-xs">
+                  {catScore}%
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
-  const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced"] });
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
+  const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
+  const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => fetch(`/api/dashboard/enhanced${periodParam}`, { credentials: "include" }).then(r => r.json()) });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: carbonCalcs } = useQuery<any>({ queryKey: ["/api/carbon-calculations"] });
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
+  const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
+  const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
+  const { can, isAdmin } = usePermissions();
 
   const isLoading = enhancedLoading || oldLoading;
+  const activePeriod = reportingPeriods.find((rp: any) => rp.id === selectedPeriodId);
 
   if (isLoading) {
     return (
@@ -294,9 +390,22 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {reportingPeriods.length > 0 && (
+            <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
+              <SelectTrigger className="w-44" data-testid="select-dashboard-period">
+                <SelectValue placeholder="Latest Data" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__latest__">Latest Data</SelectItem>
+                {reportingPeriods.map((rp: any) => (
+                  <SelectItem key={rp.id} value={rp.id}>{rp.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {enhanced?.latestPeriod && (
             <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
-              Latest: {enhanced.latestPeriod}
+              {activePeriod ? activePeriod.name : `Latest: ${enhanced.latestPeriod}`}
             </Badge>
           )}
         </div>
@@ -621,6 +730,117 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Card data-testid="card-data-completeness">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Target className="w-4 h-4 text-primary" />
+              Data Completeness
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(() => {
+              const totalEnabled = metricSummaries.length;
+              const withData = metricSummaries.filter((m: any) => m.status !== "missing").length;
+              const withEvidence = Math.round((evidenceCoverage / 100) * totalEnabled);
+              const submitted = metricSummaries.filter((m: any) => m.workflowStatus === "submitted" || m.workflowStatus === "approved").length;
+              const approved = metricSummaries.filter((m: any) => m.workflowStatus === "approved").length;
+              const metricsPercent = totalEnabled > 0 ? Math.round((withData / totalEnabled) * 100) : 0;
+              const evidencePercent = Math.round(evidenceCoverage);
+              const approvalPercent = submitted > 0 ? Math.round((approved / submitted) * 100) : 0;
+              return (
+                <>
+                  <div data-testid="progress-metrics-entered">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">Metrics with data</span>
+                      <span className="font-medium">{withData}/{totalEnabled} ({metricsPercent}%)</span>
+                    </div>
+                    <Progress value={metricsPercent} className="h-2" />
+                  </div>
+                  <div data-testid="progress-evidence-coverage">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">Evidence coverage</span>
+                      <span className="font-medium">{withEvidence}/{totalEnabled} ({evidencePercent}%)</span>
+                    </div>
+                    <Progress value={evidencePercent} className="h-2" />
+                  </div>
+                  <div data-testid="progress-approval-rate">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">Approved / submitted</span>
+                      <span className="font-medium">{approved}/{submitted} ({approvalPercent}%)</span>
+                    </div>
+                    <Progress value={approvalPercent} className="h-2" />
+                  </div>
+                </>
+              );
+            })()}
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-quick-actions">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Zap className="w-4 h-4 text-primary" />
+              Quick Actions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            {(() => {
+              const needData = metricSummaries.filter((m: any) => m.status === "missing").length;
+              const pendingApprovals = metricSummaries.filter((m: any) => m.workflowStatus === "submitted").length;
+              const pendingEvidence = Array.isArray(evidenceRequests) ? evidenceRequests.filter((er: any) => er.status === "requested").length : 0;
+              const overdueCount = actions.filter((a: any) => a.status !== "complete" && a.dueDate && new Date(a.dueDate) < new Date()).length;
+              return (
+                <>
+                  <Link href="/data-entry">
+                    <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-data-entry">
+                      <div className="flex items-center gap-2 text-sm">
+                        <ClipboardList className="w-3.5 h-3.5 text-muted-foreground" />
+                        <span>{needData} metrics need data</span>
+                      </div>
+                      {needData > 0 && <Badge variant="secondary" className="text-xs">{needData}</Badge>}
+                    </div>
+                  </Link>
+                  {(isAdmin || can("report_generation")) && (
+                    <Link href="/my-approvals">
+                      <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-approvals">
+                        <div className="flex items-center gap-2 text-sm">
+                          <CheckCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span>{pendingApprovals} items awaiting approval</span>
+                        </div>
+                        {pendingApprovals > 0 && <Badge variant="secondary" className="text-xs">{pendingApprovals}</Badge>}
+                      </div>
+                    </Link>
+                  )}
+                  <Link href="/evidence">
+                    <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-evidence">
+                      <div className="flex items-center gap-2 text-sm">
+                        <FileCheck className="w-3.5 h-3.5 text-muted-foreground" />
+                        <span>{pendingEvidence} evidence requests pending</span>
+                      </div>
+                      {pendingEvidence > 0 && <Badge variant="secondary" className="text-xs">{pendingEvidence}</Badge>}
+                    </div>
+                  </Link>
+                  <Link href="/actions">
+                    <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-overdue">
+                      <div className="flex items-center gap-2 text-sm">
+                        <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                        <span>{overdueCount} actions overdue</span>
+                      </div>
+                      {overdueCount > 0 && <Badge variant="destructive" className="text-xs">{overdueCount}</Badge>}
+                    </div>
+                  </Link>
+                </>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      </div>
+
+      <DataQualityCard />
+
+      <ActivityFeed />
 
       <NotificationsPanel />
     </div>
