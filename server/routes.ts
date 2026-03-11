@@ -488,6 +488,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     throw new Error("SESSION_SECRET environment variable is required");
   }
 
+  app.set("trust proxy", 1);
+
   app.use(session({
     store: new PgSession({ pool, createTableIfMissing: true }),
     secret: sessionSecret,
