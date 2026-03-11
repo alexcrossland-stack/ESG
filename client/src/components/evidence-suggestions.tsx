@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { authFetch } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FileCheck, Link as LinkIcon, ChevronDown, ChevronUp } from "lucide-react";
@@ -18,7 +19,7 @@ export function EvidenceSuggestions({ metricId, category, onLink }: EvidenceSugg
 
   const { data: suggestions = [] } = useQuery<any[]>({
     queryKey: ["/api/evidence/suggestions", metricId, category],
-    queryFn: () => fetch(`/api/evidence/suggestions?${params.toString()}`, { credentials: "include" }).then(r => r.json()),
+    queryFn: () => authFetch(`/api/evidence/suggestions?${params.toString()}`).then(r => r.json()),
     enabled: !!(metricId || category),
   });
 

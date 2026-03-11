@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -125,14 +125,14 @@ export default function DataEntry() {
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
     queryFn: () => {
-        return fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include" }).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
+        return authFetch(`/api/raw-data/${selectedPeriod}`).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
       },
   });
 
   const { data: entryData, isLoading: entryLoading } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedPeriod],
     queryFn: () => {
-        return fetch(`/api/data-entry/${selectedPeriod}`, { credentials: "include" }).then(r => r.json());
+        return authFetch(`/api/data-entry/${selectedPeriod}`).then(r => r.json());
       },
   });
 

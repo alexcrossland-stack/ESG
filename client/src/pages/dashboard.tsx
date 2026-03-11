@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -309,7 +309,7 @@ export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
   const [showTour, setShowTour] = useState(false);
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
-  const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => fetch(`/api/dashboard/enhanced${periodParam}`, { credentials: "include" }).then(r => r.json()) });
+  const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()) });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: carbonCalcs } = useQuery<any>({ queryKey: ["/api/carbon-calculations"] });

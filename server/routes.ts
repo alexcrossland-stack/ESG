@@ -71,8 +71,37 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
   return storedHash === legacyHashPassword(password);
 }
 
-function requireAuth(req: Request, res: Response, next: Function) {
+const tokenSessions = new Map<string, { userId: string; companyId: string; expiresAt: number }>();
+
+function generateToken(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < 64; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+  return result;
+}
+
+function resolveAuth(req: Request): { userId: string; companyId: string } | null {
   if ((req.session as any).userId) {
+    return { userId: (req.session as any).userId, companyId: (req.session as any).companyId };
+  }
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    const session = tokenSessions.get(token);
+    if (session && session.expiresAt > Date.now()) {
+      return { userId: session.userId, companyId: session.companyId };
+    }
+    if (session) tokenSessions.delete(token);
+  }
+  return null;
+}
+
+function requireAuth(req: Request, res: Response, next: Function) {
+  const auth = resolveAuth(req);
+  if (auth) {
+    (req as any)._auth = auth;
+    (req.session as any).userId = auth.userId;
+    (req.session as any).companyId = auth.companyId;
     return next();
   }
   return res.status(401).json({ error: "Not authenticated" });
@@ -494,7 +523,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     store: new PgSession({ pool, createTableIfMissing: true }),
     secret: sessionSecret,
     resave: false,
-    saveUninitialized: false,
+    saveUninitialized: true,
     cookie: {
       secure: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
@@ -560,14 +589,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { email: user.email },
       });
 
-      req.session.regenerate((err) => {
+      const token = generateToken();
+      tokenSessions.set(token, { userId: user.id, companyId: company.id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      (req.session as any).userId = user.id;
+      (req.session as any).companyId = company.id;
+      req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        (req.session as any).userId = user.id;
-        (req.session as any).companyId = company.id;
-        req.session.save((err) => {
-          if (err) return res.status(500).json({ error: "Session error" });
-          res.json({ user: { ...user, password: undefined }, company });
-        });
+        res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -618,14 +646,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { email: user.email },
       });
 
-      req.session.regenerate((err) => {
+      const token = generateToken();
+      tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      (req.session as any).userId = user.id;
+      (req.session as any).companyId = user.companyId;
+      req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
-        (req.session as any).userId = user.id;
-        (req.session as any).companyId = user.companyId;
-        req.session.save((err) => {
-          if (err) return res.status(500).json({ error: "Session error" });
-          res.json({ user: { ...user, password: undefined }, company });
-        });
+        res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -642,6 +669,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         action: "logout",
         entityType: "auth",
       });
+    }
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      tokenSessions.delete(authHeader.slice(7));
     }
     req.session.destroy(() => res.json({ ok: true }));
   });
@@ -677,9 +708,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/auth/me", async (req, res) => {
-    const userId = (req.session as any).userId;
-    if (!userId) return res.status(401).json({ error: "Not authenticated" });
-    const user = await storage.getUser(userId);
+    const auth = resolveAuth(req);
+    if (!auth) return res.status(401).json({ error: "Not authenticated" });
+    const user = await storage.getUser(auth.userId);
     if (!user) return res.status(401).json({ error: "User not found" });
     const company = user.companyId ? await storage.getCompany(user.companyId) : null;
     res.json({ user: { ...user, password: undefined }, company });

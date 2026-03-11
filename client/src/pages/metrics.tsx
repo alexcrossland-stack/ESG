@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,7 +89,7 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
   const { data: historyData } = useQuery<any>({
     queryKey: ["/api/metrics", metric?.id, "history"],
     queryFn: () => {
-        return fetch(`/api/metrics/${metric?.id}/history`, { credentials: "include" }).then(r => r.json());
+        return authFetch(`/api/metrics/${metric?.id}/history`).then(r => r.json());
       },
     enabled: !!metric?.id,
   });

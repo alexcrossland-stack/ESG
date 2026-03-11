@@ -1,5 +1,33 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+let authToken: string | null = localStorage.getItem("auth_token");
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+  if (token) {
+    localStorage.setItem("auth_token", token);
+  } else {
+    localStorage.removeItem("auth_token");
+  }
+}
+
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+  return headers;
+}
+
+export function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = { ...getAuthHeaders(), ...(init?.headers || {}) };
+  return fetch(url, { ...init, headers, credentials: "include" });
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -12,7 +40,7 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...getAuthHeaders() };
   if (data) headers["Content-Type"] = "application/json";
 
   const res = await fetch(url, {
@@ -34,6 +62,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const res = await fetch(queryKey.join("/") as string, {
       credentials: "include",
+      headers: getAuthHeaders(),
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
