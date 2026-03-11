@@ -125,7 +125,7 @@ export default function DataEntry() {
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod],
     queryFn: () => {
-        return fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include" }).then(r => r.json());
+        return fetch(`/api/raw-data/${selectedPeriod}`, { credentials: "include" }).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
       },
   });
 
