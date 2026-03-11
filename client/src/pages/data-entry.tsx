@@ -53,6 +53,7 @@ const RAW_DATA_FIELDS = {
     { key: "total_staff", label: "Total Staff (for training %)", unit: "people", help: "Total staff for training completion %" },
     { key: "signed_suppliers", label: "Suppliers Signed CoC", unit: "suppliers", help: "Suppliers who signed code of conduct" },
     { key: "total_suppliers", label: "Total Suppliers", unit: "suppliers", help: "Total number of suppliers" },
+    { key: "annual_revenue", label: "Annual Revenue", unit: "GBP", help: "Annual revenue for carbon intensity calculation" },
   ],
 };
 

@@ -42,7 +42,7 @@ The application is a full-stack SaaS web application.
     - **Supplier Questionnaire Autofill:** Auto-suggests answers for ESG questionnaires using existing company data, providing rationale and confidence levels.
     - **Carbon Estimator:** SME-focused carbon module with versioned emission factor sets (UK DEFRA 2024), data quality tracking (actual/estimated/proxy), fuel-type-specific factors (diesel/petrol/hybrid/electric/LPG), proxy calculations from floor area, per-line-item methodology notes, assumptions tracking, and detailed text export. Rules-based calculations only (no AI).
     - **Policy Templates:** Offers 28 structured templates with guided drafting, compliance mapping, and multi-format export.
-- **Calculation Engine:** Centralized service (`server/calculations.ts`) handles complex ESG metric calculations (e.g., Scope 1/2 emissions, recycling rate, carbon intensity, employee turnover).
+- **Calculation Engine:** Centralized service (`server/calculations.ts`) handles 12 automated ESG metric calculations using DB emission factors via `buildEmissionFactorMap()`. Raw inputs collected: 26 fields across environmental (12), social (8), governance (5 including annual_revenue), plus water_m3 (tracked but no formula).
 
 ## External Dependencies
 

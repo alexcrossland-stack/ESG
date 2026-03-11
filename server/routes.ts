@@ -18,7 +18,37 @@ import OpenAI from "openai";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
-import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric } from "./calculations";
+import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
+
+function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
+  const map: EmissionFactorMap = {};
+  for (const f of dbFactors) {
+    const val = parseFloat(f.factor);
+    if (isNaN(val)) continue;
+    const cat = (f.category || "").toLowerCase();
+    const name = (f.name || "").toLowerCase();
+    const ft = (f.fuelType || "").toLowerCase();
+    switch (cat) {
+      case "electricity": map.electricity = val; break;
+      case "gas": map.naturalGas = val; break;
+      case "fuel":
+        if (ft === "diesel" || name.includes("diesel")) map.diesel = val;
+        else if (ft === "petrol" || name.includes("petrol")) map.petrol = val;
+        break;
+      case "vehicles":
+        if (!ft || ft === "mixed" || ft === "average" || name.includes("average")) map.companyCar = val;
+        break;
+      case "travel":
+        if (name.includes("domestic")) map.domesticFlight = val;
+        else if (name.includes("short")) map.shortHaulFlight = val;
+        else if (name.includes("long")) map.longHaulFlight = val;
+        else if (name.includes("rail")) map.rail = val;
+        else if (name.includes("hotel")) map.hotelNight = val;
+        break;
+    }
+  }
+  return map;
+}
 
 const { Pool } = pg;
 
@@ -1068,7 +1098,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const allMetrics = await storage.getMetrics(companyId);
       const allRawFields = [
-        ...Object.values({ environmental: ["electricity_kwh","gas_kwh","vehicle_fuel_litres","total_waste_tonnes","recycled_waste_tonnes","water_m3","domestic_flight_km","short_haul_flight_km","long_haul_flight_km","rail_km","hotel_nights","car_miles"], social: ["employee_headcount","employee_leavers","absence_days","total_working_days","total_training_hours","female_managers","total_managers","living_wage_employees"], governance: ["trained_staff","total_staff","signed_suppliers","total_suppliers"] }).flat()
+        ...Object.values({ environmental: ["electricity_kwh","gas_kwh","vehicle_fuel_litres","total_waste_tonnes","recycled_waste_tonnes","water_m3","domestic_flight_km","short_haul_flight_km","long_haul_flight_km","rail_km","hotel_nights","car_miles"], social: ["employee_headcount","employee_leavers","absence_days","total_working_days","total_training_hours","female_managers","total_managers","living_wage_employees"], governance: ["trained_staff","total_staff","signed_suppliers","total_suppliers","annual_revenue"] }).flat()
       ];
 
       const RAW_LABEL_MAP: Record<string, string> = {
@@ -1105,6 +1135,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         "suppliers signed coc": "signed_suppliers",
         "suppliers signed code of conduct": "signed_suppliers",
         "total suppliers": "total_suppliers",
+        "annual revenue": "annual_revenue",
+        "revenue": "annual_revenue",
       };
 
       if (!rows.every((r: any) => r.name && typeof r.period === "string" && r.period.match(/^\d{4}-\d{2}$/))) {
@@ -1168,6 +1200,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      const bulkFactors = await storage.getEmissionFactors();
+      const bulkFactorMap = buildEmissionFactorMap(bulkFactors);
       for (const period of periodsAffected) {
         try {
           const rawData = await storage.getRawDataByPeriod(companyId, period);
@@ -1181,7 +1215,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             const pVal = vals.find(v => v.period === period);
             existingVals[m.name] = pVal?.value != null ? Number(pVal.value) : null;
           }
-          const calculated = runCalculationsForPeriod(rawInputsMap, {}, existingVals);
+          const calculated = runCalculationsForPeriod(rawInputsMap, bulkFactorMap, existingVals);
           for (const [metricName, calcValue] of Object.entries(calculated)) {
             if (calcValue === null || calcValue === undefined) continue;
             const metric = allMetrics.find(m => m.name === metricName && (m.metricType === "calculated" || m.metricType === "derived"));
@@ -1244,7 +1278,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (periodVal) existingValues[m.name] = periodVal.value !== null ? Number(periodVal.value) : null;
       }
 
-      const calculated = runCalculationsForPeriod(rawInputs, {}, existingValues);
+      const dbFactors = await storage.getEmissionFactors();
+      const efMap = buildEmissionFactorMap(dbFactors);
+      const calculated = runCalculationsForPeriod(rawInputs, efMap, existingValues);
       const updated: any[] = [];
 
       for (const [metricName, calcValue] of Object.entries(calculated)) {
@@ -1682,7 +1718,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const reportData = {
         generatedAt: new Date().toISOString(),
-        generatedBy: generatingUser?.name || generatingUser?.username || userId,
+        generatedBy: generatingUser?.username || userId,
         reportTemplate: reportTemplate || "management",
         period,
         company,
