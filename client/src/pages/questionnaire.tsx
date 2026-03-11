@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Collapsible,
   CollapsibleContent,
@@ -33,6 +34,8 @@ import {
   Send,
   CheckCircle,
   XCircle,
+  Upload,
+  FileSpreadsheet,
 } from "lucide-react";
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
@@ -766,21 +769,195 @@ function PreviousQuestionnairesTab() {
   );
 }
 
+function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [importTab, setImportTab] = useState<"text" | "csv" | "xlsx">("text");
+  const [importTitle, setImportTitle] = useState("");
+  const [importText, setImportText] = useState("");
+  const [importPreview, setImportPreview] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const importMutation = useMutation({
+    mutationFn: async (data: { format: string; content: string; title: string }) => {
+      const res = await apiRequest("POST", "/api/questionnaires/import", data);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setImportPreview(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/questionnaires"] });
+      toast({ title: `Imported ${data.totalQuestions} questions (${data.matched} matched)` });
+    },
+    onError: () => toast({ title: "Import failed", variant: "destructive" }),
+  });
+
+  const handleTextImport = () => {
+    if (!importTitle.trim()) { toast({ title: "Enter a title", variant: "destructive" }); return; }
+    if (!importText.trim()) { toast({ title: "Paste some questions", variant: "destructive" }); return; }
+    importMutation.mutate({ format: "text", content: importText, title: importTitle });
+  };
+
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!importTitle.trim()) { toast({ title: "Enter a title first", variant: "destructive" }); return; }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
+      const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
+      importMutation.mutate({ format, content: base64, title: importTitle });
+    };
+    reader.readAsArrayBuffer(file);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const handleClose = () => {
+    setImportPreview(null);
+    setImportText("");
+    setImportTitle("");
+    onClose();
+  };
+
+  const confidenceColor = (c: number) => c >= 70 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200" : c >= 40 ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Upload className="w-4 h-4" />
+            Import Questionnaire
+          </DialogTitle>
+        </DialogHeader>
+
+        {importPreview ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">{importPreview.totalQuestions} questions imported</p>
+                <p className="text-xs text-muted-foreground">{importPreview.matched} matched, {importPreview.unmatched} unmatched</p>
+              </div>
+              <Badge variant="default">Complete</Badge>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {(importPreview.questions || []).map((q: any, i: number) => (
+                <div key={i} className="p-3 rounded-md border text-sm" data-testid={`import-preview-${i}`}>
+                  <p className="font-medium text-xs">{q.text}</p>
+                  {q.suggestedAnswer && (
+                    <p className="text-xs text-muted-foreground mt-1 bg-muted/50 px-2 py-1 rounded">{q.suggestedAnswer}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <Badge className={`text-[10px] ${confidenceColor(q.confidence)}`}>{q.confidence}%</Badge>
+                    <Badge variant="outline" className="text-[10px]">{q.sourceType}</Badge>
+                    {q.requiresReview && <Badge variant="destructive" className="text-[10px]">Needs Review</Badge>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <Label>Questionnaire Title</Label>
+              <Input
+                value={importTitle}
+                onChange={(e) => setImportTitle(e.target.value)}
+                placeholder="e.g. CDP Climate Change 2024"
+                className="mt-1.5"
+                data-testid="input-import-title"
+              />
+            </div>
+
+            <Tabs value={importTab} onValueChange={(v) => setImportTab(v as any)}>
+              <TabsList>
+                <TabsTrigger value="text" data-testid="tab-import-text">Paste Text</TabsTrigger>
+                <TabsTrigger value="csv" data-testid="tab-import-csv">Upload CSV</TabsTrigger>
+                <TabsTrigger value="xlsx" data-testid="tab-import-xlsx">Upload Excel</TabsTrigger>
+              </TabsList>
+              <TabsContent value="text" className="mt-3">
+                <Textarea
+                  placeholder={"One question per line:\nWhat is your carbon reduction target?\nDo you have an environmental management system?"}
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  className="min-h-32"
+                  data-testid="textarea-import-text"
+                />
+                {importText.trim() && (
+                  <p className="text-xs text-muted-foreground mt-1">{importText.split("\n").filter(l => l.trim()).length} questions detected</p>
+                )}
+              </TabsContent>
+              <TabsContent value="csv" className="mt-3">
+                <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                  <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground mb-3">Upload a CSV file with questions</p>
+                  <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} data-testid="button-upload-csv">
+                    <Upload className="w-3.5 h-3.5 mr-1.5" />
+                    Choose CSV File
+                  </Button>
+                  <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFileImport} />
+                </div>
+              </TabsContent>
+              <TabsContent value="xlsx" className="mt-3">
+                <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                  <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground mb-3">Upload an Excel file with questions</p>
+                  <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} data-testid="button-upload-xlsx">
+                    <Upload className="w-3.5 h-3.5 mr-1.5" />
+                    Choose Excel File
+                  </Button>
+                  <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileImport} />
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={handleClose}>Cancel</Button>
+              {importTab === "text" && (
+                <Button
+                  onClick={handleTextImport}
+                  disabled={importMutation.isPending}
+                  data-testid="button-confirm-import"
+                >
+                  {importMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
+                  {importMutation.isPending ? "Importing..." : "Import & Match"}
+                </Button>
+              )}
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function QuestionnairePage() {
   const { can } = usePermissions();
   const canAccess = can("questionnaire_access");
+  const [importOpen, setImportOpen] = useState(false);
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-xl font-semibold flex items-center gap-2">
-          <ClipboardList className="w-5 h-5 text-primary" />
-          Questionnaire Autofill
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Answer ESG questionnaires using your company data
-        </p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-semibold flex items-center gap-2">
+            <ClipboardList className="w-5 h-5 text-primary" />
+            Questionnaire Autofill
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Answer ESG questionnaires using your company data
+          </p>
+        </div>
+        {canAccess && (
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="button-open-import">
+            <Upload className="w-3.5 h-3.5 mr-1.5" />
+            Import
+          </Button>
+        )}
       </div>
+
+      <ImportQuestionnaireDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
       <Tabs defaultValue={canAccess ? "new" : "previous"} className="w-full">
         <TabsList data-testid="tabs-questionnaire">

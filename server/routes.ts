@@ -21,6 +21,11 @@ import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
 import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
+import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } from "./scheduler";
+import { generatePdf, generateDocx } from "./report-engine";
+import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
+import { parse as csvParse } from "csv-parse/sync";
+import * as XLSX from "xlsx";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -3932,30 +3937,655 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/reminders/generate", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const settings = await storage.getCompanySettings(companyId);
-      if (settings && !settings.reminderEnabled) { res.json({ generated: 0 }); return; }
-      const generated = await generateScheduledReminders(companyId, storage, db, sql);
-      res.json({ generated });
+      const jobId = await enqueueJob("reminder_check", {}, companyId, `manual_reminder:${companyId}:${new Date().toISOString().slice(0, 10)}`);
+      res.json({ jobId, queued: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  async function runDailyReminderJob() {
+  app.post("/api/reports/:id/generate-file", requireAuth, async (req, res) => {
     try {
-      const dayOfWeek = new Date().getDay();
-      const result = await db.execute(sql`SELECT c.id, cs.reminder_frequency FROM companies c JOIN company_settings cs ON cs.company_id = c.id WHERE cs.reminder_enabled = true`);
-      for (const row of result.rows) {
-        try {
-          if (row.reminder_frequency === "weekly" && dayOfWeek !== 1) continue;
-          await generateScheduledReminders(row.id as string, storage, db, sql);
-        } catch {}
+      const companyId = (req.session as any).companyId;
+      const { format } = req.body;
+      if (!["pdf", "docx"].includes(format)) { res.status(400).json({ error: "Format must be pdf or docx" }); return; }
+
+      const reportRunResult = await db.execute(sql`SELECT * FROM report_runs WHERE id = ${req.params.id} AND company_id = ${companyId}`);
+      if (!reportRunResult.rows.length) { res.status(404).json({ error: "Report not found" }); return; }
+      const reportRun = reportRunResult.rows[0] as any;
+      const reportData = reportRun.report_data || {};
+      const company = await storage.getCompany(companyId);
+      const companyName = company?.name || "Company";
+
+      const sections: any[] = [];
+      if (reportData.summary) sections.push({ title: "Executive Summary", type: "text", content: reportData.summary });
+
+      if (reportData.metrics?.length) {
+        sections.push({
+          title: "ESG Metrics",
+          type: "metrics",
+          rows: reportData.metrics.map((m: any) => ({ label: m.name || m.metricName, value: `${m.value || "-"} ${m.unit || ""}`.trim(), status: m.status || m.trafficLight || "-" })),
+        });
       }
-    } catch {}
+
+      if (reportData.carbon) {
+        sections.push({
+          title: "Carbon Summary",
+          type: "metrics",
+          rows: [
+            { label: "Scope 1", value: `${reportData.carbon.scope1 || 0} tCO2e` },
+            { label: "Scope 2", value: `${reportData.carbon.scope2 || 0} tCO2e` },
+            { label: "Scope 3", value: `${reportData.carbon.scope3 || 0} tCO2e` },
+            { label: "Total", value: `${reportData.carbon.total || 0} tCO2e` },
+          ],
+        });
+      }
+
+      if (reportData.actions?.length) {
+        sections.push({
+          title: "Action Plans",
+          type: "table",
+          tableHeaders: ["Action", "Owner", "Status", "Due Date"],
+          tableRows: reportData.actions.map((a: any) => [a.title, a.owner || "-", a.status || "-", a.dueDate ? new Date(a.dueDate).toLocaleDateString() : "-"]),
+        });
+      }
+
+      if (reportData.evidence?.length) {
+        sections.push({ title: "Evidence Coverage", type: "list", items: reportData.evidence.map((e: any) => `${e.filename || e.name}: ${e.status || "uploaded"}`) });
+      }
+
+      const formattedData = { title: companyName, period: reportRun.period, sections, summary: reportData.summary };
+      let fileBuffer: Buffer;
+      let contentType: string;
+      let filename: string;
+
+      if (format === "pdf") {
+        fileBuffer = await generatePdf(formattedData, reportRun.report_template || "management", companyName);
+        contentType = "application/pdf";
+        filename = `${companyName.replace(/\s+/g, "_")}_${reportRun.report_template || "report"}_${reportRun.period || "latest"}.pdf`;
+      } else {
+        fileBuffer = await generateDocx(formattedData, reportRun.report_template || "management", companyName);
+        contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        filename = `${companyName.replace(/\s+/g, "_")}_${reportRun.report_template || "report"}_${reportRun.period || "latest"}.docx`;
+      }
+
+      const savedFile = await storage.createGeneratedFile({
+        reportRunId: req.params.id,
+        companyId,
+        fileType: format,
+        filename,
+        fileData: fileBuffer.toString("base64"),
+        fileSize: fileBuffer.length,
+      });
+
+      res.json({ fileId: savedFile.id, filename, fileSize: fileBuffer.length, fileType: format });
+    } catch (e: any) {
+      try { await storage.createPlatformHealthEvent({ eventType: "report_failure", severity: "error", message: `Report generation failed: ${e.message}`, details: { reportId: req.params.id }, companyId: (req.session as any).companyId }); } catch {}
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reports/:id/download/:fileId", requireAuth, async (req, res) => {
+    try {
+      const file = await storage.getGeneratedFile(req.params.fileId);
+      if (!file || file.companyId !== (req.session as any).companyId) { res.status(404).json({ error: "File not found" }); return; }
+      const buffer = Buffer.from(file.fileData || "", "base64");
+      const contentType = file.fileType === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+      res.send(buffer);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reports/:id/files", requireAuth, async (req, res) => {
+    try {
+      const files = await storage.getGeneratedFilesByReportRun(req.params.id);
+      res.json(files.filter(f => f.companyId === (req.session as any).companyId).map(f => ({ id: f.id, filename: f.filename, fileType: f.fileType, fileSize: f.fileSize, generatedAt: f.generatedAt })));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/questionnaires/import", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { format, content, title } = req.body;
+      if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
+
+      let questions: string[] = [];
+      if (format === "text") {
+        questions = content.split("\n").map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+      } else if (format === "csv") {
+        const buf = Buffer.from(content, "base64");
+        const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true });
+        for (const record of records) {
+          const questionCol = Object.keys(record).find(k => k.toLowerCase().includes("question")) || Object.keys(record)[0];
+          if (questionCol && record[questionCol]) questions.push(record[questionCol].trim());
+        }
+      } else if (format === "xlsx") {
+        const buf = Buffer.from(content, "base64");
+        const workbook = XLSX.read(buf, { type: "buffer" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+        for (const row of rows) {
+          const questionCol = Object.keys(row).find(k => k.toLowerCase().includes("question")) || Object.keys(row)[0];
+          if (questionCol && row[questionCol]) questions.push(String(row[questionCol]).trim());
+        }
+      } else {
+        res.status(400).json({ error: "Format must be text, csv, or xlsx" }); return;
+      }
+
+      if (!questions.length) { res.status(400).json({ error: "No questions found" }); return; }
+
+      const existingAnswers = await db.execute(sql`SELECT id, question, answer, category FROM procurement_answers WHERE company_id = ${companyId}`);
+      const answerLibrary = (existingAnswers as any).rows || [];
+
+      const matchResults = questions.map((q: string) => {
+        const qLower = q.toLowerCase();
+        const qWords = qLower.split(/\s+/).filter((w: string) => w.length > 3);
+        let bestMatch: any = null;
+        let bestConfidence = 0;
+        let bestSourceType = "none";
+
+        for (const ans of answerLibrary) {
+          const ansQ = (ans.question || "").toLowerCase();
+          if (ansQ === qLower) {
+            bestMatch = ans;
+            bestConfidence = 95;
+            bestSourceType = "exact";
+            break;
+          }
+          if (ansQ.includes(qLower) || qLower.includes(ansQ)) {
+            if (85 > bestConfidence) {
+              bestMatch = ans;
+              bestConfidence = 85;
+              bestSourceType = "exact";
+            }
+          }
+          const ansWords = ansQ.split(/\s+/).filter((w: string) => w.length > 3);
+          const overlap = qWords.filter((w: string) => ansWords.includes(w)).length;
+          const keywordScore = ansWords.length > 0 ? Math.round((overlap / Math.max(qWords.length, 1)) * 70) : 0;
+          if (keywordScore > bestConfidence) {
+            bestMatch = ans;
+            bestConfidence = keywordScore;
+            bestSourceType = "keyword";
+          }
+        }
+
+        if (!bestMatch) {
+          const categoryKeywords: Record<string, string[]> = {
+            environmental: ["carbon", "energy", "waste", "emissions", "climate", "recycling", "environmental"],
+            social: ["employee", "diversity", "health", "safety", "training", "wellbeing", "social", "community"],
+            governance: ["governance", "board", "compliance", "risk", "policy", "ethics", "anti-corruption"],
+          };
+          for (const [cat, keywords] of Object.entries(categoryKeywords)) {
+            if (keywords.some(k => qLower.includes(k))) {
+              const catMatch = answerLibrary.find((a: any) => (a.category || "").toLowerCase() === cat);
+              if (catMatch && 20 > bestConfidence) {
+                bestMatch = catMatch;
+                bestConfidence = 20;
+                bestSourceType = "category";
+              }
+              break;
+            }
+          }
+        }
+
+        return {
+          text: q,
+          suggestedAnswer: bestMatch?.answer || null,
+          confidence: bestConfidence,
+          sourceType: bestSourceType,
+          sourceAnswerId: bestMatch?.id || null,
+          requiresReview: bestConfidence < 70 || bestSourceType === "category" || bestSourceType === "none",
+        };
+      });
+
+      const questionnaire = await storage.createQuestionnaire({ companyId, title, source: `import_${format}`, status: "draft" } as any);
+
+      for (let i = 0; i < matchResults.length; i++) {
+        const mr = matchResults[i];
+        await storage.createQuestionnaireQuestion({
+          questionnaireId: questionnaire.id,
+          questionText: mr.text,
+          orderIndex: i,
+          suggestedAnswer: mr.suggestedAnswer,
+          confidence: mr.confidence >= 70 ? "high" : mr.confidence >= 40 ? "medium" : "low",
+          sourceRef: mr.sourceType !== "none" ? `${mr.sourceType}:${mr.sourceAnswerId}` : null,
+          workflowStatus: "draft",
+        } as any);
+      }
+
+      const matched = matchResults.filter(m => m.confidence > 0).length;
+      res.json({ questionnaireId: questionnaire.id, totalQuestions: matchResults.length, matched, unmatched: matchResults.length - matched, questions: matchResults });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  const CARBON_COLUMN_MAP: Record<string, string> = {
+    "electricity": "elec", "electricity (kwh)": "elec", "elec_kwh": "elec", "elec": "elec",
+    "gas": "gas", "natural gas": "gas", "gas (kwh)": "gas", "gas_kwh": "gas",
+    "diesel": "diesel", "diesel (litres)": "diesel", "diesel_litres": "diesel",
+    "petrol": "petrol", "petrol (litres)": "petrol", "petrol_litres": "petrol",
+    "waste general": "waste_general", "general waste": "waste_general", "waste_general_tonnes": "waste_general",
+    "waste recycled": "waste_recycled", "recycled waste": "waste_recycled", "waste_recycled_tonnes": "waste_recycled",
+    "water": "water", "water (m3)": "water", "water_m3": "water",
+    "employees": "employees", "employee count": "employees", "headcount": "employees",
+    "flights domestic": "flights_domestic", "domestic flights": "flights_domestic",
+    "flights short haul": "flights_short", "short haul flights": "flights_short",
+    "flights long haul": "flights_long", "long haul flights": "flights_long",
+    "rail": "rail", "rail (km)": "rail", "rail_km": "rail",
+    "hotel nights": "hotel_nights", "hotel": "hotel_nights",
+    "company car": "car_miles", "car miles": "car_miles", "company car miles": "car_miles",
+  };
+
+  function matchColumn(col: string): { inputKey: string | null; confidence: number } {
+    const normalized = col.toLowerCase().trim();
+    if (CARBON_COLUMN_MAP[normalized]) return { inputKey: CARBON_COLUMN_MAP[normalized], confidence: 100 };
+    for (const [pattern, key] of Object.entries(CARBON_COLUMN_MAP)) {
+      if (normalized.includes(pattern) || pattern.includes(normalized)) return { inputKey: key, confidence: 75 };
+    }
+    const words = normalized.split(/[\s_-]+/);
+    for (const [pattern, key] of Object.entries(CARBON_COLUMN_MAP)) {
+      const patternWords = pattern.split(/[\s_-]+/);
+      const overlap = words.filter(w => patternWords.includes(w)).length;
+      if (overlap > 0 && overlap >= patternWords.length * 0.5) return { inputKey: key, confidence: 50 };
+    }
+    return { inputKey: null, confidence: 0 };
   }
 
-  setInterval(runDailyReminderJob, 24 * 60 * 60 * 1000);
-  setTimeout(runDailyReminderJob, 60000);
+  app.post("/api/raw-data/import/parse", requireAuth, async (req, res) => {
+    try {
+      const { format, content } = req.body;
+      if (!content) { res.status(400).json({ error: "Content is required" }); return; }
+      let columns: string[] = [];
+      let rows: any[] = [];
+
+      if (format === "csv") {
+        const buf = Buffer.from(content, "base64");
+        const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true });
+        if (records.length > 0) columns = Object.keys(records[0]);
+        rows = records;
+      } else if (format === "xlsx") {
+        const buf = Buffer.from(content, "base64");
+        const workbook = XLSX.read(buf, { type: "buffer" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet);
+        if (jsonRows.length > 0) columns = Object.keys(jsonRows[0]);
+        rows = jsonRows;
+      } else {
+        res.status(400).json({ error: "Format must be csv or xlsx" }); return;
+      }
+
+      const mappings = columns.map(col => ({ column: col, ...matchColumn(col) }));
+      res.json({ columns, rows: rows.slice(0, 100), mappings });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/raw-data/import/confirm", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { mappings, rows, period } = req.body;
+      if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
+
+      let imported = 0;
+      let skipped = 0;
+      const unmatched: string[] = [];
+      const validMappings = mappings.filter((m: any) => m.inputKey);
+
+      for (const row of rows) {
+        for (const mapping of validMappings) {
+          const rawVal = row[mapping.column];
+          if (rawVal === undefined || rawVal === null || rawVal === "") { skipped++; continue; }
+          const numVal = parseFloat(String(rawVal));
+          if (isNaN(numVal)) { skipped++; continue; }
+
+          try {
+            await storage.upsertRawDataInput(companyId, mapping.inputKey, period, {
+              companyId,
+              inputName: mapping.inputKey,
+              inputCategory: "imported",
+              value: String(numVal),
+              period,
+              source: "csv_import",
+              enteredBy: userId,
+            });
+            imported++;
+          } catch { skipped++; }
+        }
+      }
+
+      const unmappedCols = mappings.filter((m: any) => !m.inputKey).map((m: any) => m.column);
+      unmatched.push(...unmappedCols);
+
+      try {
+        await storage.createAuditLog({ companyId, userId, action: "carbon_data_import", entityType: "raw_data", details: { period, imported, skipped, unmatched } });
+      } catch {}
+
+      res.json({ imported, skipped, unmatched, period });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/raw-data/import/template", requireAuth, async (_req, res) => {
+    const headers = ["Electricity (kWh)", "Gas (kWh)", "Diesel (Litres)", "Petrol (Litres)", "Waste General (Tonnes)", "Waste Recycled (Tonnes)", "Water (m3)", "Employees", "Flights Domestic", "Flights Short Haul", "Flights Long Haul", "Rail (km)", "Hotel Nights", "Company Car Miles"];
+    const example = ["12500", "8000", "500", "200", "2.5", "1.8", "150", "50", "5", "3", "2", "1200", "25", "15000"];
+    const csv = [headers.join(","), example.join(",")].join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=carbon_data_template.csv");
+    res.send(csv);
+  });
+
+  app.get("/api/benchmarks", requireAuth, async (_req, res) => {
+    res.json(SME_BENCHMARKS);
+  });
+
+  app.get("/api/benchmarks/comparison", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      const employeeCount = company?.employeeCount || 1;
+      const metrics = await storage.getMetrics(companyId);
+      const now = new Date();
+      const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+      const latestCarbon = carbonCalcs.sort((a: any, b: any) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
+
+      const companyMetrics: { metricKey: string; value: number }[] = [];
+
+      if (latestCarbon) {
+        const totalEmissions = parseFloat(latestCarbon.totalEmissions || "0");
+        companyMetrics.push({ metricKey: "carbon_intensity", value: totalEmissions / employeeCount });
+      }
+
+      const rawData = await storage.getRawDataByPeriod(companyId, currentPeriod);
+      const elecInput = rawData.find(r => r.inputName === "elec");
+      if (elecInput?.value) {
+        companyMetrics.push({ metricKey: "energy_intensity", value: parseFloat(elecInput.value) / employeeCount });
+      }
+
+      for (const m of metrics) {
+        const name = m.name.toLowerCase();
+        if (name.includes("recycl") || name.includes("waste recycl")) {
+          const vals = await storage.getMetricValues(m.id);
+          const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+          if (latest?.value) companyMetrics.push({ metricKey: "waste_recycling_rate", value: parseFloat(latest.value) });
+        }
+        if (name.includes("absence") || name.includes("sickness")) {
+          const vals = await storage.getMetricValues(m.id);
+          const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+          if (latest?.value) companyMetrics.push({ metricKey: "absence_rate", value: parseFloat(latest.value) });
+        }
+        if (name.includes("training hours") || name.includes("training")) {
+          const vals = await storage.getMetricValues(m.id);
+          const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+          if (latest?.value) companyMetrics.push({ metricKey: "training_hours", value: parseFloat(latest.value) / employeeCount });
+        }
+        if (name.includes("gender") || name.includes("diversity")) {
+          const vals = await storage.getMetricValues(m.id);
+          const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+          if (latest?.value) companyMetrics.push({ metricKey: "gender_diversity", value: parseFloat(latest.value) });
+        }
+        if (name.includes("living wage")) {
+          const vals = await storage.getMetricValues(m.id);
+          const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+          if (latest?.value) companyMetrics.push({ metricKey: "living_wage", value: parseFloat(latest.value) });
+        }
+      }
+
+      const comparison = compareAgainstBenchmarks(companyMetrics);
+      res.json(comparison);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/company/esg-profile", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const profile = await buildEsgProfile(companyId);
+      res.json(profile);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/company/esg-profile/share", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { enabled, expiresInDays, visibleSections } = req.body;
+      const ALLOWED_SECTIONS = ["esg_scores", "key_metrics", "policy_status", "carbon_summary", "compliance_highlights", "evidence_coverage", "certifications"];
+      const sanitizedSections = Array.isArray(visibleSections)
+        ? visibleSections.filter((s: string) => ALLOWED_SECTIONS.includes(s))
+        : ["esg_scores", "key_metrics", "policy_status", "carbon_summary"];
+
+      if (enabled) {
+        const token = randomUUID();
+        const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000) : null;
+        await storage.updateCompany(companyId, {
+          profileShareEnabled: true,
+          profileShareToken: token,
+          profileShareExpiresAt: expiresAt,
+          profileVisibleSections: sanitizedSections,
+        } as any);
+        res.json({ token, expiresAt, enabled: true });
+      } else {
+        await storage.updateCompany(companyId, {
+          profileShareEnabled: false,
+          profileShareToken: null,
+          profileShareExpiresAt: null,
+        } as any);
+        res.json({ enabled: false });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/company/esg-profile/rotate-token", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const token = randomUUID();
+      await storage.updateCompany(companyId, { profileShareToken: token } as any);
+      res.json({ token });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/company/esg-profile/public/:token", async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM companies WHERE profile_share_token = ${req.params.token}`);
+      if (!result.rows.length) { res.status(404).json({ error: "Profile not found" }); return; }
+      const company = result.rows[0] as any;
+
+      if (!company.profile_share_enabled) { res.status(404).json({ error: "Profile sharing is disabled" }); return; }
+      if (company.profile_share_expires_at && new Date(company.profile_share_expires_at) < new Date()) { res.status(410).json({ error: "Profile link has expired" }); return; }
+
+      const profile = await buildEsgProfile(company.id);
+      const visibleSections = company.profile_visible_sections || ["esg_scores", "key_metrics", "policy_status", "carbon_summary"];
+      const filteredProfile: any = { company: { name: company.name, industry: company.industry, employeeCount: company.employee_count } };
+      for (const section of visibleSections) {
+        if (profile[section] !== undefined) filteredProfile[section] = profile[section];
+      }
+
+      try {
+        await storage.createAuditLog({
+          companyId: company.id,
+          action: "public_profile_view",
+          entityType: "company_profile",
+          details: { ip: req.ip, token: req.params.token.slice(0, 8) + "..." },
+        });
+      } catch {}
+
+      res.json(filteredProfile);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/activity/track", async (req, res) => {
+    try {
+      const auth = resolveAuth(req);
+      const { action, page, details } = req.body;
+      const validActions = ["page_view", "data_entry_save", "report_generated", "import_completed", "questionnaire_autofill", "carbon_calculation", "control_centre_action", "login"];
+      if (!validActions.includes(action)) { res.status(400).json({ error: "Invalid action" }); return; }
+
+      const sanitizedDetails = details ? { ...details } : {};
+      delete sanitizedDetails.password;
+      delete sanitizedDetails.token;
+      delete sanitizedDetails.secret;
+
+      await storage.createUserActivity({
+        userId: auth?.userId || null,
+        companyId: auth?.companyId || null,
+        action,
+        page: page || null,
+        details: Object.keys(sanitizedDetails).length ? sanitizedDetails : null,
+      });
+      res.json({ tracked: true });
+    } catch {
+      res.json({ tracked: false });
+    }
+  });
+
+  app.get("/api/admin/analytics", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+    try {
+      const analytics = await storage.getActivityAnalytics(30);
+      res.json(analytics);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/analytics/timeline", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+    try {
+      const timeline = await storage.getActivityTimeline(30);
+      res.json(timeline);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/analytics/cleanup", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+    try {
+      const deleted = await storage.cleanupOldActivity(90);
+      res.json({ deleted });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  function requireSuperAdmin(req: Request, res: Response, next: Function) {
+    const auth = resolveAuth(req);
+    if (!auth) return res.status(401).json({ error: "Not authenticated" });
+    (async () => {
+      const user = await storage.getUser(auth.userId);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      const company = await storage.getCompany(auth.companyId);
+      if (!(company as any)?.isSuperAdmin) return res.status(403).json({ error: "Super admin access required" });
+      next();
+    })();
+  }
+
+  app.get("/api/admin/health", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const schedulerStatus = getSchedulerStatus();
+      const now24h = new Date(Date.now() - 86400000);
+      const jobsResult = await db.execute(sql`
+        SELECT status, COUNT(*) as count FROM background_jobs
+        WHERE created_at >= ${now24h} GROUP BY status
+      `);
+      const jobCounts: any = {};
+      for (const r of (jobsResult as any).rows) jobCounts[r.status] = parseInt(r.count);
+
+      const lastRunResult = await db.execute(sql`SELECT MAX(completed_at) as last_run FROM background_jobs WHERE status = 'completed'`);
+      const apiErrorsResult = await db.execute(sql`
+        SELECT COUNT(*) as count FROM platform_health_events
+        WHERE event_type = 'api_error' AND created_at >= ${now24h}
+      `);
+      const topEndpointsResult = await db.execute(sql`
+        SELECT details->>'route' as route, COUNT(*) as count FROM platform_health_events
+        WHERE event_type = 'api_error' AND created_at >= ${now24h} AND details->>'route' IS NOT NULL
+        GROUP BY details->>'route' ORDER BY count DESC LIMIT 5
+      `);
+      const reportFailuresResult = await db.execute(sql`
+        SELECT COUNT(*) as count FROM platform_health_events
+        WHERE event_type = 'report_failure' AND created_at >= ${now24h}
+      `);
+
+      res.json({
+        scheduler: schedulerStatus,
+        backgroundJobs: {
+          running: jobCounts.running || 0,
+          failed24h: jobCounts.failed || 0,
+          completed24h: jobCounts.completed || 0,
+          lastRun: (lastRunResult as any).rows[0]?.last_run || null,
+        },
+        apiErrors: {
+          count24h: parseInt((apiErrorsResult as any).rows[0]?.count || "0"),
+          topEndpoints: (topEndpointsResult as any).rows || [],
+        },
+        reportFailures: {
+          count24h: parseInt((reportFailuresResult as any).rows[0]?.count || "0"),
+        },
+        uptime: schedulerStatus.uptime,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/health/events", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const severity = req.query.severity as string;
+      const eventType = req.query.eventType as string;
+      const events = await storage.getPlatformHealthEvents(limit, offset, severity, eventType);
+      res.json(events);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/health/jobs", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const jobs = await storage.getRecentJobs(50);
+      const statusFilter = req.query.status as string;
+      const filtered = statusFilter ? jobs.filter(j => j.status === statusFilter) : jobs;
+      res.json(filtered);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.use((err: any, req: Request, res: Response, _next: Function) => {
+    const route = `${req.method} ${req.path}`;
+    const message = err.message || "Internal server error";
+    try {
+      storage.createPlatformHealthEvent({
+        eventType: "api_error",
+        severity: "error",
+        message: `API error: ${route} - ${message.slice(0, 200)}`,
+        details: { route, method: req.method, statusCode: 500 },
+      });
+    } catch {}
+    if (!res.headersSent) {
+      res.status(500).json({ error: message });
+    }
+  });
+
+  startScheduler();
 
   return httpServer;
 }
@@ -4018,6 +4648,72 @@ async function generateScheduledReminders(companyId: string, storage: any, db: a
     }
   }
   return count;
+}
+
+async function buildEsgProfile(companyId: string) {
+  const company = await storage.getCompany(companyId);
+  const metrics = await storage.getMetrics(companyId);
+  const enabledMetrics = metrics.filter((m: any) => m.enabled);
+  const now = new Date();
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const policy = await storage.getPolicy(companyId);
+  const evidence = await storage.getEvidenceFiles(companyId);
+  const carbonCalcs = await storage.getCarbonCalculations(companyId);
+  const latestCarbon = carbonCalcs.sort((a: any, b: any) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
+
+  let envScore = 0, socScore = 0, govScore = 0;
+  let envCount = 0, socCount = 0, govCount = 0;
+  const keyMetrics: any[] = [];
+
+  for (const m of enabledMetrics.slice(0, 20)) {
+    const vals = await storage.getMetricValues(m.id);
+    const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
+    if (latest?.value) {
+      const score = latest.status === "green" ? 100 : latest.status === "amber" ? 60 : latest.status === "red" ? 20 : 50;
+      if (m.category === "environmental") { envScore += score; envCount++; }
+      else if (m.category === "social") { socScore += score; socCount++; }
+      else if (m.category === "governance") { govScore += score; govCount++; }
+      if (keyMetrics.length < 6) {
+        keyMetrics.push({ name: m.name, value: latest.value, unit: m.unit, category: m.category, status: latest.status });
+      }
+    }
+  }
+
+  const esg_scores = {
+    environmental: envCount > 0 ? Math.round(envScore / envCount) : 0,
+    social: socCount > 0 ? Math.round(socScore / socCount) : 0,
+    governance: govCount > 0 ? Math.round(govScore / govCount) : 0,
+    overall: (envCount + socCount + govCount) > 0 ? Math.round((envScore + socScore + govScore) / (envCount + socCount + govCount)) : 0,
+  };
+
+  const companyInfo = await storage.getCompany(companyId);
+  const complianceResult = await db.execute(sql`
+    SELECT cf.name as framework_name, COUNT(cr.id) as total,
+      COUNT(CASE WHEN cr.linked_metric_ids IS NOT NULL THEN 1 END) as linked
+    FROM compliance_frameworks cf
+    JOIN compliance_requirements cr ON cr.framework_id = cf.id
+    WHERE cf.is_active = true
+    GROUP BY cf.name
+  `);
+
+  const totalEvidence = evidence.length;
+  const reviewedEvidence = evidence.filter(e => e.evidenceStatus === "approved" || e.evidenceStatus === "reviewed").length;
+
+  return {
+    company: { name: companyInfo?.name, industry: companyInfo?.industry, employeeCount: companyInfo?.employeeCount },
+    esg_scores,
+    key_metrics: keyMetrics,
+    policy_status: { status: policy?.status || "not_created", publishedAt: policy?.publishedAt, reviewDate: policy?.reviewDate },
+    carbon_summary: latestCarbon ? { scope1: latestCarbon.scope1Total, scope2: latestCarbon.scope2Total, scope3: latestCarbon.scope3Total, total: latestCarbon.totalEmissions, period: latestCarbon.reportingPeriod } : null,
+    compliance_highlights: (complianceResult as any).rows || [],
+    evidence_coverage: { total: totalEvidence, reviewed: reviewedEvidence, percentage: totalEvidence > 0 ? Math.round((reviewedEvidence / totalEvidence) * 100) : 0 },
+    shareSettings: {
+      enabled: (companyInfo as any)?.profileShareEnabled || false,
+      token: (companyInfo as any)?.profileShareToken || null,
+      expiresAt: (companyInfo as any)?.profileShareExpiresAt || null,
+      visibleSections: (companyInfo as any)?.profileVisibleSections || [],
+    },
+  };
 }
 
 function sanitizeQuestionText(text: string): string {

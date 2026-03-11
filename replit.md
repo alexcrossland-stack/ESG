@@ -57,6 +57,15 @@ The application is a full-stack SaaS web application.
     - **Improved Exports:** New presentation-ready export packs (Board, Customer, Compliance, Assurance).
     - **Guided Demo Mode:** Provides a guided tour and seeded data for new users.
     - **Trust & Source-Status Layer:** `SourceBadge` component to display data status, owner, date, and evidence.
+- **Phase 4 — Platform Reliability & Automation:**
+    - **Background Job Scheduler** (`server/scheduler.ts`): Recurring system jobs (reminders, evidence expiry, procurement revalidation, compliance recalculation) on 60s tick; on-demand queued jobs with retry logic, idempotency keys, worker locking. `background_jobs` table tracks all runs.
+    - **Platform Health Monitoring** (`client/src/pages/admin-health.tsx`): Super-admin-only dashboard with status cards (scheduler, API errors, report engine), health events table, background job history. Auto-refreshes every 30s. `platform_health_events` table logs job failures and API 500 errors.
+    - **PDF/DOCX Report Engine** (`server/report-engine.ts`): Uses `pdfkit` and `docx` packages. Generates branded PDF and DOCX files for all 5 report types. Files persisted in `generated_files` table with re-download support.
+    - **Questionnaire Import Tool**: Import via text (paste), CSV, or Excel. Multi-strategy answer matching with confidence scores (exact/keyword/category). All imports default to draft status.
+    - **Carbon Data Import**: Two-step flow (parse then confirm). Column auto-mapping with fuzzy matching and confidence scores. Users can override mappings before confirming. Audit trail logged.
+    - **ESG Company Profile** (`client/src/pages/esg-profile.tsx`, `client/src/pages/public-profile.tsx`): Professional ESG profile page with sharing controls (toggle, expiry, section visibility). Public shareable link via token with server-side section whitelisting. Token rotation supported.
+    - **User Activity Analytics** (`client/src/pages/admin-analytics.tsx`): Tracks page views and feature usage. `user_activity` table with 90-day retention. Admin dashboard shows active users, feature usage bars, top pages, daily activity timeline.
+    - **ESG Benchmarking** (`server/benchmarks.ts`, `client/src/pages/benchmarks.tsx`): 7 SME reference range benchmarks with source attribution. Range bar visualization with company marker. Dashboard summary card with color-coded indicators.
 
 **Feature Specifications:**
 - **AI-Assisted Tools:** Policy Generator, Supplier Questionnaire Autofill, Carbon Estimator (rules-based, not AI).

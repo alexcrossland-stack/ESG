@@ -8,6 +8,7 @@ import {
   policyGenerationInputs, emissionFactors, carbonCalculations,
   questionnaires, questionnaireQuestions,
   aiGenerationLogs, evidenceRequests, reportingPeriods,
+  backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
   type MaterialTopic, type Metric, type InsertMetric,
@@ -28,6 +29,10 @@ import {
   type Notification, type InsertNotification,
   type EvidenceRequest, type InsertEvidenceRequest,
   type ReportingPeriod, type InsertReportingPeriod,
+  type BackgroundJob, type InsertBackgroundJob,
+  type PlatformHealthEvent, type InsertPlatformHealthEvent,
+  type GeneratedFile, type InsertGeneratedFile,
+  type UserActivity, type InsertUserActivity,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -189,6 +194,26 @@ export interface IStorage {
   lockReportingPeriod(id: string, companyId: string): Promise<ReportingPeriod | undefined>;
   copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod): Promise<{ period: ReportingPeriod; copiedMetrics: number; copiedActions: number }>;
   getPeriodComparison(companyId: string, currentPeriod: string, comparePeriod: string): Promise<any[]>;
+
+  createBackgroundJob(job: InsertBackgroundJob): Promise<BackgroundJob>;
+  getBackgroundJob(id: string): Promise<BackgroundJob | undefined>;
+  updateBackgroundJob(id: string, data: Partial<BackgroundJob>): Promise<BackgroundJob | undefined>;
+  getPendingJobs(limit?: number): Promise<BackgroundJob[]>;
+  getJobsByCompany(companyId: string): Promise<BackgroundJob[]>;
+  getRecentJobs(limit?: number): Promise<BackgroundJob[]>;
+  getJobByIdempotencyKey(key: string): Promise<BackgroundJob | undefined>;
+
+  createPlatformHealthEvent(event: InsertPlatformHealthEvent): Promise<PlatformHealthEvent>;
+  getPlatformHealthEvents(limit?: number, offset?: number, severity?: string, eventType?: string): Promise<PlatformHealthEvent[]>;
+
+  createGeneratedFile(file: InsertGeneratedFile): Promise<GeneratedFile>;
+  getGeneratedFile(id: string): Promise<GeneratedFile | undefined>;
+  getGeneratedFilesByReportRun(reportRunId: string): Promise<GeneratedFile[]>;
+
+  createUserActivity(activity: InsertUserActivity): Promise<UserActivity>;
+  getActivityAnalytics(days?: number): Promise<any>;
+  getActivityTimeline(days?: number): Promise<any[]>;
+  cleanupOldActivity(retentionDays?: number): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1077,6 +1102,127 @@ export class DatabaseStorage implements IStorage {
         direction: r.direction,
       };
     });
+  }
+
+  async createBackgroundJob(job: InsertBackgroundJob) {
+    const [result] = await db.insert(backgroundJobs).values(job).returning();
+    return result;
+  }
+
+  async getBackgroundJob(id: string) {
+    const [job] = await db.select().from(backgroundJobs).where(eq(backgroundJobs.id, id));
+    return job;
+  }
+
+  async updateBackgroundJob(id: string, data: Partial<BackgroundJob>) {
+    const [result] = await db.update(backgroundJobs).set(data).where(eq(backgroundJobs.id, id)).returning();
+    return result;
+  }
+
+  async getPendingJobs(limit = 10) {
+    return db.select().from(backgroundJobs)
+      .where(eq(backgroundJobs.status, "pending"))
+      .orderBy(backgroundJobs.scheduledAt)
+      .limit(limit);
+  }
+
+  async getJobsByCompany(companyId: string) {
+    return db.select().from(backgroundJobs)
+      .where(eq(backgroundJobs.companyId, companyId))
+      .orderBy(desc(backgroundJobs.createdAt))
+      .limit(50);
+  }
+
+  async getRecentJobs(limit = 50) {
+    return db.select().from(backgroundJobs)
+      .orderBy(desc(backgroundJobs.createdAt))
+      .limit(limit);
+  }
+
+  async getJobByIdempotencyKey(key: string) {
+    const [job] = await db.select().from(backgroundJobs)
+      .where(eq(backgroundJobs.idempotencyKey, key));
+    return job;
+  }
+
+  async createPlatformHealthEvent(event: InsertPlatformHealthEvent) {
+    const [result] = await db.insert(platformHealthEvents).values(event).returning();
+    return result;
+  }
+
+  async getPlatformHealthEvents(limit = 50, offset = 0, severity?: string, eventType?: string) {
+    let query = db.select().from(platformHealthEvents).orderBy(desc(platformHealthEvents.createdAt));
+    if (severity) {
+      query = query.where(eq(platformHealthEvents.severity, severity)) as any;
+    }
+    if (eventType) {
+      query = query.where(eq(platformHealthEvents.eventType, eventType)) as any;
+    }
+    return (query as any).limit(limit).offset(offset);
+  }
+
+  async createGeneratedFile(file: InsertGeneratedFile) {
+    const [result] = await db.insert(generatedFiles).values(file).returning();
+    return result;
+  }
+
+  async getGeneratedFile(id: string) {
+    const [file] = await db.select().from(generatedFiles).where(eq(generatedFiles.id, id));
+    return file;
+  }
+
+  async getGeneratedFilesByReportRun(reportRunId: string) {
+    return db.select().from(generatedFiles)
+      .where(eq(generatedFiles.reportRunId, reportRunId))
+      .orderBy(desc(generatedFiles.generatedAt));
+  }
+
+  async createUserActivity(activity: InsertUserActivity) {
+    const [result] = await db.insert(userActivity).values(activity).returning();
+    return result;
+  }
+
+  async getActivityAnalytics(days = 30) {
+    const since = new Date(Date.now() - days * 86400000);
+    const since7 = new Date(Date.now() - 7 * 86400000);
+    const activeUsers30dResult = await db.execute(
+      sql`SELECT COUNT(DISTINCT user_id) as count FROM user_activity WHERE created_at >= ${since} AND user_id IS NOT NULL`
+    );
+    const activeUsers7dResult = await db.execute(
+      sql`SELECT COUNT(DISTINCT user_id) as count FROM user_activity WHERE created_at >= ${since7} AND user_id IS NOT NULL`
+    );
+    const featureUsage = await db.execute(
+      sql`SELECT action, COUNT(*) as count FROM user_activity WHERE created_at >= ${since} GROUP BY action ORDER BY count DESC`
+    );
+    const topPages = await db.execute(
+      sql`SELECT page, COUNT(*) as count FROM user_activity WHERE created_at >= ${since} AND action = 'page_view' AND page IS NOT NULL GROUP BY page ORDER BY count DESC LIMIT 20`
+    );
+    const reportCount = await db.execute(
+      sql`SELECT COUNT(*) as count FROM user_activity WHERE created_at >= ${since} AND action = 'report_generated'`
+    );
+    return {
+      activeUsers7d: parseInt((activeUsers7dResult as any).rows?.[0]?.count || "0"),
+      activeUsers30d: parseInt((activeUsers30dResult as any).rows?.[0]?.count || "0"),
+      featureUsageCounts: (featureUsage as any).rows || [],
+      topPages: (topPages as any).rows || [],
+      reportGenerationCount: parseInt((reportCount as any).rows?.[0]?.count || "0"),
+    };
+  }
+
+  async getActivityTimeline(days = 30) {
+    const since = new Date(Date.now() - days * 86400000);
+    const result = await db.execute(
+      sql`SELECT DATE(created_at) as date, COUNT(*) as count FROM user_activity WHERE created_at >= ${since} GROUP BY DATE(created_at) ORDER BY date`
+    );
+    return (result as any).rows || [];
+  }
+
+  async cleanupOldActivity(retentionDays = 90) {
+    const cutoff = new Date(Date.now() - retentionDays * 86400000);
+    const result = await db.execute(
+      sql`DELETE FROM user_activity WHERE created_at < ${cutoff}`
+    );
+    return (result as any).rowCount || 0;
   }
 }
 

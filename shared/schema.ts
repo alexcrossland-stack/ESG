@@ -44,6 +44,11 @@ export const companies = pgTable("companies", {
   onboardingStartedAt: timestamp("onboarding_started_at"),
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
   demoMode: boolean("demo_mode").default(false),
+  profileShareEnabled: boolean("profile_share_enabled").default(false),
+  profileShareToken: varchar("profile_share_token"),
+  profileShareExpiresAt: timestamp("profile_share_expires_at"),
+  profileVisibleSections: jsonb("profile_visible_sections"),
+  isSuperAdmin: boolean("is_super_admin").default(false),
   esgMaturity: text("esg_maturity"),
   selectedModules: jsonb("selected_modules"),
   selectedMetrics: jsonb("selected_metrics"),
@@ -545,6 +550,72 @@ export const complianceRequirements = pgTable("compliance_requirements", {
   linkedPolicySection: text("linked_policy_section"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const backgroundJobs = pgTable("background_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  jobType: text("job_type").notNull(),
+  status: text("status").notNull().default("pending"),
+  payload: jsonb("payload"),
+  result: jsonb("result"),
+  error: text("error"),
+  attempts: integer("attempts").default(0),
+  maxAttempts: integer("max_attempts").default(3),
+  idempotencyKey: varchar("idempotency_key"),
+  lockedAt: timestamp("locked_at"),
+  workerId: varchar("worker_id"),
+  scheduledAt: timestamp("scheduled_at").defaultNow(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const platformHealthEvents = pgTable("platform_health_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventType: text("event_type").notNull(),
+  severity: text("severity").notNull().default("info"),
+  message: text("message").notNull(),
+  details: jsonb("details"),
+  companyId: varchar("company_id"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const generatedFiles = pgTable("generated_files", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reportRunId: varchar("report_run_id"),
+  companyId: varchar("company_id").notNull(),
+  fileType: text("file_type").notNull(),
+  filename: text("filename").notNull(),
+  fileData: text("file_data"),
+  fileSize: integer("file_size"),
+  generatedAt: timestamp("generated_at").defaultNow(),
+  expiresAt: timestamp("expires_at"),
+});
+
+export const userActivity = pgTable("user_activity", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  action: text("action").notNull(),
+  page: text("page"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBackgroundJobSchema = createInsertSchema(backgroundJobs).omit({ id: true, createdAt: true });
+export const insertPlatformHealthEventSchema = createInsertSchema(platformHealthEvents).omit({ id: true, createdAt: true });
+export const insertGeneratedFileSchema = createInsertSchema(generatedFiles).omit({ id: true, generatedAt: true });
+export const insertUserActivitySchema = createInsertSchema(userActivity).omit({ id: true, createdAt: true });
+
+export type BackgroundJob = typeof backgroundJobs.$inferSelect;
+export type InsertBackgroundJob = z.infer<typeof insertBackgroundJobSchema>;
+export type PlatformHealthEvent = typeof platformHealthEvents.$inferSelect;
+export type InsertPlatformHealthEvent = z.infer<typeof insertPlatformHealthEventSchema>;
+export type GeneratedFile = typeof generatedFiles.$inferSelect;
+export type InsertGeneratedFile = z.infer<typeof insertGeneratedFileSchema>;
+export type UserActivity = typeof userActivity.$inferSelect;
+export type InsertUserActivity = z.infer<typeof insertUserActivitySchema>;
 
 export const insertComplianceFrameworkSchema = createInsertSchema(complianceFrameworks).omit({ id: true, createdAt: true });
 export const insertComplianceRequirementSchema = createInsertSchema(complianceRequirements).omit({ id: true, createdAt: true });

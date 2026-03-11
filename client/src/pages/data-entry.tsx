@@ -10,12 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
-  Send, Check, X, FileCheck,
+  Send, Check, X, FileCheck, Loader2, ArrowRight,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
@@ -103,6 +104,7 @@ export default function DataEntry() {
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState("raw");
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
   const [manualDataSourceTypes, setManualDataSourceTypes] = useState<Record<string, string>>({});
@@ -419,10 +421,18 @@ export default function DataEntry() {
               <p className="text-sm font-medium">Raw Data Completion</p>
               <p className="text-xs text-muted-foreground">{filledRawCount} of {totalRawFields} fields entered</p>
             </div>
-            <div className="text-right">
+            <div className="flex items-center gap-2">
+              {canEdit && (
+                <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)} data-testid="button-open-carbon-import">
+                  <Upload className="w-3.5 h-3.5 mr-1.5" />
+                  Import Data
+                </Button>
+              )}
               <div className="text-lg font-bold text-primary">{rawCompletion}%</div>
             </div>
           </div>
+
+          <CarbonImportDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} period={selectedPeriod} />
 
           <Alert className="border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800">
             <Calculator className="w-4 h-4 text-blue-500" />
@@ -676,6 +686,216 @@ export default function DataEntry() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
+  const [parsedResult, setParsedResult] = useState<any>(null);
+  const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
+  const [importResult, setImportResult] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const parseMutation = useMutation({
+    mutationFn: async (data: { format: string; content: string }) => {
+      const res = await apiRequest("POST", "/api/raw-data/import/parse", data);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setParsedResult(data);
+      setMappings((data.mappings || []).map((m: any) => ({ column: m.column, inputKey: m.inputKey })));
+      setStep("preview");
+    },
+    onError: () => toast({ title: "Failed to parse file", variant: "destructive" }),
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/raw-data/import/confirm", {
+        mappings,
+        rows: parsedResult?.rows || [],
+        period,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setImportResult(data);
+      setStep("result");
+      qc.invalidateQueries({ queryKey: ["/api/raw-data"] });
+      qc.invalidateQueries({ queryKey: ["/api/data-entry"] });
+      qc.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      toast({ title: `Imported ${data.imported} values` });
+    },
+    onError: () => toast({ title: "Import failed", variant: "destructive" }),
+  });
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
+      const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
+      parseMutation.mutate({ format, content: base64 });
+    };
+    reader.readAsArrayBuffer(file);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await authFetch("/api/raw-data/import/template");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "carbon-data-template.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: "Template download failed", variant: "destructive" });
+    }
+  };
+
+  const handleClose = () => {
+    setStep("upload");
+    setParsedResult(null);
+    setMappings([]);
+    setImportResult(null);
+    onClose();
+  };
+
+  const updateMapping = (index: number, inputKey: string | null) => {
+    setMappings(prev => prev.map((m, i) => i === index ? { ...m, inputKey } : m));
+  };
+
+  const allInputKeys = Object.values(RAW_DATA_FIELDS).flatMap(fields => fields.map(f => ({ key: f.key, label: f.label })));
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Upload className="w-4 h-4" />
+            Import Carbon / Raw Data
+          </DialogTitle>
+        </DialogHeader>
+
+        {step === "upload" && (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">Upload a CSV or Excel file with your raw operational data. Column names will be automatically mapped to input fields.</p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleDownloadTemplate} data-testid="button-import-template">
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                Download Template
+              </Button>
+            </div>
+            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+              <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground mb-3">Drop a CSV or Excel file here</p>
+              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending} data-testid="button-import-choose-file">
+                {parseMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                {parseMutation.isPending ? "Parsing..." : "Choose File"}
+              </Button>
+              <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
+            </div>
+            <p className="text-xs text-muted-foreground">Period: {period}</p>
+          </div>
+        )}
+
+        {step === "preview" && parsedResult && (
+          <div className="space-y-4">
+            <p className="text-sm font-medium">{parsedResult.rows?.length || 0} rows parsed, {parsedResult.columns?.length || 0} columns detected</p>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Column Mappings</Label>
+              {mappings.map((m, i) => {
+                const confidence = parsedResult.mappings?.[i]?.confidence || 0;
+                return (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    <span className="w-40 truncate font-medium">{m.column}</span>
+                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                    <Select value={m.inputKey || "__skip__"} onValueChange={(v) => updateMapping(i, v === "__skip__" ? null : v)}>
+                      <SelectTrigger className="w-48 h-8 text-xs" data-testid={`select-mapping-${i}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__skip__">Skip</SelectItem>
+                        {allInputKeys.map(k => (
+                          <SelectItem key={k.key} value={k.key}>{k.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Badge variant={confidence >= 70 ? "default" : confidence >= 40 ? "secondary" : "outline"} className="text-[10px]">
+                      {confidence}%
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+
+            {parsedResult.rows?.length > 0 && (
+              <div className="overflow-x-auto border rounded-md max-h-48">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted/50 border-b">
+                      {(parsedResult.columns || []).map((c: string) => (
+                        <th key={c} className="text-left p-2 font-medium">{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsedResult.rows.slice(0, 5).map((row: any, i: number) => (
+                      <tr key={i} className="border-b">
+                        {(parsedResult.columns || []).map((c: string) => (
+                          <td key={c} className="p-2">{row[c] ?? "-"}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStep("upload")}>Back</Button>
+              <Button
+                onClick={() => confirmMutation.mutate()}
+                disabled={confirmMutation.isPending || mappings.every(m => !m.inputKey)}
+                data-testid="button-confirm-import"
+              >
+                {confirmMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}
+                {confirmMutation.isPending ? "Importing..." : `Import ${mappings.filter(m => m.inputKey).length} columns`}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+
+        {step === "result" && importResult && (
+          <div className="space-y-4">
+            <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800">
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                <span className="font-medium text-emerald-800 dark:text-emerald-300">Import Complete</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div><span className="text-muted-foreground">Imported:</span> <span className="font-bold">{importResult.imported}</span></div>
+                <div><span className="text-muted-foreground">Skipped:</span> <span className="font-bold">{importResult.skipped}</span></div>
+                <div><span className="text-muted-foreground">Period:</span> <span className="font-bold">{importResult.period}</span></div>
+              </div>
+              {importResult.unmatched?.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-2">Unmatched columns: {importResult.unmatched.join(", ")}</p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -12,7 +12,7 @@ import {
   AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
-  Bell, X, ChevronDown, ChevronUp, Sparkles, Target,
+  Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -300,6 +300,54 @@ function DataQualityCard() {
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BenchmarkSummaryCard() {
+  const { data: comparison, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/benchmarks/comparison"],
+  });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+  if (!comparison || comparison.length === 0) return null;
+
+  const topMetrics = comparison.slice(0, 4);
+
+  const ratingColor = (r: string) => r === "within_range" ? "text-emerald-600 dark:text-emerald-400" : r === "above_range" ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
+  const ratingDot = (r: string) => r === "within_range" ? "bg-emerald-500" : r === "above_range" ? "bg-amber-500" : "bg-red-500";
+  const ratingLabel = (r: string) => r === "within_range" ? "In Range" : r === "above_range" ? "Above" : "Below";
+
+  return (
+    <Card data-testid="card-benchmark-summary">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            Benchmark Comparison
+          </CardTitle>
+          <Link href="/benchmarks">
+            <Button variant="ghost" size="sm" className="text-xs h-6" data-testid="link-view-benchmarks">View all</Button>
+          </Link>
+        </div>
+        <CardDescription className="text-xs">vs SME reference ranges</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-2.5">
+          {topMetrics.map((m: any) => (
+            <div key={m.metricKey} className="flex items-center justify-between text-sm" data-testid={`benchmark-summary-${m.metricKey}`}>
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${ratingDot(m.rating)}`} />
+                <span className="text-xs truncate">{m.label}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs font-medium">{m.companyValue?.toFixed(1)} {m.unit}</span>
+                <Badge variant="outline" className={`text-[10px] ${ratingColor(m.rating)}`}>{ratingLabel(m.rating)}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
@@ -859,7 +907,10 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <DataQualityCard />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <DataQualityCard />
+        <BenchmarkSummaryCard />
+      </div>
 
       <ActivityFeed />
 

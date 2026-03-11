@@ -9,6 +9,7 @@ import {
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
+  TrendingUp, Building2, Activity, HeartPulse,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -28,12 +29,16 @@ const navItems = [
   { title: "Evidence", href: "/evidence", icon: FileCheck, group: "main" },
   { title: "Compliance", href: "/compliance", icon: Shield, group: "main" },
   { title: "Reports", href: "/reports", icon: Download, group: "main" },
+  { title: "Benchmarks", href: "/benchmarks", icon: TrendingUp, group: "main" },
+  { title: "ESG Profile", href: "/esg-profile", icon: Building2, group: "main" },
   { title: "Policy Templates", href: "/policy-templates", icon: Library, group: "ai" },
   { title: "Policy Generator", href: "/policy-generator", icon: Wand2, group: "ai" },
   { title: "Questionnaire", href: "/questionnaire", icon: FileQuestion, group: "ai" },
   { title: "Carbon Calculator", href: "/carbon-calculator", icon: Calculator, group: "ai" },
   { title: "Answer Library", href: "/answer-library", icon: Bookmark, group: "ai" },
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
+  { title: "Platform Health", href: "/admin/health", icon: HeartPulse, group: "admin" },
+  { title: "Analytics", href: "/admin/analytics", icon: Activity, group: "admin" },
 ];
 
 export function AppSidebar() {
@@ -59,6 +64,7 @@ export function AppSidebar() {
   });
   const aiItems = navItems.filter(i => i.group === "ai");
   const settingsItems = navItems.filter(i => i.group === "settings");
+  const adminItems = navItems.filter(i => i.group === "admin");
 
   return (
     <Sidebar>
@@ -185,6 +191,32 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {isAdmin && adminItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Administration</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminItems.map((item) => {
+                  const isActive = location === item.href || location.startsWith(item.href);
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild data-active={isActive}>
+                        <Link href={item.href} data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
+                          <item.icon className="w-4 h-4" />
+                          <span>{item.title}</span>
+                          {isActive && (
+                            <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary" />
+                          )}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarSeparator />

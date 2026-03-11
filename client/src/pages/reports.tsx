@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -938,6 +938,52 @@ export default function Reports() {
     toast({ title: "CSV exported" });
   };
 
+  const generateFileMutation = useMutation({
+    mutationFn: async ({ reportId, format }: { reportId: string; format: "pdf" | "docx" }) => {
+      const res = await apiRequest("POST", `/api/reports/${reportId}/generate-file`, { format });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      if (data.fileId) {
+        handleDownloadFile(reportId, data.fileId, data.filename);
+      }
+      toast({ title: `${data.fileType?.toUpperCase() || "File"} generated` });
+    },
+    onError: () => toast({ title: "File generation failed", variant: "destructive" }),
+  });
+
+  const latestReportId = reports.length > 0 ? String(reports[0].id) : null;
+
+  const { data: generatedFiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/reports", latestReportId, "files"],
+    queryFn: () => latestReportId ? authFetch(`/api/reports/${latestReportId}/files`).then(r => r.json()) : Promise.resolve([]),
+    enabled: !!latestReportId,
+  });
+
+  const handleDownloadFile = async (reportId: string, fileId: string, filename: string) => {
+    try {
+      const res = await authFetch(`/api/reports/${reportId}/download/${fileId}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: "Download failed", variant: "destructive" });
+    }
+  };
+
+  const handleGenerateFile = (format: "pdf" | "docx") => {
+    if (!latestReportId) {
+      toast({ title: "Generate a report first", variant: "destructive" });
+      return;
+    }
+    generateFileMutation.mutate({ reportId: latestReportId, format });
+  };
+
   const downloadTextFile = (content: string, filename: string) => {
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -1351,14 +1397,33 @@ export default function Reports() {
                   <h2 className="text-sm font-medium">Report Preview</h2>
                   <p className="text-xs text-muted-foreground">{templateConfig.label} — {selectedPeriod}</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button size="sm" variant="outline" onClick={exportCsv} disabled={!reportData?.values?.length} data-testid="button-export-csv">
                     <FileDown className="w-3.5 h-3.5 mr-1.5" />
                     CSV
                   </Button>
-                  <Button size="sm" onClick={exportReport} data-testid="button-export-report">
+                  <Button size="sm" variant="outline" onClick={exportReport} data-testid="button-export-report">
                     <Download className="w-3.5 h-3.5 mr-1.5" />
-                    Export Report
+                    Text
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => handleGenerateFile("pdf")}
+                    disabled={generateFileMutation.isPending || !latestReportId}
+                    data-testid="button-download-pdf"
+                  >
+                    <FileDown className="w-3.5 h-3.5 mr-1.5" />
+                    {generateFileMutation.isPending && generateFileMutation.variables?.format === "pdf" ? "Generating..." : "PDF"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => handleGenerateFile("docx")}
+                    disabled={generateFileMutation.isPending || !latestReportId}
+                    data-testid="button-download-docx"
+                  >
+                    <FileDown className="w-3.5 h-3.5 mr-1.5" />
+                    {generateFileMutation.isPending && generateFileMutation.variables?.format === "docx" ? "Generating..." : "DOCX"}
                   </Button>
                 </div>
               </div>
@@ -1442,6 +1507,37 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      {generatedFiles.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <FileDown className="w-4 h-4" />
+            Generated Files
+          </h2>
+          <div className="space-y-2">
+            {generatedFiles.map((file: any) => (
+              <div key={file.id} className="flex items-center gap-3 p-3 rounded-md border border-border" data-testid={`generated-file-${file.id}`}>
+                <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{file.filename}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {file.fileType?.toUpperCase()} | {file.fileSize ? `${(file.fileSize / 1024).toFixed(1)} KB` : ""} | {file.generatedAt ? format(new Date(file.generatedAt), "dd MMM yyyy 'at' HH:mm") : ""}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDownloadFile(file.reportRunId, file.id, file.filename)}
+                  data-testid={`button-redownload-${file.id}`}
+                >
+                  <Download className="w-3.5 h-3.5 mr-1.5" />
+                  Download
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

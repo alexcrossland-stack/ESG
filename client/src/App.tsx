@@ -1,5 +1,5 @@
-import { Switch, Route, Redirect } from "wouter";
-import { queryClient } from "./lib/queryClient";
+import { Switch, Route, Redirect, useLocation } from "wouter";
+import { queryClient, authFetch } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun } from "lucide-react";
+import { useEffect, useRef } from "react";
 import NotFound from "@/pages/not-found";
 import Auth from "@/pages/auth";
 import Dashboard from "@/pages/dashboard";
@@ -29,6 +30,11 @@ import MyApprovals from "@/pages/my-approvals";
 import Compliance from "@/pages/compliance";
 import AnswerLibrary from "@/pages/answer-library";
 import ControlCentre from "@/pages/control-centre";
+import BenchmarksPage from "@/pages/benchmarks";
+import EsgProfilePage from "@/pages/esg-profile";
+import PublicProfilePage from "@/pages/public-profile";
+import AdminHealthPage from "@/pages/admin-health";
+import AdminAnalyticsPage from "@/pages/admin-analytics";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -39,11 +45,33 @@ function ThemeToggle() {
   );
 }
 
+function usePageTracking() {
+  const [location] = useLocation();
+  const lastTracked = useRef("");
+  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (location === lastTracked.current) return;
+    lastTracked.current = location;
+
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      authFetch("/api/activity/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "page_view", page: location }),
+      }).catch(() => {});
+    }, 500);
+  }, [location]);
+}
+
 function ProtectedApp() {
   const { data, isLoading } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
     retry: false,
   });
+
+  usePageTracking();
 
   if (isLoading) {
     return (
@@ -93,6 +121,10 @@ function ProtectedApp() {
               <Route path="/my-approvals" component={MyApprovals} />
               <Route path="/compliance" component={Compliance} />
               <Route path="/answer-library" component={AnswerLibrary} />
+              <Route path="/benchmarks" component={BenchmarksPage} />
+              <Route path="/esg-profile" component={EsgProfilePage} />
+              <Route path="/admin/health" component={AdminHealthPage} />
+              <Route path="/admin/analytics" component={AdminAnalyticsPage} />
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -106,6 +138,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/auth" component={Auth} />
+      <Route path="/public/esg/:token" component={PublicProfilePage} />
       <Route component={ProtectedApp} />
     </Switch>
   );
