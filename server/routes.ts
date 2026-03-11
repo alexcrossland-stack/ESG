@@ -7,6 +7,7 @@ import {
   insertUserSchema, insertCompanySchema, insertMetricSchema,
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
+  emissionFactors as emissionFactorsTable,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -1554,36 +1555,161 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { period, reportType, includePolicy, includeTopics, includeMetrics, includeActions } = req.body;
+      const {
+        period, reportType, reportTemplate,
+        includePolicy, includeTopics, includeMetrics, includeActions,
+        includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
+      } = req.body;
 
-      const report = await storage.createReportRun({
-        companyId,
-        period,
-        reportType: reportType || "pdf",
-        generatedBy: userId,
-        includePolicy,
-        includeTopics,
-        includeMetrics,
-        includeActions,
-      });
-
-      // Build report data
       const company = await storage.getCompany(companyId);
       const policy = await storage.getPolicy(companyId);
       const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
       const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
       const actions = await storage.getActionPlans(companyId);
       const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
       const allEvidence = await storage.getEvidenceFiles(companyId);
+      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+      const generatingUser = await storage.getUser(userId);
 
-      const valuesWithEvidence = values.map((v: any) => {
-        const hasEvidence = allEvidence.some(e => e.linkedModule === "metric_value" && e.linkedEntityId === v.id);
+      const periodSchema = z.object({
+        period: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+        reportType: z.enum(["pdf", "csv", "word"]).optional(),
+        reportTemplate: z.enum(["management", "customer", "annual"]).optional(),
+      });
+      const validation = periodSchema.safeParse({ period, reportType, reportTemplate });
+      if (!validation.success) {
+        res.status(400).json({ error: "Invalid report parameters" });
+        return;
+      }
+
+      const valuesWithLabels = values.map((v: any) => {
+        const hasEvidence = allEvidence.some((e: any) => e.linkedModule === "metric_value" && e.linkedEntityId === v.id);
+        const dataSourceLabel = hasEvidence ? "Evidenced" : (v.dataSourceType === "estimated" ? "Estimated" : "Manual");
+        const workflowLabel = v.workflowStatus === "approved" ? "Approved" : v.workflowStatus === "submitted" ? "Submitted" : "Draft";
+        return { ...v, dataSourceLabel, workflowLabel };
+      });
+
+      const metricsByCategory: Record<string, any[]> = {};
+      for (const v of valuesWithLabels) {
+        const cat = v.category || "other";
+        if (!metricsByCategory[cat]) metricsByCategory[cat] = [];
+        metricsByCategory[cat].push(v);
+      }
+
+      const scoredMetrics: ScoredMetric[] = enabledMetrics.map((m: any) => {
+        const val = valuesWithLabels.find((v: any) => v.metricId === m.id);
+        const status = val ? getTrafficLightStatus(m, val.value, null) : "missing";
         return {
-          ...v,
-          dataSourceLabel: hasEvidence ? "Evidenced" : (v.dataSourceType === "estimated" ? "Estimated" : "Manual"),
+          metricId: m.id, name: m.name, category: m.category,
+          status, value: val?.value ?? null,
+          weight: parseFloat(m.weight) || 1, importance: m.importance || "standard",
         };
+      });
+      const selectedTopics = topics.filter((t: any) => t.selected);
+      const weightedScore = calculateWeightedEsgScore(scoredMetrics, selectedTopics);
+
+      const periodCarbon = period
+        ? carbonCalcs.find((c: any) => c.reportingPeriod === period || c.reportingPeriod?.startsWith(period.substring(0, 4)))
+        : carbonCalcs[0];
+      const matchedCarbon = periodCarbon || (carbonCalcs.length > 0 ? carbonCalcs[0] : null);
+      const carbonPeriodMismatch = matchedCarbon && period && matchedCarbon.reportingPeriod !== period;
+      const carbonSummary = matchedCarbon ? {
+        scope1: parseFloat(matchedCarbon.scope1Total as string) || 0,
+        scope2: parseFloat(matchedCarbon.scope2Total as string) || 0,
+        scope3: parseFloat(matchedCarbon.scope3Total as string) || 0,
+        total: parseFloat(matchedCarbon.totalEmissions as string) || 0,
+        period: matchedCarbon.reportingPeriod,
+        factorYear: matchedCarbon.factorYear || 2024,
+        employeeCount: matchedCarbon.employeeCount,
+        perEmployee: matchedCarbon.employeeCount
+          ? Math.round((parseFloat(matchedCarbon.totalEmissions as string) || 0) / matchedCarbon.employeeCount * 100) / 100
+          : null,
+        dataQuality: matchedCarbon.dataQuality || {},
+        assumptions: matchedCarbon.assumptions || [],
+        methodologyNotes: matchedCarbon.methodologyNotes || [],
+        lineItems: (matchedCarbon.results as any)?.lineItems || [],
+        periodMismatch: carbonPeriodMismatch ? `Carbon data from ${matchedCarbon.reportingPeriod}, not current period ${period}` : null,
+      } : null;
+
+      const totalValues = valuesWithLabels.length;
+      const approvedCount = valuesWithLabels.filter((v: any) => v.workflowStatus === "approved").length;
+      const draftCount = valuesWithLabels.filter((v: any) => v.workflowStatus === "draft").length;
+      const evidencedCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Evidenced").length;
+      const estimatedCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Estimated").length;
+      const manualCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Manual").length;
+      const missingMetrics = enabledMetrics.filter((m: any) => !valuesWithLabels.find((v: any) => v.metricId === m.id));
+
+      const dataQualityFlags = {
+        totalValues, approvedCount, draftCount, evidencedCount, estimatedCount, manualCount,
+        missingCount: missingMetrics.length,
+        missingMetrics: missingMetrics.map((m: any) => ({ name: m.name, category: m.category })),
+        approvalRate: totalValues > 0 ? Math.round((approvedCount / totalValues) * 100) : 0,
+        evidenceRate: totalValues > 0 ? Math.round((evidencedCount / totalValues) * 100) : 0,
+      };
+
+      const actionsComplete = actions.filter((a: any) => a.status === "complete").length;
+      const actionsOverdue = actions.filter((a: any) => a.status !== "complete" && a.dueDate && new Date(a.dueDate) < new Date()).length;
+      const actionsSummary = {
+        total: actions.length,
+        complete: actionsComplete,
+        inProgress: actions.filter((a: any) => a.status === "in_progress").length,
+        notStarted: actions.filter((a: any) => a.status === "not_started").length,
+        overdue: actionsOverdue,
+        completionRate: actions.length > 0 ? Math.round((actionsComplete / actions.length) * 100) : 0,
+        items: actions,
+      };
+
+      const policyContent = latestVersion?.content;
+      const policySummary = policyContent ? {
+        purpose: policyContent.purpose || null,
+        environmentalCommitments: policyContent.environmentalCommitments || null,
+        socialCommitments: policyContent.socialCommitments || null,
+        governanceCommitments: policyContent.governanceCommitments || null,
+        rolesAndResponsibilities: policyContent.rolesAndResponsibilities || null,
+        workflowStatus: policy?.status || "draft",
+      } : null;
+
+      const emissionFactors = await db.select().from(emissionFactorsTable).orderBy(emissionFactorsTable.category);
+      const factorMethodology = {
+        factorYear: carbonSummary?.factorYear || emissionFactors[0]?.factorYear || 2024,
+        source: emissionFactors[0]?.sourceLabel || "UK DEFRA",
+        factorCount: emissionFactors.length,
+        categories: [...new Set(emissionFactors.map((f: any) => f.category))],
+      };
+
+      const reportData = {
+        generatedAt: new Date().toISOString(),
+        generatedBy: generatingUser?.name || generatingUser?.username || userId,
+        reportTemplate: reportTemplate || "management",
+        period,
+        company,
+        policySummary,
+        selectedTopics,
+        metricsByCategory,
+        values: valuesWithLabels,
+        weightedScore,
+        carbonSummary,
+        actionsSummary,
+        dataQualityFlags,
+        evidenceCoverage,
+        factorMethodology,
+      };
+
+      const report = await storage.createReportRun({
+        companyId, period,
+        reportType: reportType || "pdf",
+        reportTemplate: reportTemplate || "management",
+        generatedBy: userId,
+        includePolicy, includeTopics, includeMetrics, includeActions,
+        includeSummary: includeSummary ?? true,
+        includeCarbon: includeCarbon ?? true,
+        includeEvidence: includeEvidence ?? true,
+        includeMethodology: includeMethodology ?? true,
+        includeSignoff: includeSignoff ?? true,
+        reportData,
       });
 
       await storage.createAuditLog({
@@ -1591,21 +1717,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         action: "Report generated",
         entityType: "report",
         entityId: report.id,
-        details: { period, reportType },
+        details: { period, reportType, reportTemplate },
       });
 
-      res.json({
-        report,
-        data: {
-          company,
-          policy: latestVersion?.content,
-          selectedTopics: topics.filter(t => t.selected),
-          metrics: allMetrics.filter(m => m.enabled),
-          values: valuesWithEvidence,
-          actions,
-          evidenceCoverage,
-        },
-      });
+      res.json({ report, data: reportData });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
