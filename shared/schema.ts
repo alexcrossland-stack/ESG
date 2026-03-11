@@ -77,6 +77,7 @@ export const esgPolicies = pgTable("esg_policies", {
   status: policyStatusEnum("status").default("draft"),
   publishedAt: timestamp("published_at"),
   reviewDate: timestamp("review_date"),
+  assignedUserId: varchar("assigned_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -107,6 +108,8 @@ export const metrics = pgTable("metrics", {
   unit: text("unit"),
   frequency: metricFrequencyEnum("frequency").default("monthly"),
   dataOwner: text("data_owner"),
+  assignedUserId: varchar("assigned_user_id"),
+  assignedDueDate: timestamp("assigned_due_date"),
   enabled: boolean("enabled").default(true),
   isDefault: boolean("is_default").default(false),
   metricType: text("metric_type").default("manual"),
@@ -150,6 +153,7 @@ export const metricValues = pgTable("metric_values", {
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
+  reportingPeriodId: varchar("reporting_period_id"),
 });
 
 export const rawDataInputs = pgTable("raw_data_inputs", {
@@ -163,6 +167,10 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   period: text("period").notNull(),
   source: text("source"),
   enteredBy: varchar("entered_by"),
+  assignedUserId: varchar("assigned_user_id"),
+  assignedDueDate: timestamp("assigned_due_date"),
+  submittedBy: varchar("submitted_by"),
+  submittedAt: timestamp("submitted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   dataSourceType: dataSourceTypeEnum("data_source_type").default("manual"),
@@ -170,6 +178,7 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
+  reportingPeriodId: varchar("reporting_period_id"),
 });
 
 export const evidenceStatusEnum = pgEnum("evidence_status", ["uploaded", "reviewed", "approved", "expired"]);
@@ -191,6 +200,7 @@ export const evidenceFiles = pgTable("evidence_files", {
   uploadedAt: timestamp("uploaded_at").defaultNow(),
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
+  assignedUserId: varchar("assigned_user_id"),
 });
 
 export const actionPlans = pgTable("action_plans", {
@@ -199,6 +209,7 @@ export const actionPlans = pgTable("action_plans", {
   title: text("title").notNull(),
   description: text("description"),
   owner: text("owner"),
+  assignedUserId: varchar("assigned_user_id"),
   dueDate: timestamp("due_date"),
   status: actionStatusEnum("status").default("not_started"),
   relatedMetricId: varchar("related_metric_id"),
@@ -215,6 +226,8 @@ export const reportRuns = pgTable("report_runs", {
   reportTemplate: text("report_template").default("management"),
   generatedAt: timestamp("generated_at").defaultNow(),
   generatedBy: varchar("generated_by"),
+  submittedBy: varchar("submitted_by"),
+  submittedAt: timestamp("submitted_at"),
   includePolicy: boolean("include_policy").default(true),
   includeTopics: boolean("include_topics").default(true),
   includeMetrics: boolean("include_metrics").default(true),
@@ -336,6 +349,8 @@ export const questionnaires = pgTable("questionnaires", {
   title: text("title").notNull(),
   source: text("source"),
   status: questionnaireStatusEnum("status").default("draft"),
+  assignedUserId: varchar("assigned_user_id"),
+  assignedDueDate: timestamp("assigned_due_date"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -354,6 +369,8 @@ export const questionnaireQuestions = pgTable("questionnaire_questions", {
   sourceData: jsonb("source_data"),
   approved: boolean("approved").default(false),
   dataSourceType: dataSourceTypeEnum("data_source_type").default("manual"),
+  submittedBy: varchar("submitted_by"),
+  submittedAt: timestamp("submitted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
   reviewedBy: varchar("reviewed_by"),
@@ -395,12 +412,46 @@ export const generatedPolicies = pgTable("generated_policies", {
   reviewDate: timestamp("review_date"),
   versionNumber: integer("version_number").default(1),
   tone: policyToneEnum("tone").default("simple_sme"),
+  submittedBy: varchar("submitted_by"),
+  submittedAt: timestamp("submitted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   workflowStatus: workflowStatusEnum("workflow_status").default("draft"),
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
+});
+
+export const evidenceRequestStatusEnum = pgEnum("evidence_request_status", ["requested", "uploaded", "under_review", "approved", "rejected", "expired"]);
+
+export const evidenceRequests = pgTable("evidence_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  requestedByUserId: varchar("requested_by_user_id").notNull(),
+  assignedUserId: varchar("assigned_user_id").notNull(),
+  linkedModule: text("linked_module"),
+  linkedEntityId: varchar("linked_entity_id"),
+  description: text("description").notNull(),
+  dueDate: timestamp("due_date"),
+  status: evidenceRequestStatusEnum("status").default("requested"),
+  evidenceFileId: varchar("evidence_file_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const reportingPeriodTypeEnum = pgEnum("reporting_period_type", ["monthly", "quarterly", "annual"]);
+export const reportingPeriodStatusEnum = pgEnum("reporting_period_status", ["open", "closed", "locked"]);
+
+export const reportingPeriods = pgTable("reporting_periods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  name: text("name").notNull(),
+  periodType: reportingPeriodTypeEnum("period_type").notNull(),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  status: reportingPeriodStatusEnum("status").default("open"),
+  previousPeriodId: varchar("previous_period_id"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Insert schemas
@@ -424,6 +475,8 @@ export const insertQuestionnaireQuestionSchema = createInsertSchema(questionnair
 export const insertPolicyTemplateSchema = createInsertSchema(policyTemplates).omit({ id: true, createdAt: true });
 export const insertGeneratedPolicySchema = createInsertSchema(generatedPolicies).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertAiGenerationLogSchema = createInsertSchema(aiGenerationLogs).omit({ id: true, generatedAt: true });
+export const insertEvidenceRequestSchema = createInsertSchema(evidenceRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertReportingPeriodSchema = createInsertSchema(reportingPeriods).omit({ id: true, createdAt: true });
 
 // Types
 export type User = typeof users.$inferSelect;
@@ -465,6 +518,10 @@ export type GeneratedPolicy = typeof generatedPolicies.$inferSelect;
 export type InsertGeneratedPolicy = z.infer<typeof insertGeneratedPolicySchema>;
 export type AiGenerationLog = typeof aiGenerationLogs.$inferSelect;
 export type InsertAiGenerationLog = z.infer<typeof insertAiGenerationLogSchema>;
+export type EvidenceRequest = typeof evidenceRequests.$inferSelect;
+export type InsertEvidenceRequest = z.infer<typeof insertEvidenceRequestSchema>;
+export type ReportingPeriod = typeof reportingPeriods.$inferSelect;
+export type InsertReportingPeriod = z.infer<typeof insertReportingPeriodSchema>;
 export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
 export type UserRole = "admin" | "contributor" | "approver" | "viewer";

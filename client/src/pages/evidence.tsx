@@ -17,6 +17,7 @@ import {
   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
   Calendar, XCircle,
 } from "lucide-react";
+import { OwnerAssignment } from "@/components/owner-assignment";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   uploaded: { label: "Uploaded", icon: Upload, className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
@@ -358,6 +359,12 @@ function EvidenceList() {
                       {isExpired(f) ? "Expired" : "Expires"} {new Date(f.expiryDate).toLocaleDateString()}
                     </span>
                   )}
+                  <OwnerAssignment
+                    entityType="evidence_files"
+                    entityId={f.id}
+                    currentUserId={f.assignedUserId}
+                    invalidateKeys={[["/api/evidence"]]}
+                  />
                 </div>
               </div>
               {can("metrics_data_entry") && (
@@ -406,6 +413,10 @@ export default function Evidence() {
         <TabsList>
           <TabsTrigger value="files" data-testid="tab-evidence-files">All Evidence</TabsTrigger>
           <TabsTrigger value="coverage" data-testid="tab-evidence-coverage">Coverage</TabsTrigger>
+          <TabsTrigger value="requests" data-testid="tab-evidence-requests">
+            Evidence Requests
+            <EvidenceRequestCountBadge />
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="files" className="mt-4">
           <EvidenceList />
@@ -413,7 +424,193 @@ export default function Evidence() {
         <TabsContent value="coverage" className="mt-4">
           <MetricCoverageTable />
         </TabsContent>
+        <TabsContent value="requests" className="mt-4">
+          <EvidenceRequestsPanel />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function EvidenceRequestCountBadge() {
+  const { isAdmin } = usePermissions();
+  const { data } = useQuery<any[]>({
+    queryKey: [isAdmin ? "/api/evidence-requests" : "/api/evidence-requests/mine"],
+  });
+  const pending = (data || []).filter((r: any) => ["requested", "uploaded"].includes(r.status));
+  if (pending.length === 0) return null;
+  return <Badge variant="secondary" className="ml-1.5 text-xs h-4 px-1" data-testid="badge-requests-count">{pending.length}</Badge>;
+}
+
+const REQUEST_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+  requested: { label: "Requested", className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
+  uploaded: { label: "Uploaded", className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" },
+  under_review: { label: "Under Review", className: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300" },
+  approved: { label: "Approved", className: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" },
+  rejected: { label: "Rejected", className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
+  expired: { label: "Expired", className: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400" },
+};
+
+function EvidenceRequestsPanel() {
+  const { isAdmin, can } = usePermissions();
+  const { toast } = useToast();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [assignUser, setAssignUser] = useState("");
+  const [reqLinkedModule, setReqLinkedModule] = useState("");
+  const [reqDescription, setReqDescription] = useState("");
+  const [reqDueDate, setReqDueDate] = useState("");
+
+  const { data: requests, isLoading } = useQuery<any[]>({
+    queryKey: [isAdmin ? "/api/evidence-requests" : "/api/evidence-requests/mine"],
+  });
+
+  const { data: companyUsers } = useQuery<any[]>({
+    queryKey: ["/api/users"],
+    enabled: isAdmin,
+  });
+
+  const { data: evidenceFiles } = useQuery<any[]>({
+    queryKey: ["/api/evidence"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/evidence-requests", {
+        assignedUserId: assignUser,
+        linkedModule: reqLinkedModule || null,
+        description: reqDescription,
+        dueDate: reqDueDate || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Evidence request created" });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence-requests/mine"] });
+      setCreateOpen(false);
+      setAssignUser("");
+      setReqLinkedModule("");
+      setReqDescription("");
+      setReqDueDate("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to create request", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const linkMutation = useMutation({
+    mutationFn: async ({ requestId, evidenceFileId }: { requestId: string; evidenceFileId: string }) => {
+      const res = await apiRequest("PUT", `/api/evidence-requests/${requestId}/link`, { evidenceFileId });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Evidence linked to request" });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence-requests/mine"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to link evidence", description: e.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      {isAdmin && (
+        <div className="flex justify-end">
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-create-request">Create Request</Button>
+            </DialogTrigger>
+            <DialogContent data-testid="dialog-create-request">
+              <DialogHeader>
+                <DialogTitle>Create Evidence Request</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>Assign To</Label>
+                  <Select value={assignUser} onValueChange={setAssignUser} data-testid="select-assign-user">
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select user" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(companyUsers || []).map((u: any) => (
+                        <SelectItem key={u.id} value={u.id}>{u.username}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Linked Module</Label>
+                  <Select value={reqLinkedModule} onValueChange={setReqLinkedModule} data-testid="select-linked-module">
+                    <SelectTrigger>
+                      <SelectValue placeholder="Optional" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="metric">Metric</SelectItem>
+                      <SelectItem value="policy">Policy</SelectItem>
+                      <SelectItem value="questionnaire">Questionnaire</SelectItem>
+                      <SelectItem value="action">Action</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Description</Label>
+                  <Textarea value={reqDescription} onChange={(e) => setReqDescription(e.target.value)} placeholder="Describe the evidence needed..." data-testid="input-request-description" />
+                </div>
+                <div>
+                  <Label>Due Date</Label>
+                  <Input type="date" value={reqDueDate} onChange={(e) => setReqDueDate(e.target.value)} data-testid="input-request-due-date" />
+                </div>
+                <Button onClick={() => createMutation.mutate()} disabled={!assignUser || !reqDescription || createMutation.isPending} className="w-full">
+                  {createMutation.isPending ? "Creating..." : "Create Request"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      )}
+
+      {isLoading && <div className="text-center text-muted-foreground py-8">Loading requests...</div>}
+
+      {!isLoading && (!requests || requests.length === 0) && (
+        <div className="text-center text-muted-foreground py-8">No evidence requests</div>
+      )}
+
+      {(requests || []).map((req: any) => {
+        const statusConfig = REQUEST_STATUS_CONFIG[req.status] || REQUEST_STATUS_CONFIG.requested;
+        return (
+          <Card key={req.id} data-testid={`request-item-${req.id}`}>
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{req.description}</p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {req.linkedModule && <Badge variant="outline" className="text-xs">{req.linkedModule}</Badge>}
+                    {req.dueDate && <span className="text-xs text-muted-foreground">{new Date(req.dueDate).toLocaleDateString()}</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge variant="outline" className={`${statusConfig.className} text-xs border-0`} data-testid={`badge-request-status-${req.id}`}>
+                    {statusConfig.label}
+                  </Badge>
+                  {req.status === "requested" && !isAdmin && (
+                    <Select onValueChange={(fileId) => linkMutation.mutate({ requestId: req.id, evidenceFileId: fileId })}>
+                      <SelectTrigger className="w-auto h-7 text-xs" data-testid={`button-upload-for-request-${req.id}`}>
+                        <SelectValue placeholder="Link Evidence" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(evidenceFiles || []).map((f: any) => (
+                          <SelectItem key={f.id} value={f.id}>{f.filename}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
   );
 }

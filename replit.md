@@ -73,6 +73,44 @@ Deduplication via `source_key` column prevents duplicate notifications. Dashboar
 
 DB table: `notifications` with company_id, user_id, type, title, message, severity, linked_module, linked_entity_id, link_url, due_date, dismissed, dismissed_at, dismissed_by, auto_generated, source_key, created_at.
 
+## Phase 2 — Release 1 Features
+
+### Task Ownership & Workflow Standardisation
+- All workflow-enabled tables now have standardised `submitted_by`/`submitted_at`/`reviewed_by`/`reviewed_at`/`review_comment`/`workflow_status` columns
+- Submit action sets `submitted_by`/`submitted_at` only (no longer overwrites `reviewed_by`)
+- Approve/reject sets `reviewed_by`/`reviewed_at`/`review_comment` only
+- 6 entity tables gained `assigned_user_id` (varchar UUID): metrics, raw_data_inputs, action_plans, esg_policies, questionnaires, evidence_files
+- 3 tables gained `assigned_due_date`: metrics, raw_data_inputs, questionnaires
+
+### New Tables
+- **evidence_requests** — Status enum: requested/uploaded/under_review/approved/rejected/expired. Links requestor, assignee, module, evidence file.
+- **reporting_periods** — Type enum: monthly/quarterly/annual. Status enum: open/closed/locked. Supports chaining via previousPeriodId.
+- `metric_values` and `raw_data_inputs` gained `reporting_period_id` (nullable, backward compatible)
+
+### New API Routes
+- `GET /api/my-tasks` — All tasks assigned to current user
+- `GET /api/my-approvals` — Pending workflow items with submitter usernames (admin/approver only)
+- `PUT /api/assign/:entityType/:entityId` — Assign owner to entity (admin only)
+- `GET/POST /api/evidence-requests` — CRUD for evidence requests
+- `GET /api/evidence-requests/mine` — User's assigned requests
+- `PUT /api/evidence-requests/:id/link` — Link evidence file to request
+- `GET/POST /api/reporting-periods` — CRUD for reporting periods
+- `POST /api/reporting-periods/:id/close|lock|copy-forward` — Period lifecycle
+- `GET /api/reporting-periods/compare` — Period-over-period comparison
+
+### New Frontend Pages
+- **My Tasks** (`/my-tasks`) — Grouped task cards (metrics due, actions, evidence requests, policy reviews, questionnaires)
+- **My Approvals** (`/my-approvals`) — Inline approve/reject with comment (admin/approver only)
+- **Evidence Requests tab** — Added to evidence page with create dialog, status badges, link evidence
+- **Reporting Periods admin** — Settings admin section 10th item with create, close, lock, copy-forward
+- **Owner Assignment** — Reusable `OwnerAssignment` component on metrics admin (settings), action tracker
+
+### Shared Component
+- `client/src/components/owner-assignment.tsx` — Reusable dropdown for admin, read-only text for non-admin
+
+### Admin Sections (Updated)
+10 sections in Settings Administration tab (added "Reporting Periods" with Calendar icon)
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`) for AI-assisted features like policy generation and questionnaire autofill.

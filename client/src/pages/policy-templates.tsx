@@ -16,6 +16,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
+import { OwnerAssignment } from "@/components/owner-assignment";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -251,6 +252,14 @@ export default function PolicyTemplatesPage() {
                           <p className="text-xs text-muted-foreground">
                             v{p.versionNumber} · {p.policyOwner || "No owner"} · Updated {p.updatedAt ? format(new Date(p.updatedAt), "dd MMM yyyy") : "—"}
                           </p>
+                        </div>
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <OwnerAssignment
+                            entityType="esg_policies"
+                            entityId={p.id}
+                            currentUserId={p.assignedUserId}
+                            invalidateKeys={[["/api/generated-policies"]]}
+                          />
                         </div>
                         <WorkflowBadge status={p.workflowStatus} size="sm" />
                         {p.workflowStatus !== "approved" && p.status !== "approved" && p.status !== "published" && (

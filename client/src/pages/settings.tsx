@@ -14,16 +14,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import {
   Settings as SettingsIcon, Building2, Clock, Save, Library, FileText,
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
-  Scale, Leaf, Palette, ClipboardCheck, Search,
+  Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { OwnerAssignment } from "@/components/owner-assignment";
 
 const INDUSTRIES = [
   "Construction", "Education", "Energy & Utilities", "Financial Services",
@@ -239,6 +240,7 @@ function AdminPanel() {
     { key: "factors", label: "Emission Factors", icon: Leaf },
     { key: "workflow", label: "Approval Workflow", icon: ClipboardCheck },
     { key: "branding", label: "Report Branding", icon: Palette },
+    { key: "periods", label: "Reporting Periods", icon: Calendar },
     { key: "audit", label: "Audit Log", icon: Search },
   ];
 
@@ -268,6 +270,7 @@ function AdminPanel() {
       {section === "factors" && <EmissionFactorAdmin />}
       {section === "workflow" && <WorkflowSettings />}
       {section === "branding" && <ReportBranding />}
+      {section === "periods" && <ReportingPeriodsAdmin />}
       {section === "audit" && <AuditLogAdmin />}
     </div>
   );
@@ -610,6 +613,9 @@ function MetricsAdmin() {
                   <p className="text-muted-foreground">{m.category} · {m.metricType || "manual"} · {(m.direction || "higher_is_better").replace(/_/g, " ")}</p>
                 </div>
                 {m.enabled === false && <Badge variant="outline" className="text-[10px]">Disabled</Badge>}
+                <div onClick={(e) => e.stopPropagation()}>
+                  <OwnerAssignment entityType="metrics" entityId={m.id} currentUserId={m.assignedUserId} invalidateKeys={[["/api/metrics/all"], ["/api/metrics"]]} />
+                </div>
                 <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
               </div>
             ))}
@@ -1207,6 +1213,220 @@ function ReportBranding() {
             {updateMutation.isPending ? "Saving..." : "Save Branding"}
           </Button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReportingPeriodsAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState<string | null>(null);
+  const [periodName, setPeriodName] = useState("");
+  const [periodType, setPeriodType] = useState("quarterly");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [copyName, setCopyName] = useState("");
+  const [copyType, setCopyType] = useState("quarterly");
+  const [copyStart, setCopyStart] = useState("");
+  const [copyEnd, setCopyEnd] = useState("");
+
+  const { data: periods = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/reporting-periods", {
+        name: periodName, periodType, startDate, endDate,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Reporting period created" });
+      queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
+      setCreateOpen(false);
+      setPeriodName("");
+      setStartDate("");
+      setEndDate("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to create period", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/reporting-periods/${id}/close`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Period closed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
+    },
+  });
+
+  const lockMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/reporting-periods/${id}/lock`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Period locked" });
+      queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
+    },
+  });
+
+  const copyMutation = useMutation({
+    mutationFn: async (sourceId: string) => {
+      const res = await apiRequest("POST", `/api/reporting-periods/${sourceId}/copy-forward`, {
+        name: copyName, periodType: copyType, startDate: copyStart, endDate: copyEnd,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: `Period copied: ${data.copiedMetrics} metrics, ${data.copiedActions} actions carried forward` });
+      queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
+      setCopyOpen(null);
+      setCopyName("");
+      setCopyStart("");
+      setCopyEnd("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Copy failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const statusColors: Record<string, string> = {
+    open: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
+    closed: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+    locked: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  };
+
+  return (
+    <Card data-testid="admin-section-reporting-periods">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Reporting Periods</CardTitle>
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-create-period">Create Period</Button>
+            </DialogTrigger>
+            <DialogContent data-testid="dialog-create-period">
+              <DialogHeader>
+                <DialogTitle>Create Reporting Period</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>Name</Label>
+                  <Input value={periodName} onChange={(e) => setPeriodName(e.target.value)} placeholder="Q1 2026" />
+                </div>
+                <div>
+                  <Label>Period Type</Label>
+                  <Select value={periodType} onValueChange={setPeriodType}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="annual">Annual</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Start Date</Label>
+                    <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>End Date</Label>
+                    <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                  </div>
+                </div>
+                <Button onClick={() => createMutation.mutate()} disabled={!periodName || !startDate || !endDate || createMutation.isPending} className="w-full">
+                  {createMutation.isPending ? "Creating..." : "Create Period"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading && <Skeleton className="h-20 w-full" />}
+        {!isLoading && periods.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-4">No reporting periods created yet</p>
+        )}
+        {periods.map((p: any) => (
+          <div key={p.id} className="flex items-center justify-between p-3 border rounded-md" data-testid={`period-item-${p.id}`}>
+            <div>
+              <p className="text-sm font-medium">{p.name}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant="outline" className="text-xs">{p.periodType}</Badge>
+                <Badge variant="outline" className={`text-xs border-0 ${statusColors[p.status] || ""}`} data-testid={`badge-period-status-${p.id}`}>
+                  {p.status}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {p.startDate ? new Date(p.startDate).toLocaleDateString() : ""} - {p.endDate ? new Date(p.endDate).toLocaleDateString() : ""}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {p.status === "open" && (
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { if (confirm("Close this period? Data entry will still be possible but the period will be marked as closed.")) closeMutation.mutate(p.id); }} data-testid={`button-close-period-${p.id}`}>
+                  Close
+                </Button>
+              )}
+              {p.status === "closed" && (
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { if (confirm("Lock this period? No further data changes will be possible.")) lockMutation.mutate(p.id); }} data-testid={`button-lock-period-${p.id}`}>
+                  <LockIcon className="w-3 h-3 mr-1" />Lock
+                </Button>
+              )}
+              <Dialog open={copyOpen === p.id} onOpenChange={(o) => setCopyOpen(o ? p.id : null)}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" data-testid={`button-copy-forward-${p.id}`}>
+                    <Copy className="w-3 h-3 mr-1" />Copy Forward
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Copy Forward: {p.name}</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <p className="text-sm text-muted-foreground">Metric targets and incomplete actions will be carried forward. Data entry starts fresh.</p>
+                    <div>
+                      <Label>New Period Name</Label>
+                      <Input value={copyName} onChange={(e) => setCopyName(e.target.value)} placeholder="Q2 2026" />
+                    </div>
+                    <div>
+                      <Label>Period Type</Label>
+                      <Select value={copyType} onValueChange={setCopyType}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="quarterly">Quarterly</SelectItem>
+                          <SelectItem value="annual">Annual</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label>Start Date</Label>
+                        <Input type="date" value={copyStart} onChange={(e) => setCopyStart(e.target.value)} />
+                      </div>
+                      <div>
+                        <Label>End Date</Label>
+                        <Input type="date" value={copyEnd} onChange={(e) => setCopyEnd(e.target.value)} />
+                      </div>
+                    </div>
+                    <Button onClick={() => copyMutation.mutate(p.id)} disabled={!copyName || !copyStart || !copyEnd || copyMutation.isPending} className="w-full">
+                      {copyMutation.isPending ? "Copying..." : "Copy Forward"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

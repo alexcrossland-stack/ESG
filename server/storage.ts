@@ -7,7 +7,7 @@ import {
   actionPlans, reportRuns, auditLogs, rawDataInputs,
   policyGenerationInputs, emissionFactors, carbonCalculations,
   questionnaires, questionnaireQuestions,
-  aiGenerationLogs,
+  aiGenerationLogs, evidenceRequests, reportingPeriods,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
   type MaterialTopic, type Metric, type InsertMetric,
@@ -26,6 +26,8 @@ import {
   type AiGenerationLog, type InsertAiGenerationLog,
   notifications,
   type Notification, type InsertNotification,
+  type EvidenceRequest, type InsertEvidenceRequest,
+  type ReportingPeriod, type InsertReportingPeriod,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -165,8 +167,28 @@ export interface IStorage {
   getAiGenerationLogs(companyId: string, entityType?: string, entityId?: string): Promise<AiGenerationLog[]>;
 
   // Workflow
-  updateWorkflowStatus(table: string, id: string, status: string, reviewedBy: string, comment?: string, companyId?: string): Promise<void>;
+  updateWorkflowStatus(table: string, id: string, status: string, userId: string, comment?: string, companyId?: string): Promise<void>;
   getWorkflowPendingItems(companyId: string): Promise<any>;
+
+  // Task Ownership
+  assignOwner(entityType: string, entityId: string, assignedUserId: string, companyId: string): Promise<void>;
+  getUserTasks(userId: string, companyId: string): Promise<any[]>;
+  getUserApprovals(companyId: string): Promise<any>;
+
+  // Evidence Requests
+  getEvidenceRequests(companyId: string): Promise<EvidenceRequest[]>;
+  getEvidenceRequestsByUser(userId: string, companyId: string): Promise<EvidenceRequest[]>;
+  createEvidenceRequest(data: InsertEvidenceRequest): Promise<EvidenceRequest>;
+  updateEvidenceRequest(id: string, companyId: string, data: Partial<EvidenceRequest>): Promise<EvidenceRequest | undefined>;
+  linkEvidenceToRequest(requestId: string, evidenceFileId: string, companyId: string): Promise<EvidenceRequest | undefined>;
+
+  // Reporting Periods
+  getReportingPeriods(companyId: string): Promise<ReportingPeriod[]>;
+  createReportingPeriod(data: InsertReportingPeriod): Promise<ReportingPeriod>;
+  closeReportingPeriod(id: string, companyId: string): Promise<ReportingPeriod | undefined>;
+  lockReportingPeriod(id: string, companyId: string): Promise<ReportingPeriod | undefined>;
+  copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod): Promise<{ period: ReportingPeriod; copiedMetrics: number; copiedActions: number }>;
+  getPeriodComparison(companyId: string, currentPeriod: string, comparePeriod: string): Promise<any[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -800,26 +822,32 @@ export class DatabaseStorage implements IStorage {
       throw new Error(`Cannot transition from ${currentStatus} to ${status}`);
     }
 
-    await db.execute(
-      sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, reviewed_by = ${reviewedBy}, reviewed_at = NOW(), review_comment = ${comment || null} WHERE id = ${id}`
-    );
+    if (status === "submitted") {
+      await db.execute(
+        sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, submitted_by = ${reviewedBy}, submitted_at = NOW() WHERE id = ${id}`
+      );
+    } else {
+      await db.execute(
+        sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, reviewed_by = ${reviewedBy}, reviewed_at = NOW(), review_comment = ${comment || null} WHERE id = ${id}`
+      );
+    }
   }
 
   async getWorkflowPendingItems(companyId: string) {
     const pendingMetricValues = await db.execute(
-      sql`SELECT mv.id, m.name, mv.period, mv.workflow_status, mv.submitted_by, mv.submitted_at FROM metric_values mv INNER JOIN metrics m ON mv.metric_id = m.id WHERE m.company_id = ${companyId} AND mv.workflow_status = 'submitted'`
+      sql`SELECT mv.id, m.name, mv.period, mv.workflow_status, mv.submitted_by, mv.submitted_at, mv.review_comment FROM metric_values mv INNER JOIN metrics m ON mv.metric_id = m.id WHERE m.company_id = ${companyId} AND mv.workflow_status = 'submitted'`
     );
     const pendingRawData = await db.execute(
-      sql`SELECT id, input_name as name, period, workflow_status, entered_by as submitted_by, created_at as submitted_at FROM raw_data_inputs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+      sql`SELECT id, input_name as name, period, workflow_status, submitted_by, submitted_at, review_comment FROM raw_data_inputs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
     );
     const pendingReports = await db.execute(
-      sql`SELECT id, period, report_type as name, workflow_status, generated_by as submitted_by, generated_at as submitted_at FROM report_runs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+      sql`SELECT id, period, report_type as name, workflow_status, submitted_by, submitted_at, review_comment FROM report_runs WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
     );
     const pendingPolicies = await db.execute(
-      sql`SELECT id, title as name, workflow_status, created_at as submitted_at FROM generated_policies WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
+      sql`SELECT id, title as name, workflow_status, submitted_by, submitted_at, review_comment FROM generated_policies WHERE company_id = ${companyId} AND workflow_status = 'submitted'`
     );
     const pendingQuestions = await db.execute(
-      sql`SELECT qq.id, qq.question_text as name, qq.workflow_status, qq.created_at as submitted_at FROM questionnaire_questions qq INNER JOIN questionnaires q ON qq.questionnaire_id = q.id WHERE q.company_id = ${companyId} AND qq.workflow_status = 'submitted'`
+      sql`SELECT qq.id, qq.question_text as name, qq.workflow_status, qq.submitted_by, qq.submitted_at, qq.review_comment FROM questionnaire_questions qq INNER JOIN questionnaires q ON qq.questionnaire_id = q.id WHERE q.company_id = ${companyId} AND qq.workflow_status = 'submitted'`
     );
     return {
       metricValues: pendingMetricValues.rows,
@@ -828,6 +856,227 @@ export class DatabaseStorage implements IStorage {
       generatedPolicies: pendingPolicies.rows,
       questionnaireQuestions: pendingQuestions.rows,
     };
+  }
+
+  async assignOwner(entityType: string, entityId: string, assignedUserId: string, companyId: string) {
+    const tableMap: Record<string, string> = {
+      metrics: "metrics",
+      raw_data_inputs: "raw_data_inputs",
+      action_plans: "action_plans",
+      esg_policies: "esg_policies",
+      questionnaires: "questionnaires",
+      evidence_files: "evidence_files",
+    };
+    const table = tableMap[entityType];
+    if (!table) throw new Error("Invalid entity type for assignment");
+
+    let ownershipQuery;
+    if (table === "evidence_files") {
+      ownershipQuery = sql`SELECT id FROM evidence_files WHERE id = ${entityId} AND company_id = ${companyId}`;
+    } else {
+      ownershipQuery = sql`SELECT id FROM ${sql.raw(table)} WHERE id = ${entityId} AND company_id = ${companyId}`;
+    }
+    const entity = await db.execute(ownershipQuery);
+    if (!entity.rows || entity.rows.length === 0) {
+      throw new Error("Entity not found");
+    }
+
+    if (assignedUserId) {
+      const [targetUser] = await db.select().from(users).where(and(eq(users.id, assignedUserId), eq(users.companyId, companyId)));
+      if (!targetUser) throw new Error("User not in company");
+    }
+
+    await db.execute(
+      sql`UPDATE ${sql.raw(table)} SET assigned_user_id = ${assignedUserId || null} WHERE id = ${entityId}`
+    );
+  }
+
+  async getUserTasks(userId: string, companyId: string) {
+    const now = new Date();
+    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const tasks: any[] = [];
+
+    const metricRows = await db.execute(
+      sql`SELECT m.id, m.name, m.assigned_due_date FROM metrics m WHERE m.company_id = ${companyId} AND m.assigned_user_id = ${userId} AND m.id NOT IN (SELECT metric_id FROM metric_values WHERE period = ${currentPeriod})`
+    );
+    for (const r of metricRows.rows) {
+      const dueDate = (r as any).assigned_due_date ? new Date((r as any).assigned_due_date) : null;
+      tasks.push({
+        entityType: "metric", entityId: (r as any).id, title: (r as any).name,
+        dueDate: dueDate?.toISOString() || null, status: "data_needed",
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/data-entry",
+      });
+    }
+
+    const actionRows = await db.execute(
+      sql`SELECT id, title, due_date, status FROM action_plans WHERE company_id = ${companyId} AND assigned_user_id = ${userId} AND status != 'complete'`
+    );
+    for (const r of actionRows.rows) {
+      const dueDate = (r as any).due_date ? new Date((r as any).due_date) : null;
+      tasks.push({
+        entityType: "action", entityId: (r as any).id, title: (r as any).title,
+        dueDate: dueDate?.toISOString() || null, status: (r as any).status,
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/actions",
+      });
+    }
+
+    const evidenceRows = await db.execute(
+      sql`SELECT id, description, due_date, status FROM evidence_requests WHERE company_id = ${companyId} AND assigned_user_id = ${userId} AND status IN ('requested', 'uploaded', 'under_review')`
+    );
+    for (const r of evidenceRows.rows) {
+      const dueDate = (r as any).due_date ? new Date((r as any).due_date) : null;
+      tasks.push({
+        entityType: "evidence_request", entityId: (r as any).id, title: (r as any).description,
+        dueDate: dueDate?.toISOString() || null, status: (r as any).status,
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/evidence",
+      });
+    }
+
+    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+    const policyRows = await db.execute(
+      sql`SELECT id, review_date FROM esg_policies WHERE company_id = ${companyId} AND assigned_user_id = ${userId} AND review_date IS NOT NULL AND review_date <= ${ninetyDaysFromNow}`
+    );
+    for (const r of policyRows.rows) {
+      const dueDate = (r as any).review_date ? new Date((r as any).review_date) : null;
+      tasks.push({
+        entityType: "policy", entityId: (r as any).id, title: "ESG Policy",
+        dueDate: dueDate?.toISOString() || null, status: "review_due",
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/policy",
+      });
+    }
+
+    const questionnaireRows = await db.execute(
+      sql`SELECT id, title, assigned_due_date FROM questionnaires WHERE company_id = ${companyId} AND assigned_user_id = ${userId} AND status = 'in_progress'`
+    );
+    for (const r of questionnaireRows.rows) {
+      const dueDate = (r as any).assigned_due_date ? new Date((r as any).assigned_due_date) : null;
+      tasks.push({
+        entityType: "questionnaire", entityId: (r as any).id, title: (r as any).title,
+        dueDate: dueDate?.toISOString() || null, status: "in_progress",
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/questionnaire",
+      });
+    }
+
+    return tasks;
+  }
+
+  async getUserApprovals(companyId: string) {
+    const pending = await this.getWorkflowPendingItems(companyId);
+    const userIds = new Set<string>();
+    for (const key of Object.keys(pending)) {
+      for (const item of (pending as any)[key]) {
+        if (item.submitted_by) userIds.add(item.submitted_by);
+      }
+    }
+    const userMap: Record<string, string> = {};
+    for (const uid of userIds) {
+      const u = await this.getUser(uid);
+      if (u) userMap[uid] = u.username;
+    }
+    const enrich = (items: any[]) => items.map(i => ({
+      ...i,
+      submitterUsername: i.submitted_by ? (userMap[i.submitted_by] || "Unknown") : "Unknown",
+    }));
+    return {
+      metricValues: enrich(pending.metricValues),
+      rawDataInputs: enrich(pending.rawDataInputs),
+      reportRuns: enrich(pending.reportRuns),
+      generatedPolicies: enrich(pending.generatedPolicies),
+      questionnaireQuestions: enrich(pending.questionnaireQuestions),
+    };
+  }
+
+  async getEvidenceRequests(companyId: string) {
+    return db.select().from(evidenceRequests).where(eq(evidenceRequests.companyId, companyId)).orderBy(desc(evidenceRequests.createdAt));
+  }
+
+  async getEvidenceRequestsByUser(userId: string, companyId: string) {
+    return db.select().from(evidenceRequests).where(and(eq(evidenceRequests.companyId, companyId), eq(evidenceRequests.assignedUserId, userId))).orderBy(desc(evidenceRequests.createdAt));
+  }
+
+  async createEvidenceRequest(data: InsertEvidenceRequest) {
+    const [r] = await db.insert(evidenceRequests).values(data as any).returning();
+    return r;
+  }
+
+  async updateEvidenceRequest(id: string, companyId: string, data: Partial<EvidenceRequest>) {
+    const [r] = await db.update(evidenceRequests).set({ ...data, updatedAt: new Date() } as any).where(and(eq(evidenceRequests.id, id), eq(evidenceRequests.companyId, companyId))).returning();
+    return r;
+  }
+
+  async linkEvidenceToRequest(requestId: string, evidenceFileId: string, companyId: string) {
+    const [ev] = await db.select().from(evidenceFiles).where(and(eq(evidenceFiles.id, evidenceFileId), eq(evidenceFiles.companyId, companyId)));
+    if (!ev) throw new Error("Evidence file not found");
+    const [r] = await db.update(evidenceRequests).set({ evidenceFileId, status: "uploaded" as any, updatedAt: new Date() } as any).where(and(eq(evidenceRequests.id, requestId), eq(evidenceRequests.companyId, companyId))).returning();
+    return r;
+  }
+
+  async getReportingPeriods(companyId: string) {
+    return db.select().from(reportingPeriods).where(eq(reportingPeriods.companyId, companyId)).orderBy(desc(reportingPeriods.startDate));
+  }
+
+  async createReportingPeriod(data: InsertReportingPeriod) {
+    const [r] = await db.insert(reportingPeriods).values(data as any).returning();
+    return r;
+  }
+
+  async closeReportingPeriod(id: string, companyId: string) {
+    const [r] = await db.update(reportingPeriods).set({ status: "closed" as any }).where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId))).returning();
+    return r;
+  }
+
+  async lockReportingPeriod(id: string, companyId: string) {
+    const [r] = await db.update(reportingPeriods).set({ status: "locked" as any }).where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId))).returning();
+    return r;
+  }
+
+  async copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod) {
+    const [source] = await db.select().from(reportingPeriods).where(and(eq(reportingPeriods.id, sourcePeriodId), eq(reportingPeriods.companyId, companyId)));
+    if (!source) throw new Error("Source period not found");
+
+    const [newPeriod] = await db.insert(reportingPeriods).values({ ...newPeriodData, previousPeriodId: sourcePeriodId } as any).returning();
+
+    const targetRows = await db.execute(
+      sql`SELECT id FROM metric_targets WHERE metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})`
+    );
+    const copiedMetrics = targetRows.rows.length;
+
+    const incompleteActions = await db.execute(
+      sql`SELECT title, description, related_metric_id, assigned_user_id, owner FROM action_plans WHERE company_id = ${companyId} AND status != 'complete'`
+    );
+    let copiedActions = 0;
+    for (const a of incompleteActions.rows) {
+      await db.execute(
+        sql`INSERT INTO action_plans (id, company_id, title, description, status, related_metric_id, assigned_user_id, owner) VALUES (gen_random_uuid(), ${companyId}, ${(a as any).title}, ${(a as any).description}, 'not_started', ${(a as any).related_metric_id}, ${(a as any).assigned_user_id}, ${(a as any).owner})`
+      );
+      copiedActions++;
+    }
+
+    return { period: newPeriod, copiedMetrics, copiedActions };
+  }
+
+  async getPeriodComparison(companyId: string, currentPeriod: string, comparePeriod: string) {
+    const result = await db.execute(
+      sql`SELECT m.id as metric_id, m.name as metric_name, m.category,
+          curr.value as current_value, comp.value as compare_value,
+          m.direction
+          FROM metrics m
+          LEFT JOIN metric_values curr ON curr.metric_id = m.id AND curr.period = ${currentPeriod}
+          LEFT JOIN metric_values comp ON comp.metric_id = m.id AND comp.period = ${comparePeriod}
+          WHERE m.company_id = ${companyId}
+          AND (curr.id IS NOT NULL OR comp.id IS NOT NULL)`
+    );
+    return result.rows.map((r: any) => {
+      const cv = r.current_value ? parseFloat(r.current_value) : null;
+      const pv = r.compare_value ? parseFloat(r.compare_value) : null;
+      const delta = cv !== null && pv !== null ? cv - pv : null;
+      const percentChange = delta !== null && pv !== null && pv !== 0 ? (delta / pv) * 100 : null;
+      return {
+        metricId: r.metric_id, metricName: r.metric_name, category: r.category,
+        currentValue: cv, compareValue: pv, delta, percentChange,
+        direction: r.direction,
+      };
+    });
   }
 }
 

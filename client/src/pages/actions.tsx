@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { CheckSquare, Plus, Edit2, Trash2, Calendar, User, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { OwnerAssignment } from "@/components/owner-assignment";
 
 type ActionPlan = {
   id: string;
@@ -287,12 +288,10 @@ export default function Actions() {
                       <p className="text-sm text-muted-foreground line-clamp-2">{action.description}</p>
                     )}
                     <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-                      {action.owner && (
-                        <span className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
-                          {action.owner}
-                        </span>
-                      )}
+                      <span className="flex items-center gap-1">
+                        <User className="w-3 h-3" />
+                        <OwnerAssignment entityType="action_plans" entityId={action.id} currentUserId={(action as any).assignedUserId} invalidateKeys={[["/api/actions"]]} />
+                      </span>
                       {action.dueDate && (
                         <span className={`flex items-center gap-1 ${isOverdue ? "text-destructive" : ""}`}>
                           <Calendar className="w-3 h-3" />

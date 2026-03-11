@@ -8,7 +8,9 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
+  users,
 } from "@shared/schema";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
@@ -2705,6 +2707,293 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const pending = await storage.getWorkflowPendingItems(companyId);
       res.json(pending);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/my-tasks", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const tasks = await storage.getUserTasks(userId, companyId);
+      res.json(tasks);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/my-approvals", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const approvals = await storage.getUserApprovals(companyId);
+      res.json(approvals);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/assign/:entityType/:entityId", requireAuth, requirePermission("user_management"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { entityType, entityId } = req.params;
+      const { assignedUserId } = req.body;
+      const validTypes = ["metrics", "raw_data_inputs", "action_plans", "esg_policies", "questionnaires", "evidence_files"];
+      if (!validTypes.includes(entityType)) {
+        return res.status(400).json({ error: "Invalid entityType" });
+      }
+      await storage.assignOwner(entityType, entityId, assignedUserId || "", companyId);
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "owner_assigned",
+        entityType,
+        entityId,
+        details: { assignedUserId, performedBy: userId },
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      if (e.message === "Entity not found" || e.message === "User not in company") {
+        return res.status(404).json({ error: e.message });
+      }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence-requests", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const requests = await storage.getEvidenceRequests(companyId);
+      res.json(requests);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/evidence-requests/mine", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const requests = await storage.getEvidenceRequestsByUser(userId, companyId);
+      res.json(requests);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/evidence-requests", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { assignedUserId, linkedModule, linkedEntityId, description, dueDate } = req.body;
+      if (!assignedUserId || !description) {
+        return res.status(400).json({ error: "assignedUserId and description are required" });
+      }
+      const [targetUser] = await db.select().from(users).where(and(eq(users.id, assignedUserId), eq(users.companyId, companyId)));
+      if (!targetUser) {
+        return res.status(400).json({ error: "Assigned user not found in company" });
+      }
+      const request = await storage.createEvidenceRequest({
+        companyId, requestedByUserId: userId, assignedUserId,
+        linkedModule: linkedModule || null, linkedEntityId: linkedEntityId || null,
+        description, dueDate: dueDate ? new Date(dueDate) : null,
+      });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "evidence_request_created",
+        entityType: "evidence_request",
+        entityId: request.id,
+        details: { assignedUserId, linkedModule, description, dueDate },
+      });
+      res.status(201).json(request);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/evidence-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const isAdmin = user?.role === "admin";
+      const existing = await storage.getEvidenceRequests(companyId);
+      const current = existing.find(r => r.id === req.params.id);
+      if (!current) return res.status(404).json({ error: "Evidence request not found" });
+      if (!isAdmin && current.assignedUserId !== userId) {
+        return res.status(403).json({ error: "Not authorized to update this request" });
+      }
+      const allowedFields = isAdmin
+        ? ["status", "description", "dueDate", "assignedUserId", "linkedModule", "linkedEntityId"]
+        : ["status"];
+      const data: any = {};
+      for (const f of allowedFields) {
+        if (req.body[f] !== undefined) data[f] = req.body[f];
+      }
+      if (!isAdmin && data.status && !["uploaded"].includes(data.status)) {
+        return res.status(403).json({ error: "Only admins can change status to " + data.status });
+      }
+      const result = await storage.updateEvidenceRequest(req.params.id, companyId, data);
+      if (!result) return res.status(404).json({ error: "Evidence request not found" });
+      if (data.status && data.status !== current.status) {
+        await storage.createAuditLog({
+          companyId, userId,
+          action: "evidence_request_status_changed",
+          entityType: "evidence_request",
+          entityId: req.params.id,
+          details: { previousStatus: current.status, newStatus: data.status, updatedBy: userId },
+        });
+      }
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/evidence-requests/:id/link", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const { evidenceFileId } = req.body;
+      if (!evidenceFileId) return res.status(400).json({ error: "evidenceFileId required" });
+      const requests = await storage.getEvidenceRequests(companyId);
+      const request = requests.find(r => r.id === req.params.id);
+      if (!request) return res.status(404).json({ error: "Evidence request not found" });
+      if (request.assignedUserId !== userId && user?.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized to link evidence to this request" });
+      }
+      const result = await storage.linkEvidenceToRequest(req.params.id, evidenceFileId, companyId);
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "evidence_linked_to_request",
+        entityType: "evidence_request",
+        entityId: req.params.id,
+        details: { evidenceFileId, linkedBy: userId },
+      });
+      res.json(result);
+    } catch (e: any) {
+      if (e.message === "Evidence file not found") return res.status(404).json({ error: e.message });
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reporting-periods", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const periods = await storage.getReportingPeriods(companyId);
+      res.json(periods);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/reporting-periods", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { name, periodType, startDate, endDate } = req.body;
+      if (!name || !periodType || !startDate || !endDate) {
+        return res.status(400).json({ error: "name, periodType, startDate, endDate are required" });
+      }
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (start >= end) {
+        return res.status(400).json({ error: "startDate must be before endDate" });
+      }
+      const period = await storage.createReportingPeriod({
+        companyId, name, periodType, startDate: start, endDate: end,
+      });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "reporting_period_created",
+        entityType: "reporting_period",
+        entityId: period.id,
+        details: { name, periodType, startDate, endDate },
+      });
+      res.status(201).json(period);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/reporting-periods/:id/close", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const result = await storage.closeReportingPeriod(req.params.id, companyId);
+      if (!result) return res.status(404).json({ error: "Period not found" });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "reporting_period_closed",
+        entityType: "reporting_period",
+        entityId: req.params.id,
+        details: { periodName: result.name, closedBy: userId },
+      });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/reporting-periods/:id/lock", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const result = await storage.lockReportingPeriod(req.params.id, companyId);
+      if (!result) return res.status(404).json({ error: "Period not found" });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "reporting_period_locked",
+        entityType: "reporting_period",
+        entityId: req.params.id,
+        details: { periodName: result.name, lockedBy: userId },
+      });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/reporting-periods/:id/copy-forward", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { name, periodType, startDate, endDate } = req.body;
+      if (!name || !periodType || !startDate || !endDate) {
+        return res.status(400).json({ error: "name, periodType, startDate, endDate are required" });
+      }
+      if (new Date(startDate) >= new Date(endDate)) {
+        return res.status(400).json({ error: "startDate must be before endDate" });
+      }
+      const result = await storage.copyForwardPeriod(req.params.id, companyId, {
+        companyId, name, periodType,
+        startDate: new Date(startDate), endDate: new Date(endDate),
+      });
+      await storage.createAuditLog({
+        companyId, userId,
+        action: "reporting_period_copied",
+        entityType: "reporting_period",
+        entityId: result.period.id,
+        details: { sourcePeriodId: req.params.id, newPeriodId: result.period.id, copiedMetrics: result.copiedMetrics, copiedActions: result.copiedActions },
+      });
+      res.status(201).json(result);
+    } catch (e: any) {
+      if (e.message === "Source period not found") return res.status(404).json({ error: e.message });
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reporting-periods/compare", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const current = req.query.current as string;
+      const compare = req.query.compare as string;
+      if (!current || !compare) {
+        return res.status(400).json({ error: "current and compare query params are required" });
+      }
+      const comparison = await storage.getPeriodComparison(companyId, current, compare);
+      res.json(comparison);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

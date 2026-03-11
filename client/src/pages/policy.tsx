@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { FileText, Save, CheckCircle, Clock, History, Download, Eye, ChevronDown, ChevronUp, Sparkles, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { OwnerAssignment } from "@/components/owner-assignment";
 
 const SECTIONS = [
   { key: "purpose", label: "Purpose & Scope", placeholder: "Describe the purpose and scope of your ESG policy..." },
@@ -125,6 +126,16 @@ export default function Policy() {
           <p className="text-sm text-muted-foreground mt-0.5">
             Build and maintain your company's ESG policy
           </p>
+          {policy?.id && (
+            <div className="mt-1">
+              <OwnerAssignment
+                entityType="esg_policies"
+                entityId={policy.id}
+                currentUserId={policy.assignedUserId}
+                invalidateKeys={[["/api/policy"]]}
+              />
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={policy?.status === "published" ? "default" : "secondary"} data-testid="badge-policy-status">

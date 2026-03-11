@@ -8,6 +8,7 @@ import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
   CheckSquare, Download, Settings, LogOut, Leaf, ChevronRight,
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
+  ClipboardCheck, ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -105,6 +106,34 @@ export function AppSidebar() {
                   </SidebarMenuItem>
                 );
               })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Workflow</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild data-active={location === "/my-tasks"}>
+                  <Link href="/my-tasks" data-testid="nav-my-tasks">
+                    <ClipboardCheck className="w-4 h-4" />
+                    <span>My Tasks</span>
+                    {location === "/my-tasks" && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary" />}
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              {can("report_generation") && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild data-active={location === "/my-approvals"}>
+                    <Link href="/my-approvals" data-testid="nav-my-approvals">
+                      <ListChecks className="w-4 h-4" />
+                      <span>My Approvals</span>
+                      {location === "/my-approvals" && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary" />}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

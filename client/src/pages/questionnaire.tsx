@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { OwnerAssignment } from "@/components/owner-assignment";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -411,6 +412,14 @@ function NewQuestionnaireTab() {
             <p className="text-sm text-muted-foreground">
               {resultData.questions.length} questions autofilled
             </p>
+            <div className="mt-1">
+              <OwnerAssignment
+                entityType="questionnaires"
+                entityId={resultData.id}
+                currentUserId={(resultData as any).assignedUserId}
+                invalidateKeys={[["/api/questionnaires", resultId!]]}
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <Button
