@@ -136,7 +136,8 @@ function classifyRawDataCategory(inputName: string): "environmental" | "social" 
   return "governance";
 }
 
-const TOTAL_ONBOARDING_STEPS = 8;
+const TOTAL_ONBOARDING_STEPS_V1 = 8;
+const TOTAL_ONBOARDING_STEPS_V2 = 6;
 
 const METRIC_KEY_MAP: Record<string, string> = {
   electricity: "Electricity Consumption",
@@ -495,21 +496,13 @@ async function seedDatabase(companyId: string, userId: string) {
     });
   }
 
-  await storage.updateCompany(companyId, {
-    onboardingComplete: true,
-    onboardingPath: "guided",
-    onboardingStep: 8,
-    onboardingProgressPercent: 100,
-    onboardingCompletedAt: new Date(),
-  });
-
   await storage.createAuditLog({
     companyId,
     userId,
-    action: "Company setup completed",
+    action: "Demo data seeded",
     entityType: "company",
     entityId: companyId,
-    details: { note: "Initial onboarding wizard completed" },
+    details: { note: "Sample ESG data seeded for company" },
   });
 }
 
@@ -759,12 +752,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/onboarding/step", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { step, path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers } = req.body;
+      const { step, path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers, onboardingVersion, selectedTopics, reportingFrequency } = req.body;
 
-      const stepNum = typeof step === "number" ? Math.min(Math.max(Math.round(step), 1), TOTAL_ONBOARDING_STEPS) : 1;
+      const version = onboardingVersion || 1;
+      const totalSteps = version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1;
+      const stepNum = typeof step === "number" ? Math.min(Math.max(Math.round(step), 1), totalSteps) : 1;
       const update: any = {
         onboardingStep: stepNum,
-        onboardingProgressPercent: Math.min(Math.round((stepNum / TOTAL_ONBOARDING_STEPS) * 100), 100),
+        onboardingProgressPercent: Math.min(Math.round((stepNum / totalSteps) * 100), 100),
+        onboardingVersion: version,
       };
       if (path) {
         update.onboardingPath = path;
@@ -783,7 +779,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (esgMaturity) update.esgMaturity = esgMaturity;
       if (selectedModules) update.selectedModules = selectedModules;
       if (selectedMetrics) update.selectedMetrics = selectedMetrics;
-      if (onboardingAnswers) update.onboardingAnswers = onboardingAnswers;
+
+      const existingCompany = await storage.getCompany(companyId);
+      const existingAnswers = (existingCompany?.onboardingAnswers as any) || {};
+      const mergedAnswers = { ...existingAnswers, ...(onboardingAnswers || {}) };
+      if (selectedTopics) mergedAnswers.selectedTopics = selectedTopics;
+      if (reportingFrequency) mergedAnswers.reportingFrequency = reportingFrequency;
+      update.onboardingAnswers = mergedAnswers;
 
       const company = await storage.updateCompany(companyId, update);
       res.json(company);
@@ -796,18 +798,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers } = req.body;
+      const { path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers, onboardingVersion, selectedTopics, reportingFrequency } = req.body;
 
       const isManual = path === "manual";
+      const isQuickStart = path === "quick_start";
+      const version = onboardingVersion || 1;
 
       const update: any = {
         onboardingComplete: true,
         onboardingCompletedAt: new Date(),
         onboardingProgressPercent: 100,
-        onboardingStep: 8,
+        onboardingStep: version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1,
+        onboardingVersion: version,
       };
-      if (isManual) {
-        update.onboardingPath = "manual";
+      if (isManual || isQuickStart) {
+        update.onboardingPath = path;
       }
       if (companyProfile) {
         if (companyProfile.name) update.name = companyProfile.name;
@@ -822,18 +827,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (esgMaturity) update.esgMaturity = esgMaturity;
       if (selectedModules) update.selectedModules = selectedModules;
       if (selectedMetrics) update.selectedMetrics = selectedMetrics;
-      if (onboardingAnswers) update.onboardingAnswers = onboardingAnswers;
+
+      const existingCompanyData = await storage.getCompany(companyId);
+      const existingAnswersData = (existingCompanyData?.onboardingAnswers as any) || {};
+      const mergedAnswersData = { ...existingAnswersData, ...(onboardingAnswers || {}) };
+      if (selectedTopics) mergedAnswersData.selectedTopics = selectedTopics;
+      if (reportingFrequency) mergedAnswersData.reportingFrequency = reportingFrequency;
+      update.onboardingAnswers = mergedAnswersData;
 
       await storage.updateCompany(companyId, update);
 
-      if (!isManual && selectedMetrics && Array.isArray(selectedMetrics)) {
+      if (!isManual && !isQuickStart && selectedMetrics && Array.isArray(selectedMetrics)) {
         const existingMetrics = await storage.getMetrics(companyId);
         if (existingMetrics.length === 0) {
           await seedMetricsFromSelection(companyId, selectedMetrics, onboardingAnswers);
         }
       }
 
-      if (isManual) {
+      if (isManual || isQuickStart) {
         const existingMetrics = await storage.getMetrics(companyId);
         if (existingMetrics.length === 0) {
           await seedDatabase(companyId, userId);
@@ -859,12 +870,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.upsertMaterialTopics(companyId, topicsList as any);
       }
 
+      const completedPath = isQuickStart ? "quick_start" : isManual ? "manual" : "guided";
       await storage.createAuditLog({
         companyId, userId,
-        action: `Onboarding completed (${isManual ? "manual" : "guided"})`,
+        action: `Onboarding completed (${completedPath}, v${version})`,
         entityType: "company",
         entityId: companyId,
-        details: { path: isManual ? "manual" : "guided" },
+        details: { path: completedPath, version },
       });
 
       const company = await storage.getCompany(companyId);
@@ -4539,6 +4551,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           count24h: parseInt((reportFailuresResult as any).rows[0]?.count || "0"),
         },
         uptime: schedulerStatus.uptime,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/performance", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const dbSizeResult = await db.execute(sql`SELECT pg_size_pretty(pg_database_size(current_database())) as size`);
+      const connectionsResult = await db.execute(sql`SELECT COUNT(*) as count FROM pg_stat_activity WHERE datname = current_database()`);
+      const indexCountResult = await db.execute(sql`SELECT COUNT(*) as count FROM pg_indexes WHERE schemaname = 'public'`);
+      const tableStatsResult = await db.execute(sql`
+        SELECT relname as table_name, n_live_tup as row_count
+        FROM pg_stat_user_tables
+        WHERE schemaname = 'public'
+        ORDER BY n_live_tup DESC
+      `);
+
+      const tables = (tableStatsResult as any).rows.map((r: any) => ({
+        table: r.table_name,
+        rows: parseInt(r.row_count) || 0,
+      }));
+
+      res.json({
+        database: {
+          size: (dbSizeResult as any).rows[0]?.size || "N/A",
+          connections: parseInt((connectionsResult as any).rows[0]?.count || "0"),
+        },
+        indexCount: parseInt((indexCountResult as any).rows[0]?.count || "0"),
+        tables,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

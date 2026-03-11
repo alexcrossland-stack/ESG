@@ -8,6 +8,9 @@ const jobHandlers = new Map<string, JobHandler>();
 const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 const TICK_INTERVAL = 60_000;
 const QUEUE_POLL_INTERVAL = 5_000;
+const STUCK_TIMEOUT_MS = 10 * 60 * 1000;
+const JOB_CLEANUP_DAYS = 30;
+const HEALTH_CLEANUP_DAYS = 90;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let queueTimer: ReturnType<typeof setInterval> | null = null;
 const startTime = Date.now();
@@ -24,6 +27,8 @@ const recurringJobs: RecurringJobDef[] = [
   { jobType: "procurement_revalidation", intervalMs: 7 * 24 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "compliance_recalculation", intervalMs: 7 * 24 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "activity_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "job_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "health_event_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
 ];
 
 export function registerJobHandler(jobType: string, handler: JobHandler) {
@@ -58,60 +63,111 @@ export async function enqueueJob(
   return job.id;
 }
 
-async function processJob(jobId: string) {
-  const job = await storage.getBackgroundJob(jobId);
-  if (!job || job.status !== "pending") return;
-
-  await storage.updateBackgroundJob(jobId, {
-    status: "running",
-    startedAt: new Date(),
-    lockedAt: new Date(),
-    workerId: WORKER_ID,
-    attempts: (job.attempts || 0) + 1,
-  });
-
-  const handler = jobHandlers.get(job.jobType);
-  if (!handler) {
-    await storage.updateBackgroundJob(jobId, {
-      status: "failed",
-      completedAt: new Date(),
-      error: `No handler registered for job type: ${job.jobType}`,
-    });
-    await logHealthEvent("job_failure", "warning", `No handler for job type: ${job.jobType}`, { jobId, jobType: job.jobType }, job.companyId);
-    return;
-  }
-
+async function acquireAndProcessJob(): Promise<boolean> {
   try {
-    const result = await handler(job.payload, job.companyId);
-    await storage.updateBackgroundJob(jobId, {
-      status: "completed",
-      completedAt: new Date(),
-      result,
-      lockedAt: null,
-      workerId: null,
-    });
+    const result = await db.execute(sql`
+      UPDATE background_jobs
+      SET status = 'running',
+          started_at = NOW(),
+          locked_at = NOW(),
+          worker_id = ${WORKER_ID},
+          attempts = COALESCE(attempts, 0) + 1
+      WHERE id = (
+        SELECT id FROM background_jobs
+        WHERE status = 'pending'
+          AND scheduled_at <= NOW()
+        ORDER BY scheduled_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, job_type, payload, company_id, attempts, max_attempts
+    `);
+
+    const rows = (result as any).rows;
+    if (!rows || rows.length === 0) return false;
+
+    const row = rows[0];
+    const jobId = row.id as string;
+    const jobType = row.job_type as string;
+    const payload = row.payload;
+    const companyId = row.company_id as string | null;
+    const attempts = row.attempts as number;
+    const maxAttempts = row.max_attempts as number || 3;
+
+    console.log(`[Scheduler] Processing job ${jobId} (${jobType}) attempt ${attempts}/${maxAttempts}`);
+
+    const handler = jobHandlers.get(jobType);
+    if (!handler) {
+      await db.execute(sql`
+        UPDATE background_jobs
+        SET status = 'failed', completed_at = NOW(), error = ${`No handler for: ${jobType}`},
+            locked_at = NULL, worker_id = NULL
+        WHERE id = ${jobId}
+      `);
+      await logHealthEvent("job_failure", "warning", `No handler for job type: ${jobType}`, { jobId, jobType }, companyId);
+      return true;
+    }
+
+    try {
+      const jobResult = await handler(payload, companyId);
+      await db.execute(sql`
+        UPDATE background_jobs
+        SET status = 'completed', completed_at = NOW(), result = ${JSON.stringify(jobResult)}::jsonb,
+            locked_at = NULL, worker_id = NULL, error = NULL
+        WHERE id = ${jobId}
+      `);
+    } catch (err: any) {
+      const failed = attempts >= maxAttempts;
+      const backoffSeconds = [30, 120, 480][Math.min(attempts - 1, 2)];
+      const nextSchedule = failed ? null : new Date(Date.now() + backoffSeconds * 1000);
+
+      await db.execute(sql`
+        UPDATE background_jobs
+        SET status = ${failed ? "failed" : "pending"},
+            completed_at = ${failed ? sql`NOW()` : sql`NULL`},
+            error = ${err.message || "Unknown error"},
+            locked_at = NULL,
+            worker_id = NULL,
+            scheduled_at = ${nextSchedule ? sql`${nextSchedule}` : sql`scheduled_at`}
+        WHERE id = ${jobId}
+      `);
+
+      const severity = failed ? "error" : "warning";
+      await logHealthEvent(
+        "job_failure",
+        severity,
+        `Job ${jobType} failed (attempt ${attempts}/${maxAttempts}): ${err.message}`,
+        { jobId, jobType, attempts, maxAttempts, backoffSeconds: failed ? null : backoffSeconds },
+        companyId
+      );
+    }
+
+    return true;
   } catch (err: any) {
-    const attempts = (job.attempts || 0) + 1;
-    const maxAttempts = job.maxAttempts || 3;
-    const failed = attempts >= maxAttempts;
-
-    await storage.updateBackgroundJob(jobId, {
-      status: failed ? "failed" : "pending",
-      completedAt: failed ? new Date() : null,
-      error: err.message || "Unknown error",
-      lockedAt: null,
-      workerId: null,
-    });
-
-    const severity = failed ? "error" : "warning";
-    await logHealthEvent(
-      "job_failure",
-      severity,
-      `Job ${job.jobType} failed (attempt ${attempts}/${maxAttempts}): ${err.message}`,
-      { jobId, jobType: job.jobType, attempts, maxAttempts },
-      job.companyId
-    );
+    console.error("[Scheduler] Queue processing error:", err.message);
+    return false;
   }
+}
+
+async function recoverStuckJobs() {
+  try {
+    const result = await db.execute(sql`
+      UPDATE background_jobs
+      SET status = 'pending', locked_at = NULL, worker_id = NULL
+      WHERE status = 'running'
+        AND locked_at < NOW() - INTERVAL '${sql.raw(String(STUCK_TIMEOUT_MS / 1000))} seconds'
+      RETURNING id, job_type
+    `);
+    const rows = (result as any).rows;
+    if (rows && rows.length > 0) {
+      console.log(`[Scheduler] Recovered ${rows.length} stuck jobs`);
+      for (const row of rows) {
+        await logHealthEvent("job_stuck_recovered", "warning",
+          `Recovered stuck job ${row.job_type} (${row.id})`,
+          { jobId: row.id, jobType: row.job_type }, null);
+      }
+    }
+  } catch {}
 }
 
 async function logHealthEvent(eventType: string, severity: string, message: string, details: any, companyId?: string | null) {
@@ -132,23 +188,55 @@ async function runRecurringTick() {
     if (now - def.lastRun >= def.intervalMs) {
       def.lastRun = now;
       try {
-        const companies = await db.execute(sql`SELECT id FROM companies`);
+        const companies = await db.execute(sql`SELECT id FROM companies WHERE demo_mode = false OR demo_mode IS NULL`);
         for (const row of (companies as any).rows) {
           const idemKey = `recurring:${def.jobType}:${row.id}:${new Date().toISOString().slice(0, 10)}`;
           await enqueueJob(def.jobType, {}, row.id as string, idemKey);
         }
-      } catch {}
+      } catch (err: any) {
+        console.error(`[Scheduler] Recurring tick error for ${def.jobType}:`, err.message);
+      }
     }
   }
+
+  await recoverStuckJobs();
 }
 
 async function processQueue() {
   try {
-    const pending = await storage.getPendingJobs(5);
-    for (const job of pending) {
-      await processJob(job.id);
+    let processed = 0;
+    const maxBatch = 5;
+    while (processed < maxBatch) {
+      const found = await acquireAndProcessJob();
+      if (!found) break;
+      processed++;
     }
-  } catch {}
+  } catch (err: any) {
+    console.error("[Scheduler] Queue poll error:", err.message);
+  }
+}
+
+async function jobCleanupHandler() {
+  const cutoff = new Date(Date.now() - JOB_CLEANUP_DAYS * 86400000);
+  const result = await db.execute(sql`
+    DELETE FROM background_jobs
+    WHERE status IN ('completed', 'failed')
+      AND completed_at < ${cutoff}
+  `);
+  const count = (result as any).rowCount || 0;
+  console.log(`[Scheduler] Cleaned up ${count} old jobs`);
+  return { deleted: count };
+}
+
+async function healthEventCleanupHandler() {
+  const cutoff = new Date(Date.now() - HEALTH_CLEANUP_DAYS * 86400000);
+  const result = await db.execute(sql`
+    DELETE FROM platform_health_events
+    WHERE created_at < ${cutoff}
+  `);
+  const count = (result as any).rowCount || 0;
+  console.log(`[Scheduler] Cleaned up ${count} old health events`);
+  return { deleted: count };
 }
 
 async function reminderCheckHandler(_payload: any, companyId: string | null) {
@@ -294,6 +382,8 @@ export function startScheduler() {
   registerJobHandler("procurement_revalidation", procurementRevalidationHandler);
   registerJobHandler("compliance_recalculation", complianceRecalculationHandler);
   registerJobHandler("activity_cleanup", activityCleanupHandler);
+  registerJobHandler("job_cleanup", jobCleanupHandler);
+  registerJobHandler("health_event_cleanup", healthEventCleanupHandler);
 
   tickTimer = setInterval(runRecurringTick, TICK_INTERVAL);
   queueTimer = setInterval(processQueue, QUEUE_POLL_INTERVAL);

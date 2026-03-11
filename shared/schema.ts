@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, integer, timestamp, jsonb, decimal, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, integer, timestamp, jsonb, decimal, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -43,6 +43,7 @@ export const companies = pgTable("companies", {
   onboardingProgressPercent: integer("onboarding_progress_percent").default(0),
   onboardingStartedAt: timestamp("onboarding_started_at"),
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
+  onboardingVersion: integer("onboarding_version").default(1),
   demoMode: boolean("demo_mode").default(false),
   profileShareEnabled: boolean("profile_share_enabled").default(false),
   profileShareToken: varchar("profile_share_token"),

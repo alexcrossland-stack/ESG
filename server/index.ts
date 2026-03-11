@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { ensureIndexes } from "./ensure-indexes";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -53,6 +54,10 @@ app.use((req, res, next) => {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
 
+      if (duration > 2000) {
+        log(`[SLOW ROUTE] ${logLine}`, "perf");
+      }
+
       log(logLine);
     }
   });
@@ -61,6 +66,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await ensureIndexes();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

@@ -14,9 +14,17 @@ import {
   Leaf, Users, Shield, ArrowRight, ArrowLeft, CheckCircle2,
   Building2, Sparkles, LayoutGrid, BarChart3, Zap, FileText,
   Truck, Factory, Store, Briefcase, ClipboardList, Globe,
+  Target, Upload, FileCheck,
 } from "lucide-react";
 
-const TOTAL_STEPS = 8;
+const V2_STEPS = [
+  { key: "profile", label: "Company Profile", icon: Building2, desc: "Tell us about your business" },
+  { key: "focus", label: "ESG Focus Areas", icon: Target, desc: "Choose your priority topics" },
+  { key: "reporting", label: "Reporting Setup", icon: BarChart3, desc: "Configure metrics and frequency" },
+  { key: "data_entry", label: "First Data Entry", icon: Zap, desc: "Enter your first data point" },
+  { key: "evidence", label: "Evidence Linking", icon: Upload, desc: "Link supporting evidence" },
+  { key: "output", label: "First Output", icon: FileCheck, desc: "Generate your first report or policy" },
+];
 
 const INDUSTRIES = [
   "Manufacturing", "Professional Services", "Technology", "Retail",
@@ -43,13 +51,19 @@ const MATURITY_LEVELS = [
   { value: "formal_programme", label: "Formal ESG Programme", desc: "We have an established programme and want to improve tracking", icon: Shield },
 ];
 
-const DEFAULT_MODULES = [
-  { key: "metrics", label: "ESG Metrics Library", desc: "Track environmental, social, and governance KPIs", icon: BarChart3, default: true },
-  { key: "carbon", label: "Carbon Calculator", desc: "Calculate Scope 1, 2 & 3 emissions automatically", icon: Zap, default: true },
-  { key: "policies", label: "Policy Generator", desc: "Generate tailored ESG policy documents", icon: FileText, default: true },
-  { key: "supplier", label: "Supplier Questionnaire", desc: "Assess supplier ESG compliance", icon: ClipboardList, default: false },
-  { key: "reporting", label: "Reporting Dashboard", desc: "Generate ESG reports and exports", icon: Globe, default: true },
-  { key: "traffic_light", label: "Traffic Light Scoring", desc: "Red/amber/green status for all metrics", icon: Sparkles, default: true },
+const ESG_TOPICS = [
+  { key: "climate_change", label: "Climate Change & Carbon", category: "environmental" as const, icon: Leaf },
+  { key: "energy_efficiency", label: "Energy Efficiency", category: "environmental" as const, icon: Zap },
+  { key: "waste_management", label: "Waste & Recycling", category: "environmental" as const, icon: Globe },
+  { key: "water_conservation", label: "Water Conservation", category: "environmental" as const, icon: Globe },
+  { key: "employee_wellbeing", label: "Employee Wellbeing", category: "social" as const, icon: Users },
+  { key: "diversity_inclusion", label: "Diversity & Inclusion", category: "social" as const, icon: Users },
+  { key: "health_safety", label: "Health & Safety", category: "social" as const, icon: Shield },
+  { key: "training_development", label: "Training & Development", category: "social" as const, icon: BarChart3 },
+  { key: "board_governance", label: "Board Governance", category: "governance" as const, icon: Shield },
+  { key: "anti_corruption", label: "Anti-Corruption", category: "governance" as const, icon: Shield },
+  { key: "data_privacy", label: "Data Privacy", category: "governance" as const, icon: FileText },
+  { key: "supply_chain", label: "Supply Chain ESG", category: "governance" as const, icon: ClipboardList },
 ];
 
 type MetricRec = { key: string; name: string; desc: string; default: boolean };
@@ -63,72 +77,71 @@ const ENV_METRICS: MetricRec[] = [
   { key: "recycling", name: "Recycling Rate", desc: "Percentage of waste recycled (auto-calculated)", default: true },
   { key: "water", name: "Water Consumption", desc: "Water usage in cubic metres", default: false },
   { key: "vehicle_fuel", name: "Company Vehicle Fuel", desc: "Fuel used by company vehicles", default: false },
-  { key: "travel_emissions", name: "Business Travel Emissions", desc: "Flights, rail, car travel (auto-calculated)", default: false },
-  { key: "carbon_intensity", name: "Carbon Intensity", desc: "Emissions per employee (auto-calculated)", default: false },
 ];
 
 const SOCIAL_METRICS: MetricRec[] = [
   { key: "headcount", name: "Employee Headcount", desc: "Total number of employees", default: true },
   { key: "gender_diversity", name: "Gender Diversity", desc: "Percentage of female employees", default: true },
   { key: "turnover", name: "Employee Turnover", desc: "Staff leaving rate (auto-calculated)", default: true },
-  { key: "training", name: "Training Hours per Employee", desc: "Learning and development hours (auto-calculated)", default: true },
+  { key: "training", name: "Training Hours per Employee", desc: "Learning and development hours", default: true },
   { key: "health_safety", name: "Lost Time Incidents", desc: "Workplace health and safety incidents", default: true },
-  { key: "absence", name: "Absence Rate", desc: "Staff absence percentage (auto-calculated)", default: false },
-  { key: "engagement", name: "Employee Engagement Score", desc: "Staff satisfaction and engagement", default: false },
-  { key: "living_wage", name: "Living Wage Coverage", desc: "Percentage paid at or above living wage", default: false },
-  { key: "mgmt_diversity", name: "Management Gender Diversity", desc: "Female representation in management", default: false },
-  { key: "community", name: "Community Investment", desc: "Community engagement and investment", default: false },
+  { key: "absence", name: "Absence Rate", desc: "Staff absence percentage", default: false },
 ];
 
 const GOV_METRICS: MetricRec[] = [
   { key: "board_meetings", name: "Board Meetings Held", desc: "Number of board meetings per year", default: true },
   { key: "esg_policy", name: "ESG Policy Adoption", desc: "Whether a formal ESG policy is in place", default: true },
-  { key: "supplier_screening", name: "Supplier ESG Screening", desc: "Percentage of suppliers assessed (auto-calculated)", default: true },
-  { key: "privacy_training", name: "Data Privacy Training", desc: "Staff who completed privacy training (auto-calculated)", default: false },
+  { key: "supplier_screening", name: "Supplier ESG Screening", desc: "Percentage of suppliers assessed", default: true },
   { key: "anti_bribery", name: "Anti-Bribery Policy", desc: "Whether an anti-bribery policy is in place", default: false },
-  { key: "whistleblowing", name: "Whistleblowing Policy", desc: "Whether a whistleblowing policy is in place", default: false },
-  { key: "cybersecurity", name: "Cybersecurity Policy", desc: "Whether a cybersecurity policy is in place", default: false },
-  { key: "esg_assigned", name: "ESG Responsibility Assigned", desc: "Whether ESG ownership is assigned", default: false },
 ];
 
-function getRecommendedMetrics(profile: string, maturity: string): string[] {
+function getRecommendedMetrics(topics: string[]): string[] {
   const base = new Set<string>();
-  ENV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
-  SOCIAL_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
-  GOV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
+  const hasEnv = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "environmental");
+  const hasSocial = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "social");
+  const hasGov = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "governance");
 
-  if (profile === "manufacturing") {
-    base.add("waste"); base.add("water"); base.add("vehicle_fuel"); base.add("health_safety");
-  } else if (profile === "office") {
-    base.add("training"); base.add("engagement"); base.add("privacy_training");
-  } else if (profile === "logistics") {
-    base.add("vehicle_fuel"); base.add("travel_emissions"); base.add("health_safety"); base.add("scope1");
-  } else if (profile === "retail") {
-    base.add("waste"); base.add("living_wage"); base.add("community");
-  }
+  if (hasEnv) ENV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
+  if (hasSocial) SOCIAL_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
+  if (hasGov) GOV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
 
-  if (maturity === "formal_programme") {
-    base.add("carbon_intensity"); base.add("mgmt_diversity"); base.add("absence");
-    base.add("anti_bribery"); base.add("whistleblowing"); base.add("cybersecurity");
-    base.add("travel_emissions"); base.add("esg_assigned");
-  } else if (maturity === "some_policies") {
-    base.add("travel_emissions"); base.add("absence");
-  }
+  if (topics.includes("climate_change")) { base.add("scope1"); base.add("scope2"); base.add("gas_fuel"); }
+  if (topics.includes("waste_management")) { base.add("waste"); base.add("recycling"); }
+  if (topics.includes("water_conservation")) base.add("water");
+  if (topics.includes("health_safety")) base.add("health_safety");
+  if (topics.includes("anti_corruption")) base.add("anti_bribery");
 
   return Array.from(base);
 }
 
-function ProgressBar({ step, total }: { step: number; total: number }) {
-  const pct = Math.round((step / total) * 100);
+function StepIndicator({ steps, currentStep, completedSteps }: {
+  steps: typeof V2_STEPS; currentStep: number; completedSteps: Set<string>;
+}) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Step {step} of {total}</span>
-        <span>{pct}%</span>
-      </div>
-      <div className="h-2 rounded-full bg-muted overflow-hidden">
-        <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${pct}%` }} />
-      </div>
+    <div className="flex items-center gap-1 overflow-x-auto pb-2">
+      {steps.map((s, i) => {
+        const isCompleted = completedSteps.has(s.key);
+        const isCurrent = i + 1 === currentStep;
+        return (
+          <div key={s.key} className="flex items-center gap-1 shrink-0">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                isCompleted
+                  ? "bg-primary text-primary-foreground"
+                  : isCurrent
+                  ? "bg-primary/20 text-primary border-2 border-primary"
+                  : "bg-muted text-muted-foreground"
+              }`}
+              data-testid={`step-indicator-${s.key}`}
+            >
+              {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`w-6 h-0.5 ${isCompleted ? "bg-primary" : "bg-muted"}`} />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -179,33 +192,27 @@ export default function Onboarding() {
 
   const [showWizard, setShowWizard] = useState(false);
   const [step, setStep] = useState(1);
+  const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
 
   const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("");
-  const [businessType, setBusinessType] = useState("");
   const [employeeCount, setEmployeeCount] = useState("");
-  const [sitesCount, setSitesCount] = useState("1");
   const [country, setCountry] = useState("United Kingdom");
-  const [reportingYearStart, setReportingYearStart] = useState("January");
   const [operationalProfile, setOperationalProfile] = useState("");
-
   const [esgMaturity, setEsgMaturity] = useState("");
 
-  const [enabledModules, setEnabledModules] = useState<Record<string, boolean>>(() => {
-    const m: Record<string, boolean> = {};
-    DEFAULT_MODULES.forEach(mod => { m[mod.key] = mod.default; });
-    return m;
-  });
-
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
+  const [reportingFrequency, setReportingFrequency] = useState("monthly");
 
-  const [trackElectricity, setTrackElectricity] = useState(true);
-  const [trackGasFuel, setTrackGasFuel] = useState(true);
-  const [hasVehicles, setHasVehicles] = useState(false);
-  const [autoScope, setAutoScope] = useState(true);
+  const [quickDataMetric, setQuickDataMetric] = useState("");
+  const [quickDataValue, setQuickDataValue] = useState("");
+  const [quickDataPeriod, setQuickDataPeriod] = useState("");
 
-  const [generatePolicies, setGeneratePolicies] = useState(true);
-  const [enableSupplier, setEnableSupplier] = useState(false);
+  const [quickEvidenceDesc, setQuickEvidenceDesc] = useState("");
+  const [quickEvidenceModule, setQuickEvidenceModule] = useState("metrics");
+
+  const [selectedOutput, setSelectedOutput] = useState<"report" | "policy">("report");
 
   useEffect(() => {
     if (company) {
@@ -215,41 +222,39 @@ export default function Onboarding() {
       }
       if (company.onboardingPath === "guided" && company.onboardingStep > 0) {
         setShowWizard(true);
-        setStep(company.onboardingStep);
+        if (company.onboardingVersion === 2) {
+          setStep(company.onboardingStep);
+        } else {
+          setStep(1);
+        }
       }
-      if (company.name) setCompanyName(company.name);
+      if (company.name && company.name !== "My Company") setCompanyName(company.name);
       if (company.industry) setIndustry(company.industry);
-      if (company.businessType) setBusinessType(company.businessType);
       if (company.employeeCount) setEmployeeCount(String(company.employeeCount));
-      if (company.locations) setSitesCount(String(company.locations));
       if (company.country) setCountry(company.country);
       if (company.operationalProfile) setOperationalProfile(company.operationalProfile);
-      if (company.reportingYearStart) setReportingYearStart(company.reportingYearStart);
       if (company.esgMaturity) setEsgMaturity(company.esgMaturity);
-      if (company.selectedModules) {
-        setEnabledModules(company.selectedModules as Record<string, boolean>);
+      if (company.selectedMetrics) setSelectedMetrics(new Set(company.selectedMetrics as string[]));
+
+      const answers = company.onboardingAnswers as any;
+      if (answers?.selectedTopics && Array.isArray(answers.selectedTopics)) {
+        setSelectedTopics(new Set(answers.selectedTopics));
       }
-      if (company.selectedMetrics) {
-        setSelectedMetrics(new Set(company.selectedMetrics as string[]));
+      if (answers?.reportingFrequency) {
+        setReportingFrequency(answers.reportingFrequency);
       }
-      if (company.onboardingAnswers) {
-        const ans = company.onboardingAnswers as any;
-        if (ans.trackElectricity !== undefined) setTrackElectricity(ans.trackElectricity);
-        if (ans.trackGasFuel !== undefined) setTrackGasFuel(ans.trackGasFuel);
-        if (ans.hasVehicles !== undefined) setHasVehicles(ans.hasVehicles);
-        if (ans.autoScope !== undefined) setAutoScope(ans.autoScope);
-        if (ans.generatePolicies !== undefined) setGeneratePolicies(ans.generatePolicies);
-        if (ans.enableSupplier !== undefined) setEnableSupplier(ans.enableSupplier);
-      }
+
+      const now = new Date();
+      setQuickDataPeriod(`${now.toLocaleString("en", { month: "short" })} ${now.getFullYear()}`);
     }
   }, [company]);
 
   useEffect(() => {
-    if (esgMaturity && operationalProfile && selectedMetrics.size === 0) {
-      const recommended = getRecommendedMetrics(operationalProfile, esgMaturity);
+    if (selectedTopics.size > 0 && selectedMetrics.size === 0) {
+      const recommended = getRecommendedMetrics(Array.from(selectedTopics));
       setSelectedMetrics(new Set(recommended));
     }
-  }, [esgMaturity, operationalProfile]);
+  }, [selectedTopics]);
 
   const saveMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PUT", "/api/onboarding/step", data),
@@ -275,41 +280,83 @@ export default function Onboarding() {
   function getStepData() {
     return {
       step,
-      companyProfile: { name: companyName, industry, businessType, employeeCount: Number(employeeCount) || 0, locations: Number(sitesCount) || 1, country, operationalProfile, reportingYearStart },
+      onboardingVersion: 2,
+      companyProfile: {
+        name: companyName, industry,
+        employeeCount: Number(employeeCount) || 0,
+        locations: 1, country, operationalProfile,
+        reportingYearStart: "January",
+      },
       esgMaturity,
-      selectedModules: enabledModules,
+      selectedTopics: Array.from(selectedTopics),
       selectedMetrics: Array.from(selectedMetrics),
-      onboardingAnswers: { trackElectricity, trackGasFuel, hasVehicles, autoScope, generatePolicies, enableSupplier },
+      reportingFrequency,
+      onboardingAnswers: {
+        quickDataMetric, quickDataValue, quickDataPeriod,
+        quickEvidenceDesc, quickEvidenceModule,
+        selectedOutput,
+      },
     };
   }
 
+  function isStepValid(): boolean {
+    switch (step) {
+      case 1: return !!(companyName && industry && country && employeeCount);
+      case 2: return selectedTopics.size >= 1;
+      case 3: return selectedMetrics.size >= 1;
+      case 4: return true;
+      case 5: return true;
+      case 6: return true;
+      default: return true;
+    }
+  }
+
   function saveAndNext() {
+    const stepKey = V2_STEPS[step - 1]?.key;
+    if (stepKey) {
+      setCompletedSteps(prev => new Set([...prev, stepKey]));
+    }
     const data = getStepData();
     saveMutation.mutate({ ...data, step: step + 1 });
-    setStep(s => s + 1);
+    setStep(s => Math.min(s + 1, V2_STEPS.length));
   }
 
   function saveAndPrev() {
     const data = getStepData();
     saveMutation.mutate({ ...data, step: step - 1 });
-    setStep(s => s - 1);
+    setStep(s => Math.max(s - 1, 1));
   }
 
   function handleComplete() {
     completeMutation.mutate(getStepData());
   }
 
+  function handleSkipToFinish() {
+    completeMutation.mutate({
+      ...getStepData(),
+      step: V2_STEPS.length,
+    });
+  }
+
   function startGuided() {
     setShowWizard(true);
     setStep(1);
-    saveMutation.mutate({ step: 1, path: "guided" });
+    saveMutation.mutate({ step: 1, path: "guided", onboardingVersion: 2 });
   }
 
-  function startManual() {
-    apiRequest("POST", "/api/onboarding/complete", { path: "manual" }).then(() => {
+  function startQuickStart() {
+    apiRequest("POST", "/api/onboarding/complete", { path: "quick_start", onboardingVersion: 2 }).then(() => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Welcome!", description: "Check the setup checklist on your dashboard." });
+      toast({ title: "Welcome!", description: "Your workspace is ready. Check the dashboard to get started." });
       setLocation("/");
+    });
+  }
+
+  function toggleTopic(key: string) {
+    setSelectedTopics(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
     });
   }
 
@@ -335,8 +382,8 @@ export default function Onboarding() {
               Welcome to your ESG workspace
             </h1>
             <p className="text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
-              This platform helps SMEs set up ESG metrics, policies, carbon tracking, 
-              supplier assessments, and reporting — all in one place.
+              Set up ESG metrics, carbon tracking, policies, and reporting in minutes.
+              We'll guide you through 6 action-based steps.
             </p>
           </div>
 
@@ -353,7 +400,7 @@ export default function Onboarding() {
                 <div>
                   <h3 className="font-semibold">Guided Setup</h3>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Answer a few questions and we'll configure everything for you. Takes about 5 minutes.
+                    6 action-based steps. Complete each to unlock your workspace. Takes about 5 minutes.
                   </p>
                 </div>
                 <Badge variant="secondary" className="text-xs">Recommended</Badge>
@@ -362,17 +409,17 @@ export default function Onboarding() {
 
             <Card
               className="cursor-pointer border-2 hover:border-muted-foreground/30 transition-colors text-left"
-              onClick={startManual}
-              data-testid="button-manual-setup"
+              onClick={startQuickStart}
+              data-testid="button-quick-start"
             >
               <CardContent className="p-5 space-y-3">
                 <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
                   <LayoutGrid className="w-5 h-5 text-muted-foreground" />
                 </div>
                 <div>
-                  <h3 className="font-semibold">Set Up Manually</h3>
+                  <h3 className="font-semibold">Quick Start</h3>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Go straight to your dashboard and configure everything at your own pace.
+                    Jump straight in with defaults. The dashboard will guide you from there.
                   </p>
                 </div>
               </CardContent>
@@ -382,6 +429,8 @@ export default function Onboarding() {
       </div>
     );
   }
+
+  const currentStepDef = V2_STEPS[step - 1];
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -404,162 +453,140 @@ export default function Onboarding() {
 
       <div className="flex-1 overflow-auto p-4 sm:p-6">
         <div className="max-w-2xl mx-auto space-y-6">
-          <ProgressBar step={step} total={TOTAL_STEPS} />
+          <StepIndicator steps={V2_STEPS} currentStep={step} completedSteps={completedSteps} />
+
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              {currentStepDef && <currentStepDef.icon className="w-5 h-5 text-primary" />}
+              <h2 className="text-xl font-semibold">{currentStepDef?.label}</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">{currentStepDef?.desc}</p>
+          </div>
 
           {step === 1 && (
-            <div className="space-y-5" data-testid="step-company-profile">
-              <div>
-                <h2 className="text-xl font-semibold">Company Profile</h2>
-                <p className="text-sm text-muted-foreground mt-1">Tell us about your business so we can tailor your setup</p>
+            <div className="space-y-4" data-testid="step-company-profile">
+              <div className="space-y-1.5">
+                <Label>Company Name</Label>
+                <Input value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Your company name" data-testid="input-company-name" />
               </div>
 
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Company Name</Label>
-                  <Input value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Your company name" data-testid="input-company-name" />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label>Industry</Label>
-                    <Select value={industry} onValueChange={setIndustry}>
-                      <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
-                      <SelectContent>
-                        {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Country</Label>
-                    <Select value={country} onValueChange={setCountry}>
-                      <SelectTrigger data-testid="select-country"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label>Number of Employees</Label>
-                    <Input type="number" value={employeeCount} onChange={e => setEmployeeCount(e.target.value)} placeholder="e.g. 50" data-testid="input-employees" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Number of Sites</Label>
-                    <Input type="number" value={sitesCount} onChange={e => setSitesCount(e.target.value)} placeholder="e.g. 2" data-testid="input-sites" />
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label>Operational Profile</Label>
-                  <p className="text-xs text-muted-foreground">What best describes your operations?</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {OP_PROFILES.map(op => (
-                      <button
-                        key={op.value}
-                        className={`p-3 rounded-md border text-left transition-colors ${
-                          operationalProfile === op.value ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                        }`}
-                        onClick={() => setOperationalProfile(op.value)}
-                        data-testid={`option-profile-${op.value}`}
-                      >
-                        <op.icon className={`w-4 h-4 mb-1.5 ${operationalProfile === op.value ? "text-primary" : "text-muted-foreground"}`} />
-                        <p className="text-sm font-medium">{op.label}</p>
-                        <p className="text-xs text-muted-foreground">{op.desc}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label>Reporting Year Start</Label>
-                  <Select value={reportingYearStart} onValueChange={setReportingYearStart}>
-                    <SelectTrigger data-testid="select-reporting-year"><SelectValue /></SelectTrigger>
+                  <Label>Industry</Label>
+                  <Select value={industry} onValueChange={setIndustry}>
+                    <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
                     <SelectContent>
-                      {["January","February","March","April","May","June","July","August","September","October","November","December"].map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
+                      {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Country</Label>
+                  <Select value={country} onValueChange={setCountry}>
+                    <SelectTrigger data-testid="select-country"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Number of Employees</Label>
+                  <Input type="number" value={employeeCount} onChange={e => setEmployeeCount(e.target.value)} placeholder="e.g. 50" data-testid="input-employees" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>ESG Maturity</Label>
+                  <Select value={esgMaturity} onValueChange={setEsgMaturity}>
+                    <SelectTrigger data-testid="select-maturity"><SelectValue placeholder="Select level" /></SelectTrigger>
+                    <SelectContent>
+                      {MATURITY_LEVELS.map(l => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Operational Profile</Label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {OP_PROFILES.map(op => (
+                    <button
+                      key={op.value}
+                      className={`p-3 rounded-md border text-left transition-colors ${
+                        operationalProfile === op.value ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+                      }`}
+                      onClick={() => setOperationalProfile(op.value)}
+                      data-testid={`option-profile-${op.value}`}
+                    >
+                      <op.icon className={`w-4 h-4 mb-1.5 ${operationalProfile === op.value ? "text-primary" : "text-muted-foreground"}`} />
+                      <p className="text-sm font-medium">{op.label}</p>
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
           )}
 
           {step === 2 && (
-            <div className="space-y-5" data-testid="step-esg-maturity">
-              <div>
-                <h2 className="text-xl font-semibold">ESG Maturity</h2>
-                <p className="text-sm text-muted-foreground mt-1">Where is your organisation on its ESG journey? This helps us set appropriate defaults.</p>
-              </div>
+            <div className="space-y-4" data-testid="step-esg-focus">
+              <p className="text-sm text-muted-foreground">
+                Select at least one ESG topic to focus on. This determines which metrics and reports we set up for you.
+              </p>
+              <Badge variant="secondary" className="text-xs">{selectedTopics.size} topics selected</Badge>
 
-              <div className="space-y-3">
-                {MATURITY_LEVELS.map(level => (
-                  <button
-                    key={level.value}
-                    className={`w-full p-4 rounded-lg border text-left transition-colors flex items-start gap-4 ${
-                      esgMaturity === level.value ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                    }`}
-                    onClick={() => setEsgMaturity(level.value)}
-                    data-testid={`option-maturity-${level.value}`}
-                  >
-                    <level.icon className="w-6 h-6 text-primary shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-medium">{level.label}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">{level.desc}</p>
-                    </div>
-                    {esgMaturity === level.value && <CheckCircle2 className="w-5 h-5 text-primary ml-auto shrink-0 mt-1" />}
-                  </button>
-                ))}
-              </div>
+              {(["environmental", "social", "governance"] as const).map(cat => (
+                <div key={cat} className="space-y-2">
+                  <h3 className="text-sm font-medium capitalize flex items-center gap-2">
+                    {cat === "environmental" ? <Leaf className="w-4 h-4 text-primary" /> :
+                     cat === "social" ? <Users className="w-4 h-4 text-blue-500" /> :
+                     <Shield className="w-4 h-4 text-purple-500" />}
+                    {cat}
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {ESG_TOPICS.filter(t => t.category === cat).map(topic => (
+                      <button
+                        key={topic.key}
+                        className={`flex items-center gap-3 p-3 rounded-md border text-left transition-colors ${
+                          selectedTopics.has(topic.key) ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+                        }`}
+                        onClick={() => toggleTopic(topic.key)}
+                        data-testid={`topic-option-${topic.key}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTopics.has(topic.key)}
+                          readOnly
+                          className="accent-primary"
+                        />
+                        <span className="text-sm">{topic.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
           {step === 3 && (
-            <div className="space-y-5" data-testid="step-module-selection">
-              <div>
-                <h2 className="text-xl font-semibold">Choose Your Modules</h2>
-                <p className="text-sm text-muted-foreground mt-1">Select which tools you'd like to use. You can change this later in Settings.</p>
-              </div>
-
-              <div className="space-y-3">
-                {DEFAULT_MODULES.map(mod => (
-                  <div
-                    key={mod.key}
-                    className={`flex items-center gap-3 p-4 rounded-lg border transition-colors ${
-                      enabledModules[mod.key] ? "border-primary/40 bg-primary/5" : "border-border"
-                    }`}
-                    data-testid={`module-option-${mod.key}`}
-                  >
-                    <div className={`p-2 rounded-md ${enabledModules[mod.key] ? "bg-primary/10" : "bg-muted"}`}>
-                      <mod.icon className={`w-4 h-4 ${enabledModules[mod.key] ? "text-primary" : "text-muted-foreground"}`} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{mod.label}</p>
-                      <p className="text-xs text-muted-foreground">{mod.desc}</p>
-                    </div>
-                    <Switch
-                      checked={enabledModules[mod.key]}
-                      onCheckedChange={v => setEnabledModules(prev => ({ ...prev, [mod.key]: v }))}
-                      data-testid={`switch-module-${mod.key}`}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {step === 4 && (
-            <div className="space-y-5" data-testid="step-metric-selection">
-              <div>
-                <h2 className="text-xl font-semibold">Select Your Metrics</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  We've recommended metrics based on your profile. Tick or untick to customise.
+            <div className="space-y-4" data-testid="step-reporting-setup">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  We've recommended metrics based on your focus areas. Adjust as needed.
                 </p>
-                <Badge variant="secondary" className="mt-2 text-xs">
-                  {selectedMetrics.size} metrics selected
-                </Badge>
+                <Badge variant="secondary" className="text-xs">{selectedMetrics.size} metrics</Badge>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Reporting Frequency</Label>
+                <Select value={reportingFrequency} onValueChange={setReportingFrequency}>
+                  <SelectTrigger data-testid="select-frequency" className="w-48"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <MetricCheckboxGroup title="Environmental" icon={Leaf} color="text-primary" metrics={ENV_METRICS} selected={selectedMetrics} onToggle={toggleMetric} />
@@ -568,211 +595,144 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 5 && (
-            <div className="space-y-5" data-testid="step-carbon-setup">
-              <div>
-                <h2 className="text-xl font-semibold">Carbon Calculator Setup</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Help us configure your carbon footprint tracking. We'll link data sources to calculate emissions automatically.
-                </p>
-              </div>
+          {step === 4 && (
+            <div className="space-y-4" data-testid="step-data-entry">
+              <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+                <CardContent className="p-4">
+                  <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Try entering your first data point</p>
+                  <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                    You can enter real data or an estimate. This helps you see how the platform works.
+                  </p>
+                </CardContent>
+              </Card>
 
-              <div className="space-y-4">
-                {[
-                  { label: "Do you track electricity use?", desc: "From your utility bills — used for Scope 2 calculations", checked: trackElectricity, onChange: setTrackElectricity, testId: "switch-electricity" },
-                  { label: "Do you track gas or fuel use?", desc: "From your gas bills — used for Scope 1 calculations", checked: trackGasFuel, onChange: setTrackGasFuel, testId: "switch-gas" },
-                  { label: "Do you have company vehicles?", desc: "Fuel used by fleet vehicles — contributes to Scope 1", checked: hasVehicles, onChange: setHasVehicles, testId: "switch-vehicles" },
-                  { label: "Enable automatic Scope 1 & 2 calculations?", desc: "We'll calculate emissions from your energy data using UK DEFRA factors", checked: autoScope, onChange: setAutoScope, testId: "switch-auto-scope" },
-                ].map(item => (
-                  <div key={item.testId} className="flex items-center gap-3 p-4 rounded-lg border border-border">
-                    <div className="flex-1">
-                      <p className="text-sm font-medium">{item.label}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{item.desc}</p>
-                    </div>
-                    <Switch checked={item.checked} onCheckedChange={item.onChange} data-testid={item.testId} />
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label>Metric</Label>
+                  <Select value={quickDataMetric} onValueChange={setQuickDataMetric}>
+                    <SelectTrigger data-testid="select-quick-metric"><SelectValue placeholder="Choose a metric" /></SelectTrigger>
+                    <SelectContent>
+                      {[...ENV_METRICS, ...SOCIAL_METRICS, ...GOV_METRICS]
+                        .filter(m => selectedMetrics.has(m.key))
+                        .map(m => <SelectItem key={m.key} value={m.key}>{m.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Value</Label>
+                    <Input type="number" value={quickDataValue} onChange={e => setQuickDataValue(e.target.value)} placeholder="e.g. 1500" data-testid="input-quick-value" />
                   </div>
-                ))}
+                  <div className="space-y-1.5">
+                    <Label>Period</Label>
+                    <Input value={quickDataPeriod} onChange={e => setQuickDataPeriod(e.target.value)} placeholder="e.g. Jan 2025" data-testid="input-quick-period" />
+                  </div>
+                </div>
               </div>
 
-              {autoScope && (
-                <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-                  <CardContent className="p-4">
-                    <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Automatic calculations enabled</p>
-                    <ul className="text-xs text-blue-600 dark:text-blue-400 mt-2 space-y-1">
-                      {trackGasFuel && <li>• Scope 1 will include gas and fuel emissions</li>}
-                      {hasVehicles && <li>• Scope 1 will include company vehicle emissions</li>}
-                      {trackElectricity && <li>• Scope 2 will be calculated from electricity consumption</li>}
-                    </ul>
-                  </CardContent>
-                </Card>
-              )}
+              <p className="text-xs text-muted-foreground">
+                You can skip this step and enter data later from the Data Entry page.
+              </p>
+            </div>
+          )}
+
+          {step === 5 && (
+            <div className="space-y-4" data-testid="step-evidence">
+              <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+                <CardContent className="p-4">
+                  <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Link supporting evidence</p>
+                  <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                    Evidence files (invoices, certificates, reports) strengthen your ESG data. You can describe one now or skip.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label>Evidence Description</Label>
+                  <Input value={quickEvidenceDesc} onChange={e => setQuickEvidenceDesc(e.target.value)} placeholder="e.g. January electricity invoice" data-testid="input-evidence-desc" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Linked Module</Label>
+                  <Select value={quickEvidenceModule} onValueChange={setQuickEvidenceModule}>
+                    <SelectTrigger data-testid="select-evidence-module" className="w-48"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="metrics">Metrics</SelectItem>
+                      <SelectItem value="policies">Policies</SelectItem>
+                      <SelectItem value="questionnaires">Questionnaires</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Full file uploads are available on the Evidence page after setup.
+              </p>
             </div>
           )}
 
           {step === 6 && (
-            <div className="space-y-5" data-testid="step-policy-setup">
-              <div>
-                <h2 className="text-xl font-semibold">Policy Generation</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Would you like us to create starter ESG policy drafts? These will be editable templates you can customise.
-                </p>
-              </div>
+            <div className="space-y-5" data-testid="step-output">
+              <p className="text-sm text-muted-foreground">
+                Choose your first output to see the platform in action. You can always generate more later.
+              </p>
 
               <div className="space-y-3">
                 <button
                   className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    generatePolicies ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+                    selectedOutput === "report" ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
                   }`}
-                  onClick={() => setGeneratePolicies(true)}
-                  data-testid="option-generate-policies-yes"
+                  onClick={() => setSelectedOutput("report")}
+                  data-testid="option-output-report"
                 >
                   <div className="flex items-center gap-3">
-                    <FileText className={`w-5 h-5 ${generatePolicies ? "text-primary" : "text-muted-foreground"}`} />
+                    <FileText className={`w-5 h-5 ${selectedOutput === "report" ? "text-primary" : "text-muted-foreground"}`} />
                     <div>
-                      <p className="font-medium">Yes, generate starter drafts</p>
+                      <p className="font-medium">Generate a Board Pack Report</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        We'll create editable drafts for key ESG policies
+                        A summary report with your metrics, status, and action items
                       </p>
                     </div>
-                    {generatePolicies && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
+                    {selectedOutput === "report" && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
                   </div>
                 </button>
 
                 <button
                   className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    !generatePolicies ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+                    selectedOutput === "policy" ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
                   }`}
-                  onClick={() => setGeneratePolicies(false)}
-                  data-testid="option-generate-policies-no"
-                >
-                  <p className="font-medium">No, I'll set up policies later</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">You can generate policies anytime from the Policy Generator</p>
-                </button>
-              </div>
-
-              {generatePolicies && (
-                <div className="p-4 bg-muted/50 rounded-lg border border-border">
-                  <p className="text-sm font-medium mb-2">Policies that will be created:</p>
-                  <ul className="text-xs text-muted-foreground space-y-1">
-                    {["Environmental Policy","Sustainability Policy","Health & Safety Policy","Diversity & Inclusion Policy","Supplier Code of Conduct","Anti-Bribery / Ethics Policy","ESG Commitment Statement"].map(p => (
-                      <li key={p} className="flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />
-                        {p}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          {step === 7 && (
-            <div className="space-y-5" data-testid="step-supplier-setup">
-              <div>
-                <h2 className="text-xl font-semibold">Supplier Assessment</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Do you need to assess your suppliers' ESG practices? We can set up a questionnaire and scoring system.
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <button
-                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    enableSupplier ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                  }`}
-                  onClick={() => setEnableSupplier(true)}
-                  data-testid="option-supplier-yes"
+                  onClick={() => setSelectedOutput("policy")}
+                  data-testid="option-output-policy"
                 >
                   <div className="flex items-center gap-3">
-                    <ClipboardList className={`w-5 h-5 ${enableSupplier ? "text-primary" : "text-muted-foreground"}`} />
+                    <ClipboardList className={`w-5 h-5 ${selectedOutput === "policy" ? "text-primary" : "text-muted-foreground"}`} />
                     <div>
-                      <p className="font-medium">Yes, set up supplier assessment</p>
+                      <p className="font-medium">Generate ESG Policy Drafts</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        We'll create a default ESG questionnaire and scoring template
+                        Create editable policy documents for your key ESG areas
                       </p>
                     </div>
-                    {enableSupplier && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
+                    {selectedOutput === "policy" && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
                   </div>
                 </button>
-
-                <button
-                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    !enableSupplier ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                  }`}
-                  onClick={() => setEnableSupplier(false)}
-                  data-testid="option-supplier-no"
-                >
-                  <p className="font-medium">No, skip for now</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">You can enable this later in Settings</p>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {step === 8 && (
-            <div className="space-y-5" data-testid="step-completion">
-              <div className="text-center space-y-3">
-                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                  <CheckCircle2 className="w-8 h-8 text-primary" />
-                </div>
-                <h2 className="text-xl font-semibold">You're all set!</h2>
-                <p className="text-sm text-muted-foreground">Here's a summary of what we'll configure for you</p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="text-sm text-muted-foreground">Metrics Enabled</p>
-                    <p className="text-2xl font-bold text-primary" data-testid="text-metrics-count">{selectedMetrics.size}</p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="text-sm text-muted-foreground">Carbon Calculator</p>
-                    <p className="text-2xl font-bold" data-testid="text-carbon-status">
-                      {enabledModules.carbon && autoScope ? "Active" : "Inactive"}
-                    </p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="text-sm text-muted-foreground">Policy Generator</p>
-                    <p className="text-2xl font-bold" data-testid="text-policy-status">
-                      {enabledModules.policies ? "Ready" : "Disabled"}
-                    </p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="text-sm text-muted-foreground">Supplier Assessment</p>
-                    <p className="text-2xl font-bold" data-testid="text-supplier-status">
-                      {enableSupplier ? "Enabled" : "Disabled"}
-                    </p>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className="border-primary/30 bg-primary/5">
-                <CardContent className="p-4 space-y-2">
-                  <p className="text-sm font-medium">Active Modules</p>
-                  <div className="flex flex-wrap gap-2">
-                    {DEFAULT_MODULES.filter(m => enabledModules[m.key]).map(m => (
-                      <Badge key={m.key} variant="secondary" className="text-xs">{m.label}</Badge>
-                    ))}
+              <Card className="bg-muted/30 border-dashed">
+                <CardContent className="p-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
+                    <CheckCircle2 className="w-6 h-6 text-primary" />
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-sm font-medium mb-2">Company Details</p>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div><span className="text-muted-foreground">Name:</span> {companyName}</div>
-                    <div><span className="text-muted-foreground">Industry:</span> {industry}</div>
-                    <div><span className="text-muted-foreground">Country:</span> {country}</div>
-                    <div><span className="text-muted-foreground">Employees:</span> {employeeCount}</div>
-                    <div><span className="text-muted-foreground">Sites:</span> {sitesCount}</div>
-                    <div><span className="text-muted-foreground">Profile:</span> {operationalProfile}</div>
+                  <p className="text-sm font-medium">Setup Summary</p>
+                  <div className="grid grid-cols-2 gap-3 mt-3 text-xs text-muted-foreground">
+                    <div>
+                      <p className="font-medium text-foreground text-lg" data-testid="text-topics-count">{selectedTopics.size}</p>
+                      <p>Focus Topics</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground text-lg" data-testid="text-metrics-count">{selectedMetrics.size}</p>
+                      <p>Active Metrics</p>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -780,24 +740,34 @@ export default function Onboarding() {
           )}
 
           <div className="flex items-center justify-between pt-4 border-t border-border">
-            {step > 1 ? (
-              <Button variant="outline" onClick={saveAndPrev} data-testid="button-prev-step">
-                <ArrowLeft className="w-4 h-4 mr-1.5" />
-                Previous
-              </Button>
-            ) : <div />}
-
-            {step < TOTAL_STEPS ? (
-              <Button onClick={saveAndNext} data-testid="button-next-step">
-                Next
-                <ArrowRight className="w-4 h-4 ml-1.5" />
-              </Button>
-            ) : (
-              <Button onClick={handleComplete} disabled={completeMutation.isPending} data-testid="button-complete-setup">
-                {completeMutation.isPending ? "Setting up..." : "Go to Dashboard"}
-                <ArrowRight className="w-4 h-4 ml-1.5" />
-              </Button>
-            )}
+            <div>
+              {step > 1 && (
+                <Button variant="ghost" size="sm" onClick={saveAndPrev} data-testid="button-prev">
+                  <ArrowLeft className="w-4 h-4 mr-1" /> Back
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {step >= 4 && step < V2_STEPS.length && (
+                <Button variant="ghost" size="sm" onClick={saveAndNext} data-testid="button-skip">
+                  Skip
+                </Button>
+              )}
+              {step < V2_STEPS.length ? (
+                <Button onClick={saveAndNext} disabled={!isStepValid()} data-testid="button-next">
+                  Continue <ArrowRight className="w-4 h-4 ml-1" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleComplete}
+                  disabled={completeMutation.isPending}
+                  data-testid="button-complete"
+                >
+                  {completeMutation.isPending ? "Setting up..." : "Complete Setup"}
+                  <CheckCircle2 className="w-4 h-4 ml-1" />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>

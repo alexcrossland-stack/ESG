@@ -18,7 +18,7 @@ The application is a full-stack SaaS web application.
 - **Color Scheme:** Primary color is green (`hsl(158, 64%, 32%)`).
 - **Typography:** Uses Open Sans font.
 - **Layout:** Features a fixed-width sidebar (14rem).
-- **Onboarding:** Implements a two-path onboarding system (guided 8-step wizard or manual setup) with database persistence, autosave, and resume functionality to ease user adoption.
+- **Onboarding:** Onboarding v2 implements a 6-step action-based flow (Profile, Focus Topics, Reporting Setup, Data Entry, Evidence, Output) with Quick Start path. V1 (guided 8-step wizard or manual) is still supported. Both versions have database persistence, autosave, and resume functionality.
 
 **Technical Implementations:**
 - **Frontend:** Built with React, utilizing TanStack Query for data fetching, Wouter for routing, and Recharts for data visualization.
@@ -57,6 +57,12 @@ The application is a full-stack SaaS web application.
     - **Improved Exports:** New presentation-ready export packs (Board, Customer, Compliance, Assurance).
     - **Guided Demo Mode:** Provides a guided tour and seeded data for new users.
     - **Trust & Source-Status Layer:** `SourceBadge` component to display data status, owner, date, and evidence.
+- **Phase 5 — Performance & Onboarding:**
+    - **Test Data Generator** (`server/seed-generator.ts`): Deterministic seed with small/medium/large presets (1126/6435+ records). `server/perf-test.ts` benchmarks 24 workflows all under 200ms.
+    - **Database Optimization** (`server/ensure-indexes.ts`): 40 targeted indexes, ensured at server startup.
+    - **Reliability Hardening** (`server/scheduler.ts`): FOR UPDATE SKIP LOCKED job locking, stuck job recovery (10min timeout), exponential backoff (30s/2min/8min, max 3 retries), job cleanup (30 days) and health event cleanup (90 days). Slow route monitoring (2s threshold) in `server/index.ts`.
+    - **Performance Admin View** (`client/src/pages/admin-health.tsx`): Tabbed layout with Health Events, Background Jobs, and Performance tabs. `/api/admin/performance` endpoint returns DB size, connection count, index count, table row counts.
+    - **Onboarding v2** (`client/src/pages/onboarding.tsx`): 6-step action-based flow (Profile, Focus Topics, Reporting Setup, Data Entry, Evidence, Output) with `onboardingVersion=2`. Quick Start path seeds demo data. Dashboard activation card shows progress for incomplete onboarding.
 - **Phase 4 — Platform Reliability & Automation:**
     - **Background Job Scheduler** (`server/scheduler.ts`): Recurring system jobs (reminders, evidence expiry, procurement revalidation, compliance recalculation) on 60s tick; on-demand queued jobs with retry logic, idempotency keys, worker locking. `background_jobs` table tracks all runs.
     - **Platform Health Monitoring** (`client/src/pages/admin-health.tsx`): Super-admin-only dashboard with status cards (scheduler, API errors, report engine), health events table, background job history. Auto-refreshes every 30s. `platform_health_events` table logs job failures and API 500 errors.

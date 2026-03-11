@@ -125,6 +125,7 @@ function ProtectedApp() {
               <Route path="/esg-profile" component={EsgProfilePage} />
               <Route path="/admin/health" component={AdminHealthPage} />
               <Route path="/admin/analytics" component={AdminAnalyticsPage} />
+              <Route path="/onboarding" component={Onboarding} />
               <Route component={NotFound} />
             </Switch>
           </main>

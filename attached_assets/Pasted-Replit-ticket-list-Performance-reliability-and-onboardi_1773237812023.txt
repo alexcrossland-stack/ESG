@@ -1,0 +1,581 @@
+Replit ticket list — Performance, reliability, and onboarding
+
+Objective
+
+Implement two focused workstreams:
+	1.	Performance and reliability hardening
+	2.	Improved first-run onboarding and activation
+
+The goal is to make the platform stable under realistic SME usage and make new users reach value faster.
+
+⸻
+
+Workstream 1 — Performance and reliability hardening
+
+P001 — Build test data generator for load simulation
+
+Priority: Critical
+Blocked by: None
+
+Task
+Create a repeatable test data generator that can seed realistic platform data for performance testing.
+
+Generate at minimum:
+	•	50 companies
+	•	10–20 users per company
+	•	12 reporting periods per company
+	•	all default metrics populated
+	•	raw data inputs across periods
+	•	evidence files across periods
+	•	action plans
+	•	policies and policy versions
+	•	reports
+	•	questionnaires and answers
+	•	notifications
+	•	background jobs
+	•	audit logs
+	•	activity logs
+
+Files likely impacted
+	•	server scripts or seed utilities
+	•	shared/schema.ts if any seed-related support is needed
+
+Acceptance criteria
+	•	A script can generate realistic multi-company test data in one command
+	•	Seeded data includes historical periods and linked records
+	•	The script can be run safely in non-production environments only
+	•	Output includes counts of records created per major table
+
+⸻
+
+P002 — Run performance tests across key workflows
+
+Priority: Critical
+Blocked by: P001
+
+Task
+Run performance tests against major user workflows and record timings.
+
+Test at minimum:
+	•	dashboard load
+	•	control centre load
+	•	data entry load
+	•	compliance page load
+	•	analytics page load
+	•	report generation
+	•	questionnaire import
+	•	carbon data import
+	•	reminder generation
+	•	background job execution
+
+Use realistic concurrent behaviour where possible:
+	•	users active while jobs run
+	•	imports during normal use
+	•	report generation during active sessions
+
+Acceptance criteria
+	•	Timing results are captured for all listed workflows
+	•	Slowest endpoints and queries are identified
+	•	A short written findings summary is produced
+	•	The summary identifies which routes, queries, or jobs need optimisation
+
+⸻
+
+P003 — Optimise database indexes
+
+Priority: Critical
+Blocked by: P002
+
+Task
+Review query patterns and add indexes to improve performance for heavily queried tables.
+
+Review and optimise at minimum:
+	•	metric_values
+	•	raw_data_inputs
+	•	evidence_files
+	•	report_runs
+	•	background_jobs
+	•	audit_logs
+	•	user_activity
+	•	questionnaires
+	•	notifications
+
+Focus especially on columns used in:
+	•	company filtering
+	•	period filtering
+	•	status filtering
+	•	due dates
+	•	createdAt / updatedAt ordering
+	•	workflow status
+	•	assigned users
+	•	report lookups
+	•	job status and schedule
+
+Acceptance criteria
+	•	New indexes are added only where justified by query usage
+	•	Query plans improve for the main slow queries
+	•	Existing application behaviour is preserved
+	•	A before/after summary of the most important query improvements is documented
+
+⸻
+
+P004 — Optimise dashboard and control centre queries
+
+Priority: Critical
+Blocked by: P002
+
+Task
+Refactor slow aggregation queries used by:
+	•	dashboard summaries
+	•	control centre
+	•	approvals
+	•	compliance status
+	•	reminders
+	•	analytics summaries
+
+Reduce unnecessary repeated queries and avoid N+1 patterns.
+
+Acceptance criteria
+	•	Dashboard load time improves materially under seeded load
+	•	Control Centre loads in a single efficient API response
+	•	Query count is reduced for the main dashboard request
+	•	No regressions in data accuracy
+
+⸻
+
+P005 — Harden background job scheduler
+
+Priority: Critical
+Blocked by: P002
+
+Task
+Review and harden the scheduler and queued job execution.
+
+Ensure:
+	•	jobs do not run twice accidentally
+	•	retries are safe
+	•	stuck jobs can be detected
+	•	long-running jobs are visible
+	•	failed jobs are logged clearly
+	•	imports and report generation do not block normal request handling
+
+Add or verify support for:
+	•	payload
+	•	attempts
+	•	maxAttempts
+	•	lockedAt
+	•	workerId
+	•	idempotencyKey
+
+Acceptance criteria
+	•	Duplicate execution is prevented for the same queued job
+	•	Failed jobs retry within defined limits
+	•	Stuck jobs can be identified from the admin/system view
+	•	Report generation and import processing work through the job layer where appropriate
+	•	Job runs and failures are visible in logs or health UI
+
+⸻
+
+P006 — Improve import safety and logging
+
+Priority: High
+Blocked by: P002
+
+Task
+Harden questionnaire import and carbon/raw-data import flows.
+
+Ensure all imports follow:
+	•	upload
+	•	parse
+	•	preview
+	•	confirm
+	•	process
+	•	log result
+
+Add import logging and safe failure behaviour.
+
+Acceptance criteria
+	•	No import writes data before user confirmation
+	•	Failed imports do not partially corrupt data
+	•	Import runs are logged with status, counts, and errors
+	•	Users receive clear summaries of imported, skipped, and unmatched rows/columns
+
+⸻
+
+P007 — Add slow route and error monitoring
+
+Priority: High
+Blocked by: P002
+
+Task
+Add monitoring/logging for:
+	•	slow API routes
+	•	failed imports
+	•	failed report generation
+	•	repeated database errors
+	•	job failures
+	•	long-running jobs
+
+Define thresholds for “slow”.
+
+Acceptance criteria
+	•	Slow route events are recorded with route, duration, and timestamp
+	•	Job failures and report failures are visible in platform health
+	•	Repeated errors can be seen from logs or admin health view
+	•	Monitoring does not expose sensitive data
+
+⸻
+
+P008 — Create performance/admin summary view
+
+Priority: Medium
+Blocked by: P003, P004, P005, P007
+
+Task
+Create an admin-facing performance summary page or extend the existing health page to include:
+	•	average dashboard load time
+	•	average report generation time
+	•	recent failed jobs
+	•	recent import failures
+	•	slowest recent routes
+	•	recent system errors
+
+Acceptance criteria
+	•	Admin users can see performance indicators in one place
+	•	Metrics update from real logs/events
+	•	UI is readable and clearly grouped
+	•	Access is limited appropriately
+
+⸻
+
+P009 — Final reliability review and summary
+
+Priority: High
+Blocked by: P003, P004, P005, P006, P007, P008
+
+Task
+After implementation, provide a short written output covering:
+	•	bottlenecks found
+	•	what was changed
+	•	measurable improvements
+	•	remaining risks
+	•	any known scale limits in the current architecture
+
+Acceptance criteria
+	•	Summary is complete and understandable
+	•	Includes before/after evidence where possible
+	•	Lists any unresolved risks honestly
+
+⸻
+
+Workstream 2 — First-run onboarding and activation
+
+O001 — Redesign onboarding flow structure
+
+Priority: Critical
+Blocked by: None
+
+Task
+Create a new guided first-run onboarding flow for new companies.
+
+Flow should include these steps:
+	1.	Complete company profile
+	2.	Choose ESG focus areas
+	3.	Set up reporting basics
+	4.	Enter first data
+	5.	Upload first evidence
+	6.	Generate first output
+
+Design it as a guided success journey, not only a form wizard.
+
+Acceptance criteria
+	•	New users are routed into onboarding after signup/first login
+	•	Onboarding can be resumed later
+	•	Progress is stored per company
+	•	Users can clearly see current step, completed steps, and next step
+
+⸻
+
+O002 — Company profile step
+
+Priority: Critical
+Blocked by: O001
+
+Task
+Build or improve the first step to collect and confirm:
+	•	company name
+	•	industry
+	•	country
+	•	employee count
+	•	operational profile
+
+Add helper text explaining why this matters.
+
+Acceptance criteria
+	•	Required fields are validated
+	•	Existing values are shown if already known
+	•	Step completion only occurs when required fields are valid
+	•	User can save and resume later
+
+⸻
+
+O003 — ESG focus areas step
+
+Priority: High
+Blocked by: O001
+
+Task
+Allow user to select or confirm:
+	•	environmental topics
+	•	social topics
+	•	governance topics
+	•	relevant compliance frameworks
+
+Use plain language and sensible defaults where possible.
+
+Acceptance criteria
+	•	Selected focus areas are saved
+	•	Compliance framework selection is optional but visible
+	•	Helper text explains how focus areas affect setup
+	•	Step can be resumed later
+
+⸻
+
+O004 — Reporting basics step
+
+Priority: Critical
+Blocked by: O001
+
+Task
+Guide the user to:
+	•	select reporting frequency
+	•	confirm active metrics
+	•	assign key owners where available
+
+Make this practical and simple.
+
+Acceptance criteria
+	•	Reporting frequency is saved
+	•	Active metrics selection is saved
+	•	Owner assignment is optional but supported
+	•	Step completion requires at least one active metric
+	•	User can continue later without losing progress
+
+⸻
+
+O005 — First data entry step
+
+Priority: Critical
+Blocked by: O001
+
+Task
+Guide the user to:
+	•	enter first raw data values
+	•	enter first manual metrics
+	•	understand data quality and evidence expectations
+
+Include contextual helper text.
+
+Acceptance criteria
+	•	Step shows direct links or embedded actions for first data entry
+	•	Step completion is based on real data being entered, not only a button click
+	•	User sees data quality/evidence guidance
+	•	Empty states are clear and helpful
+
+⸻
+
+O006 — First evidence upload step
+
+Priority: High
+Blocked by: O001
+
+Task
+Guide the user to:
+	•	upload at least one evidence file
+	•	link it to a metric, policy, or questionnaire item
+
+Explain why evidence matters.
+
+Acceptance criteria
+	•	Step completion requires at least one valid uploaded and linked evidence item
+	•	User receives clear guidance on what counts as evidence
+	•	Linking flow is simple and obvious
+	•	User can resume later
+
+⸻
+
+O007 — First output generation step
+
+Priority: Critical
+Blocked by: O001
+
+Task
+Guide the user to generate at least one useful output:
+	•	board report
+	•	customer ESG pack
+	•	policy document
+	•	questionnaire response
+
+Allow any one of these to complete the step.
+
+Acceptance criteria
+	•	Step completion is triggered by a real generated output
+	•	User is shown recommended output types with simple explanations
+	•	User can access the generated output from the onboarding flow
+	•	Progress updates immediately after completion
+
+⸻
+
+O008 — Onboarding progress tracker
+
+Priority: Critical
+Blocked by: O001
+
+Task
+Add a visible onboarding progress tracker showing:
+	•	percentage complete
+	•	completed steps
+	•	next recommended action
+
+Display it:
+	•	inside onboarding
+	•	on the dashboard for new companies
+
+Acceptance criteria
+	•	Progress updates from actual completed actions
+	•	Dashboard card shows remaining tasks and quick links
+	•	Progress is accurate after page refresh and relogin
+	•	Tracker does not appear once onboarding is fully complete, unless accessed deliberately
+
+⸻
+
+O009 — Dashboard activation card for new companies
+
+Priority: High
+Blocked by: O008
+
+Task
+Add a new-company dashboard card showing:
+	•	onboarding progress
+	•	remaining tasks
+	•	recommended next action
+	•	quick links to complete tasks
+
+Acceptance criteria
+	•	Card is visible for incomplete onboarding only
+	•	Links take the user directly to the relevant step or page
+	•	Card updates as tasks are completed
+	•	Messaging is concise and clear
+
+⸻
+
+O010 — Empty state and helper text pass
+
+Priority: High
+Blocked by: O005, O006, O007
+
+Task
+Review the main pages used in onboarding and improve:
+	•	empty states
+	•	short helper text
+	•	recommended next actions
+
+Pages to review at minimum:
+	•	dashboard
+	•	data entry
+	•	evidence
+	•	reports
+	•	policies
+	•	questionnaires
+
+Acceptance criteria
+	•	Pages with no data have clear empty states
+	•	Helper text explains why the action matters
+	•	New users always have a visible next action
+	•	No empty state feels broken or unfinished
+
+⸻
+
+O011 — Quick-start path for very small users
+
+Priority: Medium
+Blocked by: O001
+
+Task
+Create a “Get value in 5 minutes” quick-start path focused on:
+	•	complete profile
+	•	enter first metrics
+	•	upload one evidence file
+	•	generate one report
+
+This should be optional and aimed at small/simple companies.
+
+Acceptance criteria
+	•	Users can choose standard onboarding or quick-start
+	•	Quick-start path is shorter and outcome-focused
+	•	Completing quick-start still updates onboarding progress properly
+	•	User can switch to the full setup later
+
+⸻
+
+O012 — Step completion rules based on real actions
+
+Priority: Critical
+Blocked by: O002, O003, O004, O005, O006, O007
+
+Task
+Make onboarding step completion depend on actual platform state where possible, not manual ticking.
+
+Examples:
+	•	profile step complete only if required fields exist
+	•	reporting basics complete only if metrics/frequency saved
+	•	evidence step complete only if evidence uploaded and linked
+	•	first output complete only if a report/policy/questionnaire response exists
+
+Acceptance criteria
+	•	Completion logic is based on real saved data/actions
+	•	Admin cannot falsely complete steps without the required action, except through an explicit override if implemented
+	•	Progress remains correct after refresh and across sessions
+
+⸻
+
+O013 — Final onboarding review and activation summary
+
+Priority: High
+Blocked by: O008, O009, O010, O011, O012
+
+Task
+Provide a short summary of:
+	•	the onboarding flow implemented
+	•	progress logic
+	•	quick-start behaviour
+	•	any remaining friction points
+	•	recommended future improvements to improve conversion
+
+Acceptance criteria
+	•	Summary is delivered clearly
+	•	It reflects what was actually implemented
+	•	It highlights any unresolved UX issues honestly
+
+⸻
+
+Recommended implementation order
+
+Reliability
+
+P001 → P002 → P003/P004/P005 in parallel → P006/P007 → P008 → P009
+
+Onboarding
+
+O001 → O002/O003/O004 → O005/O006/O007 → O008/O009/O010/O011 → O012 → O013
+
+⸻
+
+Short instruction to add above the tickets
+
+Please implement these tickets in the order shown. Focus first on platform reliability and onboarding activation. For every ticket, include:
+	•	permission checks
+	•	audit logging where relevant
+	•	backward compatibility with current demo/sample data
+	•	clear loading and error states in the UI
+	•	a short completion note describing what was changed and any risks remaining
