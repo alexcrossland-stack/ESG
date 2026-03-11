@@ -493,10 +493,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(session({
     store: new PgSession({ pool, createTableIfMissing: true }),
     secret: sessionSecret,
-    resave: true,
+    resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: true,
+      secure: "auto" as any,
       maxAge: 7 * 24 * 60 * 60 * 1000,
       sameSite: "lax" as const,
       httpOnly: true,
