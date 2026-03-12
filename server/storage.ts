@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -37,6 +37,13 @@ import {
   type UserActivity, type InsertUserActivity,
   supportRequests,
   type SupportRequest,
+  agentApiKeys, agentRuns, agentActions, agentEscalations, chatSessions, chatMessages,
+  type AgentApiKey, type InsertAgentApiKey,
+  type AgentRun, type InsertAgentRun,
+  type AgentAction, type InsertAgentAction,
+  type AgentEscalation, type InsertAgentEscalation,
+  type ChatSession, type InsertChatSession,
+  type ChatMessage, type InsertChatMessage,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -235,6 +242,27 @@ export interface IStorage {
   // Billing
   updateCompanyBilling(companyId: string, data: { planTier?: string; planStatus?: string; currentPeriodEnd?: Date | null; stripeCustomerId?: string; stripeSubscriptionId?: string }): Promise<void>;
   getHealthEventCounts(since: Date): Promise<{ total: number; byType: Record<string, number>; bySeverity: Record<string, number> }>;
+
+  // Agent API Keys
+  createAgentApiKey(data: InsertAgentApiKey): Promise<AgentApiKey>;
+  getAgentApiKeyByHash(hash: string): Promise<AgentApiKey | undefined>;
+  listAgentApiKeys(): Promise<AgentApiKey[]>;
+  revokeAgentApiKey(id: string): Promise<void>;
+  updateAgentApiKeyLastUsed(id: string): Promise<void>;
+
+  // Agent Runs / Actions / Escalations
+  createAgentRun(data: InsertAgentRun): Promise<AgentRun>;
+  updateAgentRun(id: string, updates: Partial<AgentRun>): Promise<AgentRun | undefined>;
+  createAgentAction(data: InsertAgentAction): Promise<AgentAction>;
+  createAgentEscalation(data: InsertAgentEscalation): Promise<AgentEscalation>;
+  listAgentEscalations(filters?: { status?: string; companyId?: string; limit?: number }): Promise<AgentEscalation[]>;
+
+  // Chat
+  createChatSession(data: InsertChatSession): Promise<ChatSession>;
+  getChatSession(id: string): Promise<ChatSession | undefined>;
+  listChatSessions(filters?: { userId?: string; companyId?: string }): Promise<ChatSession[]>;
+  createChatMessage(data: InsertChatMessage): Promise<ChatMessage>;
+  getChatMessages(sessionId: string): Promise<ChatMessage[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1309,6 +1337,92 @@ export class DatabaseStorage implements IStorage {
       bySeverity[row.severity] = (bySeverity[row.severity] || 0) + n;
     }
     return { total, byType, bySeverity };
+  }
+
+  // Agent API Keys
+  async createAgentApiKey(data: InsertAgentApiKey) {
+    const [key] = await db.insert(agentApiKeys).values(data as any).returning();
+    return key;
+  }
+
+  async getAgentApiKeyByHash(hash: string) {
+    const [key] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.keyHash, hash));
+    return key;
+  }
+
+  async listAgentApiKeys() {
+    return db.select().from(agentApiKeys).orderBy(desc(agentApiKeys.createdAt));
+  }
+
+  async revokeAgentApiKey(id: string) {
+    await db.update(agentApiKeys).set({ revokedAt: new Date() }).where(eq(agentApiKeys.id, id));
+  }
+
+  async updateAgentApiKeyLastUsed(id: string) {
+    await db.update(agentApiKeys).set({ lastUsedAt: new Date() }).where(eq(agentApiKeys.id, id));
+  }
+
+  // Agent Runs
+  async createAgentRun(data: InsertAgentRun) {
+    const [run] = await db.insert(agentRuns).values(data as any).returning();
+    return run;
+  }
+
+  async updateAgentRun(id: string, updates: Partial<AgentRun>) {
+    const [run] = await db.update(agentRuns).set(updates as any).where(eq(agentRuns.id, id)).returning();
+    return run;
+  }
+
+  async createAgentAction(data: InsertAgentAction) {
+    const [action] = await db.insert(agentActions).values(data as any).returning();
+    return action;
+  }
+
+  async createAgentEscalation(data: InsertAgentEscalation) {
+    const [esc] = await db.insert(agentEscalations).values(data as any).returning();
+    return esc;
+  }
+
+  async listAgentEscalations(filters?: { status?: string; companyId?: string; limit?: number }) {
+    const conditions: any[] = [];
+    if (filters?.status) conditions.push(eq(agentEscalations.status, filters.status));
+    if (filters?.companyId) conditions.push(eq(agentEscalations.companyId, filters.companyId));
+    const query = db.select().from(agentEscalations)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(agentEscalations.createdAt))
+      .limit(filters?.limit ?? 100);
+    return query;
+  }
+
+  // Chat
+  async createChatSession(data: InsertChatSession) {
+    const [session] = await db.insert(chatSessions).values(data as any).returning();
+    return session;
+  }
+
+  async getChatSession(id: string) {
+    const [session] = await db.select().from(chatSessions).where(eq(chatSessions.id, id));
+    return session;
+  }
+
+  async listChatSessions(filters?: { userId?: string; companyId?: string }) {
+    const conditions: any[] = [];
+    if (filters?.userId) conditions.push(eq(chatSessions.userId, filters.userId));
+    if (filters?.companyId) conditions.push(eq(chatSessions.companyId, filters.companyId));
+    return db.select().from(chatSessions)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(chatSessions.createdAt));
+  }
+
+  async createChatMessage(data: InsertChatMessage) {
+    const [msg] = await db.insert(chatMessages).values(data as any).returning();
+    return msg;
+  }
+
+  async getChatMessages(sessionId: string) {
+    return db.select().from(chatMessages)
+      .where(eq(chatMessages.sessionId, sessionId))
+      .orderBy(chatMessages.createdAt);
   }
 }
 

@@ -1,0 +1,70 @@
+Using the current ESG Manager platform architecture, I want you to prepare the codebase for integration with a separate AI Agent Service.
+
+Please make the following changes:
+
+1. Add persistent machine-to-machine authentication
+- Create service accounts for internal agent access
+- Add long-lived API keys or signed JWT client credentials
+- Allow scoped permissions by agent type:
+  - technical_agent
+  - customer_success_agent
+  - esg_specialist_agent
+  - marketing_agent
+  - master_orchestrator
+
+2. Add internal agent API endpoints
+Create a new internal route group such as /api/internal/agent with endpoints for:
+- company context
+- user context
+- health summary
+- support escalation creation
+- searchable knowledge/context retrieval
+- recent platform events
+- recent support tickets
+- recent audit logs
+
+3. Add a basic public health endpoint
+Create GET /health that returns:
+- app status
+- database connectivity
+- scheduler heartbeat
+- timestamp
+Return HTTP 200 when healthy and 503 when unhealthy.
+
+4. Add event/webhook support
+When a critical platform_health_event is created, allow the system to send a webhook to an external AI Agent Service.
+Support at least:
+- server_error
+- job_failure
+- ai_failure
+- import_failure
+
+5. Add agent audit tables
+Create database tables for:
+- agent_runs
+- agent_actions
+- agent_escalations
+Each record should store:
+- agent name
+- event type
+- input summary
+- output summary
+- related entity
+- status
+- created_at
+
+6. Add a support chat integration layer
+Prepare the backend so an in-app chat widget can send a message to an external AI Agent Service and receive a response.
+Store chat sessions and messages in the database.
+
+7. Keep the existing application logic unchanged where possible
+Do not refactor the full product.
+Add a clean integration layer that allows a separate Python AI service to work safely with the platform.
+
+Please provide:
+- the implementation plan
+- database changes
+- new routes
+- auth design
+- any environment variables needed
+- any security risks or considerations

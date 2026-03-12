@@ -1,0 +1,118 @@
+Please analyse the entire ESG platform codebase and generate a full technical report so that an external AI agent system can be designed to integrate with the platform.
+
+Provide the following information in clearly labelled sections.
+
+SECTION 1 — PLATFORM ARCHITECTURE  
+Explain the overall architecture of the application.
+
+Include:
+- Frontend framework (React, Next.js, etc.)
+- Backend framework (Express, FastAPI, Node, etc.)
+- Folder structure of the project
+- Key backend services
+- How the frontend communicates with the backend
+- Any middleware used
+- Any external integrations (Stripe, email, AI APIs, etc.)
+
+Provide a structured overview.
+
+SECTION 2 — DATABASE STRUCTURE  
+Provide a full overview of the database schema.
+
+Include:
+- All tables
+- Key fields in each table
+- Relationships between tables
+- Tables related to:
+  - users
+  - companies
+  - ESG metrics
+  - policies
+  - reports
+  - suppliers
+  - audit logs
+
+Present the schema clearly so another service could interact safely with the database.
+
+SECTION 3 — API ENDPOINTS  
+List every backend API endpoint.
+
+For each endpoint provide:
+- endpoint path
+- HTTP method
+- purpose
+- authentication requirements
+- request format
+- response format
+
+Example format:
+
+POST /api/metrics  
+Purpose: Add ESG metric entry  
+Auth: Required  
+Request: {metric_id, value, date}  
+Response: success message
+
+Provide a full API reference.
+
+SECTION 4 — AUTHENTICATION SYSTEM  
+Explain how authentication works in the platform.
+
+Include:
+- login process
+- session or token system
+- password reset flow
+- user roles (admin, user, etc.)
+- permission handling
+
+SECTION 5 — LOGGING AND ERROR MONITORING  
+Explain how logging currently works.
+
+Include:
+- where logs are stored
+- how errors are recorded
+- any monitoring systems
+- health check endpoints
+- how developers are alerted to failures
+
+If logging is minimal, suggest improvements.
+
+SECTION 6 — DEPLOYMENT ENVIRONMENT  
+Explain how the application is currently deployed.
+
+Include:
+- hosting environment (Replit, VPS, cloud, etc.)
+- runtime environment
+- environment variables used
+- how builds are deployed
+- whether Docker is used
+- whether background services can run alongside the application
+
+Also confirm whether the system could support additional AI services running on the same server.
+
+SECTION 7 — KNOWLEDGE SOURCES IN THE PLATFORM  
+Identify all information sources in the project that could be used by AI support agents.
+
+Examples:
+- ESG policy templates
+- ESG metric library
+- onboarding guides
+- help documentation
+- supplier questionnaires
+- carbon calculation logic
+
+Provide the file paths where these resources exist.
+
+SECTION 8 — AI AGENT READINESS REVIEW  
+Evaluate whether the platform is ready for integration with an AI agent system.
+
+Assess:
+
+1. Whether external AI agents can safely call platform APIs
+2. Whether background workers can run alongside the backend
+3. Whether agents could access logs and monitoring data
+4. Whether the database can be accessed securely by an agent service
+
+If changes are required, recommend improvements to make the platform AI-agent compatible.
+
+Provide this report clearly so that a multi-agent AI architecture can be designed around the platform.

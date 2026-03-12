@@ -100,6 +100,13 @@ The application is a full-stack SaaS web application.
     - **Demo Banner** (`client/src/pages/dashboard.tsx`): Shows amber banner when on demo account with link to create own account.
     - **Environment Config** (`.env.example`): Documents all required and optional environment variables.
 
+- **Phase 8 — AI Agent Integration Layer:**
+    - **New Database Tables** (`shared/schema.ts`): 6 new tables — `agent_api_keys` (M2M auth keys with scopes, revocation, expiry), `agent_runs` (agent execution audit), `agent_actions` (per-run action records), `agent_escalations` (agent-to-human escalation log), `chat_sessions`, `chat_messages`. New `agent_type` enum with 5 values.
+    - **Agent Authentication** (`server/agent-auth.ts`): `generateAgentApiKey()` creates `esgk_`-prefixed keys with SHA-256 hash stored only in DB. `requireAgentAuth` middleware reads `X-Agent-API-Key` header, validates hash, checks revocation/expiry, updates `last_used_at`. `requireAgentScope(scope)` enforces `internal:*` wildcard or exact scope match.
+    - **Webhook Dispatch** (`server/webhooks.ts`): `dispatchCriticalHealthEvent()` sends best-effort POST to `AGENT_WEBHOOK_URL` (env var, optional) for events with `severity=error` and type in `{server_error, job_failure, ai_failure, csv_import_failure}`. Never throws. Fires asynchronously after `createPlatformHealthEvent` in `csv_import_failure` and `ai_failure` paths in routes.ts.
+    - **Agent Routes** (`server/agent-routes.ts`, `registerAgentRoutes(app)`): 20 new routes under `/api/internal/agent/*` and `/api/internal/chat/*` plus public `GET /health`. Key routes: POST/GET/DELETE `/api/internal/agent/keys` (admin session auth), GET `/api/internal/agent/company/:id`, GET `/api/internal/agent/user/:id`, GET `/api/internal/agent/health`, GET `/api/internal/agent/knowledge` (in-memory search over policy templates + 28 metrics + 7 benchmarks + 10 compliance frameworks), GET `/api/internal/agent/events`, GET `/api/internal/agent/support-tickets`, GET `/api/internal/agent/audit-logs/:companyId`, POST/GET `/api/internal/agent/escalations` (optionally creates support ticket), POST/PATCH `/api/internal/agent/runs`, POST `/api/internal/agent/runs/:runId/actions`, POST/GET `/api/internal/chat/sessions`, GET/POST `/api/internal/chat/sessions/:id/messages` (forwards to `AGENT_SERVICE_URL` if configured, otherwise returns placeholder).
+    - **Environment Variables**: `AGENT_WEBHOOK_URL` (outbound critical event webhook), `AGENT_SERVICE_URL` (AI agent chat backend). Both optional with graceful degradation. Documented in `.env.example`.
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`).

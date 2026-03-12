@@ -27,6 +27,8 @@ import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } fr
 import { generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
+import { registerAgentRoutes } from "./agent-routes";
+import { dispatchCriticalHealthEvent } from "./webhooks";
 import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 
@@ -1545,13 +1547,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ rawSaved, metricSaved, skipped, periodsRecalculated: periodsAffected.size });
     } catch (e: any) {
       try {
-        await storage.createPlatformHealthEvent({
+        const csvFailureEvent = {
           eventType: "csv_import_failure",
           severity: "error",
           message: `Bulk data upload failed: ${e.message}`,
           details: { companyId: (req.session as any).companyId },
           companyId: (req.session as any).companyId,
-        });
+        };
+        await storage.createPlatformHealthEvent(csvFailureEvent);
+        dispatchCriticalHealthEvent(csvFailureEvent).catch(() => {});
       } catch {}
       res.status(500).json({ error: e.message });
     }
@@ -2565,13 +2569,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) {
       console.error("Policy generation error:", e);
       try {
-        await storage.createPlatformHealthEvent({
+        const aiFailureEvent = {
           eventType: "ai_failure",
           severity: "error",
           message: `Policy generation AI failure: ${e.message}`,
           details: { companyId: (req.session as any).companyId },
           companyId: (req.session as any).companyId,
-        });
+        };
+        await storage.createPlatformHealthEvent(aiFailureEvent);
+        dispatchCriticalHealthEvent(aiFailureEvent).catch(() => {});
       } catch {}
       res.status(500).json({ error: e.message });
     }
@@ -5373,6 +5379,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(500).json({ error: e.message });
     }
   });
+
+  registerAgentRoutes(app);
 
   startScheduler();
 

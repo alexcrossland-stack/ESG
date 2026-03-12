@@ -756,3 +756,116 @@ export function getUserPermissions(role: string | undefined): PermissionModule[]
   if (!role) return [];
   return ROLE_PERMISSIONS[normalizeRole(role)] || [];
 }
+
+// ============================================================
+// AI AGENT INTEGRATION LAYER
+// ============================================================
+
+export const agentTypeEnum = pgEnum("agent_type", [
+  "technical_agent",
+  "customer_success_agent",
+  "esg_specialist_agent",
+  "marketing_agent",
+  "master_orchestrator",
+]);
+
+export const agentApiKeys = pgTable("agent_api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agentType: agentTypeEnum("agent_type").notNull(),
+  label: text("label").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  keyPrefix: text("key_prefix").notNull(),
+  scopes: jsonb("scopes").notNull(),
+  companyId: varchar("company_id"),
+  lastUsedAt: timestamp("last_used_at"),
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const agentRuns = pgTable("agent_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agentName: text("agent_name").notNull(),
+  agentType: agentTypeEnum("agent_type").notNull(),
+  triggerType: text("trigger_type").notNull(),
+  inputSummary: text("input_summary"),
+  outputSummary: text("output_summary"),
+  status: text("status").notNull(),
+  durationMs: integer("duration_ms"),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const agentActions = pgTable("agent_actions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: varchar("run_id").notNull(),
+  actionType: text("action_type").notNull(),
+  entityType: text("entity_type"),
+  entityId: varchar("entity_id"),
+  inputSummary: text("input_summary"),
+  outputSummary: text("output_summary"),
+  status: text("status").notNull(),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const agentEscalations = pgTable("agent_escalations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: varchar("run_id"),
+  agentName: text("agent_name").notNull(),
+  escalationType: text("escalation_type").notNull(),
+  priority: text("priority").notNull(),
+  summary: text("summary").notNull(),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  relatedEntityType: text("related_entity_type"),
+  relatedEntityId: varchar("related_entity_id"),
+  status: text("status").notNull().default("open"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const chatSessions = pgTable("chat_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  agentType: agentTypeEnum("agent_type"),
+  title: text("title"),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const chatMessages = pgTable("chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAgentApiKeySchema = createInsertSchema(agentApiKeys).omit({ id: true, createdAt: true });
+export type InsertAgentApiKey = z.infer<typeof insertAgentApiKeySchema>;
+export type AgentApiKey = typeof agentApiKeys.$inferSelect;
+
+export const insertAgentRunSchema = createInsertSchema(agentRuns).omit({ id: true, createdAt: true });
+export type InsertAgentRun = z.infer<typeof insertAgentRunSchema>;
+export type AgentRun = typeof agentRuns.$inferSelect;
+
+export const insertAgentActionSchema = createInsertSchema(agentActions).omit({ id: true, createdAt: true });
+export type InsertAgentAction = z.infer<typeof insertAgentActionSchema>;
+export type AgentAction = typeof agentActions.$inferSelect;
+
+export const insertAgentEscalationSchema = createInsertSchema(agentEscalations).omit({ id: true, createdAt: true });
+export type InsertAgentEscalation = z.infer<typeof insertAgentEscalationSchema>;
+export type AgentEscalation = typeof agentEscalations.$inferSelect;
+
+export const insertChatSessionSchema = createInsertSchema(chatSessions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertChatSession = z.infer<typeof insertChatSessionSchema>;
+export type ChatSession = typeof chatSessions.$inferSelect;
+
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type ChatMessage = typeof chatMessages.$inferSelect;
