@@ -19,7 +19,7 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, Percent, ExternalLink,
+  DollarSign, ExternalLink,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Link } from "wouter";
@@ -342,7 +342,6 @@ function RevenueTab() {
   const freeCount = data?.freeCount ?? 0;
   const newSubscriptions30d = data?.newSubscriptions30d ?? 0;
   const churned30d = data?.churned30d ?? 0;
-  const conversionRate = data?.conversionRate ?? 0;
   const monthlyGrowth: any[] = data?.monthlyGrowth ?? [];
 
   return (
