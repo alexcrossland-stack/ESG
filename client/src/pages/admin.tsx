@@ -428,15 +428,17 @@ function PlatformHealthTab() {
 
   const jobsStatus = jobs.failed24h > 5 ? "text-destructive" : jobs.failed24h > 0 ? "text-amber-500" : "text-emerald-600";
   const errorsStatus = apiErrors > 10 ? "text-destructive" : apiErrors > 0 ? "text-amber-500" : "text-emerald-600";
+  const reportStatus = reportFailures > 0 ? "text-destructive" : "text-emerald-600";
   const incidentsStatus = openIncidents > 0 ? "text-amber-500" : "text-emerald-600";
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
           { label: "Jobs Running", value: jobs.running ?? 0, color: "text-blue-500", icon: RefreshCw },
           { label: "Failed Jobs (24h)", value: jobs.failed24h ?? 0, color: jobsStatus, icon: XCircle },
           { label: "API Errors (24h)", value: apiErrors, color: errorsStatus, icon: AlertTriangle },
+          { label: "Report Failures (24h)", value: reportFailures, color: reportStatus, icon: FileText },
           { label: "Open Incidents", value: openIncidents, color: incidentsStatus, icon: Activity },
         ].map(({ label, value, color, icon: Icon }) => (
           <Card key={label} data-testid={`health-summary-${label.toLowerCase().replace(/\s+/g, "-")}`}>
