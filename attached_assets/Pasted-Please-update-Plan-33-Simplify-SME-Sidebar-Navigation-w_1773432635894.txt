@@ -1,0 +1,169 @@
+Please update Plan #33 (Simplify SME Sidebar Navigation) with the following improvements before implementation.
+
+The current direction is good and should be implemented, but these refinements will make the navigation clearer for SME users and avoid hiding useful functionality.
+
+------------------------------------------------
+1. Do not hide advanced pages completely
+------------------------------------------------
+
+Several existing routes are currently planned to be removed from the sidebar and left accessible only via direct URL:
+
+/control-centre
+/recommendations
+/actions
+/compliance
+/benchmarks
+/my-tasks
+/my-approvals
+/policy-templates
+/policy-generator
+/questionnaire
+/carbon-calculator
+/answer-library
+
+Instead of making them URL-only, move them under a collapsible **Advanced** section inside Settings.
+
+Example:
+
+Settings
+   Company Settings
+   Billing
+   Advanced
+       Compliance
+       Benchmarks
+       Questionnaires
+       Carbon Calculator
+       Policy Templates
+       Recommendations
+
+This keeps the main navigation simple but preserves discoverability.
+
+------------------------------------------------
+2. Rename "Data Entry"
+------------------------------------------------
+
+Change the sidebar label:
+
+Data Entry → Enter Data
+
+SME users understand “Enter Data” much more easily than “Data Entry”.
+
+Update the sidebar label only — the route (/data-entry) should remain unchanged.
+
+------------------------------------------------
+3. Replace Team deep-linking
+------------------------------------------------
+
+Currently the plan deep-links the Team page to:
+
+/settings?tab=admin
+
+Instead, create a dedicated route:
+
+/team
+
+The Team sidebar link should navigate to /team.
+
+Internally the page can reuse the existing settings/admin logic if needed, but the route should be cleaner for users.
+
+------------------------------------------------
+4. Add "Next Step" highlighting
+------------------------------------------------
+
+If the platform already calculates next recommended actions, highlight the recommended sidebar item.
+
+Example:
+
+Metrics  (Next Step)
+
+or
+
+Evidence  (Recommended)
+
+This should be driven by the existing action plan / next-actions logic where possible.
+
+------------------------------------------------
+5. Sidebar behaviour improvements
+------------------------------------------------
+
+Ensure the following behaviour:
+
+• Collapsible groups for ESG Setup and Data & Evidence  
+• The group containing the active route auto-expands  
+• Active page is clearly highlighted  
+• Groups remain scrollable on mobile drawer view  
+• Sidebar works correctly in collapsed mode
+
+------------------------------------------------
+6. Add concise tooltips for top-level items
+------------------------------------------------
+
+Add simple hover tooltips:
+
+Dashboard → "See your ESG progress and next actions"  
+ESG Setup → "Set up your ESG framework"  
+Data & Evidence → "Enter data and upload supporting documents"  
+Reports → "Generate ESG reports for stakeholders"  
+Help → "Guidance and support"  
+Settings → "Manage company and account settings"
+
+------------------------------------------------
+7. Persist sidebar state
+------------------------------------------------
+
+Store collapsed group state in localStorage so the user’s preference is remembered.
+
+Example key:
+
+sidebar_collapsed_groups
+
+------------------------------------------------
+8. Final SME navigation structure
+------------------------------------------------
+
+Normal SME users should see this sidebar structure:
+
+Dashboard
+
+ESG Setup
+   Policies
+   Topics
+   Team
+
+Data & Evidence
+   Metrics
+   Enter Data
+   Evidence
+
+Reports
+
+Help
+
+Settings
+   Company Settings
+   Billing
+   Advanced
+
+Super admins should see the same menu plus:
+
+Admin
+
+------------------------------------------------
+9. Do not change backend or routes
+------------------------------------------------
+
+This task is a navigation refactor only.
+
+Do not:
+• delete routes
+• remove pages
+• modify permissions logic
+• change backend endpoints
+
+All existing routes must continue to work via direct URL.
+
+------------------------------------------------
+Success Criteria
+------------------------------------------------
+
+The sidebar should feel significantly simpler and easier for SME users while still preserving access to all platform functionality.

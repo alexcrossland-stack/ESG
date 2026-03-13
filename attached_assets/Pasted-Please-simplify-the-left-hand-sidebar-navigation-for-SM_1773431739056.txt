@@ -1,0 +1,180 @@
+Please simplify the left-hand sidebar navigation for SME users so the platform feels easier, clearer, and less technical, while preserving all existing routes and functionality.
+
+OBJECTIVE
+
+Refactor the sidebar and navigation structure to reduce cognitive overload for SME users. The navigation should reflect how a non-expert user thinks about the product:
+
+1. What is my overall status?
+2. What do I need to set up?
+3. Where do I enter data?
+4. How do I create a report?
+5. Where do I get help?
+
+Do not remove existing pages or routes. This is a navigation and UX restructuring task, not a feature removal task.
+
+------------------------------------------------
+NEW SIDEBAR STRUCTURE
+------------------------------------------------
+
+Top-level navigation should be simplified to these sections:
+
+Dashboard
+
+ESG Setup
+- Policies
+- Topics
+- Team
+
+Data & Evidence
+- Metrics
+- Data Entry
+- Evidence
+
+Reports
+
+Help
+
+Settings
+
+Super admin users only:
+Admin
+
+------------------------------------------------
+NAVIGATION RULES
+------------------------------------------------
+
+1. Keep top-level items to a maximum of 6 for normal SME users.
+2. Use grouped expandable sections for ESG Setup and Data & Evidence.
+3. Hide Admin completely for non-super-admin users.
+4. Do not expose technical/internal items directly in the main nav unless they are essential to user workflow.
+5. Preserve all existing page routes. Only change how they are presented in the sidebar.
+6. The sidebar should feel like a workflow, not a developer menu.
+
+------------------------------------------------
+MAPPING OF EXISTING PAGES
+------------------------------------------------
+
+Map current pages into this structure:
+
+Dashboard
+- existing dashboard route
+
+ESG Setup
+- Policies page
+- Topics page
+- Team page (if user is company_admin)
+- optionally ESG Profile if that currently exists as a key setup page
+
+Data & Evidence
+- Metrics page
+- Data Entry page
+- Evidence page
+
+Reports
+- Reports page
+- Previous/generated reports can stay within reports page if already present
+
+Help
+- Help page
+- Support page or support modal if already implemented
+- Support assistant remains global and does not need its own nav item unless already required
+
+Settings
+- Company/Profile settings
+- Billing
+- Integrations
+- other account/settings pages
+
+Admin
+- only for role === super_admin
+- keep existing admin routes
+
+------------------------------------------------
+UX REQUIREMENTS
+------------------------------------------------
+
+1. Add clear icons for each top-level section.
+2. Use collapsible groups for:
+   - ESG Setup
+   - Data & Evidence
+3. The default expanded group should follow the current route.
+4. The active page must be visually obvious.
+5. Keep the sidebar clean and uncluttered on desktop.
+6. On mobile, ensure grouped nav works cleanly in the collapsed/sidebar drawer state.
+
+------------------------------------------------
+OPTIONAL IMPROVEMENTS
+------------------------------------------------
+
+If straightforward, also add:
+
+1. “Next step” highlight
+If the platform already knows the user’s next recommended action, visually highlight that item in the sidebar with a subtle badge such as:
+- Next
+- Recommended
+
+2. Section descriptions on hover
+For top-level items only, optional tooltip text:
+- Dashboard: See progress and next actions
+- ESG Setup: Set up your ESG framework
+- Data & Evidence: Enter data and upload proof
+- Reports: Create outputs for customers and stakeholders
+- Help: Get guidance and support
+- Settings: Manage company and account settings
+
+3. Progressive disclosure
+If there are advanced pages that are rarely used by SMEs, move them under Settings or keep them out of the main nav unless needed.
+
+------------------------------------------------
+FILES TO UPDATE
+------------------------------------------------
+
+Likely files:
+
+client/src/components/app-sidebar.tsx
+client/src/App.tsx
+client/src/hooks/usePermissions.ts (if needed)
+client/src/pages/dashboard.tsx
+client/src/pages/help.tsx
+client/src/pages/settings.tsx
+
+Also check any shared navigation config files if they exist.
+
+------------------------------------------------
+DO NOT
+------------------------------------------------
+
+- Do not remove routes
+- Do not delete pages
+- Do not change permissions logic except to hide/show nav items appropriately
+- Do not break existing links
+- Do not expose Admin to non-super-admin users
+
+------------------------------------------------
+SUCCESS CRITERIA
+------------------------------------------------
+
+For a normal SME user, the sidebar should now read approximately as:
+
+Dashboard
+
+ESG Setup
+- Policies
+- Topics
+- Team
+
+Data & Evidence
+- Metrics
+- Data Entry
+- Evidence
+
+Reports
+
+Help
+
+Settings
+
+For super admins, add:
+Admin
+
+The platform should feel simpler, less technical, and easier for a first-time SME user to navigate.
