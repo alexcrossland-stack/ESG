@@ -834,6 +834,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!auth) return res.status(401).json({ error: "Not authenticated" });
     const user = await storage.getUser(auth.userId);
     if (!user) return res.status(401).json({ error: "User not found" });
+    const isImpersonating = !!(req.session as any).isImpersonating;
+    if (!isImpersonating && user.role !== "super_admin" && user.companyId) {
+      try {
+        const status = await storage.getCompanyStatus(user.companyId);
+        if (status === "suspended") {
+          return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
+        }
+      } catch (e) {
+        console.error("[/api/auth/me] Company status check failed:", e);
+        return res.status(503).json({ error: "Service temporarily unavailable" });
+      }
+    }
     const company = user.companyId ? await storage.getCompany(user.companyId) : null;
     res.json({ user: { ...user, password: undefined }, company });
   });
@@ -3272,6 +3284,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const targetUser = await storage.getUser(req.params.id);
       if (!targetUser || targetUser.companyId !== companyId) {
         return res.status(404).json({ error: "User not found" });
+      }
+      if (targetUser.role === "super_admin") {
+        const superAdminCountResult = await db.execute(sql`SELECT COUNT(*)::int AS total FROM users WHERE role = 'super_admin'`);
+        const superAdminCount = ((superAdminCountResult as any).rows ?? [])[0]?.total ?? 0;
+        if (superAdminCount <= 1) {
+          return res.status(400).json({ error: "Cannot demote the last super admin. Promote another user to super_admin first." });
+        }
       }
       const previousRole = targetUser.role;
       const updated = await storage.updateUser(req.params.id, { role });
