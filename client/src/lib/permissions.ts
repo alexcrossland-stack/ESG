@@ -20,7 +20,8 @@ export function usePermissions() {
   return {
     role,
     can: (module: PermissionModule) => hasPermission(role, module),
-    isAdmin: role === "admin",
+    isAdmin: role === "admin" || role === "super_admin",
+    isSuperAdmin: role === "super_admin",
     isContributor: role === "contributor",
     isApprover: role === "approver",
     isViewer: role === "viewer",

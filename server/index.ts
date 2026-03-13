@@ -140,6 +140,36 @@ app.use((req, res, next) => {
   try {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS esg_roadmap jsonb`);
   } catch {}
+  try {
+    await db.execute(sql`ALTER TYPE role ADD VALUE IF NOT EXISTS 'super_admin'`);
+  } catch {}
+  try {
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS status text DEFAULT 'active'`);
+  } catch {}
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS super_admin_actions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        admin_user_id varchar NOT NULL,
+        action text NOT NULL,
+        target_company_id varchar,
+        target_user_id varchar,
+        metadata jsonb,
+        ip_address text,
+        user_agent text,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+  } catch {}
+  try {
+    const result = await db.execute(sql`SELECT id FROM users WHERE role = 'super_admin' LIMIT 1`);
+    const rows = (result as any).rows ?? [];
+    if (rows.length === 0) {
+      console.warn("[Startup] WARN: No super_admin user found in the database — create one via direct SQL or promote an existing user");
+    }
+  } catch (e) {
+    console.warn("[Startup] WARN: Could not check for super_admin user:", e);
+  }
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

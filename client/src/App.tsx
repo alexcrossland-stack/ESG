@@ -40,6 +40,7 @@ import AdminHealthPage from "@/pages/admin-health";
 import AdminAnalyticsPage from "@/pages/admin-analytics";
 import HelpPage from "@/pages/help";
 import AdminSupportPage from "@/pages/admin-support";
+import AdminPage from "@/pages/admin";
 import BillingPage from "@/pages/billing";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
@@ -122,6 +123,31 @@ function usePageTracking() {
   }, [location]);
 }
 
+function ImpersonationBanner() {
+  const { data } = useQuery<{ isImpersonating: boolean; companyId?: string; companyName?: string }>({
+    queryKey: ["/api/admin/impersonation/status"],
+    refetchInterval: 30000,
+  });
+
+  if (!data?.isImpersonating) return null;
+
+  const exit = async () => {
+    await fetch("/api/admin/impersonation/exit", { method: "POST", credentials: "include" });
+    window.location.href = "/admin";
+  };
+
+  return (
+    <div className="bg-amber-500 text-white text-sm px-4 py-2 flex items-center justify-between shrink-0" data-testid="banner-impersonation">
+      <span>
+        <strong>Impersonation Mode</strong> — Viewing as {data.companyName}
+      </span>
+      <Button size="sm" variant="secondary" onClick={exit} data-testid="button-exit-impersonation">
+        Return to Admin
+      </Button>
+    </div>
+  );
+}
+
 function ProtectedApp() {
   const { data, isLoading } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -145,7 +171,7 @@ function ProtectedApp() {
     return <Redirect to="/auth" />;
   }
 
-  if (!data?.company?.onboardingComplete) {
+  if (data?.user?.role !== "super_admin" && !data?.company?.onboardingComplete) {
     return <Onboarding />;
   }
 
@@ -154,6 +180,7 @@ function ProtectedApp() {
       <div className="flex h-screen w-full bg-background">
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">
+          <ImpersonationBanner />
           <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-background shrink-0">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <ThemeToggle />
@@ -181,6 +208,7 @@ function ProtectedApp() {
                 <Route path="/answer-library" component={AnswerLibrary} />
                 <Route path="/benchmarks" component={BenchmarksPage} />
                 <Route path="/esg-profile" component={EsgProfilePage} />
+                <Route path="/admin" component={AdminPage} />
                 <Route path="/admin/health" component={AdminHealthPage} />
                 <Route path="/admin/analytics" component={AdminAnalyticsPage} />
                 <Route path="/admin/support" component={AdminSupportPage} />

@@ -40,6 +40,7 @@ const navItems = [
   { title: "Settings", href: "/settings", icon: Settings, group: "settings" },
   { title: "Billing", href: "/billing", icon: CreditCard, group: "settings" },
   { title: "Help & Support", href: "/help", icon: HelpCircle, group: "settings" },
+  { title: "Admin Console", href: "/admin", icon: Shield, group: "superadmin" },
   { title: "Platform Health", href: "/admin/health", icon: HeartPulse, group: "admin" },
   { title: "Analytics", href: "/admin/analytics", icon: Activity, group: "admin" },
   { title: "Support Requests", href: "/admin/support", icon: MessageSquare, group: "admin" },
@@ -47,7 +48,7 @@ const navItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { can, isAdmin } = usePermissions();
+  const { can, isAdmin, isSuperAdmin } = usePermissions();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -69,6 +70,7 @@ export function AppSidebar() {
   const aiItems = navItems.filter(i => i.group === "ai");
   const settingsItems = navItems.filter(i => i.group === "settings");
   const adminItems = navItems.filter(i => i.group === "admin");
+  const superAdminItems = navItems.filter(i => i.group === "superadmin");
 
   return (
     <Sidebar>
@@ -195,6 +197,32 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {isSuperAdmin && superAdminItems.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Super Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {superAdminItems.map((item) => {
+                  const isActive = location === item.href;
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild data-active={isActive}>
+                        <Link href={item.href} data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
+                          <item.icon className="w-4 h-4" />
+                          <span>{item.title}</span>
+                          {isActive && (
+                            <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary" />
+                          )}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         {isAdmin && adminItems.length > 0 && (
           <SidebarGroup>

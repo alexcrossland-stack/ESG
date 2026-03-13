@@ -106,15 +106,32 @@ function resolveAuth(req: Request): { userId: string; companyId: string } | null
   return null;
 }
 
-function requireAuth(req: Request, res: Response, next: Function) {
+async function requireAuth(req: Request, res: Response, next: Function) {
   const auth = resolveAuth(req);
-  if (auth) {
-    (req as any)._auth = auth;
-    (req.session as any).userId = auth.userId;
-    (req.session as any).companyId = auth.companyId;
-    return next();
+  if (!auth) {
+    return res.status(401).json({ error: "Not authenticated" });
   }
-  return res.status(401).json({ error: "Not authenticated" });
+  (req as any)._auth = auth;
+  (req.session as any).userId = auth.userId;
+  (req.session as any).companyId = auth.companyId;
+
+  const isImpersonating = !!(req.session as any).isImpersonating;
+  if (!isImpersonating) {
+    try {
+      const user = await storage.getUser(auth.userId);
+      if (user && user.role !== "super_admin" && auth.companyId) {
+        const companyStatus = await storage.getCompanyStatus(auth.companyId);
+        if (companyStatus === "suspended") {
+          return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
+        }
+      }
+    } catch (e) {
+      console.error("[requireAuth] Company status check failed:", e);
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+  }
+
+  return next();
 }
 
 function requirePermission(module: PermissionModule) {
@@ -126,6 +143,18 @@ function requirePermission(module: PermissionModule) {
     }
     return next();
   };
+}
+
+async function requireSuperAdmin(req: Request, res: Response, next: Function) {
+  const auth = resolveAuth(req);
+  if (!auth) return res.status(401).json({ error: "Not authenticated" });
+  const user = await storage.getUser(auth.userId);
+  if (!user || user.role !== "super_admin") {
+    return res.status(403).json({ error: "Super admin access required" });
+  }
+  (req as any)._auth = auth;
+  (req as any)._superAdmin = user;
+  return next();
 }
 
 const ENVIRONMENTAL_RAW_KEYS = [
@@ -5533,18 +5562,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  function requireSuperAdmin(req: Request, res: Response, next: Function) {
-    const auth = resolveAuth(req);
-    if (!auth) return res.status(401).json({ error: "Not authenticated" });
-    (async () => {
-      const user = await storage.getUser(auth.userId);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      const company = await storage.getCompany(auth.companyId);
-      if (!(company as any)?.isSuperAdmin) return res.status(403).json({ error: "Super admin access required" });
-      next();
-    })();
-  }
-
   app.get("/api/admin/health", requireAuth, requireSuperAdmin, async (_req, res) => {
     try {
       const schedulerStatus = getSchedulerStatus();
@@ -5888,6 +5905,217 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   registerAgentRoutes(app);
 
   startScheduler();
+
+  // ============================================================
+  // SUPER ADMIN ROUTES
+  // ============================================================
+
+  app.get("/api/admin/stats", requireSuperAdmin, async (req, res) => {
+    try {
+      const r1 = await db.execute(sql`SELECT COUNT(*)::int AS total FROM companies`);
+      const r2 = await db.execute(sql`SELECT COUNT(*)::int AS total FROM users`);
+      const r3 = await db.execute(sql`SELECT COUNT(*)::int AS total FROM companies WHERE plan_tier = 'pro'`);
+      const r4 = await db.execute(sql`SELECT COUNT(*)::int AS total FROM companies WHERE status = 'suspended'`);
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const healthCounts = await storage.getHealthEventCounts(since);
+      const getFirst = (r: any) => ((r as any).rows ?? [])[0];
+      res.json({
+        totalCompanies: getFirst(r1)?.total ?? 0,
+        totalUsers: getFirst(r2)?.total ?? 0,
+        proSubscriptions: getFirst(r3)?.total ?? 0,
+        suspendedCompanies: getFirst(r4)?.total ?? 0,
+        platformErrors24h: healthCounts.bySeverity?.error ?? 0,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/companies", requireSuperAdmin, async (req, res) => {
+    try {
+      const search = String(req.query.search || "");
+      const page = Math.max(1, parseInt(String(req.query.page || "1"), 10));
+      const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || "50"), 10)));
+      const result = await storage.adminListCompanies(search, page, pageSize);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/users", requireSuperAdmin, async (req, res) => {
+    try {
+      const search = String(req.query.search || "");
+      const page = Math.max(1, parseInt(String(req.query.page || "1"), 10));
+      const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || "50"), 10)));
+      const result = await storage.adminListUsers(search, page, pageSize);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/company/:companyId", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const detail = await storage.adminGetCompanyDetail(companyId);
+      if (!detail) return res.status(404).json({ error: "Company not found" });
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "view_company",
+        targetCompanyId: companyId,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json(detail);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/company/suspend", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const schema = z.object({ companyId: z.string().min(1) });
+      const { companyId } = schema.parse(req.body);
+      await storage.adminSuspendCompany(companyId);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "suspend_company",
+        targetCompanyId: companyId,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/company/reactivate", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const schema = z.object({ companyId: z.string().min(1) });
+      const { companyId } = schema.parse(req.body);
+      await storage.adminReactivateCompany(companyId);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "reactivate_company",
+        targetCompanyId: companyId,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/impersonate/:companyId", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const companyUsers = await storage.getUsersByCompany(companyId);
+      const adminUsers = companyUsers.filter((u: any) => u.role === "admin").sort((a: any, b: any) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      if (adminUsers.length === 0) {
+        return res.status(400).json({ error: "No admin user found in this company to impersonate" });
+      }
+      const targetUser = adminUsers[0];
+      if (targetUser.role === "super_admin") {
+        return res.status(400).json({ error: "Cannot impersonate a super admin user" });
+      }
+
+      const session = req.session as any;
+      session.originalSuperAdminUserId = adminUser.id;
+      session.originalSuperAdminCompanyId = adminUser.companyId;
+      session.isImpersonating = true;
+      session.impersonatedCompanyId = companyId;
+      session.userId = targetUser.id;
+      session.companyId = companyId;
+
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "impersonate_start",
+        targetCompanyId: companyId,
+        targetUserId: targetUser.id,
+        metadata: { companyName: company.name, targetUsername: targetUser.username },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+
+      res.json({
+        success: true,
+        impersonatingAs: { userId: targetUser.id, username: targetUser.username, companyId, companyName: company.name },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/impersonation/exit", requireAuth, async (req, res) => {
+    try {
+      const session = req.session as any;
+      if (!session.isImpersonating) {
+        return res.status(400).json({ error: "No active impersonation session" });
+      }
+      const originalAdminUserId = session.originalSuperAdminUserId;
+      const originalAdminCompanyId = session.originalSuperAdminCompanyId;
+      const impersonatedCompanyId = session.impersonatedCompanyId;
+
+      if (!originalAdminUserId) {
+        session.isImpersonating = false;
+        return res.status(400).json({ error: "Impersonation session corrupted — original admin ID missing" });
+      }
+
+      const originalAdmin = await storage.getUser(originalAdminUserId);
+      if (!originalAdmin || originalAdmin.role !== "super_admin") {
+        session.isImpersonating = false;
+        return res.status(403).json({ error: "Cannot restore session: original user is no longer a super admin" });
+      }
+
+      session.userId = originalAdminUserId;
+      session.companyId = originalAdminCompanyId ?? null;
+      session.isImpersonating = false;
+      delete session.originalSuperAdminUserId;
+      delete session.originalSuperAdminCompanyId;
+      delete session.impersonatedCompanyId;
+
+      await storage.createSuperAdminAction({
+        adminUserId: originalAdminUserId,
+        action: "impersonate_exit",
+        targetCompanyId: impersonatedCompanyId ?? null,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/impersonation/status", requireAuth, async (req, res) => {
+    try {
+      const session = req.session as any;
+      if (!session.isImpersonating) {
+        return res.json({ isImpersonating: false });
+      }
+      const company = await storage.getCompany(session.impersonatedCompanyId);
+      res.json({
+        isImpersonating: true,
+        companyId: session.impersonatedCompanyId,
+        companyName: company?.name ?? "Unknown",
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   return httpServer;
 }

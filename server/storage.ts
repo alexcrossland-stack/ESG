@@ -9,7 +9,7 @@ import {
   questionnaires, questionnaireQuestions,
   aiGenerationLogs, evidenceRequests, reportingPeriods,
   backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
-  authTokens,
+  authTokens, superAdminActions,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
@@ -44,6 +44,7 @@ import {
   type AgentEscalation, type InsertAgentEscalation,
   type ChatSession, type InsertChatSession,
   type ChatMessage, type InsertChatMessage,
+  type SuperAdminAction, type InsertSuperAdminAction,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -263,6 +264,15 @@ export interface IStorage {
   listChatSessions(filters?: { userId?: string; companyId?: string }): Promise<ChatSession[]>;
   createChatMessage(data: InsertChatMessage): Promise<ChatMessage>;
   getChatMessages(sessionId: string): Promise<ChatMessage[]>;
+
+  // Super Admin
+  adminListCompanies(search?: string, page?: number, pageSize?: number): Promise<{ companies: any[]; total: number }>;
+  adminListUsers(search?: string, page?: number, pageSize?: number): Promise<{ users: any[]; total: number }>;
+  adminGetCompanyDetail(companyId: string): Promise<any>;
+  adminSuspendCompany(companyId: string): Promise<void>;
+  adminReactivateCompany(companyId: string): Promise<void>;
+  createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">): Promise<SuperAdminAction>;
+  getCompanyStatus(companyId: string): Promise<string | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1423,6 +1433,102 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))
       .orderBy(chatMessages.createdAt);
+  }
+
+  async adminListCompanies(search = "", page = 1, pageSize = 50) {
+    const offset = (page - 1) * pageSize;
+    const companiesResult = await db.execute(sql`
+      SELECT
+        c.id, c.name, c.industry, c.country, c.plan_tier, c.status,
+        c.onboarding_complete, c.created_at,
+        (SELECT COUNT(*)::int FROM users u WHERE u.company_id = c.id) AS user_count,
+        (SELECT COUNT(*)::int FROM esg_policies p WHERE p.company_id = c.id) AS policy_count,
+        (SELECT COUNT(*)::int FROM metrics m WHERE m.company_id = c.id) AS metric_count,
+        (SELECT COUNT(*)::int FROM report_runs r WHERE r.company_id = c.id) AS report_count
+      FROM companies c
+      WHERE (${search} = '' OR c.name ILIKE ${'%' + search + '%'})
+      ORDER BY c.created_at DESC
+      LIMIT ${pageSize} OFFSET ${offset}
+    `);
+    const countResult = await db.execute(sql`
+      SELECT COUNT(*)::int AS total FROM companies c
+      WHERE (${search} = '' OR c.name ILIKE ${'%' + search + '%'})
+    `);
+    const rows = (companiesResult as any).rows ?? [];
+    const countRows = (countResult as any).rows ?? [];
+    return { companies: rows as any[], total: (countRows[0]?.total ?? 0) as number };
+  }
+
+  async adminListUsers(search = "", page = 1, pageSize = 50) {
+    const offset = (page - 1) * pageSize;
+    const usersResult = await db.execute(sql`
+      SELECT
+        u.id, u.username, u.email, u.role, u.created_at,
+        c.id AS company_id, c.name AS company_name, c.status AS company_status
+      FROM users u
+      LEFT JOIN companies c ON c.id = u.company_id
+      WHERE (${search} = '' OR u.email ILIKE ${'%' + search + '%'} OR u.username ILIKE ${'%' + search + '%'})
+      ORDER BY u.created_at DESC
+      LIMIT ${pageSize} OFFSET ${offset}
+    `);
+    const countResult = await db.execute(sql`
+      SELECT COUNT(*)::int AS total FROM users u
+      WHERE (${search} = '' OR u.email ILIKE ${'%' + search + '%'} OR u.username ILIKE ${'%' + search + '%'})
+    `);
+    const rows = (usersResult as any).rows ?? [];
+    const countRows = (countResult as any).rows ?? [];
+    return { users: rows as any[], total: (countRows[0]?.total ?? 0) as number };
+  }
+
+  async adminGetCompanyDetail(companyId: string) {
+    const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
+    if (!company) return null;
+    const companyUsers = await db.select().from(users).where(eq(users.companyId, companyId));
+    const mcResult = await db.execute(sql`SELECT COUNT(*)::int AS count FROM metrics WHERE company_id = ${companyId}`);
+    const pcResult = await db.execute(sql`SELECT COUNT(*)::int AS count FROM esg_policies WHERE company_id = ${companyId}`);
+    const rcResult = await db.execute(sql`SELECT COUNT(*)::int AS count FROM report_runs WHERE company_id = ${companyId}`);
+    const actResult = await db.execute(sql`
+      SELECT * FROM super_admin_actions WHERE target_company_id = ${companyId} ORDER BY created_at DESC LIMIT 10
+    `);
+    const mcRows = (mcResult as any).rows ?? [];
+    const pcRows = (pcResult as any).rows ?? [];
+    const rcRows = (rcResult as any).rows ?? [];
+    const actRows = (actResult as any).rows ?? [];
+    return {
+      ...company,
+      users: companyUsers,
+      counts: {
+        users: companyUsers.length,
+        metrics: mcRows[0]?.count ?? 0,
+        policies: pcRows[0]?.count ?? 0,
+        reports: rcRows[0]?.count ?? 0,
+      },
+      recentAdminActions: actRows,
+    };
+  }
+
+  async adminSuspendCompany(companyId: string) {
+    await db.execute(sql`UPDATE companies SET status = 'suspended' WHERE id = ${companyId}`);
+  }
+
+  async adminReactivateCompany(companyId: string) {
+    await db.execute(sql`UPDATE companies SET status = 'active' WHERE id = ${companyId}`);
+  }
+
+  async createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">) {
+    const result = await db.execute(sql`
+      INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata, ip_address, user_agent)
+      VALUES (${data.adminUserId}, ${data.action}, ${data.targetCompanyId ?? null}, ${data.targetUserId ?? null}, ${data.metadata ? JSON.stringify(data.metadata) : null}, ${data.ipAddress ?? null}, ${data.userAgent ?? null})
+      RETURNING *
+    `);
+    const rows = (result as any).rows ?? [];
+    return rows[0] as SuperAdminAction;
+  }
+
+  async getCompanyStatus(companyId: string) {
+    const result = await db.execute(sql`SELECT status FROM companies WHERE id = ${companyId}`);
+    const rows = (result as any).rows ?? [];
+    return rows[0]?.status ?? null;
   }
 }
 

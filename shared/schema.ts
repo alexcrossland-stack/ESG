@@ -3,7 +3,7 @@ import { pgTable, text, varchar, boolean, integer, timestamp, jsonb, decimal, pg
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer"]);
+export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer", "super_admin"]);
 export const planTierEnum = pgEnum("plan_tier", ["free", "pro"]);
 export const planStatusEnum = pgEnum("plan_status", ["active", "past_due", "cancelled", "over_limit"]);
 export const authTokenTypeEnum = pgEnum("auth_token_type", ["invitation", "password_reset"]);
@@ -73,6 +73,7 @@ export const companies = pgTable("companies", {
   currentPeriodEnd: timestamp("current_period_end"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
+  status: text("status").default("active"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -711,7 +712,22 @@ export type InsertProcurementAnswer = z.infer<typeof insertProcurementAnswerSche
 
 export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
-export type UserRole = "admin" | "contributor" | "approver" | "viewer";
+export const superAdminActions = pgTable("super_admin_actions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  adminUserId: varchar("admin_user_id").notNull(),
+  action: text("action").notNull(),
+  targetCompanyId: varchar("target_company_id"),
+  targetUserId: varchar("target_user_id"),
+  metadata: jsonb("metadata"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type SuperAdminAction = typeof superAdminActions.$inferSelect;
+export type InsertSuperAdminAction = typeof superAdminActions.$inferInsert;
+
+export type UserRole = "admin" | "contributor" | "approver" | "viewer" | "super_admin";
 export type PermissionModule =
   | "metrics_data_entry"
   | "policy_editing"
@@ -723,6 +739,15 @@ export type PermissionModule =
 
 export const ROLE_PERMISSIONS: Record<UserRole, PermissionModule[]> = {
   admin: [
+    "metrics_data_entry",
+    "policy_editing",
+    "report_generation",
+    "questionnaire_access",
+    "settings_admin",
+    "template_admin",
+    "user_management",
+  ],
+  super_admin: [
     "metrics_data_entry",
     "policy_editing",
     "report_generation",
