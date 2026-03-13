@@ -691,6 +691,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
 
+      if (user.role !== "super_admin" && user.companyId) {
+        const status = await storage.getCompanyStatus(user.companyId);
+        if (status === "suspended") {
+          await storage.createAuditLog({
+            companyId: user.companyId,
+            userId: user.id,
+            action: "login_blocked_suspended",
+            entityType: "auth",
+            details: { email: user.email },
+          });
+          return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
+        }
+      }
+
       if (user.companyId) {
         try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
       }
@@ -6033,7 +6047,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const session = req.session as any;
       session.originalSuperAdminUserId = adminUser.id;
-      session.originalSuperAdminCompanyId = adminUser.companyId;
+      session.originalSuperAdminCompanyId = adminUser.companyId ?? null;
+      session.originalSuperAdminRole = adminUser.role;
       session.isImpersonating = true;
       session.impersonatedCompanyId = companyId;
       session.userId = targetUser.id;
@@ -6073,10 +6088,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(400).json({ error: "Impersonation session corrupted — original admin ID missing" });
       }
 
+      const sessionRole = session.originalSuperAdminRole;
       const originalAdmin = await storage.getUser(originalAdminUserId);
       if (!originalAdmin || originalAdmin.role !== "super_admin") {
         session.isImpersonating = false;
         return res.status(403).json({ error: "Cannot restore session: original user is no longer a super admin" });
+      }
+      if (sessionRole && sessionRole !== "super_admin") {
+        session.isImpersonating = false;
+        return res.status(403).json({ error: "Impersonation session role mismatch — access denied" });
       }
 
       session.userId = originalAdminUserId;
@@ -6084,6 +6104,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       session.isImpersonating = false;
       delete session.originalSuperAdminUserId;
       delete session.originalSuperAdminCompanyId;
+      delete session.originalSuperAdminRole;
       delete session.impersonatedCompanyId;
 
       await storage.createSuperAdminAction({

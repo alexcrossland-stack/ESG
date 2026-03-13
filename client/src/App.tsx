@@ -209,6 +209,7 @@ function ProtectedApp() {
                 <Route path="/benchmarks" component={BenchmarksPage} />
                 <Route path="/esg-profile" component={EsgProfilePage} />
                 <Route path="/admin" component={AdminPage} />
+                <Route path="/admin/companies/:companyId" component={AdminPage} />
                 <Route path="/admin/health" component={AdminHealthPage} />
                 <Route path="/admin/analytics" component={AdminAnalyticsPage} />
                 <Route path="/admin/support" component={AdminSupportPage} />
