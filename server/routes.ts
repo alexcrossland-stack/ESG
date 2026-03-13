@@ -5304,8 +5304,21 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
           const raw = completion.choices[0]?.message?.content || "{}";
           const parsed = JSON.parse(raw);
-          if (parsed.months && Array.isArray(parsed.months) && parsed.months.length > 0) {
-            roadmap = parsed;
+
+          const roadmapMonthSchema = z.object({
+            month: z.number().int().min(1).max(12),
+            title: z.string().min(1).max(200),
+            actions: z.array(z.string().min(1).max(500)).min(1).max(10),
+          });
+          const roadmapSchema = z.object({
+            months: z.array(roadmapMonthSchema).min(1).max(12),
+          });
+
+          const validated = roadmapSchema.safeParse(parsed);
+          if (validated.success) {
+            roadmap = validated.data;
+          } else {
+            console.log("AI roadmap failed Zod validation:", validated.error.message);
           }
 
           await storage.createAiGenerationLog({

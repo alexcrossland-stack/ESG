@@ -39,9 +39,8 @@ export function EsgRoadmap() {
   });
 
   const roadmap = data?.roadmap;
-  const currentMonth = new Date().getMonth() + 1;
+  const now = new Date();
   const generatedDate = roadmap?.generatedAt ? new Date(roadmap.generatedAt) : null;
-  const startMonth = generatedDate ? generatedDate.getMonth() + 1 : 1;
 
   if (isLoading) {
     return (
@@ -84,9 +83,14 @@ export function EsgRoadmap() {
   }
 
   function getMonthStatus(monthNum: number): "past" | "current" | "future" {
-    const adjustedMonth = ((startMonth - 1 + monthNum - 1) % 12) + 1;
-    if (adjustedMonth < currentMonth) return "past";
-    if (adjustedMonth === currentMonth) return "current";
+    if (!generatedDate) return "future";
+    const genYear = generatedDate.getFullYear();
+    const genMonth = generatedDate.getMonth();
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth();
+    const monthsElapsed = (nowYear - genYear) * 12 + (nowMonth - genMonth);
+    if (monthNum - 1 < monthsElapsed) return "past";
+    if (monthNum - 1 === monthsElapsed) return "current";
     return "future";
   }
 
