@@ -24,6 +24,8 @@ import { Progress } from "@/components/ui/progress";
 import { usePermissions } from "@/lib/permissions";
 import { ProductTour } from "@/components/product-tour";
 import { SourceBadge } from "@/components/source-badge";
+import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
+import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -624,6 +626,11 @@ export default function Dashboard() {
 
       <ProgrammeStatusCard />
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <EvidenceCoverageCard />
+        <EsgMaturityProgress />
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="md:col-span-2">
           <CardHeader className="pb-2">
@@ -1071,7 +1078,7 @@ function ProgrammeStatusCard() {
         <Progress value={status.overallCompletionPercent} className="h-2 mt-1" />
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-3 gap-3 text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
           <div className="p-2 rounded-md bg-muted/50">
             <p className="text-lg font-bold text-primary">{status.policiesAdoptedCount}</p>
             <p className="text-xs text-muted-foreground">Policies</p>
@@ -1081,8 +1088,12 @@ function ProgrammeStatusCard() {
             <p className="text-xs text-muted-foreground">Metrics with data</p>
           </div>
           <div className="p-2 rounded-md bg-muted/50">
-            <p className="text-lg font-bold text-amber-500">{status.evidenceCount}</p>
-            <p className="text-xs text-muted-foreground">Evidence files</p>
+            <p className="text-lg font-bold text-amber-500">{status.evidenceCoveragePercent}%</p>
+            <p className="text-xs text-muted-foreground">Evidence coverage</p>
+          </div>
+          <div className="p-2 rounded-md bg-muted/50">
+            <p className="text-lg font-bold capitalize" data-testid="text-programme-maturity">{status.maturityStage || "starter"}</p>
+            <p className="text-xs text-muted-foreground">Maturity</p>
           </div>
         </div>
 

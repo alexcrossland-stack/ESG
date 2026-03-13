@@ -4291,6 +4291,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         nextBestActions.push({ label: "Generate your first ESG report", url: "/reports", priority: "low" });
       }
 
+      let maturityStage: "starter" | "developing" | "established" = "starter";
+      const allMetricValues = await storage.getMetricValues(companyId);
+      const metricsWithValuesSet = new Set(allMetricValues.map((v: any) => v.metricId));
+      const totalMetricsWithData = enabledMetrics.filter(m => metricsWithValuesSet.has(m.id)).length;
+
+      if (policiesAdoptedCount >= 5 && totalMetricsWithData >= 10 && evidenceCoveragePercent >= 50) {
+        maturityStage = "established";
+      } else if (policiesAdoptedCount >= 2 && totalMetricsWithData >= 5) {
+        maturityStage = "developing";
+      }
+
       res.json({
         overallCompletionPercent,
         policiesAdoptedCount,
@@ -4300,6 +4311,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         evidenceCount,
         evidenceCoveragePercent,
         maturityLevel,
+        maturityStage,
         priorityTopics,
         nextBestActions: nextBestActions.slice(0, 5),
       });
@@ -5232,6 +5244,97 @@ Answer the user's question based on this context. If you're asked about somethin
       } catch {}
 
       res.json(filteredProfile);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/esg/coverage", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+
+      const generatedPols = await storage.getGeneratedPolicies(companyId);
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const reports = await storage.getReportRuns(companyId);
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+
+      const linkedEntityIds = new Set(
+        evidenceFiles
+          .filter((e: any) => e.linkedModule && e.linkedEntityId)
+          .map((e: any) => e.linkedEntityId)
+      );
+      const policiesWithEvidence = generatedPols.filter((p: any) => linkedEntityIds.has(p.id)).length;
+      const metricsWithEvidence = enabledMetrics.filter(m => linkedEntityIds.has(m.id)).length;
+      const reportsWithEvidence = reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
+
+      const totalPolicies = generatedPols.length;
+      const totalMetrics = enabledMetrics.length;
+      const totalReports = reports.length;
+      const totalItems = totalPolicies + totalMetrics + totalReports;
+      const coveredItems = policiesWithEvidence + metricsWithEvidence + reportsWithEvidence;
+      const overallPercent = totalItems > 0 ? Math.round((coveredItems / totalItems) * 100) : 0;
+
+      res.json({
+        overallPercent,
+        policiesWithEvidence,
+        totalPolicies,
+        metricsWithEvidence,
+        totalMetrics,
+        reportsWithEvidence,
+        totalReports,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/esg/maturity", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+
+      const generatedPols = await storage.getGeneratedPolicies(companyId);
+      const policiesAdopted = generatedPols.filter((p: any) => p.workflowStatus === "approved").length;
+      const policy = await storage.getPolicy(companyId);
+      const publishedPolicy = policy?.status === "published" ? 1 : 0;
+      const totalPoliciesAdopted = policiesAdopted + publishedPolicy;
+
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const metricValues = await storage.getMetricValues(companyId);
+      const metricsWithValues = new Set(metricValues.map((v: any) => v.metricId));
+      const metricsWithData = enabledMetrics.filter(m => metricsWithValues.has(m.id)).length;
+
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const linkedEntityIds = new Set(
+        evidenceFiles
+          .filter((e: any) => e.linkedModule && e.linkedEntityId)
+          .map((e: any) => e.linkedEntityId)
+      );
+      const reports = await storage.getReportRuns(companyId);
+      const totalItems = generatedPols.length + enabledMetrics.length + reports.length;
+      const coveredItems =
+        generatedPols.filter((p: any) => linkedEntityIds.has(p.id)).length +
+        enabledMetrics.filter(m => linkedEntityIds.has(m.id)).length +
+        reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
+      const evidenceCoverage = totalItems > 0 ? Math.round((coveredItems / totalItems) * 100) : 0;
+
+      let stage: "starter" | "developing" | "established" = "starter";
+
+      if (totalPoliciesAdopted >= 5 && metricsWithData >= 10 && evidenceCoverage >= 50) {
+        stage = "established";
+      } else if (totalPoliciesAdopted >= 2 && metricsWithData >= 5) {
+        stage = "developing";
+      }
+
+      res.json({
+        stage,
+        details: {
+          policiesAdopted: totalPoliciesAdopted,
+          metricsWithData,
+          evidenceCoverage,
+        },
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

@@ -19,6 +19,7 @@ import {
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
+import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 
 const REPORT_TEMPLATES = [
   {
@@ -1377,6 +1378,8 @@ export default function Reports() {
               ))}
             </CardContent>
           </Card>
+
+          <EvidenceCoverageCard />
 
           <Card>
             <CardHeader className="pb-3">
