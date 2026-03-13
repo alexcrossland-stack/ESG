@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, copyFile } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -59,9 +59,19 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  console.log("copying connect-pg-simple table.sql into dist...");
+  await copyFile(
+    "node_modules/connect-pg-simple/table.sql",
+    "dist/table.sql"
+  );
 }
 
-buildAll().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+buildAll()
+  .then(() => {
+    console.log("build complete.");
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
