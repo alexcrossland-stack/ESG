@@ -5255,14 +5255,23 @@ Answer the user's question based on this context. If you're asked about somethin
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const maturityLevel = req.body.maturityLevel || (company as any).esgMaturity || "just_starting";
-      const priorityTopics = req.body.priorityTopics || (company as any).selectedModules || [];
-      const actionPlan = req.body.esgActionPlan || (company as any).esgActionPlan || {};
+      const requestSchema = z.object({
+        maturityLevel: z.string().max(50).optional(),
+        priorityTopics: z.array(z.string().max(100)).max(20).optional(),
+        esgActionPlan: z.record(z.any()).optional(),
+      }).optional();
+      const bodyParsed = requestSchema.safeParse(req.body);
+      const body = bodyParsed.success ? bodyParsed.data || {} : {};
+
+      const maturityLevel = body.maturityLevel || (company as any).esgMaturity || "just_starting";
+      const priorityTopics = body.priorityTopics || (company as any).selectedModules || [];
+      const actionPlan = body.esgActionPlan || (company as any).esgActionPlan || {};
 
       const topicLabels = Array.isArray(priorityTopics) ? priorityTopics.join(", ") : String(priorityTopics);
       const actionItems = Array.isArray(actionPlan?.items) ? actionPlan.items.map((i: any) => i.label || i.title || i).join("; ") : "";
 
       let roadmap: any = null;
+      let generationSource: "ai" | "fallback" = "fallback";
 
       try {
         if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
@@ -5317,6 +5326,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           const validated = roadmapSchema.safeParse(parsed);
           if (validated.success) {
             roadmap = validated.data;
+            generationSource = "ai";
           } else {
             console.log("AI roadmap failed Zod validation:", validated.error.message);
           }
@@ -5350,7 +5360,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         userId,
         action: "ESG roadmap generated",
         entityType: "esg_roadmap",
-        details: { maturityLevel, months: roadmap.months?.length || 0, aiGenerated: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY },
+        details: { maturityLevel, months: roadmap.months?.length || 0, generationSource },
       });
 
       res.json({ roadmap });
