@@ -6090,6 +6090,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  // NOTE: intentionally does NOT use requireAuth — during impersonation of a suspended
+  // company, requireAuth would block this endpoint (suspended company check). Instead,
+  // auth is validated directly via session.originalSuperAdminUserId + DB role check.
   app.post("/api/admin/impersonation/exit", async (req, res) => {
     try {
       const session = req.session as any;

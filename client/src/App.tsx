@@ -9,7 +9,7 @@ import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun, TriangleAlert } from "lucide-react";
 import { SupportAssistant } from "@/components/support-assistant";
-import { useEffect, useRef, Component } from "react";
+import { useEffect, useRef, Component, type ComponentType } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import NotFound from "@/pages/not-found";
 import Auth from "@/pages/auth";
@@ -123,6 +123,16 @@ function usePageTracking() {
   }, [location]);
 }
 
+function SuperAdminRoute({ component: Component }: { component: ComponentType<any> }) {
+  const { data, isLoading } = useQuery<{ user: any; company: any }>({
+    queryKey: ["/api/auth/me"],
+    retry: false,
+  });
+  if (isLoading) return null;
+  if (!data?.user || data.user.role !== "super_admin") return <Redirect to="/" />;
+  return <Component />;
+}
+
 function ImpersonationBanner() {
   const { data } = useQuery<{ isImpersonating: boolean; companyId?: string; companyName?: string }>({
     queryKey: ["/api/admin/impersonation/status"],
@@ -139,7 +149,7 @@ function ImpersonationBanner() {
   return (
     <div className="bg-amber-500 text-white text-sm px-4 py-2 flex items-center justify-between shrink-0" data-testid="banner-impersonation">
       <span>
-        <strong>Impersonation Mode</strong> — Viewing as {data.companyName}
+        Viewing as <strong>{data.companyName}</strong> (Impersonation Mode)
       </span>
       <Button size="sm" variant="secondary" onClick={exit} data-testid="button-exit-impersonation">
         Return to Admin
@@ -208,11 +218,11 @@ function ProtectedApp() {
                 <Route path="/answer-library" component={AnswerLibrary} />
                 <Route path="/benchmarks" component={BenchmarksPage} />
                 <Route path="/esg-profile" component={EsgProfilePage} />
-                <Route path="/admin" component={AdminPage} />
-                <Route path="/admin/companies/:companyId" component={AdminPage} />
-                <Route path="/admin/health" component={AdminHealthPage} />
-                <Route path="/admin/analytics" component={AdminAnalyticsPage} />
-                <Route path="/admin/support" component={AdminSupportPage} />
+                <Route path="/admin" component={() => <SuperAdminRoute component={AdminPage} />} />
+                <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminPage} />} />
+                <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
+                <Route path="/admin/analytics" component={() => <SuperAdminRoute component={AdminAnalyticsPage} />} />
+                <Route path="/admin/support" component={() => <SuperAdminRoute component={AdminSupportPage} />} />
                 <Route path="/billing" component={BillingPage} />
                 <Route path="/onboarding" component={Onboarding} />
                 <Route path="/recommendations" component={Recommendations} />
