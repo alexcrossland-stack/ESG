@@ -1,0 +1,192 @@
+Review and Improvements to Current Platform Plans
+
+After reviewing the current development plans (#10–#26), the overall architecture and feature scope are strong and appropriate for a production SaaS platform. However, several improvements should be implemented before proceeding to beta launch. These improvements fall into three areas: task sequencing, feature adjustments, and additional product features.
+
+1. Recommended Implementation Order
+
+The current plan mixes infrastructure, product, and monetisation tasks. The following order is recommended to reduce risk and ensure the platform is stable before onboarding real users.
+
+Phase A — Platform Stability and Security  
+Implement foundational platform safety first.
+
+Tasks to complete in this order:
+• #10 Environment & Deployment Configuration  
+• #12 Security Hardening Pass  
+• #11 Automated Database Backup System  
+
+These tasks ensure proper configuration, data protection, and secure operation.
+
+Phase B — Monitoring and Operational Visibility  
+
+Once the platform is secure, add monitoring and operational insight.
+
+Tasks:
+• #15 Platform Health Monitoring Expansion  
+• #23 Monitoring, Analytics & Ops Config  
+
+This ensures errors, slow routes, and failures are visible and measurable.
+
+Phase C — User Experience Improvements  
+
+Next improve usability for real SME customers.
+
+Tasks:
+• #16 Beta Launch Readiness  
+• #25 Team Invites & Dedicated Team Page  
+
+Most SMEs will use the platform with multiple users, so invite functionality is critical.
+
+Phase D — Monetisation and Commercial Controls  
+
+Only after product stability and usability are confirmed should billing limits be enforced.
+
+Tasks:
+• #14 Stripe Subscription Billing  
+• #26 Billing Feature Gating  
+
+Billing must always be implemented before feature gating.
+
+2. Adjustments to Free Plan Limits
+
+The current plan defines the following free limits:
+• Metrics: 5  
+• Policies: 2  
+• Reports: 1  
+
+These limits are too restrictive for SMEs to experience meaningful value before upgrading.
+
+Recommended Free Plan Limits:
+• Users: 3  
+• Policies: 5  
+• Metrics: 10  
+• Reports per month: 2  
+• AI features: limited or disabled  
+
+This allows SMEs to run the platform for several months before needing to upgrade.
+
+3. Improvements to Team Invitation System (#25)
+
+Enhance the team invite feature with two additional capabilities:
+
+Invite Status Tracking  
+Pending invites should display one of the following statuses:
+• Invited  
+• Accepted  
+• Expired  
+• Revoked  
+
+Resend Invitation  
+Admins should be able to resend an invite if the original expires.
+
+This avoids confusion for administrators managing teams.
+
+4. Monitoring Improvements (#23)
+
+The current PostHog event tracking should be expanded.
+
+Add additional events:
+• policy_adopted  
+• metric_enabled  
+• evidence_linked  
+• report_downloaded  
+• action_plan_completed  
+
+These events will help measure product activation and user engagement.
+
+5. Backup System Improvement (#11)
+
+Add an automated restore verification process.
+
+Introduce a weekly job:
+
+weekly_restore_test
+
+This job should:
+• Load a backup into a temporary database  
+• Verify schema and row counts  
+• Log the result as a health event  
+
+Many platforms discover backup failures only when they attempt restoration.
+
+6. Security Improvement (#12)
+
+Add additional file upload protection.
+
+Evidence and CSV upload routes should also check file signatures and block potentially dangerous files. Where possible:
+
+• Verify file headers for known formats (PDF, CSV, XLSX)  
+• Reject executable files  
+• Optionally integrate a simple antivirus scan (ClamAV or similar)
+
+This prevents malicious file uploads.
+
+7. New Feature — ESG Roadmap Generator
+
+Add a new feature to generate a 12-month ESG implementation roadmap for SMEs.
+
+Endpoint:
+POST /api/esg/roadmap
+
+Inputs:
+• maturityLevel  
+• priorityTopics  
+• esgActionPlan  
+
+Output:
+A 12-month roadmap structured as monthly milestones.
+
+Example output:
+
+Month 1  
+Adopt Environmental Policy
+
+Month 2  
+Begin electricity and waste tracking
+
+Month 3  
+Upload supplier code of conduct evidence
+
+Month 6  
+Generate first ESG report
+
+This roadmap should appear in the ESG profile page so companies have a clear implementation path.
+
+8. New Feature — Evidence Coverage Score
+
+Add a measurable evidence coverage indicator.
+
+Example:
+
+Evidence Coverage: 62%
+
+Policies with evidence: 3 / 5  
+Metrics with evidence: 4 / 10  
+Reports supported by evidence: 1 / 3  
+
+Display this score in:
+• Dashboard  
+• Programme Status card  
+• Reports page  
+
+Evidence credibility is extremely important in ESG reporting.
+
+9. Dashboard Enhancement — ESG Maturity Progress
+
+Add a maturity progress indicator.
+
+Example:
+
+Starter → Developing → Established
+
+This visual progress indicator helps companies understand how their ESG programme is evolving.
+
+10. Overall Recommendation
+
+The platform already has strong foundations including:
+• guided onboarding  
+• policy templates  
+• ESG metrics tracking  
+• programme status dashboard  
+• AI support assistant  
+
+With the sequencing fixes and additional features described above, the platform will be significantly stronger and ready for a real SME beta launch.

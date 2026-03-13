@@ -1,0 +1,308 @@
+# Phase 10 — Production Improvements for ESG Platform
+
+The ESG platform is now deployed and working on the production server.  
+Implement the following improvements to increase reliability, usability, collaboration, and commercial readiness.
+
+Follow existing project architecture (React + Express + PostgreSQL).  
+Maintain TypeScript types and do not break existing APIs.
+
+--------------------------------
+1. Error Monitoring (Sentry)
+--------------------------------
+
+Goal: Capture backend and frontend errors automatically.
+
+Install dependencies:
+
+npm install @sentry/node @sentry/tracing
+npm install @sentry/react
+
+Backend setup:
+
+Update server/index.ts
+
+Initialize Sentry before Express routes:
+
+import * as Sentry from "@sentry/node";
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  tracesSampleRate: 0.2
+});
+
+Add middleware:
+
+app.use(Sentry.Handlers.requestHandler());
+app.use(Sentry.Handlers.errorHandler());
+
+Ensure all uncaught exceptions are logged.
+
+Frontend setup:
+
+Update client/src/main.tsx
+
+Initialize Sentry React to capture:
+
+- React render errors
+- API failures
+- unhandled promise rejections
+
+Add environment variable:
+
+SENTRY_DSN
+
+--------------------------------
+2. Product Analytics (PostHog)
+--------------------------------
+
+Goal: Track user behaviour and activation.
+
+Install:
+
+npm install posthog-js
+
+Initialize PostHog in:
+
+client/src/main.tsx
+
+Use environment variable:
+
+POSTHOG_KEY
+
+Track key events:
+
+- onboarding_completed
+- policy_created
+- metric_value_entered
+- evidence_uploaded
+- report_generated
+- assistant_question_asked
+- dashboard_viewed
+
+Example event:
+
+posthog.capture("policy_created")
+
+--------------------------------
+3. ESG Setup Progress Tracker
+--------------------------------
+
+Goal: Help SMEs understand how far they are through ESG setup.
+
+Create component:
+
+client/src/components/esg-progress.tsx
+
+Checklist items:
+
+- Company profile completed
+- ESG priorities selected
+- First policy created
+- First metric data entered
+- Evidence uploaded
+- First report generated
+
+Create backend endpoint:
+
+GET /api/programme/progress
+
+Return:
+
+{
+ profileComplete: boolean,
+ prioritiesSelected: boolean,
+ policiesCreated: number,
+ metricsWithData: number,
+ evidenceUploaded: number,
+ reportsGenerated: number
+}
+
+Display progress bar in dashboard.
+
+File:
+
+client/src/pages/dashboard.tsx
+
+Place above the Programme Status card.
+
+--------------------------------
+4. Multi-User Company Accounts
+--------------------------------
+
+Goal: Allow multiple users per company workspace.
+
+Create database table:
+
+company_users
+
+Fields:
+
+id
+company_id
+user_id
+role
+created_at
+
+Roles:
+
+admin
+editor
+viewer
+
+Update auth logic so users belong to companies through company_users.
+
+Create endpoint:
+
+POST /api/company/invite
+
+Flow:
+
+Admin enters email → invite link generated → user joins company workspace.
+
+Create new page:
+
+client/src/pages/team.tsx
+
+Admins can:
+
+- invite users
+- change roles
+- remove users
+
+--------------------------------
+5. Billing Feature Gating
+--------------------------------
+
+Use existing Stripe integration.
+
+Create helper file:
+
+server/billing/feature-gates.ts
+
+Define plans.
+
+Free Plan Limits:
+
+- 5 metrics
+- 2 policies
+- 1 report
+
+Pro Plan:
+
+- unlimited metrics
+- unlimited policies
+- supplier module
+- advanced reporting
+
+Before creating resources check limits.
+
+Example:
+
+POST /api/policies
+
+If limit exceeded return:
+
+403 plan_limit_reached
+
+Frontend should display upgrade CTA linking to billing page.
+
+--------------------------------
+6. Automated Database Backups
+--------------------------------
+
+Create backup script:
+
+script/backup-db.sh
+
+Command:
+
+pg_dump $DATABASE_URL > /var/backups/esg-$(date +%F).sql
+
+Keep last 14 backups.
+
+Add cron job:
+
+0 2 * * * /root/ESG/script/backup-db.sh
+
+Log backup success.
+
+--------------------------------
+7. ESG Score System
+--------------------------------
+
+Create endpoint:
+
+GET /api/esg/score
+
+Calculate score based on:
+
+Environment → metrics completion
+Social → policies + evidence
+Governance → policies + reporting
+
+Score range:
+
+0–100
+
+Return:
+
+{
+ overallScore,
+ environmentScore,
+ socialScore,
+ governanceScore
+}
+
+Create component:
+
+client/src/components/esg-score-card.tsx
+
+Display score using coloured progress rings.
+
+Add to dashboard above Programme Status.
+
+--------------------------------
+8. Configuration
+--------------------------------
+
+Add environment variables to .env.example:
+
+SENTRY_DSN=
+POSTHOG_KEY=
+BACKUP_PATH=/var/backups
+
+--------------------------------
+9. Documentation
+--------------------------------
+
+Update:
+
+replit.md
+
+Add section:
+
+Phase 10 — Production Improvements
+
+Document:
+
+- monitoring
+- analytics
+- team collaboration
+- ESG scoring
+- automated backups
+
+--------------------------------
+Expected Result
+--------------------------------
+
+After implementation the platform will include:
+
+- production-grade error monitoring
+- product analytics
+- ESG setup progress guidance
+- multi-user company workspaces
+- subscription feature gating
+- automated database backups
+- ESG scoring dashboard
+
+These improvements prepare the platform for real SME customers and commercial launch.
