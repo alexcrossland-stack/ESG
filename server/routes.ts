@@ -5237,6 +5237,115 @@ Answer the user's question based on this context. If you're asked about somethin
     }
   });
 
+  app.get("/api/esg/roadmap", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json({ roadmap: (company as any).esgRoadmap || null });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/esg/roadmap", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const maturityLevel = req.body.maturityLevel || (company as any).esgMaturity || "just_starting";
+      const priorityTopics = req.body.priorityTopics || (company as any).selectedModules || [];
+      const actionPlan = req.body.esgActionPlan || (company as any).esgActionPlan || {};
+
+      const topicLabels = Array.isArray(priorityTopics) ? priorityTopics.join(", ") : String(priorityTopics);
+      const actionItems = Array.isArray(actionPlan?.items) ? actionPlan.items.map((i: any) => i.label || i.title || i).join("; ") : "";
+
+      let roadmap: any = null;
+
+      try {
+        if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
+          const aiOpenai = new OpenAI({
+            apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+            baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+          });
+
+          const prompt = `You are an ESG implementation advisor for SME businesses. Generate a 12-month ESG implementation roadmap.
+
+Company context:
+- ESG maturity level: ${maturityLevel}
+- Priority ESG topics: ${topicLabels || "general ESG"}
+- Industry: ${(company as any).industry || "unknown"}
+- Employee count: ${(company as any).employeeCount || "unknown"}
+- Current action plan items: ${actionItems || "none specified"}
+
+Generate a month-by-month roadmap with realistic, actionable steps for an SME. Each month should have a milestone title and 2-4 concrete actions.
+
+Return ONLY valid JSON in this exact format:
+{
+  "months": [
+    { "month": 1, "title": "Foundation & Quick Wins", "actions": ["action 1", "action 2", "action 3"] },
+    { "month": 2, "title": "...", "actions": ["...", "..."] }
+  ]
+}
+
+Include all 12 months. Make the progression realistic: start with quick wins and policies, move to data collection, then reporting and continuous improvement.`;
+
+          const completion = await aiOpenai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are an ESG implementation expert for SMEs. Always respond with valid JSON only." },
+              { role: "user", content: prompt },
+            ],
+            max_completion_tokens: 3000,
+            response_format: { type: "json_object" },
+          });
+
+          const raw = completion.choices[0]?.message?.content || "{}";
+          const parsed = JSON.parse(raw);
+          if (parsed.months && Array.isArray(parsed.months) && parsed.months.length > 0) {
+            roadmap = parsed;
+          }
+
+          await storage.createAiGenerationLog({
+            companyId,
+            featureType: "esg_roadmap",
+            modelName: "gpt-4o-mini",
+            promptVersion: "v1",
+            generatedBy: userId,
+            sourceDataSummary: { maturityLevel, priorityTopics, actionItems: actionItems.slice(0, 200) },
+            promptText: "<roadmap generation prompt>",
+            outputSummary: `${parsed.months?.length || 0}-month roadmap generated`,
+          });
+        }
+      } catch (aiErr: any) {
+        console.log("AI roadmap generation failed, using fallback:", aiErr.message);
+      }
+
+      if (!roadmap) {
+        roadmap = generateFallbackRoadmap(maturityLevel, priorityTopics);
+      }
+
+      roadmap.generatedAt = new Date().toISOString();
+      roadmap.maturityLevel = maturityLevel;
+
+      await db.execute(sql`UPDATE companies SET esg_roadmap = ${JSON.stringify(roadmap)}::jsonb WHERE id = ${companyId}`);
+
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "ESG roadmap generated",
+        entityType: "esg_roadmap",
+        details: { maturityLevel, months: roadmap.months?.length || 0, aiGenerated: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY },
+      });
+
+      res.json({ roadmap });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/activity/track", async (req, res) => {
     try {
       const auth = resolveAuth(req);
@@ -6303,6 +6412,51 @@ TONE: ${tone}
   prompt += `\nIMPORTANT: In the "versionControl" section, include a version control and approval table with fields for Version Number, Date, Author, Approver, and Next Review Date. Use the policy owner and approver names provided.`;
 
   return prompt;
+}
+
+function generateFallbackRoadmap(maturityLevel: string, priorityTopics: any[]): any {
+  const topics = Array.isArray(priorityTopics) ? priorityTopics : [];
+  const hasEnv = topics.some((t: any) => typeof t === "string" ? t.toLowerCase().includes("environ") : false);
+  const hasSocial = topics.some((t: any) => typeof t === "string" ? t.toLowerCase().includes("social") : false);
+  const hasGov = topics.some((t: any) => typeof t === "string" ? t.toLowerCase().includes("govern") : false);
+
+  const starterRoadmap = [
+    { month: 1, title: "Foundation & Quick Wins", actions: ["Assign ESG responsibility to a senior team member", "Review current policies and identify gaps", "Set up ESG data collection spreadsheet or platform"] },
+    { month: 2, title: "Environmental Policy", actions: ["Draft and adopt an Environmental Policy", "Begin tracking electricity and gas consumption monthly", hasEnv ? "Identify quick-win energy savings (LED lighting, thermostat adjustments)" : "Review waste management practices"] },
+    { month: 3, title: "Social Foundations", actions: ["Create an Equal Opportunities / Diversity Policy", "Set up employee training hours tracking", hasSocial ? "Plan an employee engagement survey" : "Document health and safety procedures"] },
+    { month: 4, title: "Governance Basics", actions: ["Adopt an Anti-Bribery and Ethics Policy", "Establish a Whistleblowing Policy", hasGov ? "Schedule quarterly board ESG reviews" : "Review supplier code of conduct requirements"] },
+    { month: 5, title: "Data Collection Ramp-Up", actions: ["Ensure 3 months of energy data is collected", "Begin tracking waste volumes and recycling rates", "Collect employee headcount and diversity data"] },
+    { month: 6, title: "First ESG Report", actions: ["Generate your first quarterly ESG summary report", "Review initial metrics and identify trends", "Share results with senior management"] },
+    { month: 7, title: "Evidence & Documentation", actions: ["Upload evidence for key policies (utility bills, certificates)", "Link evidence to relevant metrics and policies", "Create an evidence review schedule"] },
+    { month: 8, title: "Carbon Footprint Baseline", actions: ["Calculate Scope 1 emissions (gas, fuel, vehicles)", "Calculate Scope 2 emissions (electricity)", "Document methodology and assumptions"] },
+    { month: 9, title: "Target Setting", actions: ["Set reduction targets for top 3 environmental metrics", "Establish social KPI targets (training hours, diversity)", "Create action plans for each target"] },
+    { month: 10, title: "Stakeholder Engagement", actions: ["Share ESG profile with key customers or partners", "Engage suppliers on sustainability expectations", "Communicate ESG progress to employees"] },
+    { month: 11, title: "Compliance & Benchmarking", actions: ["Compare performance against industry benchmarks", "Review compliance with relevant frameworks (GRI, SECR)", "Identify areas for improvement"] },
+    { month: 12, title: "Annual Review & Year 2 Planning", actions: ["Generate comprehensive annual ESG report", "Review all policies and update as needed", "Set Year 2 improvement targets based on data trends"] },
+  ];
+
+  const developingRoadmap = [
+    { month: 1, title: "Data Quality Audit", actions: ["Audit existing ESG data for completeness and accuracy", "Identify gaps in data collection processes", "Standardise data entry procedures"] },
+    { month: 2, title: "Policy Enhancements", actions: ["Review and update all existing ESG policies", "Add Scope 3 considerations to environmental policy", "Ensure policies reference current regulations"] },
+    { month: 3, title: "Supply Chain Integration", actions: ["Develop a Supplier Code of Conduct", "Survey top 20 suppliers on ESG practices", "Integrate supplier ESG into procurement decisions"] },
+    { month: 4, title: "Carbon Reduction Plan", actions: ["Develop a formal Carbon Reduction Plan", "Identify energy efficiency investment opportunities", "Set science-aligned reduction targets"] },
+    { month: 5, title: "Social Impact Deepening", actions: ["Launch formal employee engagement programme", "Implement living wage accreditation if applicable", "Establish community investment strategy"] },
+    { month: 6, title: "Mid-Year Comprehensive Report", actions: ["Generate detailed mid-year ESG report with trends", "Present to board with recommendations", "Benchmark against peers"] },
+    { month: 7, title: "Advanced Evidence Management", actions: ["Implement evidence review and approval workflow", "Set up automated evidence expiry alerts", "Ensure audit trail for all key data"] },
+    { month: 8, title: "Scope 3 Assessment", actions: ["Map Scope 3 emission categories relevant to your business", "Collect business travel and commuting data", "Estimate supply chain emissions where possible"] },
+    { month: 9, title: "Framework Alignment", actions: ["Map your reporting to GRI Standards", "Assess TCFD recommendation applicability", "Prepare for any mandatory reporting requirements"] },
+    { month: 10, title: "Governance Strengthening", actions: ["Establish ESG committee or steering group", "Review cybersecurity and data privacy controls", "Schedule regular governance reviews"] },
+    { month: 11, title: "External Engagement", actions: ["Share public ESG profile with stakeholders", "Respond to customer ESG questionnaires confidently", "Explore industry ESG certifications"] },
+    { month: 12, title: "Annual Review & Strategic Planning", actions: ["Complete annual ESG performance report", "Set multi-year ESG strategy (3-year plan)", "Plan budget for Year 2 ESG initiatives"] },
+  ];
+
+  if (maturityLevel === "formal_programme" || maturityLevel === "established") {
+    return { months: developingRoadmap };
+  }
+  if (maturityLevel === "some_policies" || maturityLevel === "developing") {
+    return { months: developingRoadmap };
+  }
+  return { months: starterRoadmap };
 }
 
 async function generateAIAnswer(openai: OpenAI, question: string, context: string): Promise<{ answer: string; suggestedAnswer?: string; confidence: string; source: string; rationale?: string; sourceDataUsed?: string[] }> {

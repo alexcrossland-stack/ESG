@@ -16,6 +16,7 @@ import {
   Leaf, Shield, Users, Factory, FileText, Share2, Copy,
   RefreshCw, ExternalLink, Download, CheckCircle, Clock,
 } from "lucide-react";
+import { EsgRoadmap } from "@/components/esg-roadmap";
 
 const SECTION_OPTIONS = [
   { key: "esg_scores", label: "ESG Scores" },
@@ -190,6 +191,8 @@ export default function EsgProfilePage() {
           </Card>
         )}
       </div>
+
+      <EsgRoadmap />
 
       <Card>
         <CardHeader>
