@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
-  ClipboardList, TrendingUp, Upload, Bot,
+  ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -86,8 +86,11 @@ export default function AdminCompanyPage() {
 
   const { data: diag, isLoading, error } = useQuery<any>({
     queryKey: ["/api/admin/company", companyId, "diagnostics"],
-    queryFn: () =>
-      fetch(`/api/admin/company/${companyId}/diagnostics`, { credentials: "include" }).then(r => r.json()),
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/company/${companyId}/diagnostics`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    },
     enabled: !!companyId,
   });
 
@@ -151,13 +154,9 @@ export default function AdminCompanyPage() {
         <span>Created: <strong>{diag.createdAt ? format(new Date(diag.createdAt), "d MMM yyyy") : "—"}</strong></span>
         <span>·</span>
         <span>Onboarding: <strong className={diag.onboardingComplete ? "text-emerald-600" : "text-amber-600"}>{diag.onboardingComplete ? "Complete" : "Incomplete"}</strong></span>
-        <span>·</span>
-        <span>Last login: <strong>{diag.lastLogin ? formatDistanceToNow(new Date(diag.lastLogin), { addSuffix: true }) : "Never"}</strong></span>
-        <span>·</span>
-        <span>Last metric: <strong>{diag.lastMetricEntry ? formatDistanceToNow(new Date(diag.lastMetricEntry), { addSuffix: true }) : "None"}</strong></span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <DiagStatCard label="Users" value={diag.counts.users} icon={Users} />
         <DiagStatCard label="Policies" value={diag.counts.policies} icon={ClipboardList} />
         <DiagStatCard label="Metrics" value={diag.counts.metrics} icon={BarChart2} />
@@ -169,6 +168,18 @@ export default function AdminCompanyPage() {
           icon={BotMessageSquare}
           sub="assistant interactions"
           color="text-violet-500"
+        />
+        <DiagStatCard
+          label="Last Login"
+          value={diag.lastLogin ? formatDistanceToNow(new Date(diag.lastLogin), { addSuffix: true }) : "Never"}
+          icon={LogIn}
+          sub="most recent user login"
+        />
+        <DiagStatCard
+          label="Last Metric Entry"
+          value={diag.lastMetricEntry ? formatDistanceToNow(new Date(diag.lastMetricEntry), { addSuffix: true }) : "None"}
+          icon={LineChart}
+          sub="most recent metric value"
         />
       </div>
 
