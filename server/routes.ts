@@ -6068,12 +6068,23 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const churned30d = ((churnedR as any).rows ?? [])[0]?.count ?? 0;
       const conversionRate = totalCompanies > 0 ? Math.round((proCount / totalCompanies) * 1000) / 10 : 0;
       const estimatedMrr = proCount * 199;
-      const monthlyGrowth = ((monthlyR as any).rows ?? []).map((r: any) => ({
-        month: r.month,
-        free: r.free_count,
-        pro: r.pro_count,
-        total: r.total_count,
-      }));
+      const rawMonthly = ((monthlyR as any).rows ?? []);
+      const monthBuckets: { month: string; free: number; pro: number; total: number }[] = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const label = d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+        const match = rawMonthly.find((r: any) => {
+          const rd = new Date(r.month_date);
+          return rd.getFullYear() === d.getFullYear() && rd.getMonth() === d.getMonth();
+        });
+        monthBuckets.push({
+          month: label,
+          free: match?.free_count ?? 0,
+          pro: match?.pro_count ?? 0,
+          total: match?.total_count ?? 0,
+        });
+      }
+      const monthlyGrowth = monthBuckets;
 
       res.json({ totalCompanies, proCount, freeCount, estimatedMrr, newSubscriptions30d, churned30d, conversionRate, monthlyGrowth });
     } catch (e: any) {
