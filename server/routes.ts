@@ -115,20 +115,17 @@ async function requireAuth(req: Request, res: Response, next: Function) {
   (req.session as any).userId = auth.userId;
   (req.session as any).companyId = auth.companyId;
 
-  const isImpersonating = !!(req.session as any).isImpersonating;
-  if (!isImpersonating) {
-    try {
-      const user = await storage.getUser(auth.userId);
-      if (user && user.role !== "super_admin" && auth.companyId) {
-        const companyStatus = await storage.getCompanyStatus(auth.companyId);
-        if (companyStatus === "suspended") {
-          return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
-        }
+  try {
+    const user = await storage.getUser(auth.userId);
+    if (user && user.role !== "super_admin" && auth.companyId) {
+      const companyStatus = await storage.getCompanyStatus(auth.companyId);
+      if (companyStatus === "suspended") {
+        return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
       }
-    } catch (e) {
-      console.error("[requireAuth] Company status check failed:", e);
-      return res.status(503).json({ error: "Service temporarily unavailable" });
     }
+  } catch (e) {
+    console.error("[requireAuth] Company status check failed:", e);
+    return res.status(503).json({ error: "Service temporarily unavailable" });
   }
 
   return next();
@@ -834,8 +831,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!auth) return res.status(401).json({ error: "Not authenticated" });
     const user = await storage.getUser(auth.userId);
     if (!user) return res.status(401).json({ error: "User not found" });
-    const isImpersonating = !!(req.session as any).isImpersonating;
-    if (!isImpersonating && user.role !== "super_admin" && user.companyId) {
+    const sessionData = req.session as any;
+    const isActiveImpersonation = !!(sessionData.isImpersonating && sessionData.originalSuperAdminUserId);
+    if (!isActiveImpersonation && user.role !== "super_admin" && user.companyId) {
       try {
         const status = await storage.getCompanyStatus(user.companyId);
         if (status === "suspended") {
@@ -6092,7 +6090,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/admin/impersonation/exit", requireAuth, async (req, res) => {
+  app.post("/api/admin/impersonation/exit", async (req, res) => {
     try {
       const session = req.session as any;
       if (!session.isImpersonating) {
@@ -6140,10 +6138,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/impersonation/status", requireAuth, async (req, res) => {
+  app.get("/api/admin/impersonation/status", async (req, res) => {
     try {
       const session = req.session as any;
-      if (!session.isImpersonating) {
+      if (!session.isImpersonating || !session.originalSuperAdminUserId) {
+        return res.json({ isImpersonating: false });
+      }
+      const originalAdmin = await storage.getUser(session.originalSuperAdminUserId);
+      if (!originalAdmin || originalAdmin.role !== "super_admin") {
+        session.isImpersonating = false;
         return res.json({ isImpersonating: false });
       }
       const company = await storage.getCompany(session.impersonatedCompanyId);
