@@ -5311,7 +5311,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             actions: z.array(z.string().min(1).max(500)).min(1).max(10),
           });
           const roadmapSchema = z.object({
-            months: z.array(roadmapMonthSchema).min(1).max(12),
+            months: z.array(roadmapMonthSchema).length(12),
           });
 
           const validated = roadmapSchema.safeParse(parsed);

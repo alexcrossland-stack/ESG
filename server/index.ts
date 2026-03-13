@@ -4,7 +4,8 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { ensureIndexes } from "./ensure-indexes";
-import { storage } from "./storage";
+import { storage, db } from "./storage";
+import { sql } from "drizzle-orm";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -136,6 +137,9 @@ app.use((req, res, next) => {
 
 (async () => {
   await ensureIndexes();
+  try {
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS esg_roadmap jsonb`);
+  } catch {}
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
