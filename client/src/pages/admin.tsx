@@ -517,7 +517,7 @@ function PlatformHealthTab() {
         <Link href="/admin/health" data-testid="link-full-health-dashboard">
           <Button variant="outline" size="sm" className="gap-1.5">
             <ExternalLink className="w-3.5 h-3.5" />
-            Full health dashboard
+            View full health dashboard
           </Button>
         </Link>
       </div>
