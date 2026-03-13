@@ -6029,7 +6029,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-      const [totalsR, newProR, churnedR, monthlyR] = await Promise.all([
+      const [totalsR, newSubsR, churnedR, monthlyR] = await Promise.all([
         db.execute(sql`
           SELECT
             COUNT(*)::int AS total,
@@ -6064,7 +6064,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const totalCompanies = totals.total ?? 0;
       const proCount = totals.pro_count ?? 0;
       const freeCount = totals.free_count ?? 0;
-      const newSubscriptions30d = ((newProR as any).rows ?? [])[0]?.count ?? 0;
+      const newSubscriptions30d = ((newSubsR as any).rows ?? [])[0]?.count ?? 0;
       const churned30d = ((churnedR as any).rows ?? [])[0]?.count ?? 0;
       const conversionRate = totalCompanies > 0 ? Math.round((proCount / totalCompanies) * 1000) / 10 : 0;
       const estimatedMrr = proCount * 199;
