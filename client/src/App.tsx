@@ -41,6 +41,7 @@ import AdminAnalyticsPage from "@/pages/admin-analytics";
 import HelpPage from "@/pages/help";
 import AdminSupportPage from "@/pages/admin-support";
 import AdminPage from "@/pages/admin";
+import AdminCompanyPage from "@/pages/admin-company";
 import BillingPage from "@/pages/billing";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
@@ -219,7 +220,7 @@ function ProtectedApp() {
                 <Route path="/benchmarks" component={BenchmarksPage} />
                 <Route path="/esg-profile" component={EsgProfilePage} />
                 <Route path="/admin" component={() => <SuperAdminRoute component={AdminPage} />} />
-                <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminPage} />} />
+                <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminCompanyPage} />} />
                 <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
                 <Route path="/admin/analytics" component={() => <SuperAdminRoute component={AdminAnalyticsPage} />} />
                 <Route path="/admin/support" component={() => <SuperAdminRoute component={AdminSupportPage} />} />

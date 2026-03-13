@@ -1531,6 +1531,76 @@ export class DatabaseStorage implements IStorage {
     const rows = (result as any).rows ?? [];
     return rows[0]?.status ?? null;
   }
+
+  async adminGetCompanyDiagnostics(companyId: string) {
+    const [company] = await db.select().from(companies).where(eq(companies.id, companyId));
+    if (!company) return null;
+
+    const companyUsers = await db.select().from(users).where(eq(users.companyId, companyId));
+
+    const [policiesR, metricsR, evidenceR, reportsR, mvR, aiR, lastLoginR, errorsR, activityR] = await Promise.all([
+      db.execute(sql`SELECT COUNT(*)::int AS count FROM esg_policies WHERE company_id = ${companyId}`),
+      db.execute(sql`SELECT COUNT(*)::int AS count FROM metrics WHERE company_id = ${companyId}`),
+      db.execute(sql`SELECT COUNT(*)::int AS count FROM evidence_files WHERE company_id = ${companyId}`),
+      db.execute(sql`SELECT COUNT(*)::int AS count FROM report_runs WHERE company_id = ${companyId}`),
+      db.execute(sql`
+        SELECT MAX(mv.submitted_at) AS last_entry FROM metric_values mv
+        JOIN metrics m ON mv.metric_id = m.id
+        WHERE m.company_id = ${companyId}
+      `),
+      db.execute(sql`
+        SELECT COUNT(*)::int AS count FROM user_activity
+        WHERE company_id = ${companyId}
+          AND (action ILIKE '%assist%' OR action ILIKE '%chat%')
+          AND created_at >= NOW() - INTERVAL '30 days'
+      `),
+      db.execute(sql`
+        SELECT created_at FROM audit_logs
+        WHERE company_id = ${companyId} AND action = 'login'
+        ORDER BY created_at DESC LIMIT 1
+      `),
+      db.execute(sql`
+        SELECT id, event_type, severity, message, created_at FROM platform_health_events
+        WHERE company_id = ${companyId} AND severity IN ('error', 'critical')
+        ORDER BY created_at DESC LIMIT 5
+      `),
+      db.execute(sql`
+        SELECT action, entity_type, created_at FROM audit_logs
+        WHERE company_id = ${companyId}
+          AND action IN ('onboarding_complete', 'policy_created', 'policy_adopted', 'metric_entered',
+                         'evidence_uploaded', 'report_generated', 'assistant_used', 'login')
+        ORDER BY created_at DESC LIMIT 20
+      `),
+    ]);
+
+    const r = (x: any) => (x as any).rows ?? [];
+
+    return {
+      id: company.id,
+      name: company.name,
+      industry: company.industry,
+      country: company.country,
+      status: company.status ?? "active",
+      planTier: company.planTier ?? "free",
+      onboardingComplete: company.onboardingComplete ?? false,
+      maturityLevel: company.esgMaturity ?? null,
+      employeeCount: company.employeeCount,
+      createdAt: company.createdAt,
+      counts: {
+        users: companyUsers.length,
+        policies: r(policiesR)[0]?.count ?? 0,
+        metrics: r(metricsR)[0]?.count ?? 0,
+        evidenceFiles: r(evidenceR)[0]?.count ?? 0,
+        reports: r(reportsR)[0]?.count ?? 0,
+        aiUsageLast30Days: r(aiR)[0]?.count ?? 0,
+      },
+      lastMetricEntry: r(mvR)[0]?.last_entry ?? null,
+      lastLogin: r(lastLoginR)[0]?.created_at ?? null,
+      users: companyUsers.map(u => ({ id: u.id, username: u.username, email: u.email, role: u.role })),
+      recentErrors: r(errorsR),
+      activityTimeline: r(activityR),
+    };
+  }
 }
 
 export const storage = new DatabaseStorage();

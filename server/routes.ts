@@ -6005,6 +6005,126 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.get("/api/admin/company/:companyId/diagnostics", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const diag = await storage.adminGetCompanyDiagnostics(companyId);
+      if (!diag) return res.status(404).json({ error: "Company not found" });
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "view_company_diagnostics",
+        targetCompanyId: companyId,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json(diag);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/revenue", requireSuperAdmin, async (_req, res) => {
+    try {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      const [totalsR, newProR, monthlyR] = await Promise.all([
+        db.execute(sql`
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE plan_tier = 'pro')::int AS pro_count,
+            COUNT(*) FILTER (WHERE plan_tier = 'free')::int AS free_count
+          FROM companies
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM companies
+          WHERE plan_tier = 'pro' AND created_at >= ${thirtyDaysAgo}
+        `),
+        db.execute(sql`
+          SELECT
+            TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') AS month,
+            DATE_TRUNC('month', created_at) AS month_date,
+            COUNT(*) FILTER (WHERE plan_tier = 'free')::int AS free_count,
+            COUNT(*) FILTER (WHERE plan_tier = 'pro')::int AS pro_count,
+            COUNT(*)::int AS total_count
+          FROM companies
+          WHERE created_at >= NOW() - INTERVAL '6 months'
+          GROUP BY DATE_TRUNC('month', created_at)
+          ORDER BY month_date ASC
+        `),
+      ]);
+
+      const totals = ((totalsR as any).rows ?? [])[0] ?? {};
+      const totalCompanies = totals.total ?? 0;
+      const proCount = totals.pro_count ?? 0;
+      const freeCount = totals.free_count ?? 0;
+      const newPro30d = ((newProR as any).rows ?? [])[0]?.count ?? 0;
+      const conversionRate = totalCompanies > 0 ? Math.round((proCount / totalCompanies) * 1000) / 10 : 0;
+      const estimatedMrr = proCount * 199;
+      const monthlyGrowth = ((monthlyR as any).rows ?? []).map((r: any) => ({
+        month: r.month,
+        free: r.free_count,
+        pro: r.pro_count,
+        total: r.total_count,
+      }));
+
+      res.json({ totalCompanies, proCount, freeCount, estimatedMrr, newPro30d, conversionRate, monthlyGrowth });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/platform-health/summary", requireSuperAdmin, async (_req, res) => {
+    try {
+      const now24h = new Date(Date.now() - 86400000);
+
+      const [jobsR, errorsR, reportFailR, openR, recentEventsR, recentJobsR] = await Promise.all([
+        db.execute(sql`
+          SELECT status, COUNT(*)::int AS count FROM background_jobs
+          WHERE created_at >= ${now24h} GROUP BY status
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM platform_health_events
+          WHERE event_type = 'api_error' AND created_at >= ${now24h}
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM platform_health_events
+          WHERE event_type = 'report_failure' AND created_at >= ${now24h}
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM platform_health_events WHERE resolved_at IS NULL
+        `),
+        db.execute(sql`
+          SELECT id, event_type, severity, message, created_at FROM platform_health_events
+          ORDER BY created_at DESC LIMIT 5
+        `),
+        db.execute(sql`
+          SELECT id, job_type, status, attempts, error, created_at, completed_at FROM background_jobs
+          ORDER BY created_at DESC LIMIT 5
+        `),
+      ]);
+
+      const jobCounts: Record<string, number> = {};
+      for (const row of ((jobsR as any).rows ?? [])) jobCounts[row.status] = parseInt(row.count);
+
+      res.json({
+        jobs: {
+          running: jobCounts.running ?? 0,
+          failed24h: jobCounts.failed ?? 0,
+          completed24h: jobCounts.completed ?? 0,
+        },
+        apiErrors24h: ((errorsR as any).rows ?? [])[0]?.count ?? 0,
+        reportFailures24h: ((reportFailR as any).rows ?? [])[0]?.count ?? 0,
+        openIncidents: ((openR as any).rows ?? [])[0]?.count ?? 0,
+        recentEvents: (recentEventsR as any).rows ?? [],
+        recentJobs: (recentJobsR as any).rows ?? [],
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/admin/company/suspend", requireSuperAdmin, async (req, res) => {
     try {
       const adminUser = (req as any)._superAdmin;
