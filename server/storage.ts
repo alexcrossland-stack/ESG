@@ -273,6 +273,7 @@ export interface IStorage {
   adminReactivateCompany(companyId: string): Promise<void>;
   createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">): Promise<SuperAdminAction>;
   getCompanyStatus(companyId: string): Promise<string | null>;
+  adminGetCompanyDiagnostics(companyId: string): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
