@@ -411,7 +411,11 @@ function RevenueTab() {
 function PlatformHealthTab() {
   const { data, isLoading, refetch } = useQuery<any>({
     queryKey: ["/api/admin/platform-health/summary"],
-    queryFn: () => fetch("/api/admin/platform-health/summary", { credentials: "include" }).then(r => r.json()),
+    queryFn: async () => {
+      const res = await fetch("/api/admin/platform-health/summary", { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    },
     refetchInterval: 30000,
   });
 
@@ -474,17 +478,26 @@ function PlatformHealthTab() {
             {recentEvents.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2 text-center">No health events recorded</p>
             ) : (
-              <div className="space-y-1.5">
-                {recentEvents.map((e: any, i: number) => (
-                  <div key={e.id ?? i} className="flex items-center gap-2 text-xs" data-testid={`health-event-${i}`}>
-                    <SeverityBadge severity={e.severity} />
-                    <span className="flex-1 truncate">{e.message}</span>
-                    <span className="text-muted-foreground shrink-0">
-                      {e.created_at ? formatDistanceToNow(new Date(e.created_at), { addSuffix: true }) : ""}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-muted-foreground">
+                    <th className="pb-1 font-medium">Severity</th>
+                    <th className="pb-1 font-medium">Message</th>
+                    <th className="pb-1 font-medium text-right">When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentEvents.map((e: any, i: number) => (
+                    <tr key={e.id ?? i} data-testid={`health-event-${i}`}>
+                      <td className="py-1 pr-2"><SeverityBadge severity={e.severity} /></td>
+                      <td className="py-1 truncate max-w-[200px]">{e.message}</td>
+                      <td className="py-1 text-right text-muted-foreground whitespace-nowrap">
+                        {e.created_at ? formatDistanceToNow(new Date(e.created_at), { addSuffix: true }) : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </CardContent>
         </Card>
@@ -499,17 +512,26 @@ function PlatformHealthTab() {
             {recentJobs.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2 text-center">No jobs recorded</p>
             ) : (
-              <div className="space-y-1.5">
-                {recentJobs.map((j: any, i: number) => (
-                  <div key={j.id ?? i} className="flex items-center gap-2 text-xs" data-testid={`health-job-${i}`}>
-                    <JobStatusBadge status={j.status} />
-                    <span className="flex-1 truncate">{j.job_type}</span>
-                    <span className="text-muted-foreground shrink-0">
-                      {j.created_at ? formatDistanceToNow(new Date(j.created_at), { addSuffix: true }) : ""}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-muted-foreground">
+                    <th className="pb-1 font-medium">Status</th>
+                    <th className="pb-1 font-medium">Job Type</th>
+                    <th className="pb-1 font-medium text-right">When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentJobs.map((j: any, i: number) => (
+                    <tr key={j.id ?? i} data-testid={`health-job-${i}`}>
+                      <td className="py-1 pr-2"><JobStatusBadge status={j.status} /></td>
+                      <td className="py-1 truncate max-w-[200px]">{j.job_type}</td>
+                      <td className="py-1 text-right text-muted-foreground whitespace-nowrap">
+                        {j.created_at ? formatDistanceToNow(new Date(j.created_at), { addSuffix: true }) : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </CardContent>
         </Card>
