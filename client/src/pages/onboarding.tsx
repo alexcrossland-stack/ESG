@@ -8,22 +8,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import {
   Leaf, Users, Shield, ArrowRight, ArrowLeft, CheckCircle2,
   Building2, Sparkles, LayoutGrid, BarChart3, Zap, FileText,
   Truck, Factory, Store, Briefcase, ClipboardList, Globe,
-  Target, Upload, FileCheck,
+  Target, Upload, FileCheck, HelpCircle, Star,
 } from "lucide-react";
 
 const V2_STEPS = [
   { key: "profile", label: "Company Profile", icon: Building2, desc: "Tell us about your business" },
-  { key: "focus", label: "ESG Focus Areas", icon: Target, desc: "Choose your priority topics" },
+  { key: "maturity", label: "ESG Maturity", icon: Star, desc: "Assess your current ESG level" },
+  { key: "focus", label: "ESG Priorities", icon: Target, desc: "Choose your focus areas" },
   { key: "reporting", label: "Reporting Setup", icon: BarChart3, desc: "Configure metrics and frequency" },
   { key: "data_entry", label: "First Data Entry", icon: Zap, desc: "Enter your first data point" },
   { key: "evidence", label: "Evidence Linking", icon: Upload, desc: "Link supporting evidence" },
-  { key: "output", label: "First Output", icon: FileCheck, desc: "Generate your first report or policy" },
+  { key: "action_plan", label: "Your ESG Action Plan", icon: FileCheck, desc: "See your personalised plan" },
 ];
 
 const INDUSTRIES = [
@@ -45,25 +46,40 @@ const OP_PROFILES = [
   { value: "mixed", label: "Mixed", icon: Building2, desc: "Combination of operations" },
 ];
 
-const MATURITY_LEVELS = [
-  { value: "just_starting", label: "Just Starting", desc: "We're new to ESG and need guidance", icon: Leaf },
-  { value: "some_policies", label: "Some Policies in Place", desc: "We have some ESG practices but want to formalise them", icon: ClipboardList },
-  { value: "formal_programme", label: "Formal ESG Programme", desc: "We have an established programme and want to improve tracking", icon: Shield },
+const MATURITY_QUESTIONS = [
+  { key: "q1", text: "Does your business have a written ESG, sustainability or environmental policy?" },
+  { key: "q2", text: "Do you track carbon emissions, energy consumption, or waste data?" },
+  { key: "q3", text: "Do you formally measure social metrics (e.g. employee diversity, training hours, health & safety incidents)?" },
+  { key: "q4", text: "Do you have governance documents covering ethics, anti-corruption, or data privacy?" },
+  { key: "q5", text: "Have you reported on ESG topics to customers, investors, banks, or regulators in the past 2 years?" },
 ];
 
+function computeMaturity(answers: Record<string, boolean | null>): string {
+  const yesCount = Object.values(answers).filter(v => v === true).length;
+  if (yesCount <= 1) return "just_starting";
+  if (yesCount <= 3) return "some_policies";
+  return "formal_programme";
+}
+
+const MATURITY_META: Record<string, { label: string; desc: string; color: string }> = {
+  just_starting: { label: "Starter", desc: "Just beginning your ESG journey — the platform will guide you step by step.", color: "text-amber-600 dark:text-amber-400" },
+  some_policies: { label: "Developing", desc: "You have some ESG practices in place — now let's formalise and track them.", color: "text-blue-600 dark:text-blue-400" },
+  formal_programme: { label: "Established", desc: "You have a strong ESG foundation — the platform will help you optimise and report.", color: "text-emerald-600 dark:text-emerald-400" },
+};
+
 const ESG_TOPICS = [
-  { key: "climate_change", label: "Climate Change & Carbon", category: "environmental" as const, icon: Leaf },
-  { key: "energy_efficiency", label: "Energy Efficiency", category: "environmental" as const, icon: Zap },
-  { key: "waste_management", label: "Waste & Recycling", category: "environmental" as const, icon: Globe },
-  { key: "water_conservation", label: "Water Conservation", category: "environmental" as const, icon: Globe },
-  { key: "employee_wellbeing", label: "Employee Wellbeing", category: "social" as const, icon: Users },
-  { key: "diversity_inclusion", label: "Diversity & Inclusion", category: "social" as const, icon: Users },
-  { key: "health_safety", label: "Health & Safety", category: "social" as const, icon: Shield },
-  { key: "training_development", label: "Training & Development", category: "social" as const, icon: BarChart3 },
-  { key: "board_governance", label: "Board Governance", category: "governance" as const, icon: Shield },
-  { key: "anti_corruption", label: "Anti-Corruption", category: "governance" as const, icon: Shield },
-  { key: "data_privacy", label: "Data Privacy", category: "governance" as const, icon: FileText },
-  { key: "supply_chain", label: "Supply Chain ESG", category: "governance" as const, icon: ClipboardList },
+  { key: "climate_change", label: "Climate Change & Carbon", category: "environmental" as const, icon: Leaf, benefit: "Reduce energy costs and meet customer carbon requirements" },
+  { key: "energy_efficiency", label: "Energy Efficiency", category: "environmental" as const, icon: Zap, benefit: "Lower utility bills and demonstrate resource responsibility" },
+  { key: "waste_management", label: "Waste & Recycling", category: "environmental" as const, icon: Globe, benefit: "Cut disposal costs and show circular economy commitment" },
+  { key: "water_conservation", label: "Water Conservation", category: "environmental" as const, icon: Globe, benefit: "Manage water risk and reduce operational costs" },
+  { key: "employee_wellbeing", label: "Employee Wellbeing", category: "social" as const, icon: Users, benefit: "Attract and retain talent, reduce absence and turnover" },
+  { key: "diversity_inclusion", label: "Diversity & Inclusion", category: "social" as const, icon: Users, benefit: "Access wider talent pools and meet procurement requirements" },
+  { key: "health_safety", label: "Health & Safety", category: "social" as const, icon: Shield, benefit: "Meet legal obligations and protect your workforce" },
+  { key: "training_development", label: "Training & Development", category: "social" as const, icon: BarChart3, benefit: "Build capability, reduce skill gaps, and improve retention" },
+  { key: "board_governance", label: "Board Governance", category: "governance" as const, icon: Shield, benefit: "Build investor confidence and demonstrate accountability" },
+  { key: "anti_corruption", label: "Anti-Corruption", category: "governance" as const, icon: Shield, benefit: "Meet legal requirements and protect business reputation" },
+  { key: "data_privacy", label: "Data Privacy", category: "governance" as const, icon: FileText, benefit: "Comply with GDPR and build customer trust" },
+  { key: "supply_chain", label: "Supply Chain ESG", category: "governance" as const, icon: ClipboardList, benefit: "Meet growing customer due-diligence requirements" },
 ];
 
 type MetricRec = { key: string; name: string; desc: string; default: boolean };
@@ -95,22 +111,106 @@ const GOV_METRICS: MetricRec[] = [
   { key: "anti_bribery", name: "Anti-Bribery Policy", desc: "Whether an anti-bribery policy is in place", default: false },
 ];
 
+const POLICY_MAP: Record<string, { name: string; url: string }> = {
+  climate_change: { name: "Climate Change & Carbon Policy", url: "/policy-generator" },
+  energy_efficiency: { name: "Energy Management Policy", url: "/policy-generator" },
+  waste_management: { name: "Waste & Recycling Policy", url: "/policy-generator" },
+  water_conservation: { name: "Water Management Policy", url: "/policy-generator" },
+  employee_wellbeing: { name: "Employee Wellbeing Policy", url: "/policy-generator" },
+  diversity_inclusion: { name: "Diversity & Inclusion Policy", url: "/policy-generator" },
+  health_safety: { name: "Health & Safety Policy", url: "/policy-generator" },
+  training_development: { name: "Learning & Development Policy", url: "/policy-generator" },
+  board_governance: { name: "Corporate Governance Policy", url: "/policy-generator" },
+  anti_corruption: { name: "Anti-Bribery & Corruption Policy", url: "/policy-generator" },
+  data_privacy: { name: "Data Privacy Policy", url: "/policy-generator" },
+  supply_chain: { name: "Supplier Code of Conduct", url: "/policy-generator" },
+};
+
+const EVIDENCE_BY_MATURITY: Record<string, { name: string; desc: string }[]> = {
+  just_starting: [
+    { name: "Energy Invoices", desc: "Electricity and gas bills for the past 12 months" },
+    { name: "Payroll / HR Records", desc: "Employee headcount and diversity data" },
+    { name: "Company Registration Document", desc: "Formal business registration certificate" },
+  ],
+  some_policies: [
+    { name: "Emissions Calculation Report", desc: "Carbon footprint calculation methodology and results" },
+    { name: "Training Records", desc: "Employee learning and development completion logs" },
+    { name: "Board Meeting Minutes", desc: "Evidence of board-level ESG oversight and discussion" },
+  ],
+  formal_programme: [
+    { name: "Third-Party ESG Assessment", desc: "Independent audit or sustainability assessment report" },
+    { name: "ISO or Industry Certification", desc: "Quality, environmental, or safety management certificates" },
+    { name: "Supply Chain Due Diligence Report", desc: "Supplier ESG questionnaire results and risk ratings" },
+  ],
+};
+
+function generateActionPlan(maturity: string, topics: string[], metrics: string[], frequency: string) {
+  const PRIORITY_BY_MATURITY: Record<string, string[]> = {
+    just_starting: ["health_safety", "employee_wellbeing", "climate_change", "board_governance", "data_privacy"],
+    some_policies: ["climate_change", "diversity_inclusion", "anti_corruption", "health_safety", "board_governance"],
+    formal_programme: ["supply_chain", "water_conservation", "training_development", "data_privacy", "energy_efficiency"],
+  };
+
+  const prioritised = (PRIORITY_BY_MATURITY[maturity] || []).filter(t => topics.includes(t));
+  const remaining = topics.filter(t => !prioritised.includes(t));
+  const orderedTopics = [...prioritised, ...remaining];
+
+  const recommendedPolicies = orderedTopics
+    .filter(t => POLICY_MAP[t])
+    .slice(0, 3)
+    .map(t => ({ topic: t, name: POLICY_MAP[t].name, url: POLICY_MAP[t].url }));
+
+  const ALL_METRICS = [...ENV_METRICS, ...SOCIAL_METRICS, ...GOV_METRICS];
+  const topicToMetrics: Record<string, string[]> = {
+    climate_change: ["scope1", "scope2", "gas_fuel", "electricity"],
+    energy_efficiency: ["electricity", "gas_fuel"],
+    waste_management: ["waste", "recycling"],
+    water_conservation: ["water"],
+    employee_wellbeing: ["headcount", "turnover", "training"],
+    diversity_inclusion: ["gender_diversity", "headcount"],
+    health_safety: ["health_safety"],
+    training_development: ["training"],
+    board_governance: ["board_meetings", "esg_policy"],
+    anti_corruption: ["anti_bribery"],
+    data_privacy: ["esg_policy"],
+    supply_chain: ["supplier_screening"],
+  };
+  const metricKeys = new Set<string>();
+  for (const topic of orderedTopics) {
+    for (const m of (topicToMetrics[topic] || [])) metricKeys.add(m);
+  }
+  for (const m of metrics) metricKeys.add(m);
+  const recommendedMetrics = Array.from(metricKeys)
+    .slice(0, 5)
+    .map(k => ALL_METRICS.find(m => m.key === k))
+    .filter(Boolean)
+    .map(m => ({ key: m!.key, name: m!.name, desc: m!.desc }));
+
+  const recommendedEvidence = (EVIDENCE_BY_MATURITY[maturity] || EVIDENCE_BY_MATURITY.just_starting);
+
+  return {
+    maturityLevel: maturity,
+    recommendedPolicies,
+    recommendedMetrics,
+    recommendedEvidence,
+    reportingFrequency: frequency,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 function getRecommendedMetrics(topics: string[]): string[] {
   const base = new Set<string>();
   const hasEnv = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "environmental");
   const hasSocial = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "social");
   const hasGov = topics.some(t => ESG_TOPICS.find(e => e.key === t)?.category === "governance");
-
   if (hasEnv) ENV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
   if (hasSocial) SOCIAL_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
   if (hasGov) GOV_METRICS.filter(m => m.default).forEach(m => base.add(m.key));
-
   if (topics.includes("climate_change")) { base.add("scope1"); base.add("scope2"); base.add("gas_fuel"); }
   if (topics.includes("waste_management")) { base.add("waste"); base.add("recycling"); }
   if (topics.includes("water_conservation")) base.add("water");
   if (topics.includes("health_safety")) base.add("health_safety");
   if (topics.includes("anti_corruption")) base.add("anti_bribery");
-
   return Array.from(base);
 }
 
@@ -125,19 +225,17 @@ function StepIndicator({ steps, currentStep, completedSteps }: {
         return (
           <div key={s.key} className="flex items-center gap-1 shrink-0">
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                isCompleted
-                  ? "bg-primary text-primary-foreground"
-                  : isCurrent
-                  ? "bg-primary/20 text-primary border-2 border-primary"
+              className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                isCompleted ? "bg-primary text-primary-foreground"
+                  : isCurrent ? "bg-primary/20 text-primary border-2 border-primary"
                   : "bg-muted text-muted-foreground"
               }`}
               data-testid={`step-indicator-${s.key}`}
             >
-              {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
+              {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : i + 1}
             </div>
             {i < steps.length - 1 && (
-              <div className={`w-6 h-0.5 ${isCompleted ? "bg-primary" : "bg-muted"}`} />
+              <div className={`w-5 h-0.5 ${isCompleted ? "bg-primary" : "bg-muted"}`} />
             )}
           </div>
         );
@@ -165,12 +263,7 @@ function MetricCheckboxGroup({ title, icon: Icon, color, metrics, selected, onTo
             }`}
             data-testid={`metric-option-${m.key}`}
           >
-            <input
-              type="checkbox"
-              checked={selected.has(m.key)}
-              onChange={() => onToggle(m.key)}
-              className="mt-0.5 accent-primary"
-            />
+            <input type="checkbox" checked={selected.has(m.key)} onChange={() => onToggle(m.key)} className="mt-0.5 accent-primary" />
             <div className="min-w-0">
               <p className="text-sm font-medium">{m.name}</p>
               <p className="text-xs text-muted-foreground">{m.desc}</p>
@@ -199,7 +292,10 @@ export default function Onboarding() {
   const [employeeCount, setEmployeeCount] = useState("");
   const [country, setCountry] = useState("United Kingdom");
   const [operationalProfile, setOperationalProfile] = useState("");
-  const [esgMaturity, setEsgMaturity] = useState("");
+
+  const [maturityAnswers, setMaturityAnswers] = useState<Record<string, boolean | null>>({
+    q1: null, q2: null, q3: null, q4: null, q5: null,
+  });
 
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
@@ -212,7 +308,10 @@ export default function Onboarding() {
   const [quickEvidenceDesc, setQuickEvidenceDesc] = useState("");
   const [quickEvidenceModule, setQuickEvidenceModule] = useState("metrics");
 
-  const [selectedOutput, setSelectedOutput] = useState<"report" | "policy">("report");
+  const [actionPlan, setActionPlan] = useState<any>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+
+  const computedMaturity = computeMaturity(maturityAnswers);
 
   useEffect(() => {
     if (company) {
@@ -233,19 +332,19 @@ export default function Onboarding() {
       if (company.employeeCount) setEmployeeCount(String(company.employeeCount));
       if (company.country) setCountry(company.country);
       if (company.operationalProfile) setOperationalProfile(company.operationalProfile);
-      if (company.esgMaturity) setEsgMaturity(company.esgMaturity);
       if (company.selectedMetrics) setSelectedMetrics(new Set(company.selectedMetrics as string[]));
 
       const answers = company.onboardingAnswers as any;
       if (answers?.selectedTopics && Array.isArray(answers.selectedTopics)) {
         setSelectedTopics(new Set(answers.selectedTopics));
       }
-      if (answers?.reportingFrequency) {
-        setReportingFrequency(answers.reportingFrequency);
-      }
+      if (answers?.reportingFrequency) setReportingFrequency(answers.reportingFrequency);
+      if (answers?.maturityAnswers) setMaturityAnswers({ q1: null, q2: null, q3: null, q4: null, q5: null, ...answers.maturityAnswers });
 
       const now = new Date();
       setQuickDataPeriod(`${now.toLocaleString("en", { month: "short" })} ${now.getFullYear()}`);
+
+      if (company.esgActionPlan) setActionPlan(company.esgActionPlan);
     }
   }, [company]);
 
@@ -269,7 +368,7 @@ export default function Onboarding() {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      toast({ title: "Setup complete!", description: "Your ESG workspace is ready." });
+      toast({ title: "Setup complete!", description: "Your ESG workspace is ready. Your action plan is waiting on the dashboard." });
       setLocation("/");
     },
     onError: (e: any) => {
@@ -287,14 +386,14 @@ export default function Onboarding() {
         locations: 1, country, operationalProfile,
         reportingYearStart: "January",
       },
-      esgMaturity,
+      esgMaturity: computedMaturity,
       selectedTopics: Array.from(selectedTopics),
       selectedMetrics: Array.from(selectedMetrics),
       reportingFrequency,
       onboardingAnswers: {
         quickDataMetric, quickDataValue, quickDataPeriod,
         quickEvidenceDesc, quickEvidenceModule,
-        selectedOutput,
+        maturityAnswers,
       },
     };
   }
@@ -302,23 +401,46 @@ export default function Onboarding() {
   function isStepValid(): boolean {
     switch (step) {
       case 1: return !!(companyName && industry && country && employeeCount);
-      case 2: return selectedTopics.size >= 1;
-      case 3: return selectedMetrics.size >= 1;
-      case 4: return true;
+      case 2: return Object.values(maturityAnswers).every(v => v !== null);
+      case 3: return selectedTopics.size >= 1;
+      case 4: return selectedMetrics.size >= 1;
       case 5: return true;
       case 6: return true;
+      case 7: return true;
       default: return true;
+    }
+  }
+
+  async function handleActionPlanStep() {
+    setPlanLoading(true);
+    try {
+      const res = await apiRequest("POST", "/api/onboarding/action-plan", {
+        esgMaturity: computedMaturity,
+        selectedTopics: Array.from(selectedTopics),
+        selectedMetrics: Array.from(selectedMetrics),
+        reportingFrequency,
+      });
+      const plan = await res.json();
+      setActionPlan(plan);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    } catch {
+      const plan = generateActionPlan(computedMaturity, Array.from(selectedTopics), Array.from(selectedMetrics), reportingFrequency);
+      setActionPlan(plan);
+    } finally {
+      setPlanLoading(false);
     }
   }
 
   function saveAndNext() {
     const stepKey = V2_STEPS[step - 1]?.key;
-    if (stepKey) {
-      setCompletedSteps(prev => new Set([...prev, stepKey]));
-    }
+    if (stepKey) setCompletedSteps(prev => new Set([...prev, stepKey]));
     const data = getStepData();
     saveMutation.mutate({ ...data, step: step + 1 });
-    setStep(s => Math.min(s + 1, V2_STEPS.length));
+    const nextStep = step + 1;
+    setStep(Math.min(nextStep, V2_STEPS.length));
+    if (nextStep === 7) {
+      handleActionPlanStep();
+    }
   }
 
   function saveAndPrev() {
@@ -329,13 +451,6 @@ export default function Onboarding() {
 
   function handleComplete() {
     completeMutation.mutate(getStepData());
-  }
-
-  function handleSkipToFinish() {
-    completeMutation.mutate({
-      ...getStepData(),
-      step: V2_STEPS.length,
-    });
   }
 
   function startGuided() {
@@ -368,6 +483,10 @@ export default function Onboarding() {
     });
   }
 
+  function setMaturityAnswer(key: string, val: boolean) {
+    setMaturityAnswers(prev => ({ ...prev, [key]: val }));
+  }
+
   if (!company) return null;
 
   if (!showWizard) {
@@ -383,7 +502,7 @@ export default function Onboarding() {
             </h1>
             <p className="text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
               Set up ESG metrics, carbon tracking, policies, and reporting in minutes.
-              We'll guide you through 6 action-based steps.
+              We'll create a personalised ESG action plan for your business.
             </p>
           </div>
 
@@ -400,7 +519,7 @@ export default function Onboarding() {
                 <div>
                   <h3 className="font-semibold">Guided Setup</h3>
                   <p className="text-xs text-muted-foreground mt-1">
-                    6 action-based steps. Complete each to unlock your workspace. Takes about 5 minutes.
+                    7 guided steps. Get a personalised ESG action plan. Takes about 5 minutes.
                   </p>
                 </div>
                 <Badge variant="secondary" className="text-xs">Recommended</Badge>
@@ -455,12 +574,15 @@ export default function Onboarding() {
         <div className="max-w-2xl mx-auto space-y-6">
           <StepIndicator steps={V2_STEPS} currentStep={step} completedSteps={completedSteps} />
 
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              {currentStepDef && <currentStepDef.icon className="w-5 h-5 text-primary" />}
-              <h2 className="text-xl font-semibold">{currentStepDef?.label}</h2>
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {currentStepDef && <currentStepDef.icon className="w-5 h-5 text-primary" />}
+                <h2 className="text-xl font-semibold">{currentStepDef?.label}</h2>
+              </div>
+              <span className="text-xs text-muted-foreground">Step {step} of {V2_STEPS.length}</span>
             </div>
-            <p className="text-sm text-muted-foreground">{currentStepDef?.desc}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">{currentStepDef?.desc}</p>
           </div>
 
           {step === 1 && (
@@ -496,15 +618,6 @@ export default function Onboarding() {
                   <Label>Number of Employees</Label>
                   <Input type="number" value={employeeCount} onChange={e => setEmployeeCount(e.target.value)} placeholder="e.g. 50" data-testid="input-employees" />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>ESG Maturity</Label>
-                  <Select value={esgMaturity} onValueChange={setEsgMaturity}>
-                    <SelectTrigger data-testid="select-maturity"><SelectValue placeholder="Select level" /></SelectTrigger>
-                    <SelectContent>
-                      {MATURITY_LEVELS.map(l => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -529,9 +642,74 @@ export default function Onboarding() {
           )}
 
           {step === 2 && (
+            <div className="space-y-5" data-testid="step-maturity-quiz">
+              <Card className="bg-muted/30 border-dashed">
+                <CardContent className="p-4">
+                  <p className="text-sm text-muted-foreground">
+                    Answer these 5 quick questions to help us understand where you are on your ESG journey. There are no right or wrong answers.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <div className="space-y-3">
+                {MATURITY_QUESTIONS.map((q, idx) => (
+                  <Card key={q.key} className={`transition-all ${maturityAnswers[q.key] !== null ? "border-primary/30" : ""}`} data-testid={`maturity-question-${q.key}`}>
+                    <CardContent className="p-4">
+                      <p className="text-sm font-medium mb-3">{idx + 1}. {q.text}</p>
+                      <div className="flex gap-3">
+                        <button
+                          className={`flex-1 py-2 px-4 rounded-md border text-sm font-medium transition-colors ${
+                            maturityAnswers[q.key] === true ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"
+                          }`}
+                          onClick={() => setMaturityAnswer(q.key, true)}
+                          data-testid={`maturity-${q.key}-yes`}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          className={`flex-1 py-2 px-4 rounded-md border text-sm font-medium transition-colors ${
+                            maturityAnswers[q.key] === false ? "bg-muted text-foreground border-border" : "border-border hover:border-primary/50"
+                          }`}
+                          onClick={() => setMaturityAnswer(q.key, false)}
+                          data-testid={`maturity-${q.key}-no`}
+                        >
+                          No
+                        </button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {Object.values(maturityAnswers).every(v => v !== null) && (
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Star className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">
+                          Your ESG Maturity Level:{" "}
+                          <span className={MATURITY_META[computedMaturity]?.color}>
+                            {MATURITY_META[computedMaturity]?.label}
+                          </span>
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {MATURITY_META[computedMaturity]?.desc}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {step === 3 && (
             <div className="space-y-4" data-testid="step-esg-focus">
               <p className="text-sm text-muted-foreground">
-                Select at least one ESG topic to focus on. This determines which metrics and reports we set up for you.
+                Select the ESG topics most relevant to your business. We'll use these to recommend policies, metrics, and evidence.
               </p>
               <Badge variant="secondary" className="text-xs">{selectedTopics.size} topics selected</Badge>
 
@@ -547,19 +725,17 @@ export default function Onboarding() {
                     {ESG_TOPICS.filter(t => t.category === cat).map(topic => (
                       <button
                         key={topic.key}
-                        className={`flex items-center gap-3 p-3 rounded-md border text-left transition-colors ${
+                        className={`flex items-start gap-3 p-3 rounded-md border text-left transition-colors ${
                           selectedTopics.has(topic.key) ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
                         }`}
                         onClick={() => toggleTopic(topic.key)}
                         data-testid={`topic-option-${topic.key}`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedTopics.has(topic.key)}
-                          readOnly
-                          className="accent-primary"
-                        />
-                        <span className="text-sm">{topic.label}</span>
+                        <input type="checkbox" checked={selectedTopics.has(topic.key)} readOnly className="accent-primary mt-0.5 shrink-0" />
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium">{topic.label}</span>
+                          <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{topic.benefit}</p>
+                        </div>
                       </button>
                     ))}
                   </div>
@@ -568,7 +744,7 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="space-y-4" data-testid="step-reporting-setup">
               <div className="flex items-center justify-between">
                 <p className="text-sm text-muted-foreground">
@@ -595,7 +771,7 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="space-y-4" data-testid="step-data-entry">
               <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
                 <CardContent className="p-4">
@@ -637,13 +813,13 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 5 && (
+          {step === 6 && (
             <div className="space-y-4" data-testid="step-evidence">
               <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
                 <CardContent className="p-4">
                   <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Link supporting evidence</p>
                   <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                    Evidence files (invoices, certificates, reports) strengthen your ESG data. You can describe one now or skip.
+                    Evidence files (invoices, certificates, reports) strengthen your ESG data and credibility with stakeholders.
                   </p>
                 </CardContent>
               </Card>
@@ -672,70 +848,105 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 6 && (
-            <div className="space-y-5" data-testid="step-output">
-              <p className="text-sm text-muted-foreground">
-                Choose your first output to see the platform in action. You can always generate more later.
-              </p>
+          {step === 7 && (
+            <div className="space-y-5" data-testid="step-action-plan">
+              {planLoading ? (
+                <div className="space-y-3">
+                  <div className="h-16 bg-muted animate-pulse rounded-lg" />
+                  <div className="h-32 bg-muted animate-pulse rounded-lg" />
+                  <div className="h-32 bg-muted animate-pulse rounded-lg" />
+                </div>
+              ) : actionPlan ? (
+                <>
+                  <Card className="border-primary/20 bg-primary/5">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <Sparkles className="w-5 h-5 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold">Your personalised ESG Action Plan is ready</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Based on your {MATURITY_META[computedMaturity]?.label} maturity level and {selectedTopics.size} selected focus areas.
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
 
-              <div className="space-y-3">
-                <button
-                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    selectedOutput === "report" ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                  }`}
-                  onClick={() => setSelectedOutput("report")}
-                  data-testid="option-output-report"
-                >
-                  <div className="flex items-center gap-3">
-                    <FileText className={`w-5 h-5 ${selectedOutput === "report" ? "text-primary" : "text-muted-foreground"}`} />
+                  <div className="space-y-4">
                     <div>
-                      <p className="font-medium">Generate a Board Pack Report</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        A summary report with your metrics, status, and action items
-                      </p>
+                      <h3 className="text-sm font-semibold flex items-center gap-2 mb-2">
+                        <FileText className="w-4 h-4 text-primary" /> Top Recommended Policies
+                      </h3>
+                      <div className="space-y-2">
+                        {(actionPlan.recommendedPolicies || []).map((p: any, i: number) => (
+                          <div key={i} className="flex items-center justify-between p-3 rounded-md border bg-card" data-testid={`plan-policy-${i}`}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                                <span className="text-xs text-primary font-bold">{i + 1}</span>
+                              </div>
+                              <span className="text-sm">{p.name}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    {selectedOutput === "report" && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
-                  </div>
-                </button>
 
-                <button
-                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
-                    selectedOutput === "policy" ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
-                  }`}
-                  onClick={() => setSelectedOutput("policy")}
-                  data-testid="option-output-policy"
-                >
-                  <div className="flex items-center gap-3">
-                    <ClipboardList className={`w-5 h-5 ${selectedOutput === "policy" ? "text-primary" : "text-muted-foreground"}`} />
                     <div>
-                      <p className="font-medium">Generate ESG Policy Drafts</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Create editable policy documents for your key ESG areas
-                      </p>
+                      <h3 className="text-sm font-semibold flex items-center gap-2 mb-2">
+                        <BarChart3 className="w-4 h-4 text-blue-500" /> Top Recommended Metrics
+                      </h3>
+                      <div className="space-y-2">
+                        {(actionPlan.recommendedMetrics || []).map((m: any, i: number) => (
+                          <div key={i} className="flex items-start gap-2 p-3 rounded-md border bg-card" data-testid={`plan-metric-${i}`}>
+                            <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center shrink-0 mt-0.5">
+                              <span className="text-xs text-blue-600 dark:text-blue-400 font-bold">{i + 1}</span>
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium">{m.name}</p>
+                              <p className="text-xs text-muted-foreground">{m.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    {selectedOutput === "policy" && <CheckCircle2 className="w-5 h-5 text-primary ml-auto" />}
-                  </div>
-                </button>
-              </div>
 
-              <Card className="bg-muted/30 border-dashed">
-                <CardContent className="p-4 text-center">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
-                    <CheckCircle2 className="w-6 h-6 text-primary" />
-                  </div>
-                  <p className="text-sm font-medium">Setup Summary</p>
-                  <div className="grid grid-cols-2 gap-3 mt-3 text-xs text-muted-foreground">
                     <div>
-                      <p className="font-medium text-foreground text-lg" data-testid="text-topics-count">{selectedTopics.size}</p>
-                      <p>Focus Topics</p>
+                      <h3 className="text-sm font-semibold flex items-center gap-2 mb-2">
+                        <Upload className="w-4 h-4 text-amber-500" /> Evidence to Collect
+                      </h3>
+                      <div className="space-y-2">
+                        {(actionPlan.recommendedEvidence || []).map((e: any, i: number) => (
+                          <div key={i} className="flex items-start gap-2 p-3 rounded-md border bg-card" data-testid={`plan-evidence-${i}`}>
+                            <div className="w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-900 flex items-center justify-center shrink-0 mt-0.5">
+                              <span className="text-xs text-amber-600 dark:text-amber-400 font-bold">{i + 1}</span>
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium">{e.name}</p>
+                              <p className="text-xs text-muted-foreground">{e.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-foreground text-lg" data-testid="text-metrics-count">{selectedMetrics.size}</p>
-                      <p>Active Metrics</p>
+
+                    <div className="flex items-center justify-between p-3 rounded-md bg-muted/50">
+                      <span className="text-sm text-muted-foreground">Recommended reporting frequency</span>
+                      <Badge variant="secondary" className="capitalize">{actionPlan.reportingFrequency}</Badge>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+
+                  <p className="text-xs text-muted-foreground text-center">
+                    This plan is saved to your profile and visible from the dashboard at any time.
+                  </p>
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <HelpCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Generating your action plan...</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -748,19 +959,19 @@ export default function Onboarding() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {step >= 4 && step < V2_STEPS.length && (
+              {step >= 5 && step < V2_STEPS.length && (
                 <Button variant="ghost" size="sm" onClick={saveAndNext} data-testid="button-skip">
                   Skip
                 </Button>
               )}
               {step < V2_STEPS.length ? (
-                <Button onClick={saveAndNext} disabled={!isStepValid()} data-testid="button-next">
+                <Button onClick={saveAndNext} disabled={!isStepValid() || saveMutation.isPending} data-testid="button-next">
                   Continue <ArrowRight className="w-4 h-4 ml-1" />
                 </Button>
               ) : (
                 <Button
                   onClick={handleComplete}
-                  disabled={completeMutation.isPending}
+                  disabled={completeMutation.isPending || planLoading}
                   data-testid="button-complete"
                 >
                   {completeMutation.isPending ? "Setting up..." : "Complete Setup"}

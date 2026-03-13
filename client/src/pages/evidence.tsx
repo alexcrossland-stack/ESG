@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -321,10 +322,21 @@ function EvidenceList() {
     return (
       <Card>
         <CardContent className="pt-6">
-          <div className="text-center py-8">
-            <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-            <p className="text-sm text-muted-foreground">No evidence files uploaded yet</p>
-            <p className="text-xs text-muted-foreground mt-1">Upload evidence to support your ESG data and reporting</p>
+          <div className="text-center py-8 space-y-3" data-testid="evidence-empty-state">
+            <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/30" />
+            <div>
+              <p className="text-sm font-medium">No evidence files yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Start by uploading documents that support your ESG data</p>
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1 max-w-xs mx-auto text-left">
+              <p>Examples to upload:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-muted-foreground/80">
+                <li>Energy invoices (electricity, gas)</li>
+                <li>Payroll or HR records</li>
+                <li>Training completion certificates</li>
+                <li>Board meeting minutes</li>
+              </ul>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -399,6 +411,18 @@ export default function Evidence() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <PageGuidance
+        pageKey="evidence"
+        title="Evidence Management — what this page does"
+        summary="This page is where you store and manage the documents that support your ESG data — things like energy invoices, training records, board minutes, and third-party certificates. Evidence strengthens the credibility of your ESG reports."
+        goodLooksLike="At least one piece of evidence linked to each active metric or policy, with documents reviewed and marked as approved."
+        steps={[
+          "Upload key documents — energy invoices, payroll data, policy certificates",
+          "Link each file to the relevant metric, policy, or questionnaire",
+          "Check the Coverage tab to see which metrics still lack supporting evidence",
+          "Use evidence requests to ask team members to submit documents",
+        ]}
+      />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-evidence-title">Evidence Management</h1>

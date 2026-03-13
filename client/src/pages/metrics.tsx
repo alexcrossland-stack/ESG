@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -341,6 +342,18 @@ export default function Metrics() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
+      <PageGuidance
+        pageKey="metrics"
+        title="Metrics Library — what this page does"
+        summary="This page shows all the ESG metrics available to your business. Enable the ones relevant to you, then enter data for each period on the Data Entry page. The platform calculates carbon emissions and other derived metrics automatically."
+        goodLooksLike="At least 5–10 metrics enabled across environmental, social, and governance categories, with data entered for the current and previous 3 months."
+        steps={[
+          "Toggle on the metrics relevant to your business",
+          "Pay attention to 'calculated' metrics — these auto-update when you enter raw data",
+          "Go to Data Entry to start logging values each month or quarter",
+          "Return here to review coverage and enable more metrics as your programme grows",
+        ]}
+      />
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
@@ -418,7 +431,19 @@ export default function Metrics() {
             onClick={() => setSelectedMetric(metric)}
           />
         ))}
-        {filtered.length === 0 && (
+        {filtered.length === 0 && metrics.length === 0 && (
+          <div className="text-center py-10 space-y-3" data-testid="metrics-empty-state">
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+              <BarChart3 className="w-6 h-6 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">No metrics activated yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Enable metrics to start tracking your ESG performance</p>
+            </div>
+            <p className="text-xs text-muted-foreground">Use the toggle on each metric below to activate it, or go to Data Entry to start recording values.</p>
+          </div>
+        )}
+        {filtered.length === 0 && metrics.length > 0 && (
           <p className="text-center text-sm text-muted-foreground py-8">No metrics match your filters.</p>
         )}
       </div>

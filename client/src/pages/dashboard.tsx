@@ -490,6 +490,8 @@ export default function Dashboard() {
         </div>
       )}
 
+      <ActionPlanBanner company={company} />
+
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">
@@ -619,6 +621,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <ProgrammeStatusCard />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="md:col-span-2">
@@ -970,6 +974,137 @@ export default function Dashboard() {
 
       <NotificationsPanel />
     </div>
+  );
+}
+
+function ActionPlanBanner({ company }: { company: any }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem("action_plan_banner_dismissed") === "true"; } catch { return false; }
+  });
+
+  if (dismissed) return null;
+  const plan = company?.esgActionPlan;
+  if (!plan) return null;
+
+  function dismiss() {
+    try { localStorage.setItem("action_plan_banner_dismissed", "true"); } catch {}
+    setDismissed(true);
+  }
+
+  const MATURITY_LABELS: Record<string, string> = {
+    just_starting: "Starter",
+    some_policies: "Developing",
+    formal_programme: "Established",
+  };
+
+  return (
+    <div className="flex items-start gap-3 p-4 rounded-lg border border-primary/30 bg-primary/5 relative" data-testid="banner-action-plan">
+      <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+        <Sparkles className="w-4 h-4 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold">Your ESG Action Plan is ready</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Based on your {MATURITY_LABELS[plan.maturityLevel] || plan.maturityLevel} maturity level.
+          We've recommended {plan.recommendedPolicies?.length || 0} policies,&nbsp;
+          {plan.recommendedMetrics?.length || 0} metrics, and {plan.recommendedEvidence?.length || 0} evidence documents to collect.
+        </p>
+        <div className="flex gap-2 mt-2 flex-wrap">
+          {(plan.recommendedPolicies || []).slice(0, 2).map((p: any, i: number) => (
+            <Badge key={i} variant="secondary" className="text-xs">{p.name}</Badge>
+          ))}
+          {(plan.recommendedPolicies || []).length > 2 && (
+            <Badge variant="secondary" className="text-xs">+{(plan.recommendedPolicies || []).length - 2} more</Badge>
+          )}
+        </div>
+        <div className="flex gap-2 mt-2">
+          <Link href="/policy-generator">
+            <Button size="sm" variant="outline" className="h-7 text-xs" data-testid="button-action-plan-create-policy">
+              Create first policy
+            </Button>
+          </Link>
+          <Link href="/metrics">
+            <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid="button-action-plan-view-metrics">
+              View metrics
+            </Button>
+          </Link>
+        </div>
+      </div>
+      <button onClick={dismiss} className="text-muted-foreground hover:text-foreground transition-colors shrink-0" data-testid="button-dismiss-action-plan">
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+function ProgrammeStatusCard() {
+  const { data: status, isLoading } = useQuery<any>({ queryKey: ["/api/programme/status"] });
+
+  if (isLoading) return <Skeleton className="h-44" />;
+  if (!status) return null;
+
+  const PRIORITY_COLORS: Record<string, string> = {
+    high: "text-red-500 dark:text-red-400",
+    medium: "text-amber-500 dark:text-amber-400",
+    low: "text-blue-500 dark:text-blue-400",
+  };
+
+  const PRIORITY_BG: Record<string, string> = {
+    high: "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800",
+    medium: "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800",
+    low: "bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800",
+  };
+
+  return (
+    <Card data-testid="card-programme-status">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Target className="w-4 h-4 text-primary" />
+            ESG Programme Status
+          </CardTitle>
+          <div className="text-right">
+            <span className="text-2xl font-bold">{status.overallCompletionPercent}%</span>
+            <p className="text-xs text-muted-foreground">complete</p>
+          </div>
+        </div>
+        <Progress value={status.overallCompletionPercent} className="h-2 mt-1" />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="p-2 rounded-md bg-muted/50">
+            <p className="text-lg font-bold text-primary">{status.policiesAdoptedCount}</p>
+            <p className="text-xs text-muted-foreground">Policies</p>
+          </div>
+          <div className="p-2 rounded-md bg-muted/50">
+            <p className="text-lg font-bold text-blue-500">{status.metricsWithDataCount}<span className="text-sm font-normal text-muted-foreground">/{status.metricsEnabledCount}</span></p>
+            <p className="text-xs text-muted-foreground">Metrics with data</p>
+          </div>
+          <div className="p-2 rounded-md bg-muted/50">
+            <p className="text-lg font-bold text-amber-500">{status.evidenceCount}</p>
+            <p className="text-xs text-muted-foreground">Evidence files</p>
+          </div>
+        </div>
+
+        {(status.nextBestActions || []).length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Next Best Actions</p>
+            {(status.nextBestActions || []).map((action: any, i: number) => (
+              <Link key={i} href={action.url}>
+                <div
+                  className={`flex items-center gap-2 p-2 rounded-md border text-xs cursor-pointer hover:opacity-80 transition-opacity ${PRIORITY_BG[action.priority] || PRIORITY_BG.low}`}
+                  data-testid={`next-action-${i}`}
+                >
+                  <Zap className={`w-3 h-3 shrink-0 ${PRIORITY_COLORS[action.priority] || ""}`} />
+                  <span className="flex-1 leading-snug">{action.label}</span>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground -rotate-90 shrink-0" />
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

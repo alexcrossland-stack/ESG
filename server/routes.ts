@@ -142,7 +142,7 @@ function classifyRawDataCategory(inputName: string): "environmental" | "social" 
 }
 
 const TOTAL_ONBOARDING_STEPS_V1 = 8;
-const TOTAL_ONBOARDING_STEPS_V2 = 6;
+const TOTAL_ONBOARDING_STEPS_V2 = 7;
 
 const METRIC_KEY_MAP: Record<string, string> = {
   electricity: "Electricity Consumption",
@@ -1027,6 +1027,126 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { dismiss } = req.body;
       await storage.updateCompany(companyId, { activationCardDismissedAt: dismiss ? new Date() : null });
       res.json({ dismissed: !!dismiss });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/onboarding/action-plan", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { esgMaturity, selectedTopics, selectedMetrics, reportingFrequency } = req.body;
+
+      const maturity = (esgMaturity as string) || "just_starting";
+      const topics: string[] = Array.isArray(selectedTopics) ? selectedTopics : [];
+      const metrics: string[] = Array.isArray(selectedMetrics) ? selectedMetrics : [];
+      const frequency = (reportingFrequency as string) || "monthly";
+
+      const POLICY_MAP: Record<string, string> = {
+        climate_change: "Climate Change & Carbon Policy",
+        energy_efficiency: "Energy Management Policy",
+        waste_management: "Waste & Recycling Policy",
+        water_conservation: "Water Management Policy",
+        employee_wellbeing: "Employee Wellbeing Policy",
+        diversity_inclusion: "Diversity & Inclusion Policy",
+        health_safety: "Health & Safety Policy",
+        training_development: "Learning & Development Policy",
+        board_governance: "Corporate Governance Policy",
+        anti_corruption: "Anti-Bribery & Corruption Policy",
+        data_privacy: "Data Privacy Policy",
+        supply_chain: "Supplier Code of Conduct",
+      };
+
+      const PRIORITY_BY_MATURITY: Record<string, string[]> = {
+        just_starting: ["health_safety", "employee_wellbeing", "climate_change", "board_governance", "data_privacy"],
+        some_policies: ["climate_change", "diversity_inclusion", "anti_corruption", "health_safety", "board_governance"],
+        formal_programme: ["supply_chain", "water_conservation", "training_development", "data_privacy", "energy_efficiency"],
+      };
+
+      const prioritised = (PRIORITY_BY_MATURITY[maturity] || []).filter((t: string) => topics.includes(t));
+      const remaining = topics.filter((t: string) => !prioritised.includes(t));
+      const orderedTopics = [...prioritised, ...remaining];
+
+      const recommendedPolicies = orderedTopics
+        .filter((t: string) => POLICY_MAP[t])
+        .slice(0, 3)
+        .map((t: string) => ({ topic: t, name: POLICY_MAP[t], url: "/policy-generator" }));
+
+      const METRIC_INFO: Record<string, { name: string; desc: string }> = {
+        electricity: { name: "Electricity Consumption", desc: "Track electricity usage in kWh monthly" },
+        gas_fuel: { name: "Gas / Fuel Consumption", desc: "Natural gas and fuel consumption" },
+        scope1: { name: "Scope 1 Emissions", desc: "Direct carbon emissions (tCO2e)" },
+        scope2: { name: "Scope 2 Emissions", desc: "Indirect emissions from electricity" },
+        waste: { name: "Waste Generated", desc: "Total waste produced in tonnes" },
+        recycling: { name: "Recycling Rate", desc: "Percentage of waste recycled" },
+        water: { name: "Water Consumption", desc: "Water usage in cubic metres" },
+        headcount: { name: "Employee Headcount", desc: "Total number of employees" },
+        gender_diversity: { name: "Gender Diversity", desc: "Percentage of female employees" },
+        turnover: { name: "Employee Turnover Rate", desc: "Staff leaving rate" },
+        training: { name: "Training Hours per Employee", desc: "Learning and development hours" },
+        health_safety: { name: "Lost Time Incidents", desc: "Workplace health and safety incidents" },
+        board_meetings: { name: "Board Meetings Held", desc: "Annual board meetings held" },
+        esg_policy: { name: "ESG Policy Adoption", desc: "Formal ESG policy in place" },
+        supplier_screening: { name: "Supplier ESG Screening", desc: "Percentage of suppliers assessed" },
+        anti_bribery: { name: "Anti-Bribery Policy", desc: "Anti-bribery policy in place" },
+      };
+
+      const topicToMetrics: Record<string, string[]> = {
+        climate_change: ["scope1", "scope2", "gas_fuel", "electricity"],
+        energy_efficiency: ["electricity", "gas_fuel"],
+        waste_management: ["waste", "recycling"],
+        water_conservation: ["water"],
+        employee_wellbeing: ["headcount", "turnover", "training"],
+        diversity_inclusion: ["gender_diversity", "headcount"],
+        health_safety: ["health_safety"],
+        training_development: ["training"],
+        board_governance: ["board_meetings", "esg_policy"],
+        anti_corruption: ["anti_bribery"],
+        data_privacy: ["esg_policy"],
+        supply_chain: ["supplier_screening"],
+      };
+
+      const metricKeys = new Set<string>();
+      for (const topic of orderedTopics) {
+        for (const m of (topicToMetrics[topic] || [])) metricKeys.add(m);
+      }
+      for (const m of metrics) metricKeys.add(m);
+      const recommendedMetrics = Array.from(metricKeys)
+        .slice(0, 5)
+        .map((k: string) => ({ key: k, ...(METRIC_INFO[k] || { name: k, desc: "" }) }));
+
+      const EVIDENCE_BY_MATURITY: Record<string, { name: string; desc: string }[]> = {
+        just_starting: [
+          { name: "Energy Invoices", desc: "Electricity and gas bills for the past 12 months" },
+          { name: "Payroll / HR Records", desc: "Employee headcount and diversity data" },
+          { name: "Company Registration Document", desc: "Formal business registration certificate" },
+        ],
+        some_policies: [
+          { name: "Emissions Calculation Report", desc: "Carbon footprint calculation methodology and results" },
+          { name: "Training Records", desc: "Employee learning and development completion logs" },
+          { name: "Board Meeting Minutes", desc: "Evidence of board-level ESG oversight and discussion" },
+        ],
+        formal_programme: [
+          { name: "Third-Party ESG Assessment", desc: "Independent audit or sustainability assessment report" },
+          { name: "ISO or Industry Certification", desc: "Quality, environmental, or safety management certificates" },
+          { name: "Supply Chain Due Diligence Report", desc: "Supplier ESG questionnaire results and risk ratings" },
+        ],
+      };
+
+      const recommendedEvidence = (EVIDENCE_BY_MATURITY[maturity] || EVIDENCE_BY_MATURITY.just_starting);
+
+      const actionPlan = {
+        maturityLevel: maturity,
+        recommendedPolicies,
+        recommendedMetrics,
+        recommendedEvidence,
+        reportingFrequency: frequency,
+        generatedAt: new Date().toISOString(),
+      };
+
+      await storage.updateCompany(companyId, { esgActionPlan: actionPlan } as any);
+
+      res.json(actionPlan);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -4088,6 +4208,147 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       res.json({ recommendations, total: recommendations.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/programme/status", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      const metricValues = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
+      const valueMap = new Set(metricValues.map((v: any) => v.metricId));
+      const metricsWithDataCount = enabledMetrics.filter(m => valueMap.has(m.id)).length;
+
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const evidenceCount = evidenceFiles.length;
+      const evidenceCoveragePercent = enabledMetrics.length > 0
+        ? Math.round((evidenceFiles.filter((e: any) => e.linkedModule && e.linkedEntityId).length / enabledMetrics.length) * 100)
+        : 0;
+
+      const policy = await storage.getPolicy(companyId);
+      const generatedPolicies = await storage.getGeneratedPolicies(companyId);
+      const adoptedPolicies = generatedPolicies.filter((p: any) => p.workflowStatus === "approved").length;
+      const publishedPolicy = policy?.status === "published" ? 1 : 0;
+      const policiesAdoptedCount = adoptedPolicies + publishedPolicy;
+      const recommendedPoliciesCount = Math.max(3, policiesAdoptedCount);
+
+      const maturityLevel = company.esgMaturity || null;
+      const answers = (company.onboardingAnswers as any) || {};
+      const priorityTopics: string[] = Array.isArray(answers.selectedTopics) ? answers.selectedTopics.slice(0, 5) : [];
+
+      const MATURITY_WEIGHTS: Record<string, number> = {
+        just_starting: 20,
+        some_policies: 50,
+        formal_programme: 80,
+      };
+      const maturityScore = maturityLevel ? (MATURITY_WEIGHTS[maturityLevel] || 0) : 0;
+
+      const metricsScore = enabledMetrics.length > 0
+        ? Math.round((metricsWithDataCount / enabledMetrics.length) * 100)
+        : 0;
+      const policiesScore = recommendedPoliciesCount > 0
+        ? Math.min(100, Math.round((policiesAdoptedCount / recommendedPoliciesCount) * 100))
+        : 0;
+      const evidenceScore = Math.min(evidenceCoveragePercent, 100);
+
+      const overallCompletionPercent = Math.round(
+        (maturityScore * 0.2) + (metricsScore * 0.4) + (policiesScore * 0.25) + (evidenceScore * 0.15)
+      );
+
+      const nextBestActions: { label: string; url: string; priority: "high" | "medium" | "low" }[] = [];
+
+      if (!maturityLevel || !answers.selectedTopics) {
+        nextBestActions.push({ label: "Complete your ESG profile and maturity assessment", url: "/onboarding", priority: "high" });
+      }
+      if (policiesAdoptedCount === 0) {
+        nextBestActions.push({ label: "Create your first ESG policy", url: "/policy-generator", priority: "high" });
+      }
+      if (enabledMetrics.length === 0) {
+        nextBestActions.push({ label: "Activate your ESG metrics", url: "/metrics", priority: "high" });
+      } else if (metricsWithDataCount === 0) {
+        nextBestActions.push({ label: "Enter your first metric data", url: "/data-entry", priority: "high" });
+      } else {
+        const missingCount = enabledMetrics.length - metricsWithDataCount;
+        if (missingCount > 0) {
+          nextBestActions.push({ label: `Enter data for ${missingCount} metric${missingCount > 1 ? "s" : ""} this month`, url: "/data-entry", priority: "medium" });
+        }
+      }
+      if (evidenceCount === 0) {
+        nextBestActions.push({ label: "Upload your first supporting document", url: "/evidence", priority: "medium" });
+      } else if (evidenceCoveragePercent < 40) {
+        nextBestActions.push({ label: "Link evidence to more metrics to improve coverage", url: "/evidence", priority: "medium" });
+      }
+
+      const reports = await storage.getReportRuns(companyId);
+      if (reports.length === 0) {
+        nextBestActions.push({ label: "Generate your first ESG report", url: "/reports", priority: "low" });
+      }
+
+      res.json({
+        overallCompletionPercent,
+        policiesAdoptedCount,
+        recommendedPoliciesCount,
+        metricsWithDataCount,
+        metricsEnabledCount: enabledMetrics.length,
+        evidenceCount,
+        evidenceCoveragePercent,
+        maturityLevel,
+        priorityTopics,
+        nextBestActions: nextBestActions.slice(0, 5),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/chat/assist", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { message, pageContext, companyContext } = req.body;
+
+      if (!message?.trim()) return res.status(400).json({ error: "Message is required" });
+
+      const company = await storage.getCompany(companyId);
+      const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
+        : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
+
+      const systemPrompt = `You are an ESG implementation coach for small and medium-sized businesses (SMEs). Your role is to help business owners and managers understand ESG (Environmental, Social, and Governance) practices and take practical action.
+
+Respond in plain, simple English. Be concise — 2-4 sentences maximum. Focus on what the user should do next. Avoid jargon. Be encouraging and practical.
+
+The user is currently on the ${pageContext || "dashboard"} page of their ESG management platform.
+
+Company context:
+- ESG maturity level: ${companyContext?.maturityLevel ? maturityLabel : "Unknown"}
+- Policies adopted: ${companyContext?.policiesAdopted ?? "Unknown"}
+- Metrics with data entered: ${companyContext?.metricsWithData ?? "Unknown"}
+- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}
+
+Answer the user's question based on this context. If you're asked about something outside ESG, gently redirect to ESG topics.`;
+
+      try {
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: message.trim() },
+          ],
+          max_tokens: 200,
+          temperature: 0.7,
+        });
+        const reply = completion.choices[0]?.message?.content?.trim() || "I'm unable to answer right now. Please visit the Help Centre.";
+        res.json({ reply });
+      } catch {
+        res.json({ reply: "I'm unable to answer right now. Please visit the Help Centre for guidance." });
+      }
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

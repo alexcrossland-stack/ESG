@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun, TriangleAlert } from "lucide-react";
+import { SupportAssistant } from "@/components/support-assistant";
 import { useEffect, useRef, Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import NotFound from "@/pages/not-found";
@@ -194,6 +195,7 @@ function ProtectedApp() {
           <AppFooter />
         </div>
       </div>
+      <SupportAssistant />
     </SidebarProvider>
   );
 }

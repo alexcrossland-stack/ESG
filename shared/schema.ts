@@ -65,6 +65,7 @@ export const companies = pgTable("companies", {
   selectedModules: jsonb("selected_modules"),
   selectedMetrics: jsonb("selected_metrics"),
   onboardingAnswers: jsonb("onboarding_answers"),
+  esgActionPlan: jsonb("esg_action_plan"),
   activationCardDismissedAt: timestamp("activation_card_dismissed_at"),
   planTier: planTierEnum("plan_tier").default("free"),
   planStatus: planStatusEnum("plan_status").default("active"),

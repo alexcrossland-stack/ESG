@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1314,6 +1315,18 @@ export default function Reports() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
+      <PageGuidance
+        pageKey="reports"
+        title="ESG Reports — what this page does"
+        summary="This page generates structured ESG reports from your data, policies, and evidence. Use them for board meetings, bank or investor requests, procurement questionnaires, or public sustainability disclosures."
+        goodLooksLike="At least one report generated and shared per quarter, covering the metrics and policies most relevant to your audience."
+        steps={[
+          "Choose the report template that matches your audience (board, supply chain, etc.)",
+          "Select the time period and the data you want to include",
+          "Generate the report and review it before sharing",
+          "Download as PDF or share a link directly with stakeholders",
+        ]}
+      />
       <div>
         <h1 className="text-xl font-semibold flex items-center gap-2" data-testid="text-page-title">
           <Download className="w-5 h-5 text-primary" />

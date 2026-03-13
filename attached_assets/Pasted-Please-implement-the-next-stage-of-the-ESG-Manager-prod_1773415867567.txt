@@ -1,0 +1,332 @@
+Please implement the next stage of the ESG Manager product improvements.
+These changes should be implemented carefully in sequence and must not break the existing application.
+
+The platform is already live and running on a production server, so stability and backward compatibility are critical.
+
+⸻
+
+PROJECT GOAL
+
+Improve usability for SME users by adding:
+	1.	A richer guided onboarding experience
+	2.	Clear contextual guidance on key pages
+	3.	A top-level ESG programme progress dashboard
+	4.	An in-app contextual support assistant
+
+These features should make it extremely easy for a non-expert SME to understand:
+
+• what ESG means for them
+• what they need to do next
+• how far along their programme is
+• how to use each section of the platform
+
+⸻
+
+IMPLEMENTATION ORDER
+
+Please implement the following in this exact order:
+	1.	Guided Onboarding Wizard Improvements
+	2.	Contextual Page Guidance Panels
+	3.	ESG Programme Status Dashboard
+	4.	In-App Support Assistant
+
+Do NOT attempt to implement all logic in one pass.
+Each stage should integrate cleanly with the previous one.
+
+⸻
+
+	1.	GUIDED ONBOARDING WIZARD IMPROVEMENTS
+
+Enhance the onboarding experience so the platform generates a personalised ESG action plan.
+
+Key changes:
+
+• Replace the existing maturity dropdown with a short 5-question maturity assessment
+• Questions should calculate a maturity level:
+	•	Starter
+	•	Developing
+	•	Established
+
+• Update the topic selection step so each ESG topic includes a short benefit statement explaining the business value
+
+Example:
+Climate Change — “Reduce energy costs and meet customer carbon requirements”
+
+• Add a final onboarding step called:
+
+“Your ESG Action Plan”
+
+This step should show:
+
+Top 3 recommended policies
+Top 5 recommended metrics
+Top 3 evidence items to collect
+Suggested reporting frequency
+
+These recommendations should be rule-based and derived from:
+
+maturity level + selected ESG topics
+
+NO AI calls should be used here.
+
+⸻
+
+DATABASE CHANGES
+
+Add a new column to the companies table:
+
+esgActionPlan jsonb
+
+⸻
+
+NEW API ENDPOINT
+
+Create:
+
+POST /api/onboarding/action-plan
+
+This endpoint should:
+	1.	Accept company onboarding data
+	2.	Compute the action plan
+	3.	Save it to companies.esgActionPlan
+	4.	Return the plan to the frontend
+
+⸻
+
+UI CHANGES
+
+• Add a dismissible banner on the dashboard:
+
+“Continue your ESG Action Plan”
+
+• The banner links to a new section on the profile page.
+
+Create or extend:
+
+/esg-profile
+
+This page should display the saved action plan.
+
+⸻
+
+EMPTY STATE IMPROVEMENTS
+
+If a user opens pages without completing setup, show helpful CTAs.
+
+Metrics page
+Policies page
+Evidence page
+
+Each should show:
+
+“Haven’t set up your ESG plan yet?
+Complete your ESG profile”
+
+⸻
+
+	2.	CONTEXTUAL PAGE GUIDANCE PANELS
+
+Create a reusable component:
+
+PageGuidance
+
+Location:
+
+client/src/components/page-guidance.tsx
+
+Props:
+
+title
+summary
+goodLooksLike
+steps
+pageKey
+
+Behaviour:
+
+• collapsible guidance panel
+• dismissible
+• collapsed state stored in localStorage
+
+Example key:
+
+guidance_dismissed_metrics
+
+⸻
+
+ADD GUIDANCE TO THESE PAGES
+
+Policies page
+
+Explain:
+what ESG policies are
+why stakeholders ask for them
+how to adopt them
+
+Metrics page
+
+Explain:
+what ESG metrics are
+why tracking matters
+how to enter data
+
+Evidence page
+
+Explain:
+why documents matter for ESG credibility
+how to upload and link evidence
+
+Topics page
+
+Explain:
+what material ESG topics are
+how to choose relevant ones
+
+Reports page
+
+Explain:
+what ESG reporting is
+how to generate a report
+
+⸻
+
+	3.	ESG PROGRAMME STATUS DASHBOARD
+
+Create a new API endpoint:
+
+GET /api/programme/status
+
+Return:
+
+overallCompletionPercent
+policiesAdoptedCount
+recommendedPoliciesCount
+metricsWithDataCount
+metricsEnabledCount
+evidenceCount
+evidenceCoveragePercent
+maturityLevel
+priorityTopics
+nextBestActions[]
+
+⸻
+
+NEXT BEST ACTIONS LOGIC
+
+Examples:
+
+• No policies adopted → “Create your first policy”
+• Metrics enabled but no data → “Enter your first metric data”
+• No evidence uploaded → “Upload supporting documents”
+• Maturity missing → “Complete ESG profile”
+
+Return each action as:
+
+label
+url
+priority
+
+⸻
+
+DASHBOARD UI
+
+Create a new dashboard section:
+
+“ESG Programme Status”
+
+Display:
+
+overall completion progress ring
+policy progress
+metric progress
+evidence progress
+maturity badge
+next-best actions list
+
+This section should appear above the existing dashboard cards.
+
+⸻
+
+	4.	IN-APP SUPPORT ASSISTANT
+
+Create a floating assistant accessible on all authenticated pages.
+
+Location:
+
+client/src/components/support-assistant.tsx
+
+Behaviour:
+
+• floating “Ask for help” button
+• slide-up chat panel
+• simple chat interface
+• session history stored in React state only
+
+⸻
+
+NEW API ENDPOINT
+
+POST /api/chat/assist
+
+Input:
+
+message
+pageContext
+companyContext
+
+companyContext should include:
+
+maturityLevel
+policiesAdopted
+metricsWithData
+evidenceCount
+
+⸻
+
+AI BEHAVIOUR
+
+Use OpenAI through the existing integration.
+
+System prompt:
+
+The assistant should act as:
+
+“An ESG implementation coach for SMEs”
+
+Responses should be:
+
+• plain English
+• concise
+• practical
+• focused on what the user should do next
+
+⸻
+
+IMPORTANT
+
+If OpenAI API key is missing or unavailable:
+
+Return a fallback response:
+
+“I’m unable to answer right now. Please visit the Help Centre.”
+
+The API must NOT crash the server.
+
+⸻
+
+GLOBAL APP INTEGRATION
+
+Render the assistant globally inside the authenticated app layout.
+
+client/src/App.tsx
+
+⸻
+
+FINAL REQUIREMENTS
+
+After completing the implementation please provide:
+	1.	A list of all files changed
+	2.	Any database migrations required
+	3.	Any new environment variables needed
+	4.	A manual testing checklist for each feature
+	5.	Confirmation that existing functionality was not broken

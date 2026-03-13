@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -117,6 +118,18 @@ export default function Policy() {
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
+      <PageGuidance
+        pageKey="policy"
+        title="ESG Policy — what this page does"
+        summary="This page is your central ESG policy editor. Use it to create, maintain, and publish a comprehensive written ESG policy that covers your commitments on environment, social responsibility, and governance."
+        goodLooksLike="A published policy with at least 4 sections completed, reviewed within the last 12 months, and approved by a senior member of your team."
+        steps={[
+          "Work through each section — add your company's commitments and context",
+          "Use the AI generation shortcut if you want a first draft quickly",
+          "Review and approve the draft, then publish it",
+          "Share the published policy with staff, customers, and suppliers",
+        ]}
+      />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { PageGuidance } from "@/components/page-guidance";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +75,18 @@ export default function Topics() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
+      <PageGuidance
+        pageKey="topics"
+        title="Priority Topics — what this page does"
+        summary="This page lets you set which ESG topics are most relevant to your business. Your selections drive what metrics you track, what policies you create, and how your ESG reports are structured."
+        goodLooksLike="At least 3–5 topics selected covering a mix of environmental, social, and governance areas relevant to your industry and operations."
+        steps={[
+          "Toggle on the topics that matter most to your industry and stakeholders",
+          "Think about what your customers, lenders, or investors ask about",
+          "Enable climate and carbon topics if you have energy-intensive operations",
+          "Review and update your selections as your ESG programme evolves",
+        ]}
+      />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">

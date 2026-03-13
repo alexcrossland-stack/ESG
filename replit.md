@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ESG Manager is a SaaS web application designed for Small and Medium-sized Enterprises (SMEs) to streamline their Environmental, Social, and Governance (ESG) policy management, data tracking, and reporting. It aims to replace manual processes with a guided, AI-assisted platform, making ESG accessible to business owners, CFOs, HR, and operations managers without requiring prior ESG expertise. The platform provides tools for policy generation, questionnaire autofill, and carbon emissions calculation, ultimately helping businesses improve their ESG performance and reporting capabilities. The project envisions becoming the leading ESG platform for SMEs, empowering them to achieve sustainability goals and meet reporting requirements efficiently.
+The ESG Manager is a SaaS web application designed for Small and Medium-sized Enterprises (SMEs) to simplify Environmental, Social, and Governance (ESG) policy management, data tracking, and reporting. It replaces manual processes with an AI-assisted platform, making ESG accessible to business owners, CFOs, HR, and operations managers regardless of prior ESG expertise. Key capabilities include policy generation, questionnaire autofill, and carbon emissions calculation. The project aims to become the leading ESG platform for SMEs, helping them achieve sustainability goals and meet reporting requirements efficiently.
 
 ## User Preferences
 
@@ -13,109 +13,68 @@ No explicit user preferences were provided in the original `replit.md` file. The
 The application is a full-stack SaaS web application.
 
 **UI/UX Decisions:**
-- **Design System:** Utilizes Shadcn UI and Tailwind CSS for a modern, responsive interface.
-- **Theming:** Supports both light and dark modes.
-- **Color Scheme:** Primary color is green (`hsl(158, 64%, 32%)`).
+- **Design System:** Shadcn UI and Tailwind CSS for a modern, responsive interface.
+- **Theming:** Supports light and dark modes with a primary green color (`hsl(158, 64%, 32%)`).
 - **Typography:** Uses Open Sans font.
-- **Layout:** Features a fixed-width sidebar (14rem).
-- **Onboarding:** Onboarding v2 implements a 6-step action-based flow (Profile, Focus Topics, Reporting Setup, Data Entry, Evidence, Output) with Quick Start path. V1 (guided 8-step wizard or manual) is still supported. Both versions have database persistence, autosave, and resume functionality.
+- **Onboarding:** V2 7-step guided wizard: Company Profile → ESG Maturity Assessment (5-question quiz scoring to Starter/Developing/Established) → ESG Priorities (with business benefit statements) → Reporting Setup → First Data Entry → Evidence Linking → Your ESG Action Plan (rule-based, no AI). Action plan saved to `esgActionPlan` jsonb column on companies table. Endpoint: POST /api/onboarding/action-plan.
 
 **Technical Implementations:**
-- **Frontend:** Built with React, utilizing TanStack Query for data fetching, Wouter for routing, and Recharts for data visualization.
-- **Backend:** Developed with Node.js and Express.
-- **Database:** PostgreSQL is used as the primary data store, managed via Drizzle ORM.
-- **Authentication:** Session-based authentication with `express-session` and `connect-pg-simple`, incorporating `bcrypt` for password hashing, rate limiting, and secure cookie practices. RBAC (Role-Based Access Control) is implemented with four roles (admin, contributor, approver, viewer) and seven permission modules, enforced server-side via middleware and client-side via hooks.
+- **Frontend:** React, TanStack Query for data fetching, Wouter for routing, Recharts for data visualization.
+- **Backend:** Node.js with Express.
+- **Database:** PostgreSQL managed via Drizzle ORM.
+- **Authentication:** Session-based authentication with `express-session`, `connect-pg-simple`, `bcrypt` for password hashing, rate limiting, and secure cookies. Role-Based Access Control (RBAC) supports four roles (admin, contributor, approver, viewer) and seven permission modules, enforced server-side and client-side.
 - **Core Features:**
-    - **Dashboard:** Provides an overview of ESG performance with weighted scores, category performance, submission rates, emissions trends, and alerts.
-    - **ESG Policy Builder:** Allows for the creation and management of ESG policies with version history and a draft/publish workflow.
-    - **Metrics Library & Data Entry:** Features 28 default ESG metrics, supporting manual, calculated, and derived types. Supports raw data inputs, manual metric entry, and bulk Excel uploads.
-    - **Scoring System:** Employs a traffic light system for metric status and a weighted ESG scoring methodology.
-    - **Action Tracker:** Manages ESG improvement actions with owners, due dates, and status tracking.
-    - **Reports:** Structured report generator with 3 templates and 9 configurable sections, supporting text and CSV export.
-    - **Evidence Management:** Tracks evidence files linked to various modules, with statuses and review workflows.
+    - **Dashboard:** Overview of ESG performance, weighted scores, emissions trends, and alerts.
+    - **ESG Policy Builder:** Create and manage policies with version history and draft/publish workflow.
+    - **Metrics Library & Data Entry:** 28 default ESG metrics supporting manual, calculated, derived types, and bulk Excel uploads.
+    - **Scoring System:** Traffic light system for metric status and weighted ESG scoring.
+    - **Action Tracker:** Manage ESG improvement actions.
+    - **Reports:** Structured report generator with configurable sections, supporting text and CSV export.
+    - **Evidence Management:** Track evidence files linked to various modules.
     - **Workflow Management:** Key entities have `workflowStatus` with enforced state transitions and audit trails.
-    - **AI Safety/Governance:** AI-generated outputs are marked as "draft" requiring human review, and metadata is logged.
-- **Admin Controls:** Comprehensive admin panel for managing users, roles, module configurations, scoring weights, metric settings, policy templates, emission factors, approval workflows, report branding, and audit logs.
-- **Notifications & Reminders:** Auto-generated notifications for metric due dates, overdue actions, policy reviews, evidence expiry, and stale questionnaires.
-- **Phase 2 Enhancements:**
-    - **Task Ownership & Workflow Standardisation:** Standardized workflow fields and assigned user/due dates for various entities.
-    - **Reporting Periods:** Introduced `reporting_periods` for managing data entry and reporting cycles.
-    - **My Tasks/My Approvals:** Dedicated pages for users to manage assigned tasks and approvals.
-    - **Period-Filtered Views:** Enhanced data entry and dashboard views with reporting period selection.
-    - **Bulk Operations:** Added bulk approve/reject and owner assignment functionalities.
-    - **Activity Feed:** Timeline component from audit log for dashboard.
-- **Phase 2 — Release 3 Features:**
-    - **Data Quality Score System:** Per-metric quality scores based on various criteria.
-    - **Compliance Framework Mapping:** Integrated compliance frameworks (e.g., GRI, ISO 14001, UN SDGs) with tracking of requirements.
-    - **Enhanced Report Sections:** Added Data Quality Assessment, Compliance Status, and Period Comparison sections to reports.
-    - **Dashboard Completeness Indicators:** Progress bars and quick action cards for data completeness.
-- **Phase 3 — Commercial Usability Features:**
+    - **AI Safety/Governance:** AI-generated outputs are marked as "draft" requiring human review.
+    - **Admin Controls:** Comprehensive panel for managing users, roles, configurations, scoring, metrics, templates, emission factors, and audit logs.
+    - **Notifications & Reminders:** Auto-generated notifications for due dates, overdue actions, reviews, and expiry.
+    - **Reporting Periods:** Management of data entry and reporting cycles.
+    - **Data Quality Score System:** Per-metric quality scores.
+    - **Compliance Framework Mapping:** Integration with compliance frameworks (e.g., GRI, ISO 14001, UN SDGs).
     - **ESG Control Centre:** Aggregated view of outstanding ESG issues with an ESG Gap Score.
-    - **Customer Procurement Answer Library:** CRUD for pre-approved ESG answers with usage tracking and auto-flagging.
-    - **Automated Recurring Reminders:** Scheduled background jobs for multi-tier escalations.
-    - **Evidence Reuse & Suggestions:** Functionality for suggesting and reusing evidence files.
-    - **Improved Exports:** New presentation-ready export packs (Board, Customer, Compliance, Assurance).
-    - **Guided Demo Mode:** Provides a guided tour and seeded data for new users.
-    - **Trust & Source-Status Layer:** `SourceBadge` component to display data status, owner, date, and evidence.
-- **Phase 6 — Product Readiness & Commercial Value:**
-    - **AI Rate Limiting:** `aiLimiter` (20 req/min) applied to all AI endpoints including `policy-templates/:slug/generate`, `policy-generator/generate`, `questionnaires/:id/autofill`, `questionnaires/generate-responses`. File upload limits 5MB, row import limits 10,000.
-    - **ESG Control Centre Upgrade** (`client/src/pages/control-centre.tsx`): Filter tabs (All/Data/Actions/Compliance/Approvals), priority sort, bulk complete overdue actions, improved empty states, 3-stat header row.
-    - **Recommendations Engine** (`/api/recommendations`, `client/src/pages/recommendations.tsx`): 7 rule-based recommendations (missing_data, expiring_evidence, expired_evidence, overdue_actions, low_quality, compliance_gap, draft_policies), priority sorted high→medium→low. Dashboard widget shows top 3. Sidebar nav link added.
-    - **Simplified Report Types** (`client/src/pages/reports.tsx`): 4 named report types (Board Summary, Customer Response Pack, Compliance Summary, Full ESG Report) with audience and time estimates shown as cards.
-    - **Questionnaire AI Response Generator** (`client/src/pages/questionnaire.tsx`): New "AI Response Generator" tab (default). Paste questionnaire text → POST `/api/questionnaires/generate-responses` → Q&A pairs with confidence & source. Copy-per-answer and bulk export.
-    - **Demo Mode Guided Scenarios** (`client/src/components/product-tour.tsx`): 3 scenarios (customer ESG request, board report, ESG gap review) with step-by-step walkthrough UI.
-    - **Expanded CSV Import Templates** (`/api/raw-data/import/templates`, `/api/raw-data/import/template?type=`): 4 template types (energy, travel, workforce, all). Import dialog shows template selector cards with download.
-- **Phase 5 — Performance & Onboarding:**
-    - **Test Data Generator** (`server/seed-generator.ts`): Deterministic seed with small/medium/large presets (1126/6435+ records). `server/perf-test.ts` benchmarks 24 workflows all under 200ms.
-    - **Database Optimization** (`server/ensure-indexes.ts`): 40 targeted indexes, ensured at server startup.
-    - **Reliability Hardening** (`server/scheduler.ts`): FOR UPDATE SKIP LOCKED job locking, stuck job recovery (10min timeout), exponential backoff (30s/2min/8min, max 3 retries), job cleanup (30 days) and health event cleanup (90 days). Slow route monitoring (2s threshold) in `server/index.ts`.
-    - **Performance Admin View** (`client/src/pages/admin-health.tsx`): Tabbed layout with Health Events, Background Jobs, and Performance tabs. `/api/admin/performance` endpoint returns DB size, connection count, index count, table row counts.
-    - **Onboarding v2** (`client/src/pages/onboarding.tsx`): 6-step action-based flow (Profile, Focus Topics, Reporting Setup, Data Entry, Evidence, Output) with `onboardingVersion=2`. Quick Start path seeds demo data. Dashboard activation card shows progress for incomplete onboarding.
-- **Phase 4 — Platform Reliability & Automation:**
-    - **Background Job Scheduler** (`server/scheduler.ts`): Recurring system jobs (reminders, evidence expiry, procurement revalidation, compliance recalculation) on 60s tick; on-demand queued jobs with retry logic, idempotency keys, worker locking. `background_jobs` table tracks all runs.
-    - **Platform Health Monitoring** (`client/src/pages/admin-health.tsx`): Super-admin-only dashboard with status cards (scheduler, API errors, report engine), health events table, background job history. Auto-refreshes every 30s. `platform_health_events` table logs job failures and API 500 errors.
-    - **PDF/DOCX Report Engine** (`server/report-engine.ts`): Uses `pdfkit` and `docx` packages. Generates branded PDF and DOCX files for all 5 report types. Files persisted in `generated_files` table with re-download support.
-    - **Questionnaire Import Tool**: Import via text (paste), CSV, or Excel. Multi-strategy answer matching with confidence scores (exact/keyword/category). All imports default to draft status.
-    - **Carbon Data Import**: Two-step flow (parse then confirm). Column auto-mapping with fuzzy matching and confidence scores. Users can override mappings before confirming. Audit trail logged.
-    - **ESG Company Profile** (`client/src/pages/esg-profile.tsx`, `client/src/pages/public-profile.tsx`): Professional ESG profile page with sharing controls (toggle, expiry, section visibility). Public shareable link via token with server-side section whitelisting. Token rotation supported.
-    - **User Activity Analytics** (`client/src/pages/admin-analytics.tsx`): Tracks page views and feature usage. `user_activity` table with 90-day retention. Admin dashboard shows active users, feature usage bars, top pages, daily activity timeline.
-    - **ESG Benchmarking** (`server/benchmarks.ts`, `client/src/pages/benchmarks.tsx`): 7 SME reference range benchmarks with source attribution. Range bar visualization with company marker. Dashboard summary card with color-coded indicators.
+    - **Customer Procurement Answer Library:** CRUD for pre-approved ESG answers.
+    - **Recommendations Engine:** Rule-based recommendations (missing data, overdue actions, compliance gaps).
+    - **ESG Programme Status:** GET /api/programme/status computes overall completion % (maturity 20%, metrics 40%, policies 25%, evidence 15%), policies/metrics/evidence counts, and prioritised next-best-actions. Displayed as ProgrammeStatusCard on dashboard.
+    - **Page Guidance Panels:** `client/src/components/page-guidance.tsx` — collapsible blue info panel on policy, metrics, evidence, topics, reports pages. Dismissible per page via localStorage. Shows: summary, "what good looks like", and numbered steps.
+    - **In-app Support Assistant:** `client/src/components/support-assistant.tsx` — floating chat panel (bottom-right), globally rendered in ProtectedApp. Uses POST /api/chat/assist (OpenAI gpt-4o-mini, graceful fallback). Shows suggested questions when fresh. Page-aware and company-context-aware.
+    - **Action Plan Banner:** Dashboard shows dismissible banner (localStorage) when esgActionPlan is populated. Links to policy generator and metrics.
+    - **Questionnaire AI Response Generator:** AI-powered Q&A generation from questionnaire text.
+    - **ESG Company Profile:** Professional, public-shareable ESG profile page.
+    - **ESG Benchmarking:** Comparison against 7 SME reference benchmarks.
+- **Performance & Reliability:**
+    - **Background Job Scheduler:** Recurring and on-demand jobs with retry logic and idempotency.
+    - **Platform Health Monitoring:** Super-admin dashboard for scheduler status, API errors, health events, and background job history.
+    - **PDF/DOCX Report Engine:** Generates branded reports.
+    - **Carbon Data Import:** Two-step import process with column auto-mapping.
+    - **Security Hardening:** Helmet.js, CORS restrictions, body size limits, environment validation, slow route monitoring, 5xx error handling.
+    - **AI Rate Limiting:** `aiLimiter` (20 req/min) on all AI endpoints.
+- **AI Agent Integration Layer:**
+    - **Agent Authentication:** API key-based authentication with scopes, revocation, and expiry.
+    - **Webhook Dispatch:** Critical health events dispatched to an optional agent webhook.
+    - **Agent Routes:** Dedicated API endpoints for agent interaction, including company/user data, health, knowledge base, events, support tickets, audit logs, escalations, and chat sessions.
 
 **Feature Specifications:**
-- **AI-Assisted Tools:** Policy Generator, Supplier Questionnaire Autofill, Carbon Estimator (rules-based, not AI).
-- **Carbon Estimator:** SME-focused carbon module with versioned emission factors (UK DEFRA 2024), data quality tracking, fuel-type-specific factors, and proxy calculations.
-- **Policy Templates:** 28 structured templates with guided drafting.
-- **Calculation Engine:** Centralized service for 12 automated ESG metric calculations using database emission factors.
-
-- **Phase 7 — Launch Readiness:**
-    - **Security Hardening** (`server/index.ts`): Helmet.js with production CSP (disabled in dev for Vite HMR), CORS restricted to REPLIT_DOMAINS in production, 2MB body size limit, startup validation for DATABASE_URL/SESSION_SECRET, slow route health events (>2s threshold), 5xx error handler logs health events.
-    - **Email Service** (`server/email.ts`): Resend integration with graceful fallback if API key absent. `generateSecureToken()` returns `{plaintext, hash}`. 5 HTML email templates: invitation, password reset, report ready, support confirmation, evidence expiry. Support confirmation emails sent on ticket creation.
-    - **Password Reset Flow**: `POST /api/auth/forgot-password` and `POST /api/auth/reset-password` routes. Token stored as SHA-256 hash in `auth_tokens` table with 1-hour expiry. Auth page shows forgot-password form and "Check your inbox" confirmation. Reset link shows new password form.
-    - **Stripe Billing** (`client/src/pages/billing.tsx`): Billing page with Free vs Pro plan cards. `POST /api/billing/create-checkout` creates Stripe Checkout session. `POST /api/billing/webhook` verifies Stripe signatures and handles checkout.session.completed, invoice.payment_succeeded, invoice.payment_failed, customer.subscription.deleted events. `GET /api/billing/status` returns current plan tier. Cancel subscription endpoint. Billing link in sidebar.
-    - **Database Schema Extensions**: `auth_tokens` table (token_hash, type, email, expires_at, used_at). Billing fields on companies (plan_tier, plan_status, current_period_end, stripe_customer_id, stripe_subscription_id). New enums: plan_tier, plan_status, auth_token_type.
-    - **Health Monitoring Expansion** (`client/src/pages/admin-health.tsx`): Event severity filtering, event breakdown by type (24h summary), Security Audit tab. `GET /api/admin/health/counts` returns 24h event counts by type/severity. `GET /api/admin/security-audit` runs environment config checks. CSV import failures and AI failures log health events.
-    - **Demo Reset** (`POST /api/admin/demo/reset`): Super-admin only, requires `{confirm: "RESET_DEMO"}`, scoped to demo company only.
-    - **Client Error Boundary** (`client/src/App.tsx`): React class-based error boundary wrapping all routes. Reports errors to `POST /api/health/client-error`. Shows branded error UI with reload button.
-    - **Branded 404** (`client/src/pages/not-found.tsx`): Redesigned with ESG Manager branding, "Go to dashboard" and "Get help" buttons.
-    - **Demo Banner** (`client/src/pages/dashboard.tsx`): Shows amber banner when on demo account with link to create own account.
-    - **Environment Config** (`.env.example`): Documents all required and optional environment variables.
-
-- **Phase 8 — AI Agent Integration Layer:**
-    - **New Database Tables** (`shared/schema.ts`): 6 new tables — `agent_api_keys` (M2M auth keys with scopes, revocation, expiry), `agent_runs` (agent execution audit), `agent_actions` (per-run action records), `agent_escalations` (agent-to-human escalation log), `chat_sessions`, `chat_messages`. New `agent_type` enum with 5 values.
-    - **Agent Authentication** (`server/agent-auth.ts`): `generateAgentApiKey()` creates `esgk_`-prefixed keys with SHA-256 hash stored only in DB. `requireAgentAuth` middleware reads `X-Agent-API-Key` header, validates hash, checks revocation/expiry, updates `last_used_at`. `requireAgentScope(scope)` enforces `internal:*` wildcard or exact scope match.
-    - **Webhook Dispatch** (`server/webhooks.ts`): `dispatchCriticalHealthEvent()` sends best-effort POST to `AGENT_WEBHOOK_URL` (env var, optional) for events with `severity=error` and type in `{server_error, job_failure, ai_failure, csv_import_failure}`. Never throws. Fires asynchronously after `createPlatformHealthEvent` in `csv_import_failure` and `ai_failure` paths in routes.ts.
-    - **Agent Routes** (`server/agent-routes.ts`, `registerAgentRoutes(app)`): 20 new routes under `/api/internal/agent/*` and `/api/internal/chat/*` plus public `GET /health`. Key routes: POST/GET/DELETE `/api/internal/agent/keys` (admin session auth), GET `/api/internal/agent/company/:id`, GET `/api/internal/agent/user/:id`, GET `/api/internal/agent/health`, GET `/api/internal/agent/knowledge` (in-memory search over policy templates + 28 metrics + 7 benchmarks + 10 compliance frameworks), GET `/api/internal/agent/events`, GET `/api/internal/agent/support-tickets`, GET `/api/internal/agent/audit-logs/:companyId`, POST/GET `/api/internal/agent/escalations` (optionally creates support ticket), POST/PATCH `/api/internal/agent/runs`, POST `/api/internal/agent/runs/:runId/actions`, POST/GET `/api/internal/chat/sessions`, GET/POST `/api/internal/chat/sessions/:id/messages` (forwards to `AGENT_SERVICE_URL` if configured, otherwise returns placeholder).
-    - **Environment Variables**: `AGENT_WEBHOOK_URL` (outbound critical event webhook), `AGENT_SERVICE_URL` (AI agent chat backend). Both optional with graceful degradation. Documented in `.env.example`.
+- **AI-Assisted Tools:** Policy Generator, Supplier Questionnaire Autofill.
+- **Carbon Estimator:** SME-focused carbon module with versioned emission factors (UK DEFRA 2024).
+- **Policy Templates:** 28 structured templates.
+- **Calculation Engine:** Centralized service for 12 automated ESG metric calculations.
 
 ## External Dependencies
 
-- **AI Services:** OpenAI (via Replit AI Integrations, specifically `gpt-5.2`).
+- **AI Services:** OpenAI (via Replit AI Integrations).
 - **Database:** PostgreSQL.
 - **Session Store:** `connect-pg-simple`.
 - **Password Hashing:** `bcrypt`.
 - **UI Frameworks:** React, Tailwind CSS, Shadcn UI.
 - **Data Visualization:** Recharts.
-- **Security:** Helmet.js for HTTP security headers.
-- **Email:** Resend (gracefully disabled if RESEND_API_KEY not set).
-- **Billing:** Stripe (gracefully disabled if STRIPE_SECRET_KEY not set).
+- **Security:** Helmet.js.
+- **Email:** Resend (optional).
+- **Billing:** Stripe (optional).
 - **Data Fetching:** TanStack Query.
