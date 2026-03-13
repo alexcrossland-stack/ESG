@@ -6029,7 +6029,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-      const [totalsR, newProR, monthlyR] = await Promise.all([
+      const [totalsR, newProR, churnedR, monthlyR] = await Promise.all([
         db.execute(sql`
           SELECT
             COUNT(*)::int AS total,
@@ -6040,6 +6040,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         db.execute(sql`
           SELECT COUNT(*)::int AS count FROM companies
           WHERE plan_tier = 'pro' AND created_at >= ${thirtyDaysAgo}
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM companies
+          WHERE status != 'active' AND status IS NOT NULL
         `),
         db.execute(sql`
           SELECT
@@ -6060,6 +6064,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const proCount = totals.pro_count ?? 0;
       const freeCount = totals.free_count ?? 0;
       const newPro30d = ((newProR as any).rows ?? [])[0]?.count ?? 0;
+      const churned30d = ((churnedR as any).rows ?? [])[0]?.count ?? 0;
       const conversionRate = totalCompanies > 0 ? Math.round((proCount / totalCompanies) * 1000) / 10 : 0;
       const estimatedMrr = proCount * 199;
       const monthlyGrowth = ((monthlyR as any).rows ?? []).map((r: any) => ({
@@ -6069,7 +6074,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         total: r.total_count,
       }));
 
-      res.json({ totalCompanies, proCount, freeCount, estimatedMrr, newPro30d, conversionRate, monthlyGrowth });
+      res.json({ totalCompanies, proCount, freeCount, estimatedMrr, newPro30d, churned30d, conversionRate, monthlyGrowth });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

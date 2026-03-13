@@ -341,6 +341,7 @@ function RevenueTab() {
   const proCount = data?.proCount ?? 0;
   const freeCount = data?.freeCount ?? 0;
   const newPro30d = data?.newPro30d ?? 0;
+  const churned30d = data?.churned30d ?? 0;
   const conversionRate = data?.conversionRate ?? 0;
   const monthlyGrowth: any[] = data?.monthlyGrowth ?? [];
 
@@ -353,7 +354,7 @@ function RevenueTab() {
           { label: "Pro Tier", value: proCount, icon: CreditCard },
           { label: "Estimated MRR", value: `£${mrr.toLocaleString()}`, icon: DollarSign },
           { label: "New Pro (30d)", value: newPro30d, icon: TrendingUp },
-          { label: "Conversion Rate", value: `${conversionRate}%`, icon: Percent },
+          { label: "Churned", value: churned30d, icon: AlertTriangle },
         ].map(({ label, value, icon: Icon }) => (
           <Card key={label} data-testid={`revenue-stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
             <CardContent className="pt-5 flex items-start gap-3">
