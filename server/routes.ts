@@ -4228,12 +4228,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const evidenceFiles = await storage.getEvidenceFiles(companyId);
       const evidenceCount = evidenceFiles.length;
-      const evidenceCoveragePercent = enabledMetrics.length > 0
-        ? Math.round((evidenceFiles.filter((e: any) => e.linkedModule && e.linkedEntityId).length / enabledMetrics.length) * 100)
-        : 0;
-
+      const reports = await storage.getReportRuns(companyId);
       const policy = await storage.getPolicy(companyId);
       const generatedPolicies = await storage.getGeneratedPolicies(companyId);
+
+      const linkedEntityIds = new Set(
+        evidenceFiles
+          .filter((e: any) => e.linkedModule && e.linkedEntityId)
+          .map((e: any) => e.linkedEntityId)
+      );
+      const totalCoverageItems = generatedPolicies.length + enabledMetrics.length + reports.length;
+      const coveredItems =
+        generatedPolicies.filter((p: any) => linkedEntityIds.has(p.id)).length +
+        enabledMetrics.filter(m => linkedEntityIds.has(m.id)).length +
+        reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
+      const evidenceCoveragePercent = totalCoverageItems > 0 ? Math.round((coveredItems / totalCoverageItems) * 100) : 0;
+
       const adoptedPolicies = generatedPolicies.filter((p: any) => p.workflowStatus === "approved").length;
       const publishedPolicy = policy?.status === "published" ? 1 : 0;
       const policiesAdoptedCount = adoptedPolicies + publishedPolicy;
@@ -4286,7 +4296,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         nextBestActions.push({ label: "Link evidence to more metrics to improve coverage", url: "/evidence", priority: "medium" });
       }
 
-      const reports = await storage.getReportRuns(companyId);
       if (reports.length === 0) {
         nextBestActions.push({ label: "Generate your first ESG report", url: "/reports", priority: "low" });
       }
