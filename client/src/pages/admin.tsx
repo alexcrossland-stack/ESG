@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -41,10 +41,9 @@ function StatCard({ label, value, icon: Icon, variant = "default" }: {
   );
 }
 
-function CompaniesTable() {
+function CompaniesTable({ onSelect }: { onSelect: (company: any) => void }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [selectedCompany, setSelectedCompany] = useState<any>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "reactivate" | "impersonate"; company: any } | null>(null);
   const { toast } = useToast();
   const PAGE_SIZE = 50;
@@ -54,13 +53,6 @@ function CompaniesTable() {
     queryFn: () =>
       fetch(`/api/admin/companies?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}`, { credentials: "include" })
         .then(r => r.json()),
-  });
-
-  const { data: companyDetail, isLoading: detailLoading } = useQuery<any>({
-    queryKey: ["/api/admin/company", selectedCompany?.id],
-    queryFn: () =>
-      fetch(`/api/admin/company/${selectedCompany.id}`, { credentials: "include" }).then(r => r.json()),
-    enabled: !!selectedCompany?.id,
   });
 
   const suspendMut = useMutation({
@@ -160,7 +152,7 @@ function CompaniesTable() {
                     <div className="flex items-center justify-end gap-1">
                       <Button
                         size="sm" variant="ghost"
-                        onClick={() => setSelectedCompany(c)}
+                        onClick={() => onSelect(c)}
                         data-testid={`button-view-${c.id}`}
                       >
                         <Eye className="w-3.5 h-3.5" />
@@ -216,66 +208,6 @@ function CompaniesTable() {
           </div>
         </div>
       )}
-
-      <Dialog open={!!selectedCompany} onOpenChange={() => setSelectedCompany(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{selectedCompany?.name}</DialogTitle>
-            <DialogDescription>Company details and recent admin actions</DialogDescription>
-          </DialogHeader>
-          {detailLoading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
-          ) : companyDetail ? (
-            <div className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-4">
-                <div><span className="text-muted-foreground">Industry:</span> {companyDetail.industry ?? "—"}</div>
-                <div><span className="text-muted-foreground">Country:</span> {companyDetail.country ?? "—"}</div>
-                <div><span className="text-muted-foreground">Plan:</span> <Badge variant="outline">{companyDetail.planTier ?? "free"}</Badge></div>
-                <div><span className="text-muted-foreground">Status:</span> <Badge variant={companyDetail.status === "suspended" ? "destructive" : "outline"}>{companyDetail.status ?? "active"}</Badge></div>
-                <div><span className="text-muted-foreground">Employees:</span> {companyDetail.employeeCount ?? "—"}</div>
-                <div><span className="text-muted-foreground">Onboarded:</span> {companyDetail.onboardingComplete ? "Yes" : "No"}</div>
-              </div>
-              <div>
-                <p className="font-medium mb-2">Counts</p>
-                <div className="grid grid-cols-4 gap-2">
-                  {Object.entries(companyDetail.counts ?? {}).map(([k, v]) => (
-                    <div key={k} className="text-center p-2 bg-muted rounded">
-                      <p className="text-lg font-bold">{String(v)}</p>
-                      <p className="text-xs text-muted-foreground capitalize">{k}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="font-medium mb-2">Users ({companyDetail.users?.length ?? 0})</p>
-                <div className="space-y-1 max-h-32 overflow-y-auto">
-                  {(companyDetail.users ?? []).map((u: any) => (
-                    <div key={u.id} className="flex items-center justify-between px-2 py-1 bg-muted/50 rounded text-xs">
-                      <span>{u.username} ({u.email})</span>
-                      <Badge variant="secondary">{u.role}</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {(companyDetail.recentAdminActions ?? []).length > 0 && (
-                <div>
-                  <p className="font-medium mb-2">Recent Admin Actions</p>
-                  <div className="space-y-1 max-h-32 overflow-y-auto">
-                    {companyDetail.recentAdminActions.map((a: any) => (
-                      <div key={a.id} className="flex items-center justify-between px-2 py-1 bg-muted/50 rounded text-xs">
-                        <span className="font-mono">{a.action}</span>
-                        <span className="text-muted-foreground">
-                          {a.created_at ? formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) : ""}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
         <DialogContent>
@@ -418,6 +350,10 @@ function UsersTable() {
 export default function AdminPage() {
   const { role } = usePermissions();
   const [, navigate] = useLocation();
+  const params = useParams<{ companyId?: string }>();
+  const urlCompanyId = params?.companyId ?? null;
+
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(urlCompanyId);
 
   useEffect(() => {
     if (role && role !== "super_admin") {
@@ -425,10 +361,31 @@ export default function AdminPage() {
     }
   }, [role, navigate]);
 
+  useEffect(() => {
+    setSelectedCompanyId(urlCompanyId);
+  }, [urlCompanyId]);
+
+  const handleSelectCompany = (company: any) => {
+    setSelectedCompanyId(company.id);
+    navigate(`/admin/companies/${company.id}`);
+  };
+
+  const handleCloseDetail = () => {
+    setSelectedCompanyId(null);
+    navigate("/admin");
+  };
+
   const { data: stats, isLoading: statsLoading } = useQuery<any>({
     queryKey: ["/api/admin/stats"],
     queryFn: () => fetch("/api/admin/stats", { credentials: "include" }).then(r => r.json()),
     enabled: role === "super_admin",
+  });
+
+  const { data: companyDetail, isLoading: detailLoading } = useQuery<any>({
+    queryKey: ["/api/admin/company", selectedCompanyId],
+    queryFn: () =>
+      fetch(`/api/admin/company/${selectedCompanyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedCompanyId,
   });
 
   return (
@@ -466,12 +423,72 @@ export default function AdminPage() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="companies" className="mt-4">
-          <CompaniesTable />
+          <CompaniesTable onSelect={handleSelectCompany} />
         </TabsContent>
         <TabsContent value="users" className="mt-4">
           <UsersTable />
         </TabsContent>
       </Tabs>
+
+      <Dialog open={!!selectedCompanyId} onOpenChange={(open) => { if (!open) handleCloseDetail(); }}>
+        <DialogContent className="max-w-2xl" data-testid="dialog-company-detail">
+          <DialogHeader>
+            <DialogTitle>{companyDetail?.name ?? selectedCompanyId}</DialogTitle>
+            <DialogDescription>Company details and recent admin actions</DialogDescription>
+          </DialogHeader>
+          {detailLoading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : companyDetail ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-4">
+                <div><span className="text-muted-foreground">Industry:</span> {companyDetail.industry ?? "—"}</div>
+                <div><span className="text-muted-foreground">Country:</span> {companyDetail.country ?? "—"}</div>
+                <div><span className="text-muted-foreground">Plan:</span> <Badge variant="outline">{companyDetail.planTier ?? "free"}</Badge></div>
+                <div><span className="text-muted-foreground">Status:</span> <Badge variant={companyDetail.status === "suspended" ? "destructive" : "outline"}>{companyDetail.status ?? "active"}</Badge></div>
+                <div><span className="text-muted-foreground">Employees:</span> {companyDetail.employeeCount ?? "—"}</div>
+                <div><span className="text-muted-foreground">Onboarded:</span> {companyDetail.onboardingComplete ? "Yes" : "No"}</div>
+              </div>
+              <div>
+                <p className="font-medium mb-2">Counts</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {Object.entries(companyDetail.counts ?? {}).map(([k, v]) => (
+                    <div key={k} className="text-center p-2 bg-muted rounded">
+                      <p className="text-lg font-bold">{String(v)}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{k}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="font-medium mb-2">Users ({companyDetail.users?.length ?? 0})</p>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {(companyDetail.users ?? []).map((u: any) => (
+                    <div key={u.id} className="flex items-center justify-between px-2 py-1 bg-muted/50 rounded text-xs">
+                      <span>{u.username} ({u.email})</span>
+                      <Badge variant="secondary">{u.role}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {(companyDetail.recentAdminActions ?? []).length > 0 && (
+                <div>
+                  <p className="font-medium mb-2">Recent Admin Actions</p>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {companyDetail.recentAdminActions.map((a: any) => (
+                      <div key={a.id} className="flex items-center justify-between px-2 py-1 bg-muted/50 rounded text-xs">
+                        <span className="font-mono">{a.action}</span>
+                        <span className="text-muted-foreground">
+                          {a.created_at ? formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
