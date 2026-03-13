@@ -6024,7 +6024,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/revenue", requireSuperAdmin, async (_req, res) => {
+  app.get("/api/admin/revenue", requireAuth, requireSuperAdmin, async (_req, res) => {
     try {
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -6092,7 +6092,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/platform-health/summary", requireSuperAdmin, async (_req, res) => {
+  app.get("/api/admin/platform-health/summary", requireAuth, requireSuperAdmin, async (_req, res) => {
     try {
       const now24h = new Date(Date.now() - 86400000);
 
