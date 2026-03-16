@@ -21,6 +21,7 @@ import {
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
   DollarSign, ExternalLink, Crown,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { formatDistanceToNow } from "date-fns";
@@ -558,6 +559,11 @@ function BetaAccessTab() {
   const [grantReason, setGrantReason] = useState("");
   const [revokeEmail, setRevokeEmail] = useState("");
 
+  const { data: betaCompanies = [], isLoading: betaLoading, refetch: refetchBeta } = useQuery<any[]>({
+    queryKey: ["/api/admin/beta/companies"],
+    queryFn: () => fetch("/api/admin/beta/companies", { credentials: "include" }).then(r => r.json()),
+  });
+
   const grantMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/admin/beta/grant", {
@@ -576,6 +582,7 @@ function BetaAccessTab() {
       setGrantEmail("");
       setGrantDays(30);
       setGrantReason("");
+      refetchBeta();
     },
     onError: (e: any) => {
       toast({ title: "Failed to grant beta access", description: e.message, variant: "destructive" });
@@ -590,98 +597,202 @@ function BetaAccessTab() {
     onSuccess: () => {
       toast({ title: "Beta access revoked", description: `Beta access has been removed from ${revokeEmail}.` });
       setRevokeEmail("");
+      refetchBeta();
     },
     onError: (e: any) => {
       toast({ title: "Failed to revoke beta access", description: e.message, variant: "destructive" });
     },
   });
 
+  const activeCompanies = betaCompanies.filter((c: any) => !c.isExpired);
+  const expiredCompanies = betaCompanies.filter((c: any) => c.isExpired);
+
+  function fmtDate(iso: string | null) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function fmtRelative(iso: string | null) {
+    if (!iso) return "";
+    try { return formatDistanceToNow(new Date(iso), { addSuffix: true }); } catch { return ""; }
+  }
+
   return (
-    <div className="grid sm:grid-cols-2 gap-6 mt-2">
-      <Card>
-        <CardHeader>
+    <div className="space-y-6 mt-2">
+      <div className="grid sm:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Crown className="w-4 h-4 text-primary" />
+              Grant Beta Access
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="grant-email">User email</Label>
+              <Input
+                id="grant-email"
+                placeholder="user@example.com"
+                value={grantEmail}
+                onChange={e => setGrantEmail(e.target.value)}
+                data-testid="input-grant-email"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="grant-days">Days of access</Label>
+              <Input
+                id="grant-days"
+                type="number"
+                min={1}
+                placeholder="30"
+                value={grantDays}
+                onChange={e => setGrantDays(e.target.value === "" ? "" : Number(e.target.value))}
+                data-testid="input-grant-days"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="grant-reason">Reason <span className="text-muted-foreground">(optional)</span></Label>
+              <Textarea
+                id="grant-reason"
+                placeholder="Pre-launch beta tester"
+                value={grantReason}
+                onChange={e => setGrantReason(e.target.value)}
+                rows={2}
+                data-testid="input-grant-reason"
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={grantMutation.isPending || !grantEmail || !grantDays}
+              onClick={() => grantMutation.mutate()}
+              data-testid="button-grant-beta"
+            >
+              {grantMutation.isPending ? "Granting..." : "Grant Beta Access"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldOff className="w-4 h-4 text-destructive" />
+              Revoke Beta Access
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="revoke-email">User email</Label>
+              <Input
+                id="revoke-email"
+                placeholder="user@example.com"
+                value={revokeEmail}
+                onChange={e => setRevokeEmail(e.target.value)}
+                data-testid="input-revoke-email"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              This will immediately remove Pro beta access from the user's company. If they have no active Stripe subscription, they will revert to the Free plan.
+            </p>
+            <Button
+              variant="destructive"
+              className="w-full"
+              disabled={revokeMutation.isPending || !revokeEmail}
+              onClick={() => {
+                if (window.confirm(`Revoke beta access from ${revokeEmail}?`)) revokeMutation.mutate();
+              }}
+              data-testid="button-revoke-beta"
+            >
+              {revokeMutation.isPending ? "Revoking..." : "Revoke Beta Access"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card data-testid="card-beta-companies">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Crown className="w-4 h-4 text-primary" />
-            Grant Beta Access
+            Beta Companies
+            {betaCompanies.length > 0 && (
+              <Badge variant="secondary" className="ml-1">{betaCompanies.length}</Badge>
+            )}
           </CardTitle>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {activeCompanies.length > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
+                {activeCompanies.length} active
+              </span>
+            )}
+            {expiredCompanies.length > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                {expiredCompanies.length} expired
+              </span>
+            )}
+          </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="grant-email">User email</Label>
-            <Input
-              id="grant-email"
-              placeholder="user@example.com"
-              value={grantEmail}
-              onChange={e => setGrantEmail(e.target.value)}
-              data-testid="input-grant-email"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="grant-days">Days of access</Label>
-            <Input
-              id="grant-days"
-              type="number"
-              min={1}
-              placeholder="30"
-              value={grantDays}
-              onChange={e => setGrantDays(e.target.value === "" ? "" : Number(e.target.value))}
-              data-testid="input-grant-days"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="grant-reason">Reason <span className="text-muted-foreground">(optional)</span></Label>
-            <Textarea
-              id="grant-reason"
-              placeholder="Pre-launch beta tester"
-              value={grantReason}
-              onChange={e => setGrantReason(e.target.value)}
-              rows={2}
-              data-testid="input-grant-reason"
-            />
-          </div>
-          <Button
-            className="w-full"
-            disabled={grantMutation.isPending || !grantEmail || !grantDays}
-            onClick={() => grantMutation.mutate()}
-            data-testid="button-grant-beta"
-          >
-            {grantMutation.isPending ? "Granting..." : "Grant Beta Access"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <ShieldOff className="w-4 h-4 text-destructive" />
-            Revoke Beta Access
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="revoke-email">User email</Label>
-            <Input
-              id="revoke-email"
-              placeholder="user@example.com"
-              value={revokeEmail}
-              onChange={e => setRevokeEmail(e.target.value)}
-              data-testid="input-revoke-email"
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            This will immediately remove Pro beta access from the user's company. If they have no active Stripe subscription, they will revert to the Free plan.
-          </p>
-          <Button
-            variant="destructive"
-            className="w-full"
-            disabled={revokeMutation.isPending || !revokeEmail}
-            onClick={() => {
-              if (window.confirm(`Revoke beta access from ${revokeEmail}?`)) revokeMutation.mutate();
-            }}
-            data-testid="button-revoke-beta"
-          >
-            {revokeMutation.isPending ? "Revoking..." : "Revoke Beta Access"}
-          </Button>
+        <CardContent>
+          {betaLoading && (
+            <div className="space-y-2">
+              {[...Array(3)].map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          )}
+          {!betaLoading && betaCompanies.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-6">No companies have beta access set.</p>
+          )}
+          {!betaLoading && betaCompanies.length > 0 && (
+            <div className="space-y-2">
+              {betaCompanies.map((c: any) => (
+                <div
+                  key={c.id}
+                  className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${
+                    c.isExpired
+                      ? "border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20"
+                      : "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20"
+                  }`}
+                  data-testid={`beta-company-row-${c.id}`}
+                >
+                  <div className="flex-1 min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium truncate">{c.name}</span>
+                      {c.isExpired ? (
+                        <Badge variant="outline" className="text-amber-700 dark:text-amber-400 border-amber-400 dark:border-amber-600 bg-transparent shrink-0" data-testid={`badge-beta-expired-${c.id}`}>
+                          <Clock className="w-3 h-3 mr-1" /> Expired
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-blue-700 dark:text-blue-400 border-blue-400 dark:border-blue-600 bg-transparent shrink-0" data-testid={`badge-beta-active-${c.id}`}>
+                          <CheckCircle className="w-3 h-3 mr-1" /> Active
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+                      {c.adminEmail && <span>{c.adminEmail}</span>}
+                      <span className={c.isExpired ? "text-amber-600 dark:text-amber-400 font-medium" : "text-blue-600 dark:text-blue-400"}>
+                        {c.isExpired ? "Expired" : "Expires"} {fmtDate(c.betaExpiresAt)}
+                        {c.betaExpiresAt && (
+                          <span className="ml-1 opacity-70">({fmtRelative(c.betaExpiresAt)})</span>
+                        )}
+                      </span>
+                      {c.betaGrantedBy && <span>Granted by {c.betaGrantedBy}</span>}
+                      {c.betaReason && <span className="italic truncate max-w-[20ch]" title={c.betaReason}>{c.betaReason}</span>}
+                    </div>
+                  </div>
+                  <Link href={`/admin/company/${c.id}`}>
+                    <button
+                      className="shrink-0 p-1.5 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                      title="View company"
+                      data-testid={`button-view-beta-company-${c.id}`}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                    </button>
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -6003,6 +6003,42 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.get("/api/admin/beta/companies", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          c.id,
+          c.name,
+          c.is_beta_company,
+          c.beta_expires_at,
+          c.beta_access_level,
+          c.beta_granted_by,
+          c.beta_reason,
+          c.plan_tier,
+          u.email AS admin_email
+        FROM companies c
+        LEFT JOIN users u ON u.company_id = c.id AND u.role = 'admin'
+        WHERE c.is_beta_company = true
+        ORDER BY c.beta_expires_at ASC NULLS LAST
+      `);
+      const now = new Date();
+      const rows = ((result as any).rows ?? []).map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        adminEmail: r.admin_email ?? null,
+        planTier: r.plan_tier,
+        betaAccessLevel: r.beta_access_level,
+        betaGrantedBy: r.beta_granted_by,
+        betaReason: r.beta_reason,
+        betaExpiresAt: r.beta_expires_at,
+        isExpired: r.beta_expires_at ? new Date(r.beta_expires_at) <= now : false,
+      }));
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/health/counts", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       const hours = parseInt(req.query.hours as string) || 24;
