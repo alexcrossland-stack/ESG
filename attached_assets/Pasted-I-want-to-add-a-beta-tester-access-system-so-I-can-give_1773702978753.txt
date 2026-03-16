@@ -1,0 +1,73 @@
+I want to add a beta / tester access system so I can give selected users full Pro access before launch, without creating fake Stripe subscriptions.
+
+Please implement this with the following requirements:
+
+OBJECTIVE
+- Selected users can access all Pro features for testing
+- Stripe billing logic must remain unchanged
+- Beta access must be easy to grant and revoke
+- Beta users should automatically lose access when their beta period expires
+
+REQUIRED CHANGES
+
+1. Database
+Add these fields to the users table:
+- isBetaUser: boolean, default false
+- betaExpiresAt: timestamp, nullable
+- betaAccessLevel: text or enum, default 'pro'
+- betaGrantedBy: nullable text or user id
+- betaReason: nullable text
+
+2. Access Logic
+Update plan / feature access logic so that:
+- If user has active Stripe subscription => Pro access
+- Else if user.isBetaUser is true and betaExpiresAt is null or in the future => Pro access
+- Else => Free access
+
+Important:
+- Do not fake or create Stripe subscriptions for beta users
+- Do not alter existing Stripe subscription/webhook behavior
+- Keep beta access as a separate override layer
+
+3. Admin Endpoints
+Add secure admin-only routes:
+- POST /admin/grant-beta
+  body: { email, expiresInDays, accessLevel?, reason? }
+- POST /admin/revoke-beta
+  body: { email }
+
+Grant-beta should:
+- find the user by email
+- set isBetaUser = true
+- set betaExpiresAt = now + expiresInDays
+- set betaAccessLevel = 'pro' unless specified
+- optionally record betaReason
+
+Revoke-beta should:
+- set isBetaUser = false
+- set betaExpiresAt = null
+- set betaAccessLevel = null or default
+- clear optional beta metadata if appropriate
+
+4. Frontend
+Update the UI so beta users are shown as:
+- “Pro (Beta)” instead of just “Pro”
+
+Optional:
+- add a small banner on billing/account pages saying:
+  “You currently have beta access to Pro features.”
+
+5. Safety / Permissions
+- Admin routes must be protected so only admin users can call them
+- Return clear success/error responses
+- Do not expose beta controls in public UI unless there is already an admin panel
+
+6. Logging
+If practical, log when beta access is granted/revoked for audit purposes
+
+7. Deliverable
+When finished, tell me:
+- which files were changed
+- what database migration was added
+- what routes were created
+- exactly how I can test granting and revoking beta access

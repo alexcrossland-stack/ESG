@@ -1,0 +1,207 @@
+Please implement the Beta / Tester Access System exactly as follows.
+
+GOAL
+Allow selected companies to access all Pro features during pre-launch beta without creating fake Stripe subscriptions. Beta access must be a separate override layer and remain fully independent of Stripe billing.
+
+ARCHITECTURAL DECISION
+This must be implemented at the company level, not the user level, because:
+- planTier is stored on companies
+- Stripe webhooks update companies
+- feature gating reads company.planTier
+- user-level beta flags would create inconsistent access logic
+
+Use a user's email only as the lookup method to find their companyId, then apply beta access to that company.
+
+1. DATABASE CHANGES
+In shared/schema.ts, add these nullable / defaulted fields to the companies table:
+
+- isBetaCompany: boolean("is_beta_company").default(false)
+- betaExpiresAt: timestamp("beta_expires_at")
+- betaAccessLevel: text("beta_access_level")
+- betaGrantedBy: text("beta_granted_by")
+- betaReason: text("beta_reason")
+
+Then run:
+npm run db:push
+
+No destructive changes. Only additive schema changes.
+
+2. ACCESS LOGIC
+In server/routes.ts, add this helper:
+
+function getEffectivePlanTier(company: Company): { tier: "free" | "pro"; isBeta: boolean } {
+  if (company.planTier === "pro") return { tier: "pro", isBeta: false };
+
+  const now = new Date();
+  if (
+    company.isBetaCompany &&
+    (!company.betaExpiresAt || company.betaExpiresAt > now)
+  ) {
+    return { tier: "pro", isBeta: true };
+  }
+
+  return { tier: "free", isBeta: false };
+}
+
+Use this helper anywhere the effective plan tier is needed.
+
+Update GET /api/billing/status so it:
+- uses getEffectivePlanTier(company)
+- returns effective planTier
+- returns isBeta
+- returns betaExpiresAt
+
+Important:
+- Do not modify Stripe checkout logic
+- Do not modify Stripe webhook behavior
+- Do not create fake Stripe subscriptions
+- Stripe remains the source of truth for paid subscriptions only
+- Beta access is only an override layer for feature access
+
+3. ADMIN ENDPOINTS
+In server/routes.ts, add two secure endpoints protected by:
+- requireAuth
+- requireSuperAdmin
+
+A) POST /api/admin/beta/grant
+
+Request body:
+{
+  "email": "user@example.com",
+  "expiresInDays": 30,
+  "accessLevel": "pro",
+  "reason": "pre-launch testing"
+}
+
+Behavior:
+- find the user by email
+- verify the user exists
+- verify the user has a companyId
+- load the company
+- set:
+  - isBetaCompany = true
+  - betaExpiresAt = now + expiresInDays
+  - betaAccessLevel = accessLevel ?? "pro"
+  - betaGrantedBy = current super admin email
+  - betaReason = reason ?? null
+- write an audit log entry to super_admin_actions with:
+  - action = "beta_access_granted"
+  - details = { email, expiresInDays, reason, companyId }
+- return:
+  {
+    success: true,
+    companyId,
+    betaExpiresAt
+  }
+
+B) POST /api/admin/beta/revoke
+
+Request body:
+{
+  "email": "user@example.com"
+}
+
+Behavior:
+- find the user by email
+- verify user and company exist
+- clear:
+  - isBetaCompany = false
+  - betaExpiresAt = null
+  - betaAccessLevel = null
+  - betaGrantedBy = null
+  - betaReason = null
+- write audit log entry:
+  - action = "beta_access_revoked"
+  - details = { email, companyId }
+- return:
+  {
+    success: true
+  }
+
+Error handling:
+- return clear 400 errors for invalid input
+- return clear 404 errors when user or company is not found
+- do not fail silently
+
+4. BILLING PAGE UI
+In client/src/pages/billing.tsx:
+
+Update the billing status interface to include:
+- isBeta
+- betaExpiresAt
+
+Behavior:
+- keep using the server-returned effective planTier
+- when billing.isBeta is true, display badge text:
+  "Pro (Beta)"
+  instead of:
+  "Pro"
+
+Add a visible informational banner below the plan cards when billing.isBeta is true:
+"You currently have beta access to Pro features. This access expires on [formatted date]."
+
+This banner should always show while beta is active.
+
+5. ADMIN UI
+In client/src/pages/admin.tsx, add a new tab:
+- Beta Access
+
+Place it alongside the existing admin tabs.
+
+Inside the Beta Access tab add:
+
+A) Grant Beta Access form
+Fields:
+- Email
+- Days (number)
+- Reason (optional textarea)
+
+Behavior:
+- submits to POST /api/admin/beta/grant
+- uses existing shadcn form patterns already used in admin.tsx
+- uses existing apiRequest and useMutation patterns
+- shows success toast including expiry date
+- shows error toast on failure
+
+B) Revoke Beta Access form
+Fields:
+- Email
+
+Behavior:
+- submits to POST /api/admin/beta/revoke
+- uses same form/mutation patterns
+- shows success toast or error toast
+
+Keep this page functional and minimal.
+
+6. FILES EXPECTED TO CHANGE
+- shared/schema.ts
+- server/routes.ts
+- client/src/pages/billing.tsx
+- client/src/pages/admin.tsx
+
+7. DELIVERABLE FORMAT
+When finished, provide:
+1. exact files changed
+2. exact schema changes applied
+3. exact routes created
+4. exact UI changes made
+5. exact testing steps
+6. any assumptions or edge cases
+7. confirmation that Stripe logic and webhooks were left untouched
+
+8. TESTING REQUIREMENTS
+After implementation, tell me exactly how to test this flow:
+- grant beta access to a company via one user email
+- verify billing page shows Pro (Beta)
+- verify /api/billing/status returns effective planTier = pro and isBeta = true
+- verify Pro features are available
+- revoke beta access
+- verify company returns to Free if no active Stripe subscription exists
+
+NON-GOALS
+- no fake Stripe subscriptions
+- no Stripe webhook changes
+- no user-level beta schema
+- no public beta signup flow
+- no self-serve tester requests
