@@ -31,7 +31,17 @@ export function authFetch(url: string, init?: RequestInit): Promise<Response> {
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    let message: string;
+    try {
+      const json = JSON.parse(text);
+      message = json.error || json.message || text;
+    } catch {
+      message = text;
+    }
+    if (res.status === 429) {
+      message = "Too many attempts. Please wait a few minutes before trying again.";
+    }
+    throw new Error(message);
   }
 }
 
