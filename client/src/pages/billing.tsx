@@ -46,6 +46,8 @@ export default function BillingPage() {
     planStatus: string;
     currentPeriodEnd: string | null;
     stripeCustomerId: string | null;
+    isBeta: boolean;
+    betaExpiresAt: string | null;
   }>({
     queryKey: ["/api/billing/status"],
   });
@@ -77,11 +79,16 @@ export default function BillingPage() {
   });
 
   const isPro = billing?.planTier === "pro";
+  const isBeta = billing?.isBeta ?? false;
   const isPastDue = billing?.planStatus === "past_due";
   const isCancelled = billing?.planStatus === "cancelled";
 
   const periodEnd = billing?.currentPeriodEnd
     ? new Date(billing.currentPeriodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
+    : null;
+
+  const betaExpiry = billing?.betaExpiresAt
+    ? new Date(billing.betaExpiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : null;
 
   return (
@@ -111,7 +118,7 @@ export default function BillingPage() {
           )}
         </div>
         <Badge variant={isPro ? "default" : "secondary"} className="capitalize" data-testid="badge-plan-tier">
-          {billing?.planTier || "free"}
+          {isPro && isBeta ? "Pro (Beta)" : billing?.planTier || "free"}
         </Badge>
       </div>
 
@@ -181,7 +188,19 @@ export default function BillingPage() {
         </Card>
       </div>
 
-      {isPro && !isCancelled && (
+      {isBeta && (
+        <div className="flex items-start gap-3 p-4 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800" data-testid="banner-beta-access">
+          <Crown className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">You currently have beta access to Pro features.</p>
+            {betaExpiry && (
+              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">This access expires on {betaExpiry}.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isPro && !isCancelled && !isBeta && (
         <div className="border rounded-lg p-4 space-y-3">
           <p className="font-medium text-sm">Cancel subscription</p>
           <p className="text-sm text-muted-foreground">

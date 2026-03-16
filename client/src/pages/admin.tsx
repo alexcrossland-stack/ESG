@@ -19,8 +19,10 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, ExternalLink,
+  DollarSign, ExternalLink, Crown,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { formatDistanceToNow } from "date-fns";
 import { Link } from "wouter";
 
@@ -549,6 +551,143 @@ function PlatformHealthTab() {
   );
 }
 
+function BetaAccessTab() {
+  const { toast } = useToast();
+  const [grantEmail, setGrantEmail] = useState("");
+  const [grantDays, setGrantDays] = useState<number | "">(30);
+  const [grantReason, setGrantReason] = useState("");
+  const [revokeEmail, setRevokeEmail] = useState("");
+
+  const grantMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/beta/grant", {
+        email: grantEmail.trim(),
+        expiresInDays: Number(grantDays),
+        accessLevel: "pro",
+        reason: grantReason.trim() || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const expiry = data.betaExpiresAt
+        ? new Date(data.betaExpiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
+        : "unknown";
+      toast({ title: "Beta access granted", description: `Pro beta access granted. Expires ${expiry}.` });
+      setGrantEmail("");
+      setGrantDays(30);
+      setGrantReason("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to grant beta access", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/beta/revoke", { email: revokeEmail.trim() });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Beta access revoked", description: `Beta access has been removed from ${revokeEmail}.` });
+      setRevokeEmail("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to revoke beta access", description: e.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="grid sm:grid-cols-2 gap-6 mt-2">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Crown className="w-4 h-4 text-primary" />
+            Grant Beta Access
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="grant-email">User email</Label>
+            <Input
+              id="grant-email"
+              placeholder="user@example.com"
+              value={grantEmail}
+              onChange={e => setGrantEmail(e.target.value)}
+              data-testid="input-grant-email"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="grant-days">Days of access</Label>
+            <Input
+              id="grant-days"
+              type="number"
+              min={1}
+              placeholder="30"
+              value={grantDays}
+              onChange={e => setGrantDays(e.target.value === "" ? "" : Number(e.target.value))}
+              data-testid="input-grant-days"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="grant-reason">Reason <span className="text-muted-foreground">(optional)</span></Label>
+            <Textarea
+              id="grant-reason"
+              placeholder="Pre-launch beta tester"
+              value={grantReason}
+              onChange={e => setGrantReason(e.target.value)}
+              rows={2}
+              data-testid="input-grant-reason"
+            />
+          </div>
+          <Button
+            className="w-full"
+            disabled={grantMutation.isPending || !grantEmail || !grantDays}
+            onClick={() => grantMutation.mutate()}
+            data-testid="button-grant-beta"
+          >
+            {grantMutation.isPending ? "Granting..." : "Grant Beta Access"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <ShieldOff className="w-4 h-4 text-destructive" />
+            Revoke Beta Access
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="revoke-email">User email</Label>
+            <Input
+              id="revoke-email"
+              placeholder="user@example.com"
+              value={revokeEmail}
+              onChange={e => setRevokeEmail(e.target.value)}
+              data-testid="input-revoke-email"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This will immediately remove Pro beta access from the user's company. If they have no active Stripe subscription, they will revert to the Free plan.
+          </p>
+          <Button
+            variant="destructive"
+            className="w-full"
+            disabled={revokeMutation.isPending || !revokeEmail}
+            onClick={() => {
+              if (window.confirm(`Revoke beta access from ${revokeEmail}?`)) revokeMutation.mutate();
+            }}
+            data-testid="button-revoke-beta"
+          >
+            {revokeMutation.isPending ? "Revoking..." : "Revoke Beta Access"}
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const { role } = usePermissions();
   const [, navigate] = useLocation();
@@ -601,6 +740,9 @@ export default function AdminPage() {
           <TabsTrigger value="platform-health" data-testid="tab-platform-health">
             <Activity className="w-4 h-4 mr-2" /> Platform Health
           </TabsTrigger>
+          <TabsTrigger value="beta-access" data-testid="tab-beta-access">
+            <Crown className="w-4 h-4 mr-2" /> Beta Access
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="companies" className="mt-4">
           <CompaniesTable />
@@ -613,6 +755,9 @@ export default function AdminPage() {
         </TabsContent>
         <TabsContent value="platform-health" className="mt-4">
           <PlatformHealthTab />
+        </TabsContent>
+        <TabsContent value="beta-access" className="mt-4">
+          <BetaAccessTab />
         </TabsContent>
       </Tabs>
     </div>

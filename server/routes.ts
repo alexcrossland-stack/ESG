@@ -154,6 +154,18 @@ async function requireSuperAdmin(req: Request, res: Response, next: Function) {
   return next();
 }
 
+function getEffectivePlanTier(company: any): { tier: "free" | "pro"; isBeta: boolean } {
+  if (company.planTier === "pro") return { tier: "pro", isBeta: false };
+  const now = new Date();
+  if (
+    company.isBetaCompany &&
+    (!company.betaExpiresAt || new Date(company.betaExpiresAt) > now)
+  ) {
+    return { tier: "pro", isBeta: true };
+  }
+  return { tier: "free", isBeta: false };
+}
+
 const ENVIRONMENTAL_RAW_KEYS = [
   "elec", "gas", "fuel", "waste", "water", "flight", "hotel", "rail", "car_miles",
 ];
@@ -5765,11 +5777,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
+      const { tier, isBeta } = getEffectivePlanTier(company);
       res.json({
-        planTier: company.planTier || "free",
+        planTier: tier,
         planStatus: company.planStatus || "active",
         currentPeriodEnd: company.currentPeriodEnd,
         stripeCustomerId: company.stripeCustomerId,
+        isBeta,
+        betaExpiresAt: isBeta ? company.betaExpiresAt : null,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5917,6 +5932,72 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const expiredTokens = parseInt((expiredResult as any).rows?.[0]?.count || "0");
       checks.push({ check: "Expired auth tokens", pass: expiredTokens < 100, detail: `${expiredTokens} expired unused tokens pending cleanup` });
       res.json({ generatedAt: new Date().toISOString(), checks, summary: { passed: checks.filter(c => c.pass).length, failed: checks.filter(c => !c.pass).length, total: checks.length } });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/beta/grant", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const { email, expiresInDays, accessLevel, reason } = req.body;
+      if (!email || typeof email !== "string") return res.status(400).json({ error: "email is required" });
+      if (!expiresInDays || typeof expiresInDays !== "number" || expiresInDays < 1) {
+        return res.status(400).json({ error: "expiresInDays must be a positive number" });
+      }
+      const userResult = await db.execute(sql`SELECT id, email, company_id FROM users WHERE LOWER(email) = LOWER(${email.trim()}) LIMIT 1`);
+      const userRows = (userResult as any).rows ?? [];
+      if (userRows.length === 0) return res.status(404).json({ error: `No user found with email: ${email}` });
+      const targetUser = userRows[0];
+      if (!targetUser.company_id) return res.status(400).json({ error: "This user is not associated with a company" });
+      const betaExpiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
+      const grantedBy = (req as any)._superAdmin?.email ?? "super_admin";
+      await db.execute(sql`
+        UPDATE companies SET
+          is_beta_company = true,
+          beta_expires_at = ${betaExpiresAt.toISOString()},
+          beta_access_level = ${accessLevel ?? "pro"},
+          beta_granted_by = ${grantedBy},
+          beta_reason = ${reason ?? null}
+        WHERE id = ${targetUser.company_id}
+      `);
+      const adminUserId = (req as any)._superAdmin?.id ?? "system";
+      await db.execute(sql`
+        INSERT INTO super_admin_actions (id, admin_user_id, action, target_company_id, target_user_id, metadata)
+        VALUES (gen_random_uuid()::text, ${adminUserId}, 'beta_access_granted', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, expiresInDays, reason: reason ?? null, companyId: targetUser.company_id, grantedBy })}::jsonb)
+      `);
+      console.log(`[Beta] Granted beta access to company ${targetUser.company_id} (user: ${email}) by ${grantedBy}, expires ${betaExpiresAt.toISOString()}`);
+      res.json({ success: true, companyId: targetUser.company_id, betaExpiresAt: betaExpiresAt.toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/beta/revoke", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email || typeof email !== "string") return res.status(400).json({ error: "email is required" });
+      const userResult = await db.execute(sql`SELECT id, email, company_id FROM users WHERE LOWER(email) = LOWER(${email.trim()}) LIMIT 1`);
+      const userRows = (userResult as any).rows ?? [];
+      if (userRows.length === 0) return res.status(404).json({ error: `No user found with email: ${email}` });
+      const targetUser = userRows[0];
+      if (!targetUser.company_id) return res.status(400).json({ error: "This user is not associated with a company" });
+      await db.execute(sql`
+        UPDATE companies SET
+          is_beta_company = false,
+          beta_expires_at = null,
+          beta_access_level = null,
+          beta_granted_by = null,
+          beta_reason = null
+        WHERE id = ${targetUser.company_id}
+      `);
+      const revokedBy = (req as any)._superAdmin?.email ?? "super_admin";
+      const revokeAdminId = (req as any)._superAdmin?.id ?? "system";
+      await db.execute(sql`
+        INSERT INTO super_admin_actions (id, admin_user_id, action, target_company_id, target_user_id, metadata)
+        VALUES (gen_random_uuid()::text, ${revokeAdminId}, 'beta_access_revoked', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, companyId: targetUser.company_id, revokedBy })}::jsonb)
+      `);
+      console.log(`[Beta] Revoked beta access from company ${targetUser.company_id} (user: ${email}) by ${revokedBy}`);
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

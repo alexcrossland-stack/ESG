@@ -73,6 +73,11 @@ export const companies = pgTable("companies", {
   currentPeriodEnd: timestamp("current_period_end"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
+  isBetaCompany: boolean("is_beta_company").default(false),
+  betaExpiresAt: timestamp("beta_expires_at"),
+  betaAccessLevel: text("beta_access_level"),
+  betaGrantedBy: text("beta_granted_by"),
+  betaReason: text("beta_reason"),
   status: text("status").default("active"),
   createdAt: timestamp("created_at").defaultNow(),
 });
