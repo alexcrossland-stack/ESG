@@ -148,15 +148,13 @@ app.use((req, res, next) => {
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS super_admin_actions (
-        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
-        admin_user_id varchar NOT NULL,
+        id serial PRIMARY KEY,
+        admin_user_id integer,
         action text NOT NULL,
-        target_company_id varchar,
-        target_user_id varchar,
+        target_company_id integer,
+        target_user_id integer,
         metadata jsonb,
-        ip_address text,
-        user_agent text,
-        created_at timestamp DEFAULT now()
+        created_at timestamp DEFAULT now() NOT NULL
       )
     `);
   } catch {}

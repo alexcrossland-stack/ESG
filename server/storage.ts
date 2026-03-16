@@ -1518,8 +1518,8 @@ export class DatabaseStorage implements IStorage {
 
   async createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">) {
     const result = await db.execute(sql`
-      INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata, ip_address, user_agent)
-      VALUES (${data.adminUserId}, ${data.action}, ${data.targetCompanyId ?? null}, ${data.targetUserId ?? null}, ${data.metadata ? JSON.stringify(data.metadata) : null}, ${data.ipAddress ?? null}, ${data.userAgent ?? null})
+      INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata)
+      VALUES (${data.adminUserId ?? null}, ${data.action}, ${data.targetCompanyId ?? null}, ${data.targetUserId ?? null}, ${data.metadata ? JSON.stringify(data.metadata) : null})
       RETURNING *
     `);
     const rows = (result as any).rows ?? [];

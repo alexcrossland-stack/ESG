@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, integer, timestamp, jsonb, decimal, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, integer, serial, timestamp, jsonb, decimal, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -713,15 +713,13 @@ export type InsertProcurementAnswer = z.infer<typeof insertProcurementAnswerSche
 export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
 
 export const superAdminActions = pgTable("super_admin_actions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  adminUserId: varchar("admin_user_id").notNull(),
+  id: serial("id").primaryKey(),
+  adminUserId: integer("admin_user_id"),
   action: text("action").notNull(),
-  targetCompanyId: varchar("target_company_id"),
-  targetUserId: varchar("target_user_id"),
+  targetCompanyId: integer("target_company_id"),
+  targetUserId: integer("target_user_id"),
   metadata: jsonb("metadata"),
-  ipAddress: text("ip_address"),
-  userAgent: text("user_agent"),
-  createdAt: timestamp("created_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export type SuperAdminAction = typeof superAdminActions.$inferSelect;
