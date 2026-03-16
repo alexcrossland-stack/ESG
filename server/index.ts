@@ -33,20 +33,19 @@ const httpServer = createServer(app);
 
 app.use(
   helmet({
-    contentSecurityPolicy: isProd ? {
+    contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+        connectSrc: ["'self'", "https:", "wss:"],
         imgSrc: ["'self'", "data:", "blob:"],
-        connectSrc: ["'self'"],
-        fontSrc: ["'self'", "data:"],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
-        mediaSrc: ["'self'", "blob:"],
-        workerSrc: ["'self'", "blob:"],
+        upgradeInsecureRequests: null,
       },
-    } : false,
+    },
     crossOriginEmbedderPolicy: false,
     hsts: isProd ? { maxAge: 31536000, includeSubDomains: true } : false,
   })
