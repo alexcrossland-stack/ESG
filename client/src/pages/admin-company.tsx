@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
-  ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart,
+  ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -137,9 +137,20 @@ export default function AdminCompanyPage() {
             {statusActive ? <ShieldCheck className="w-3 h-3 mr-1" /> : <ShieldOff className="w-3 h-3 mr-1" />}
             {diag.status ?? "active"}
           </Badge>
-          <Badge variant={diag.planTier === "pro" ? "default" : "secondary"} data-testid="badge-plan-tier">
-            {diag.planTier ?? "free"}
+          <Badge variant={diag.planTier === "pro" ? "default" : diag.isBetaCompany ? "outline" : "secondary"} data-testid="badge-plan-tier">
+            {diag.planTier === "pro" ? "Pro (Stripe)" : diag.isBetaCompany ? "Free + Beta" : "free"}
           </Badge>
+          {diag.isBetaCompany && (
+            <Badge variant="outline" className="gap-1 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300" data-testid="badge-beta-status">
+              <Crown className="w-3 h-3" />
+              Beta
+              {diag.betaExpiresAt && (
+                <span className="font-normal opacity-70">
+                  · exp {format(new Date(diag.betaExpiresAt), "d MMM yy")}
+                </span>
+              )}
+            </Badge>
+          )}
           {diag.maturityLevel && (
             <Badge variant="outline" className="capitalize" data-testid="badge-maturity">
               {diag.maturityLevel} maturity
