@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -97,6 +98,7 @@ export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can, isApprover } = usePermissions();
+  const { isPro } = useBillingStatus();
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
@@ -422,11 +424,16 @@ export default function DataEntry() {
               <p className="text-xs text-muted-foreground">{filledRawCount} of {totalRawFields} fields entered</p>
             </div>
             <div className="flex items-center gap-2">
-              {canEdit && (
+              {canEdit && isPro && (
                 <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)} data-testid="button-open-carbon-import">
                   <Upload className="w-3.5 h-3.5 mr-1.5" />
                   Import Data
                 </Button>
+              )}
+              {canEdit && !isPro && (
+                <UpgradeButton feature="CSV Import" size="sm" variant="outline" data-testid="button-import-upgrade">
+                  Import Data
+                </UpgradeButton>
               )}
               <div className="text-lg font-bold text-primary">{rawCompletion}%</div>
             </div>

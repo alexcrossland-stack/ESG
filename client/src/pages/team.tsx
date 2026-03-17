@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +20,7 @@ export default function TeamPage() {
   const { isAdmin } = usePermissions();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isPro } = useBillingStatus();
 
   const { data: users, isLoading } = useQuery<any[]>({
     queryKey: ["/api/users"],
@@ -58,6 +60,16 @@ export default function TeamPage() {
         ))}
       </div>
 
+      {!isPro && users && (
+        <UpgradeLimitBanner
+          current={users.length}
+          limit={3}
+          noun="Team seats"
+          feature="team-seats"
+          data-testid="banner-seat-limit"
+        />
+      )}
+
       <Card data-testid="card-team-users">
         <CardHeader className="pb-4">
           <CardTitle className="text-sm flex items-center gap-2">
@@ -66,6 +78,7 @@ export default function TeamPage() {
           </CardTitle>
           <CardDescription className="text-xs">
             Assign roles to control what each team member can access
+            {!isPro && <span className="ml-1 text-amber-600 dark:text-amber-400 font-medium">· Free plan: 3 seats max</span>}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">

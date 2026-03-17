@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
@@ -877,10 +878,11 @@ export default function Reports() {
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const canApprove = can("report_generation");
+  const { isPro } = useBillingStatus();
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
-  const [selectedTemplate, setSelectedTemplate] = useState("board");
+  const [selectedTemplate, setSelectedTemplate] = useState("management");
   const [reportData, setReportData] = useState<any>(null);
 
   const templateConfig = REPORT_TEMPLATES.find(t => t.id === selectedTemplate) || REPORT_TEMPLATES[0];
@@ -1345,18 +1347,23 @@ export default function Reports() {
               <CardTitle className="text-sm">Report Type</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5">
-              {REPORT_TEMPLATES.map(t => (
+              {REPORT_TEMPLATES.map(t => {
+                const isLocked = !isPro && t.id !== "management";
+                return (
                 <div
                   key={t.id}
-                  onClick={() => handleTemplateChange(t.id)}
-                  className={`p-3 rounded-md border cursor-pointer transition-colors ${selectedTemplate === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
+                  onClick={() => !isLocked && handleTemplateChange(t.id)}
+                  className={`p-3 rounded-md border transition-colors ${isLocked ? "opacity-60 cursor-not-allowed bg-muted/30" : "cursor-pointer"} ${selectedTemplate === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
                   data-testid={`template-${t.id}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="text-base">{(t as any).icon}</span>
                       <div>
-                        <p className="text-sm font-medium">{t.label}</p>
+                        <p className="text-sm font-medium flex items-center gap-1.5">
+                          {t.label}
+                          {isLocked && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-400">Pro</span>}
+                        </p>
                         <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>
                       </div>
                     </div>
@@ -1375,7 +1382,8 @@ export default function Reports() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
 
@@ -1460,25 +1468,33 @@ export default function Reports() {
                     <Download className="w-3.5 h-3.5 mr-1.5" />
                     Text
                   </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => handleGenerateFile("pdf")}
-                    disabled={generateFileMutation.isPending || !latestReportId}
-                    data-testid="button-download-pdf"
-                  >
-                    <FileDown className="w-3.5 h-3.5 mr-1.5" />
-                    {generateFileMutation.isPending && generateFileMutation.variables?.format === "pdf" ? "Generating..." : "PDF"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => handleGenerateFile("docx")}
-                    disabled={generateFileMutation.isPending || !latestReportId}
-                    data-testid="button-download-docx"
-                  >
-                    <FileDown className="w-3.5 h-3.5 mr-1.5" />
-                    {generateFileMutation.isPending && generateFileMutation.variables?.format === "docx" ? "Generating..." : "DOCX"}
-                  </Button>
+                  {isPro ? (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => handleGenerateFile("pdf")}
+                        disabled={generateFileMutation.isPending || !latestReportId}
+                        data-testid="button-download-pdf"
+                      >
+                        <FileDown className="w-3.5 h-3.5 mr-1.5" />
+                        {generateFileMutation.isPending && generateFileMutation.variables?.format === "pdf" ? "Generating..." : "PDF"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleGenerateFile("docx")}
+                        disabled={generateFileMutation.isPending || !latestReportId}
+                        data-testid="button-download-docx"
+                      >
+                        <FileDown className="w-3.5 h-3.5 mr-1.5" />
+                        {generateFileMutation.isPending && generateFileMutation.variables?.format === "docx" ? "Generating..." : "DOCX"}
+                      </Button>
+                    </>
+                  ) : (
+                    <UpgradeButton feature="Report Export" size="sm" data-testid="button-download-upgrade">
+                      Download PDF / DOCX
+                    </UpgradeButton>
+                  )}
                 </div>
               </div>
               <ReportPreview data={reportData} sections={effectiveSections} />

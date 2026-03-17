@@ -1569,6 +1569,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { rows } = req.body as { rows: { name: string; period: string; value: number }[] };
+      const _co = await storage.getCompany(companyId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return res.status(400).json({ error: "No data rows provided" });
@@ -2105,6 +2109,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } = req.body;
 
       const company = await storage.getCompany(companyId);
+      const { tier: _rptTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      if (_rptTier !== "pro" && reportTemplate && reportTemplate !== "management") {
+        return res.status(403).json({ error: "Free plan is limited to the Management report template. Upgrade to Pro for all templates.", code: "UPGRADE_REQUIRED" });
+      }
       const policy = await storage.getPolicy(companyId);
       const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
       const topics = await storage.getMaterialTopics(companyId);
@@ -2705,6 +2713,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { inputs } = req.body;
+      const _co = await storage.getCompany(companyId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 
       const saved = await storage.createPolicyGenerationInput({ companyId, inputs });
 
@@ -2937,12 +2949,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ===== QUESTIONNAIRE AUTOFILL =====
   app.get("/api/questionnaires", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
+    const company = await storage.getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    const { tier } = getEffectivePlanTier(company);
+    if (tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
     const qs = await storage.getQuestionnaires(companyId);
     res.json(qs);
   });
 
   app.get("/api/questionnaires/:id", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
+    const company = await storage.getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "Company not found" });
+    const { tier } = getEffectivePlanTier(company);
+    if (tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
     const q = await storage.getQuestionnaire(req.params.id);
     if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Questionnaire not found" });
     const questions = await storage.getQuestionnaireQuestions(q.id);
@@ -2954,6 +2974,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { title, source, questions } = req.body;
+      const _company = await storage.getCompany(companyId);
+      if (!_company) return res.status(404).json({ error: "Company not found" });
+      const { tier: _tier } = getEffectivePlanTier(_company);
+      if (_tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 
       const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft" });
 
@@ -2987,6 +3011,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const questionnaireId = req.params.id;
+      const _co = await storage.getCompany(companyId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 
       const qRecord = await storage.getQuestionnaire(questionnaireId);
       if (!qRecord || qRecord.companyId !== companyId) return res.status(404).json({ error: "Not found" });
@@ -3086,6 +3114,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/questionnaires/:qId/questions/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
+      const _cId = (req.session as any).companyId;
+      const _co = await storage.getCompany(_cId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
       res.json(updated);
     } catch (e: any) {
@@ -3096,6 +3129,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/questionnaires/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const _co = await storage.getCompany(companyId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const q = await storage.getQuestionnaire(req.params.id);
       if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Not found" });
       await storage.deleteQuestionnaire(req.params.id);
@@ -3124,6 +3161,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { answers } = req.body;
+      const _co = await storage.getCompany(companyId);
+      if (!_co) return res.status(404).json({ error: "Company not found" });
+      const { tier: _t } = getEffectivePlanTier(_co);
+      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 
       const template = await storage.getPolicyTemplate(req.params.slug);
       if (!template) return res.status(404).json({ error: "Template not found" });
@@ -3827,6 +3868,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate } = req.body;
+      const _evCo = await storage.getCompany(companyId);
+      if (!_evCo) return res.status(404).json({ error: "Company not found" });
+      const { tier: _evTier } = getEffectivePlanTier(_evCo);
+      if (_evTier !== "pro") {
+        const existingFiles = await storage.getEvidenceFiles(companyId);
+        if (existingFiles.length >= 10) {
+          return res.status(403).json({ error: "Free plan is limited to 10 evidence files. Upgrade to Pro for unlimited uploads.", code: "UPGRADE_REQUIRED" });
+        }
+      }
       if (!filename) {
         return res.status(400).json({ error: "Filename is required" });
       }
@@ -4008,6 +4058,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/compliance/requirements/:frameworkId", requireAuth, async (req, res) => {
     try {
+      const _crCo = await storage.getCompany((req.session as any).companyId);
+      const { tier: _crTier } = _crCo ? getEffectivePlanTier(_crCo) : { tier: "free" as const };
+      if (_crTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const rows = await db.execute(
         sql`SELECT * FROM compliance_requirements WHERE framework_id = ${req.params.frameworkId} ORDER BY code`
       );
@@ -4020,6 +4073,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/compliance/status", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const _csCo = await storage.getCompany(companyId);
+      const { tier: _csTier } = _csCo ? getEffectivePlanTier(_csCo) : { tier: "free" as const };
+      if (_csTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const frameworks = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
       const requirements = await db.execute(sql`SELECT * FROM compliance_requirements`);
       const metricsResult = await db.execute(
@@ -4279,7 +4335,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return (order[a.impact as keyof typeof order] ?? 3) - (order[b.impact as keyof typeof order] ?? 3);
       });
 
-      res.json({ recommendations, total: recommendations.length });
+      const _recCo = await storage.getCompany(companyId);
+      const { tier: _recTier } = _recCo ? getEffectivePlanTier(_recCo) : { tier: "free" as const };
+      const limited = _recTier !== "pro" && recommendations.length > 3;
+      const displayed = limited ? recommendations.slice(0, 3) : recommendations;
+      res.json({ recommendations: displayed, total: recommendations.length, limited });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -4409,6 +4469,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!message?.trim()) return res.status(400).json({ error: "Message is required" });
 
       const company = await storage.getCompany(companyId);
+      const { tier: _chatTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      if (_chatTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
         : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
 
@@ -4710,6 +4772,8 @@ Answer the user's question based on this context. If you're asked about somethin
       const reportRun = reportRunResult.rows[0] as any;
       const reportData = reportRun.report_data || {};
       const company = await storage.getCompany(companyId);
+      const { tier: _fileTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      if (_fileTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const companyName = company?.name || "Company";
 
       const sections: any[] = [];
@@ -4808,6 +4872,10 @@ Answer the user's question based on this context. If you're asked about somethin
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { format, content, title } = req.body;
+      const _iCo = await storage.getCompany(companyId);
+      if (!_iCo) return res.status(404).json({ error: "Company not found" });
+      const { tier: _iTier } = getEffectivePlanTier(_iCo);
+      if (_iTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
       if (title.length > 200) { res.status(400).json({ error: "Title must be 200 characters or fewer" }); return; }
       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
@@ -4928,6 +4996,10 @@ Answer the user's question based on this context. If you're asked about somethin
     try {
       const companyId = (req.session as any).companyId;
       const { text, title } = req.body;
+      const _grCo = await storage.getCompany(companyId);
+      if (!_grCo) return res.status(404).json({ error: "Company not found" });
+      const { tier: _grTier } = getEffectivePlanTier(_grCo);
+      if (_grTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       if (!text || typeof text !== "string") { res.status(400).json({ error: "Questionnaire text is required" }); return; }
       if (text.length > 50000) { res.status(400).json({ error: "Text exceeds 50,000 character limit" }); return; }
 
@@ -5048,6 +5120,10 @@ Answer the user's question based on this context. If you're asked about somethin
 
   app.post("/api/raw-data/import/parse", requireAuth, async (req, res) => {
     try {
+      const _parseCo = await storage.getCompany((req.session as any).companyId);
+      if (!_parseCo) return res.status(404).json({ error: "Company not found" });
+      const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
+      if (_parseTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const { format, content } = req.body;
       if (!content) { res.status(400).json({ error: "Content is required" }); return; }
       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
@@ -5083,6 +5159,10 @@ Answer the user's question based on this context. If you're asked about somethin
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { mappings, rows, period } = req.body;
+      const _confCo = await storage.getCompany(companyId);
+      if (!_confCo) return res.status(404).json({ error: "Company not found" });
+      const { tier: _confTier } = getEffectivePlanTier(_confCo);
+      if (_confTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
@@ -5189,6 +5269,8 @@ Answer the user's question based on this context. If you're asked about somethin
     try {
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
+      const { tier: _bmTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      if (_bmTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const employeeCount = company?.employeeCount || 1;
       const metrics = await storage.getMetrics(companyId);
       const now = new Date();
@@ -5260,6 +5342,9 @@ Answer the user's question based on this context. If you're asked about somethin
     try {
       const companyId = (req.session as any).companyId;
       const { enabled, expiresInDays, visibleSections } = req.body;
+      const _shareCo = await storage.getCompany(companyId);
+      const { tier: _shareTier } = _shareCo ? getEffectivePlanTier(_shareCo) : { tier: "free" as const };
+      if (_shareTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
       const ALLOWED_SECTIONS = ["esg_scores", "key_metrics", "policy_status", "carbon_summary", "compliance_highlights", "evidence_coverage", "certifications"];
       const sanitizedSections = Array.isArray(visibleSections)
         ? visibleSections.filter((s: string) => ALLOWED_SECTIONS.includes(s))

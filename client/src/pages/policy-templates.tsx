@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -298,6 +299,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
 }) {
   const { toast } = useToast();
   const { can } = usePermissions();
+  const { isPro } = useBillingStatus();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [initialized, setInitialized] = useState(false);
@@ -568,7 +570,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
             Next
             <ChevronRight className="w-4 h-4 ml-1" />
           </Button>
-        ) : (
+        ) : isPro ? (
           <Button
             onClick={() => generateMutation.mutate()}
             disabled={generateMutation.isPending || !can("policy_editing")}
@@ -586,6 +588,10 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
               </>
             )}
           </Button>
+        ) : (
+          <UpgradeButton feature="AI Policy Generation" data-testid="button-generate-policy-upgrade">
+            Generate Policy
+          </UpgradeButton>
         )}
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,6 +54,7 @@ export function SupportAssistant() {
 
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: statusData } = useQuery<any>({ queryKey: ["/api/programme/status"] });
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
 
   const pageLabel = PAGE_LABELS[location] || "Platform";
 
@@ -154,6 +156,21 @@ export function SupportAssistant() {
             </button>
           </div>
 
+          {!billingLoading && !isPro ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                <Sparkles className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">AI Assistant — Pro Feature</p>
+                <p className="text-xs text-muted-foreground mt-1">The ESG assistant is available on the Pro plan. Upgrade to get instant answers about sustainability, guidance through the platform, and SME-specific ESG advice.</p>
+              </div>
+              <UpgradeButton feature="AI Assistant" size="sm" data-testid="button-assistant-upgrade">
+                Upgrade to Pro
+              </UpgradeButton>
+            </div>
+          ) : (
+          <>
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {messages.map(msg => (
               <div
@@ -241,6 +258,8 @@ export function SupportAssistant() {
             </div>
             <p className="text-[10px] text-muted-foreground mt-1.5 text-center">AI-generated answers. Always verify critical decisions.</p>
           </div>
+          </>
+          )}
         </div>
       )}
 

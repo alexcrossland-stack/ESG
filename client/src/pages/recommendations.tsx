@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,12 +67,14 @@ function RecommendationCard({ rec }: { rec: Recommendation }) {
 }
 
 export default function Recommendations() {
-  const { data, isLoading, refetch, isRefetching } = useQuery<{ recommendations: Recommendation[]; total: number }>({
+  const { isPro } = useBillingStatus();
+  const { data, isLoading, refetch, isRefetching } = useQuery<{ recommendations: Recommendation[]; total: number; limited?: boolean }>({
     queryKey: ["/api/recommendations"],
   });
 
   const highCount = data?.recommendations.filter(r => r.impact === "high").length || 0;
   const mediumCount = data?.recommendations.filter(r => r.impact === "medium").length || 0;
+  const isLimited = !isPro && (data?.limited ?? false);
 
   return (
     <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5" data-testid="page-recommendations">
@@ -108,6 +111,16 @@ export default function Recommendations() {
             <p className="text-xs text-muted-foreground mt-0.5">Total</p>
           </Card>
         </div>
+      )}
+
+      {isLimited && (
+        <UpgradeLimitBanner
+          current={3}
+          limit={data?.total ?? 3}
+          noun="Recommendations"
+          feature="recommendations"
+          data-testid="banner-recommendations-limit"
+        />
       )}
 
       {isLoading ? (

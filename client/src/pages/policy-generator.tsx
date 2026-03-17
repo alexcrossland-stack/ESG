@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { usePermissions } from "@/lib/permissions";
 import { AiDraftBadge } from "@/components/workflow-badge";
+import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 
 const STEPS = [
   { label: "Company Profile", icon: Building2 },
@@ -106,6 +107,7 @@ export default function PolicyGenerator() {
   const { toast } = useToast();
   const { can } = usePermissions();
   const canEdit = can("policy_editing");
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
   const [step, setStep] = useState(0);
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [generatedContent, setGeneratedContent] = useState<Record<string, string> | null>(null);
@@ -420,10 +422,13 @@ export default function PolicyGenerator() {
                       Next
                       <ChevronRight className="w-4 h-4 ml-1" />
                     </Button>
-                  ) : (
-                    <Button onClick={handleGenerate} data-testid="button-generate" disabled={!canEdit}>
-                      <FileText className="w-4 h-4 mr-1" />
+                  ) : !billingLoading && !isPro ? (
+                    <UpgradeButton feature="AI Policy Generator" data-testid="button-generate-upgrade">
                       Generate Policy
+                    </UpgradeButton>
+                  ) : (
+                    <Button onClick={handleGenerate} data-testid="button-generate" disabled={!canEdit || generateMutation.isPending}>
+                      {generateMutation.isPending ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Generating...</> : <><FileText className="w-4 h-4 mr-1" />Generate Policy</>}
                     </Button>
                   )}
                 </div>

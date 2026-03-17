@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -408,6 +409,10 @@ function EvidenceList() {
 
 export default function Evidence() {
   const { can } = usePermissions();
+  const { isPro } = useBillingStatus();
+  const { data: coverage } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
+  const fileCount = coverage?.totalEvidence ?? 0;
+  const atLimit = !isPro && fileCount >= 10;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -428,8 +433,18 @@ export default function Evidence() {
           <h1 className="text-2xl font-bold" data-testid="text-evidence-title">Evidence Management</h1>
           <p className="text-sm text-muted-foreground mt-1">Upload, track, and review supporting evidence for your ESG data</p>
         </div>
-        {can("metrics_data_entry") && <UploadEvidenceDialog />}
+        {can("metrics_data_entry") && !atLimit && <UploadEvidenceDialog />}
       </div>
+
+      {!isPro && can("metrics_data_entry") && (
+        <UpgradeLimitBanner
+          current={fileCount}
+          limit={10}
+          noun="Evidence files"
+          feature="evidence-upload"
+          data-testid="banner-evidence-limit"
+        />
+      )}
 
       <CoverageOverview />
 

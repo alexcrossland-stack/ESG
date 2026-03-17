@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useBillingStatus, UpgradePageGate } from "@/components/upgrade-prompt";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1086,6 +1087,23 @@ export default function QuestionnairePage() {
   const { can } = usePermissions();
   const canAccess = can("questionnaire_access");
   const [importOpen, setImportOpen] = useState(false);
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
+
+  if (!billingLoading && !isPro) {
+    return (
+      <UpgradePageGate
+        feature="Questionnaire Autofill"
+        title="Questionnaire Autofill requires Pro"
+        description="Answer supplier and customer ESG questionnaires automatically using your company data — and let AI fill in your answers with a single click."
+        bullets={[
+          "Create and manage unlimited ESG questionnaires",
+          "AI autofill from your existing ESG data",
+          "Import questionnaires from PDF or text",
+          "Export completed answers instantly",
+        ]}
+      />
+    );
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">

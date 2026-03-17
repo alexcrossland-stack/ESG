@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useBillingStatus, UpgradeOverlay } from "@/components/upgrade-prompt";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -83,15 +84,19 @@ function RangeBar({ low, median, high, value, direction }: { low: number; median
 }
 
 export default function BenchmarksPage() {
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
+
   const { data: benchmarks, isLoading: loadingBenchmarks } = useQuery<BenchmarkDef[]>({
     queryKey: ["/api/benchmarks"],
   });
 
   const { data: comparison, isLoading: loadingComparison } = useQuery<BenchmarkComparison[]>({
     queryKey: ["/api/benchmarks/comparison"],
+    enabled: isPro,
+    retry: false,
   });
 
-  if (loadingBenchmarks || loadingComparison) {
+  if (loadingBenchmarks || billingLoading || (isPro && loadingComparison)) {
     return (
       <div className="p-6 space-y-4">
         <Skeleton className="h-8 w-64" />
@@ -119,6 +124,34 @@ export default function BenchmarksPage() {
         </AlertDescription>
       </Alert>
 
+      {!isPro ? (
+        <UpgradeOverlay
+          feature="ESG Benchmarks"
+          title="Unlock your benchmark comparison"
+          description="See how your ESG performance compares to SME industry ranges. Available on the Pro plan."
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {allBenchmarks.slice(0, 4).map(b => (
+              <Card key={b.metricKey} data-testid={`card-benchmark-preview-${b.metricKey}`}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold">{b.label}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-baseline gap-2 mb-1">
+                    <span className="text-2xl font-bold text-muted-foreground">—</span>
+                    <span className="text-sm text-muted-foreground">{b.unit}</span>
+                  </div>
+                  <RangeBar low={b.rangeLow} median={b.rangeMedian} high={b.rangeHigh} value={b.rangeMedian} direction={b.direction} />
+                  <div className="mt-4 space-y-1">
+                    <p className="text-xs text-muted-foreground">Reference range: {b.rangeLow} – {b.rangeHigh} {b.unit} (median: {b.rangeMedian})</p>
+                    <p className="text-[10px] text-muted-foreground/70 italic">{b.source}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </UpgradeOverlay>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {allBenchmarks.map(b => {
           const comp = comparisonMap.get(b.metricKey);
@@ -163,6 +196,7 @@ export default function BenchmarksPage() {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
