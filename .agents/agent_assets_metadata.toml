@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "fZX2FVoQUIi0NQLF6u72n"
+uri = "file://client/public/social-preview.png"
+type = "image"
+title = "Simply ESG — Social Preview Image (1200×630)"
