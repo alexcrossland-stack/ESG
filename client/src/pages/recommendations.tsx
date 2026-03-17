@@ -119,6 +119,7 @@ export default function Recommendations() {
           limit={data?.total ?? 3}
           noun="Recommendations"
           feature="recommendations"
+          valueMessage="Upgrade to see your full prioritised action list — tailored to your biggest ESG gaps."
           data-testid="banner-recommendations-limit"
         />
       )}

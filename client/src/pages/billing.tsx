@@ -4,25 +4,113 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, Zap, Crown, AlertCircle } from "lucide-react";
+import { CheckCircle2, XCircle, Zap, Crown, AlertCircle, Minus } from "lucide-react";
 import { useEffect } from "react";
 
-const FREE_FEATURES = [
-  "Up to 3 team members",
-  "Core ESG metrics tracking",
-  "Basic reporting",
-  "Evidence file storage",
-  "Community support",
-];
-
-const PRO_FEATURES = [
-  "Unlimited team members",
-  "Full ESG metrics suite",
-  "AI-powered policy generator",
-  "Advanced carbon calculator",
-  "Questionnaire autofill (AI)",
-  "Custom report templates",
-  "Priority email support",
+const COMPARISON_ROWS: {
+  category: string;
+  rows: { label: string; free: string | null; pro: string }[];
+}[] = [
+  {
+    category: "AI Tools",
+    rows: [
+      {
+        label: "AI Policy Generator",
+        free: null,
+        pro: "Generate complete, regulation-aware ESG policies from your answers",
+      },
+      {
+        label: "AI Questionnaire Autofill",
+        free: null,
+        pro: "Auto-fill supplier & investor questionnaires from your existing data",
+      },
+      {
+        label: "AI Support Assistant",
+        free: null,
+        pro: "Get instant, context-aware ESG guidance without leaving the platform",
+      },
+    ],
+  },
+  {
+    category: "Reports",
+    rows: [
+      {
+        label: "PDF & Word export",
+        free: null,
+        pro: "Download boardroom-ready reports to share with your board or investors",
+      },
+      {
+        label: "Report templates",
+        free: "Management summary only",
+        pro: "All templates — Board Pack, Investor, Regulatory, and more",
+      },
+    ],
+  },
+  {
+    category: "Questionnaires",
+    rows: [
+      {
+        label: "Supplier & customer questionnaires",
+        free: null,
+        pro: "Create, manage, and respond to unlimited ESG questionnaires",
+      },
+    ],
+  },
+  {
+    category: "Benchmarks",
+    rows: [
+      {
+        label: "SME benchmark comparison",
+        free: null,
+        pro: "Compare your emissions, diversity, and governance to SME reference ranges",
+      },
+    ],
+  },
+  {
+    category: "Team",
+    rows: [
+      {
+        label: "Team seats",
+        free: "Up to 3 members",
+        pro: "Unlimited team members with role-based access",
+      },
+    ],
+  },
+  {
+    category: "Data Import",
+    rows: [
+      {
+        label: "CSV / Excel bulk import",
+        free: null,
+        pro: "Import a full year of ESG data from spreadsheets in one upload",
+      },
+    ],
+  },
+  {
+    category: "Core platform",
+    rows: [
+      {
+        label: "ESG metrics tracking",
+        free: "Core metrics",
+        pro: "Full metrics suite",
+      },
+      {
+        label: "Evidence file storage",
+        free: "Up to 10 files",
+        pro: "Unlimited uploads",
+      },
+      {
+        label: "Basic reporting",
+        free: "✓",
+        pro: "✓",
+      },
+      {
+        label: "Carbon footprint calculator",
+        free: "✓",
+        pro: "✓",
+      },
+    ],
+  },
 ];
 
 export default function BillingPage() {
@@ -92,7 +180,7 @@ export default function BillingPage() {
     : null;
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-6 max-w-4xl mx-auto space-y-8">
       <div>
         <h1 className="text-2xl font-bold">Billing & Plan</h1>
         <p className="text-muted-foreground text-sm mt-1">Manage your subscription and billing settings.</p>
@@ -129,19 +217,11 @@ export default function BillingPage() {
               <CardTitle className="text-base">Free</CardTitle>
               <span className="text-xl font-bold">£0</span>
             </div>
-            <CardDescription>Everything you need to get started with ESG.</CardDescription>
+            <CardDescription>Everything you need to get started with ESG reporting.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {FREE_FEATURES.map(f => (
-              <div key={f} className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span>{f}</span>
-              </div>
-            ))}
+          <CardContent>
             {!isPro && (
-              <div className="pt-3">
-                <Badge variant="outline" className="w-full justify-center">Current plan</Badge>
-              </div>
+              <Badge variant="outline" className="w-full justify-center">Current plan</Badge>
             )}
           </CardContent>
         </Card>
@@ -163,29 +243,85 @@ export default function BillingPage() {
                 <span className="text-xs text-muted-foreground">/mo</span>
               </div>
             </div>
-            <CardDescription>Full suite for growing sustainability programmes.</CardDescription>
+            <CardDescription>Full AI-powered suite for serious sustainability programmes.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {PRO_FEATURES.map(f => (
-              <div key={f} className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                <span>{f}</span>
-              </div>
-            ))}
-            {!isPro && (
-              <div className="pt-3">
-                <Button
-                  className="w-full"
-                  disabled={checkoutMutation.isPending}
-                  onClick={() => checkoutMutation.mutate()}
-                  data-testid="button-upgrade-pro"
-                >
-                  {checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro"}
-                </Button>
-              </div>
+          <CardContent>
+            {!isPro ? (
+              <Button
+                className="w-full"
+                disabled={checkoutMutation.isPending}
+                onClick={() => checkoutMutation.mutate()}
+                data-testid="button-upgrade-pro"
+              >
+                {checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro"}
+              </Button>
+            ) : (
+              <Badge className="w-full justify-center bg-primary/10 text-primary hover:bg-primary/10 border border-primary/20">Active</Badge>
             )}
           </CardContent>
         </Card>
+      </div>
+
+      <div className="space-y-1" data-testid="plan-comparison-table">
+        <h2 className="text-base font-semibold">What's included</h2>
+        <p className="text-sm text-muted-foreground">A full breakdown of what each plan includes.</p>
+
+        <div className="mt-4 rounded-lg border border-border overflow-hidden">
+          <div className="grid grid-cols-[1fr_auto_auto] bg-muted/50 border-b border-border">
+            <div className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Feature</div>
+            <div className="px-6 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide text-center w-28">Free</div>
+            <div className="px-6 py-2.5 text-xs font-semibold text-primary uppercase tracking-wide text-center w-36 flex items-center gap-1 justify-center">
+              <Crown className="w-3 h-3" /> Pro
+            </div>
+          </div>
+
+          {COMPARISON_ROWS.map((section, si) => (
+            <div key={section.category}>
+              <div className="px-4 py-2 bg-muted/30 border-b border-border">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{section.category}</span>
+              </div>
+              {section.rows.map((row, ri) => (
+                <div
+                  key={row.label}
+                  className={`grid grid-cols-[1fr_auto_auto] border-b border-border last:border-b-0 hover:bg-muted/20 transition-colors ${si === COMPARISON_ROWS.length - 1 && ri === section.rows.length - 1 ? "rounded-b-lg" : ""}`}
+                  data-testid={`comparison-row-${row.label.replace(/\s+/g, "-").toLowerCase()}`}
+                >
+                  <div className="px-4 py-3 text-sm text-foreground">{row.label}</div>
+                  <div className="px-4 py-3 w-28 flex items-center justify-center">
+                    {row.free === null ? (
+                      <XCircle className="w-4 h-4 text-muted-foreground/50" />
+                    ) : row.free === "✓" ? (
+                      <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
+                    ) : (
+                      <span className="text-xs text-muted-foreground text-center leading-tight">{row.free}</span>
+                    )}
+                  </div>
+                  <div className="px-4 py-3 w-36 flex items-start gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    {row.pro === "✓" ? null : (
+                      <span className="text-xs text-muted-foreground leading-snug">{row.pro}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {!isPro && (
+          <div className="pt-4">
+            <Button
+              className="w-full sm:w-auto gap-2"
+              disabled={checkoutMutation.isPending}
+              onClick={() => checkoutMutation.mutate()}
+              data-testid="button-upgrade-pro-bottom"
+            >
+              <Zap className="w-4 h-4" />
+              {checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro — £49/month"}
+            </Button>
+            <p className="text-xs text-muted-foreground mt-2">No long-term contracts · Cancel anytime</p>
+          </div>
+        )}
       </div>
 
       {isBeta && (

@@ -163,7 +163,7 @@ export function SupportAssistant() {
               </div>
               <div>
                 <p className="text-sm font-semibold">AI Assistant — Pro Feature</p>
-                <p className="text-xs text-muted-foreground mt-1">The ESG assistant is available on the Pro plan. Upgrade to get instant answers about sustainability, guidance through the platform, and SME-specific ESG advice.</p>
+                <p className="text-xs text-muted-foreground mt-1">Get instant, context-aware answers about ESG practices, regulations, and your data — without leaving the platform. Pro plan required.</p>
               </div>
               <UpgradeButton feature="AI Assistant" size="sm" data-testid="button-assistant-upgrade">
                 Upgrade to Pro

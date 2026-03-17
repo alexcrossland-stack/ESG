@@ -431,7 +431,13 @@ export default function DataEntry() {
                 </Button>
               )}
               {canEdit && !isPro && (
-                <UpgradeButton feature="CSV Import" size="sm" variant="outline" data-testid="button-import-upgrade">
+                <UpgradeButton
+                  feature="CSV Import"
+                  size="sm"
+                  variant="outline"
+                  valueMessage="Import a full year of ESG data from Excel or CSV in one upload — no manual field entry."
+                  data-testid="button-import-upgrade"
+                >
                   Import Data
                 </UpgradeButton>
               )}

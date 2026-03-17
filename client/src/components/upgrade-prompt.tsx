@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,22 +15,54 @@ export function useBillingStatus() {
   return { billing: data, isPro, isBeta, isLoading };
 }
 
+function trackEvent(action: string, details?: Record<string, string>) {
+  fetch("/api/activity/track", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      action,
+      page: typeof window !== "undefined" ? window.location.pathname : "/",
+      details,
+    }),
+  }).catch(() => {});
+}
+
 interface UpgradeButtonProps {
   feature: string;
   children: React.ReactNode;
   className?: string;
   size?: "sm" | "default" | "lg";
+  variant?: "default" | "outline" | "secondary";
+  valueMessage?: string;
   "data-testid"?: string;
 }
 
-export function UpgradeButton({ feature, children, className, size = "default", "data-testid": testId }: UpgradeButtonProps) {
-  return (
-    <Link href="/billing">
+export function UpgradeButton({
+  feature,
+  children,
+  className,
+  size = "default",
+  valueMessage,
+  "data-testid": testId,
+}: UpgradeButtonProps) {
+  const slug = feature.replace(/\s+/g, "-").toLowerCase();
+
+  useEffect(() => {
+    trackEvent("upgrade_prompt_shown", { feature });
+  }, [feature]);
+
+  const handleClick = () => {
+    trackEvent("upgrade_prompt_clicked", { feature });
+  };
+
+  const btn = (
+    <Link href="/billing" onClick={handleClick}>
       <Button
         variant="outline"
         size={size}
         className={`relative gap-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950 ${className ?? ""}`}
-        data-testid={testId ?? `upgrade-button-${feature.replace(/\s+/g, "-").toLowerCase()}`}
+        data-testid={testId ?? `upgrade-button-${slug}`}
       >
         <Lock className="w-3.5 h-3.5 shrink-0" />
         {children}
@@ -41,6 +74,15 @@ export function UpgradeButton({ feature, children, className, size = "default", 
         </Badge>
       </Button>
     </Link>
+  );
+
+  if (!valueMessage) return btn;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {btn}
+      <p className="text-xs text-muted-foreground leading-snug">{valueMessage}</p>
+    </div>
   );
 }
 
@@ -59,6 +101,14 @@ export function UpgradePageGate({
   icon,
   bullets,
 }: UpgradePageGateProps) {
+  useEffect(() => {
+    trackEvent("upgrade_prompt_shown", { feature });
+  }, [feature]);
+
+  const handleClick = () => {
+    trackEvent("upgrade_prompt_clicked", { feature });
+  };
+
   return (
     <div className="flex items-center justify-center min-h-[60vh] p-6" data-testid={`upgrade-gate-${feature.replace(/\s+/g, "-").toLowerCase()}`}>
       <Card className="max-w-md w-full border-amber-200 dark:border-amber-800 shadow-sm">
@@ -84,7 +134,7 @@ export function UpgradePageGate({
             </ul>
           )}
 
-          <Link href="/billing">
+          <Link href="/billing" onClick={handleClick}>
             <Button className="w-full gap-2 mt-2 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-upgrade-cta">
               <Zap className="w-4 h-4" />
               Upgrade to Pro
@@ -106,6 +156,14 @@ interface UpgradeOverlayProps {
 }
 
 export function UpgradeOverlay({ feature, title, description, children }: UpgradeOverlayProps) {
+  useEffect(() => {
+    trackEvent("upgrade_prompt_shown", { feature });
+  }, [feature]);
+
+  const handleClick = () => {
+    trackEvent("upgrade_prompt_clicked", { feature });
+  };
+
   return (
     <div className="relative" data-testid={`upgrade-overlay-${feature.replace(/\s+/g, "-").toLowerCase()}`}>
       <div className="pointer-events-none select-none" style={{ filter: "blur(4px)", opacity: 0.4 }}>
@@ -119,9 +177,9 @@ export function UpgradeOverlay({ feature, title, description, children }: Upgrad
             </div>
             <div className="space-y-1">
               <p className="font-semibold text-sm">{title ?? `Unlock ${feature}`}</p>
-              <p className="text-xs text-muted-foreground">{description ?? `This insight is available on the Pro plan.`}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{description ?? `This insight is available on the Pro plan.`}</p>
             </div>
-            <Link href="/billing">
+            <Link href="/billing" onClick={handleClick}>
               <Button size="sm" className="gap-1.5 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-overlay-upgrade">
                 <Zap className="w-3.5 h-3.5" />
                 Upgrade to Pro
@@ -139,27 +197,56 @@ interface UpgradeLimitBannerProps {
   limit: number;
   noun: string;
   feature: string;
+  valueMessage?: string;
   "data-testid"?: string;
 }
 
-export function UpgradeLimitBanner({ current, limit, noun, feature, "data-testid": testId }: UpgradeLimitBannerProps) {
+export function UpgradeLimitBanner({
+  current,
+  limit,
+  noun,
+  feature,
+  valueMessage,
+  "data-testid": testId,
+}: UpgradeLimitBannerProps) {
   const atLimit = current >= limit;
+
+  useEffect(() => {
+    trackEvent("upgrade_prompt_shown", { feature });
+  }, [feature]);
+
+  const handleClick = () => {
+    trackEvent("upgrade_prompt_clicked", { feature });
+  };
+
   return (
     <div
       className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${atLimit ? "border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30" : "border-border bg-muted/40"}`}
       data-testid={testId ?? `limit-banner-${noun}`}
     >
-      <div className="flex items-center gap-2">
-        {atLimit ? <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" /> : <Sparkles className="w-4 h-4 text-muted-foreground shrink-0" />}
-        <span className={atLimit ? "text-amber-800 dark:text-amber-300 font-medium" : "text-muted-foreground"}>
-          {atLimit
-            ? `${noun} limit reached (${current}/${limit}) — upgrade to add more`
-            : `${current} of ${limit} ${noun.toLowerCase()} used on Free plan`}
-        </span>
+      <div className="flex items-start gap-2">
+        {atLimit ? <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" /> : <Sparkles className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />}
+        <div>
+          <span className={atLimit ? "text-amber-800 dark:text-amber-300 font-medium" : "text-muted-foreground"}>
+            {atLimit
+              ? `${noun} limit reached (${current}/${limit}) — upgrade to add more`
+              : `${current} of ${limit} ${noun.toLowerCase()} used on Free plan`}
+          </span>
+          {valueMessage && (
+            <p className={`text-xs mt-0.5 ${atLimit ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+              {valueMessage}
+            </p>
+          )}
+        </div>
       </div>
       {atLimit && (
-        <Link href="/billing">
-          <Button variant="outline" size="sm" className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0" data-testid={`button-upgrade-${feature}`}>
+        <Link href="/billing" onClick={handleClick}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:text-amber-400 shrink-0"
+            data-testid={`button-upgrade-${feature}`}
+          >
             Upgrade
           </Button>
         </Link>

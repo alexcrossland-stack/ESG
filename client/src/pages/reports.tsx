@@ -1491,7 +1491,12 @@ export default function Reports() {
                       </Button>
                     </>
                   ) : (
-                    <UpgradeButton feature="Report Export" size="sm" data-testid="button-download-upgrade">
+                    <UpgradeButton
+                      feature="Report Export"
+                      size="sm"
+                      valueMessage="Share boardroom-ready reports with your board, investors, or lenders."
+                      data-testid="button-download-upgrade"
+                    >
                       Download PDF / DOCX
                     </UpgradeButton>
                   )}

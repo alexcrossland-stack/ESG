@@ -66,6 +66,7 @@ export default function TeamPage() {
           limit={3}
           noun="Team seats"
           feature="team-seats"
+          valueMessage="Invite your full team on Pro — assign roles, share responsibilities, and collaborate on your ESG programme."
           data-testid="banner-seat-limit"
         />
       )}

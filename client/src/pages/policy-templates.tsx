@@ -589,7 +589,11 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
             )}
           </Button>
         ) : (
-          <UpgradeButton feature="AI Policy Generation" data-testid="button-generate-policy-upgrade">
+          <UpgradeButton
+            feature="AI Policy Generation"
+            valueMessage="Produce a tailored ESG policy document to adopt, share with your board, or publish to stakeholders."
+            data-testid="button-generate-policy-upgrade"
+          >
             Generate Policy
           </UpgradeButton>
         )}

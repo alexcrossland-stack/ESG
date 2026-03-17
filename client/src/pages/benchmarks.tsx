@@ -127,8 +127,8 @@ export default function BenchmarksPage() {
       {!isPro ? (
         <UpgradeOverlay
           feature="ESG Benchmarks"
-          title="Unlock your benchmark comparison"
-          description="See how your ESG performance compares to SME industry ranges. Available on the Pro plan."
+          title="See how you compare to similar SMEs"
+          description="Benchmark your carbon emissions, workforce diversity, and governance against real SME reference ranges. Instantly see where you lead — and where to focus next."
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {allBenchmarks.slice(0, 4).map(b => (

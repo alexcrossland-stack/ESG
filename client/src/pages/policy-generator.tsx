@@ -423,7 +423,11 @@ export default function PolicyGenerator() {
                       <ChevronRight className="w-4 h-4 ml-1" />
                     </Button>
                   ) : !billingLoading && !isPro ? (
-                    <UpgradeButton feature="AI Policy Generator" data-testid="button-generate-upgrade">
+                    <UpgradeButton
+                      feature="AI Policy Generator"
+                      valueMessage="Get a complete, regulation-aware ESG policy from your answers — ready to publish in under a minute."
+                      data-testid="button-generate-upgrade"
+                    >
                       Generate Policy
                     </UpgradeButton>
                   ) : (

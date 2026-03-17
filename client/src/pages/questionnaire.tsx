@@ -1093,13 +1093,13 @@ export default function QuestionnairePage() {
     return (
       <UpgradePageGate
         feature="Questionnaire Autofill"
-        title="Questionnaire Autofill requires Pro"
-        description="Answer supplier and customer ESG questionnaires automatically using your company data — and let AI fill in your answers with a single click."
+        title="Respond to ESG questionnaires automatically"
+        description="Fill supplier, customer, and investor ESG questionnaires using your existing company data — what takes hours manually is done in minutes, with AI doing the heavy lifting."
         bullets={[
           "Create and manage unlimited ESG questionnaires",
-          "AI autofill from your existing ESG data",
-          "Import questionnaires from PDF or text",
-          "Export completed answers instantly",
+          "AI autofill from your existing metrics and policies",
+          "Import questionnaires from PDF or plain text",
+          "Export completed answers as a polished document",
         ]}
       />
     );

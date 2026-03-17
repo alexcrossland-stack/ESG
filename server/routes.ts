@@ -106,6 +106,20 @@ function resolveAuth(req: Request): { userId: string; companyId: string } | null
   return null;
 }
 
+function upgradeRequired(req: Request, res: Response, customMsg?: string) {
+  try {
+    const a = resolveAuth(req);
+    storage.createUserActivity({
+      userId: a?.userId ?? null,
+      companyId: a?.companyId ?? null,
+      action: "blocked_action_attempted",
+      page: req.path,
+      details: { endpoint: `${req.method} ${req.path}` },
+    }).catch(() => {});
+  } catch {}
+  res.status(403).json({ error: customMsg ?? "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+}
+
 async function requireAuth(req: Request, res: Response, next: Function) {
   const auth = resolveAuth(req);
   if (!auth) {
@@ -1572,7 +1586,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
 
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return res.status(400).json({ error: "No data rows provided" });
@@ -2111,7 +2125,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       const { tier: _rptTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
       if (_rptTier !== "pro" && reportTemplate && reportTemplate !== "management") {
-        return res.status(403).json({ error: "Free plan is limited to the Management report template. Upgrade to Pro for all templates.", code: "UPGRADE_REQUIRED" });
+        return upgradeRequired(req, res, "Free plan is limited to the Management report template. Upgrade to Pro for all templates.");
       }
       const policy = await storage.getPolicy(companyId);
       const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
@@ -2716,7 +2730,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
 
       const saved = await storage.createPolicyGenerationInput({ companyId, inputs });
 
@@ -2952,7 +2966,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const company = await storage.getCompany(companyId);
     if (!company) return res.status(404).json({ error: "Company not found" });
     const { tier } = getEffectivePlanTier(company);
-    if (tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+    if (tier !== "pro") return upgradeRequired(req, res);
     const qs = await storage.getQuestionnaires(companyId);
     res.json(qs);
   });
@@ -2962,7 +2976,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const company = await storage.getCompany(companyId);
     if (!company) return res.status(404).json({ error: "Company not found" });
     const { tier } = getEffectivePlanTier(company);
-    if (tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+    if (tier !== "pro") return upgradeRequired(req, res);
     const q = await storage.getQuestionnaire(req.params.id);
     if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Questionnaire not found" });
     const questions = await storage.getQuestionnaireQuestions(q.id);
@@ -2977,7 +2991,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _company = await storage.getCompany(companyId);
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
-      if (_tier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_tier !== "pro") return upgradeRequired(req, res);
 
       const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft" });
 
@@ -3014,7 +3028,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
 
       const qRecord = await storage.getQuestionnaire(questionnaireId);
       if (!qRecord || qRecord.companyId !== companyId) return res.status(404).json({ error: "Not found" });
@@ -3118,7 +3132,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(_cId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
       const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
       res.json(updated);
     } catch (e: any) {
@@ -3132,7 +3146,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
       const q = await storage.getQuestionnaire(req.params.id);
       if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Not found" });
       await storage.deleteQuestionnaire(req.params.id);
@@ -3164,7 +3178,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = getEffectivePlanTier(_co);
-      if (_t !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_t !== "pro") return upgradeRequired(req, res);
 
       const template = await storage.getPolicyTemplate(req.params.slug);
       if (!template) return res.status(404).json({ error: "Template not found" });
@@ -3874,7 +3888,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (_evTier !== "pro") {
         const existingFiles = await storage.getEvidenceFiles(companyId);
         if (existingFiles.length >= 10) {
-          return res.status(403).json({ error: "Free plan is limited to 10 evidence files. Upgrade to Pro for unlimited uploads.", code: "UPGRADE_REQUIRED" });
+          return upgradeRequired(req, res, "Free plan is limited to 10 evidence files. Upgrade to Pro for unlimited uploads.");
         }
       }
       if (!filename) {
@@ -4060,7 +4074,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const _crCo = await storage.getCompany((req.session as any).companyId);
       const { tier: _crTier } = _crCo ? getEffectivePlanTier(_crCo) : { tier: "free" as const };
-      if (_crTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_crTier !== "pro") return upgradeRequired(req, res);
       const rows = await db.execute(
         sql`SELECT * FROM compliance_requirements WHERE framework_id = ${req.params.frameworkId} ORDER BY code`
       );
@@ -4075,7 +4089,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const _csCo = await storage.getCompany(companyId);
       const { tier: _csTier } = _csCo ? getEffectivePlanTier(_csCo) : { tier: "free" as const };
-      if (_csTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_csTier !== "pro") return upgradeRequired(req, res);
       const frameworks = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
       const requirements = await db.execute(sql`SELECT * FROM compliance_requirements`);
       const metricsResult = await db.execute(
@@ -4470,7 +4484,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const company = await storage.getCompany(companyId);
       const { tier: _chatTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
-      if (_chatTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_chatTier !== "pro") return upgradeRequired(req, res);
       const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
         : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
 
@@ -4773,7 +4787,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const reportData = reportRun.report_data || {};
       const company = await storage.getCompany(companyId);
       const { tier: _fileTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
-      if (_fileTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_fileTier !== "pro") return upgradeRequired(req, res);
       const companyName = company?.name || "Company";
 
       const sections: any[] = [];
@@ -4875,7 +4889,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const _iCo = await storage.getCompany(companyId);
       if (!_iCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _iTier } = getEffectivePlanTier(_iCo);
-      if (_iTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_iTier !== "pro") return upgradeRequired(req, res);
       if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
       if (title.length > 200) { res.status(400).json({ error: "Title must be 200 characters or fewer" }); return; }
       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
@@ -4999,7 +5013,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const _grCo = await storage.getCompany(companyId);
       if (!_grCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _grTier } = getEffectivePlanTier(_grCo);
-      if (_grTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_grTier !== "pro") return upgradeRequired(req, res);
       if (!text || typeof text !== "string") { res.status(400).json({ error: "Questionnaire text is required" }); return; }
       if (text.length > 50000) { res.status(400).json({ error: "Text exceeds 50,000 character limit" }); return; }
 
@@ -5123,7 +5137,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const _parseCo = await storage.getCompany((req.session as any).companyId);
       if (!_parseCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
-      if (_parseTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_parseTier !== "pro") return upgradeRequired(req, res);
       const { format, content } = req.body;
       if (!content) { res.status(400).json({ error: "Content is required" }); return; }
       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
@@ -5162,7 +5176,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const _confCo = await storage.getCompany(companyId);
       if (!_confCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _confTier } = getEffectivePlanTier(_confCo);
-      if (_confTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_confTier !== "pro") return upgradeRequired(req, res);
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
@@ -5270,7 +5284,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
       const { tier: _bmTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
-      if (_bmTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_bmTier !== "pro") return upgradeRequired(req, res);
       const employeeCount = company?.employeeCount || 1;
       const metrics = await storage.getMetrics(companyId);
       const now = new Date();
@@ -5344,7 +5358,7 @@ Answer the user's question based on this context. If you're asked about somethin
       const { enabled, expiresInDays, visibleSections } = req.body;
       const _shareCo = await storage.getCompany(companyId);
       const { tier: _shareTier } = _shareCo ? getEffectivePlanTier(_shareCo) : { tier: "free" as const };
-      if (_shareTier !== "pro") return res.status(403).json({ error: "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
+      if (_shareTier !== "pro") return upgradeRequired(req, res);
       const ALLOWED_SECTIONS = ["esg_scores", "key_metrics", "policy_status", "carbon_summary", "compliance_highlights", "evidence_coverage", "certifications"];
       const sanitizedSections = Array.isArray(visibleSections)
         ? visibleSections.filter((s: string) => ALLOWED_SECTIONS.includes(s))
@@ -5642,7 +5656,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const auth = resolveAuth(req);
       const { action, page, details } = req.body;
-      const validActions = ["page_view", "data_entry_save", "report_generated", "import_completed", "questionnaire_autofill", "carbon_calculation", "control_centre_action", "login"];
+      const validActions = ["page_view", "data_entry_save", "report_generated", "import_completed", "questionnaire_autofill", "carbon_calculation", "control_centre_action", "login", "upgrade_prompt_shown", "upgrade_prompt_clicked", "blocked_action_attempted"];
       if (!validActions.includes(action)) { res.status(400).json({ error: "Invalid action" }); return; }
 
       const sanitizedDetails = details ? { ...details } : {};
