@@ -22,7 +22,6 @@ import { format } from "date-fns";
 import { ActivityFeed } from "@/components/activity-feed";
 import { Progress } from "@/components/ui/progress";
 import { usePermissions } from "@/lib/permissions";
-import { ProductTour } from "@/components/product-tour";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
@@ -406,7 +405,6 @@ function BenchmarkSummaryCard() {
 
 export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
-  const [showTour, setShowTour] = useState(false);
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
   const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()) });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
@@ -415,7 +413,6 @@ export default function Dashboard() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
-  const { data: demoStatus } = useQuery<any>({ queryKey: ["/api/company/demo-status"] });
   const { can, isAdmin } = usePermissions();
 
   const isLoading = enhancedLoading || oldLoading;
@@ -483,15 +480,6 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
-      {demoStatus?.isDemo && (
-        <div className="flex items-center gap-3 p-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 text-sm" data-testid="banner-demo">
-          <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-          <p className="text-amber-800 dark:text-amber-300 flex-1">
-            You're exploring the demo account — pre-loaded with sample data. <Link href="/auth"><span className="underline cursor-pointer font-medium">Create your own account</span></Link> to get started.
-          </p>
-        </div>
-      )}
-
       <ActionPlanBanner company={company} />
 
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -522,15 +510,8 @@ export default function Dashboard() {
               {activePeriod ? activePeriod.name : `Latest: ${enhanced.latestPeriod}`}
             </Badge>
           )}
-          {demoStatus?.demoMode && (
-            <Button variant="outline" size="sm" onClick={() => setShowTour(true)} data-testid="button-start-tour">
-              <Info className="w-3.5 h-3.5 mr-1" />
-              Tour
-            </Button>
-          )}
         </div>
       </div>
-      {showTour && <ProductTour onComplete={() => setShowTour(false)} />}
 
       <ActivationCard />
 

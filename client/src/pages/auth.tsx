@@ -280,21 +280,6 @@ export default function Auth() {
                     </form>
                   </Form>
 
-                  <div className="mt-4 pt-4 border-t">
-                    <p className="text-center text-xs text-muted-foreground mb-3">Try before you commit</p>
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      data-testid="button-demo"
-                      disabled={loginMutation.isPending}
-                      onClick={() => loginMutation.mutate({ email: "demo@example.com", password: "password123" })}
-                    >
-                      {loginMutation.isPending ? "Signing in..." : "Try Demo Account"}
-                    </Button>
-                    <p className="text-xs text-muted-foreground text-center mt-2">
-                      Pre-loaded with sample ESG data so you can explore every feature
-                    </p>
-                  </div>
                 </CardContent>
               </TabsContent>
 
