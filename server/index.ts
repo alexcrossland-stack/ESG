@@ -136,6 +136,39 @@ app.use((req, res, next) => {
 
 (async () => {
   await ensureIndexes();
+
+  // Schema validation — catch missing columns before they cause silent runtime failures
+  try {
+    const colResult = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'companies'
+    `);
+    const existing = new Set(((colResult as any).rows ?? []).map((r: any) => r.column_name as string));
+    const required: string[] = [
+      // Identity & core
+      "id", "name", "status", "created_at",
+      // Onboarding
+      "onboarding_complete", "onboarding_step", "onboarding_path", "onboarding_progress_percent",
+      "onboarding_version",
+      // Billing
+      "plan_tier", "plan_status", "current_period_end",
+      "stripe_customer_id", "stripe_subscription_id",
+      // Beta access
+      "is_beta_company", "beta_expires_at", "beta_access_level", "beta_granted_by", "beta_reason",
+      // Features
+      "demo_mode", "profile_share_enabled", "esg_action_plan", "esg_roadmap",
+    ];
+    const missing = required.filter(col => !existing.has(col));
+    if (missing.length > 0) {
+      console.error(`[Startup] FATAL: Database schema out of sync — run db:push`);
+      console.error(`[Startup] FATAL: Missing columns in 'companies' table: ${missing.join(", ")}`);
+      process.exit(1);
+    }
+    console.log(`[Startup] Schema check passed (${existing.size} columns in 'companies')`);
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not validate database schema:", e.message ?? e);
+    process.exit(1);
+  }
+
   try {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS esg_roadmap jsonb`);
   } catch {}
