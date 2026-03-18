@@ -2125,7 +2125,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Reports
   app.get("/api/reports", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const reports = await storage.getReportRuns(companyId);
+    const rawSiteId = req.query.siteId as string | undefined;
+    const siteId = rawSiteId === "null" ? null : rawSiteId;
+    const reports = await storage.getReportRuns(companyId, siteId);
     res.json(reports);
   });
 
@@ -2137,6 +2139,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         period, reportType, reportTemplate,
         includePolicy, includeTopics, includeMetrics, includeActions,
         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
+        siteId: bodySiteId,
       } = req.body;
 
       const company = await storage.getCompany(companyId);
@@ -2383,6 +2386,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         includeMethodology: includeMethodology ?? true,
         includeSignoff: includeSignoff ?? true,
         reportData,
+        siteId: bodySiteId || null,
       });
 
       await storage.createAuditLog({
@@ -5219,7 +5223,7 @@ Answer the user's question based on this context. If you're asked about somethin
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { mappings, rows, period } = req.body;
+      const { mappings, rows, period, siteId: bodySiteId } = req.body;
       const _confCo = await storage.getCompany(companyId);
       if (!_confCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _confTier } = getEffectivePlanTier(_confCo);
@@ -5227,6 +5231,10 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (ownership) return res.status(ownership.status).json({ error: ownership.error });
+      }
 
       let imported = 0;
       let skipped = 0;
@@ -5249,6 +5257,7 @@ Answer the user's question based on this context. If you're asked about somethin
               period,
               source: "csv_import",
               enteredBy: userId,
+              siteId: bodySiteId || null,
             });
             imported++;
           } catch { skipped++; }
@@ -6607,6 +6616,36 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const period = req.query.period as string | undefined;
       const summary = await storage.getSitesSummary(companyId, period);
       res.json(summary);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/sites/unassigned-counts — count of null-siteId records per entity type — MUST be before /:id
+  app.get("/api/sites/unassigned-counts", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const counts = await storage.getUnassignedCounts(companyId);
+      res.json(counts);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/sites/migrate — bulk-assign null-siteId records to a site — MUST be before /:id
+  app.post("/api/sites/migrate", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { siteId, entityTypes } = req.body;
+      if (!siteId || !Array.isArray(entityTypes) || entityTypes.length === 0) {
+        return res.status(400).json({ error: "siteId and entityTypes[] are required" });
+      }
+      const ownership = await validateSiteOwnership(siteId, companyId);
+      if (ownership) return res.status(ownership.status).json({ error: ownership.error });
+      const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
+      res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

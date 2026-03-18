@@ -19,7 +19,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Building2, Plus, Pencil, Archive, MapPin, Globe, AlertCircle } from "lucide-react";
+import { Building2, Plus, Pencil, Archive, MapPin, Globe, AlertCircle, ArrowRightLeft, CheckCircle2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { OrganisationSite } from "@shared/schema";
 
 const SITE_TYPES = [
@@ -281,6 +282,129 @@ function SiteCard({ site, onEdit, onArchive }: { site: OrganisationSite; onEdit:
   );
 }
 
+const ENTITY_TYPES = [
+  { key: "metric_values", label: "Metric Values", description: "ESG metric data entries" },
+  { key: "raw_data_inputs", label: "Raw Data Inputs", description: "Carbon calculator source data" },
+  { key: "evidence_files", label: "Evidence Files", description: "Supporting documents" },
+  { key: "carbon_calculations", label: "Carbon Calculations", description: "Emissions calculation results" },
+  { key: "questionnaires", label: "Questionnaires", description: "ESG survey responses" },
+];
+
+function MigrateLegacyDataPanel({ activeSites }: { activeSites: OrganisationSite[] }) {
+  const { toast } = useToast();
+  const [targetSiteId, setTargetSiteId] = useState("");
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(ENTITY_TYPES.map(e => e.key));
+
+  const { data: counts, refetch: refetchCounts } = useQuery<Record<string, number>>({
+    queryKey: ["/api/sites/unassigned-counts"],
+  });
+
+  const totalUnassigned = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
+
+  const migrateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/sites/migrate", {
+        siteId: targetSiteId,
+        entityTypes: selectedTypes,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const total = Object.values(data as Record<string, number>).reduce((a, b) => a + b, 0);
+      toast({ title: `Migration complete`, description: `${total} records assigned to site.` });
+      refetchCounts();
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sites/summary"] });
+    },
+    onError: () => toast({ title: "Migration failed", variant: "destructive" }),
+  });
+
+  const toggleType = (key: string) => {
+    setSelectedTypes(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
+
+  if (totalUnassigned === 0 && counts !== undefined) {
+    return (
+      <Card>
+        <CardContent className="py-5 flex items-center gap-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+          <div>
+            <p className="text-sm font-medium">All data is site-assigned</p>
+            <p className="text-xs text-muted-foreground">No legacy (unassigned) records exist.</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <ArrowRightLeft className="w-4 h-4 text-muted-foreground" />
+          <CardTitle className="text-base">Migrate Legacy Data</CardTitle>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1">
+          Assign historical records (created before sites were set up) to a specific site.
+          {totalUnassigned > 0 && (
+            <span className="font-medium text-foreground"> {totalUnassigned} unassigned records found.</span>
+          )}
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {ENTITY_TYPES.map(et => {
+            const count = counts?.[et.key] ?? 0;
+            return (
+              <label
+                key={et.key}
+                className={`flex items-center gap-3 p-3 rounded-md border cursor-pointer transition-colors ${selectedTypes.includes(et.key) ? "border-primary bg-primary/5" : "border-border"} ${count === 0 ? "opacity-50" : ""}`}
+                data-testid={`migrate-checkbox-${et.key}`}
+              >
+                <Checkbox
+                  checked={selectedTypes.includes(et.key)}
+                  onCheckedChange={() => toggleType(et.key)}
+                  disabled={count === 0}
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{et.label}</p>
+                  <p className="text-xs text-muted-foreground">{count} unassigned</p>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="flex items-end gap-3 pt-2">
+          <div className="flex-1 space-y-1.5">
+            <Label htmlFor="migrate-target-site" className="text-sm">Assign to site</Label>
+            <Select value={targetSiteId} onValueChange={setTargetSiteId}>
+              <SelectTrigger id="migrate-target-site" data-testid="select-migrate-target-site">
+                <SelectValue placeholder="Select a site…" />
+              </SelectTrigger>
+              <SelectContent>
+                {activeSites.map(site => (
+                  <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            onClick={() => migrateMutation.mutate()}
+            disabled={!targetSiteId || selectedTypes.length === 0 || migrateMutation.isPending || totalUnassigned === 0}
+            data-testid="button-run-migration"
+          >
+            {migrateMutation.isPending ? "Migrating…" : "Run Migration"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SitesPage() {
   const { toast } = useToast();
   const [showForm, setShowForm] = useState(false);
@@ -390,6 +514,15 @@ export default function SitesPage() {
               No archived sites found.
             </div>
           )}
+        </div>
+      )}
+
+      {activeSites.length > 0 && (
+        <div>
+          <h2 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wide">
+            Legacy Data Migration
+          </h2>
+          <MigrateLegacyDataPanel activeSites={activeSites} />
         </div>
       )}
 

@@ -15,12 +15,13 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
-  Gauge, Scale, ArrowUpDown,
+  Gauge, Scale, ArrowUpDown, MapPin,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
+import { useSiteContext } from "@/hooks/use-site-context";
 
 const REPORT_TEMPLATES = [
   {
@@ -879,6 +880,7 @@ export default function Reports() {
   const { can } = usePermissions();
   const canApprove = can("report_generation");
   const { isPro } = useBillingStatus();
+  const { activeSiteId, activeSite } = useSiteContext();
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
@@ -903,7 +905,15 @@ export default function Reports() {
     }));
   };
 
-  const { data: reports = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/reports"] });
+  const { data: reports = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports", activeSiteId ?? "all"],
+    queryFn: async () => {
+      const url = activeSiteId ? `/api/reports?siteId=${activeSiteId}` : "/api/reports";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load reports");
+      return res.json();
+    },
+  });
   const { data: companyData } = useQuery<any>({ queryKey: ["/api/company"] });
   const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
   const { data: complianceStatus } = useQuery<any>({ queryKey: ["/api/compliance/status"] });
@@ -918,6 +928,7 @@ export default function Reports() {
         period: selectedPeriod,
         reportType,
         reportTemplate: selectedTemplate,
+        siteId: activeSiteId || null,
         ...effectiveSections,
       });
       return res.json();
@@ -1524,7 +1535,9 @@ export default function Reports() {
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : reports.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No reports generated yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {activeSite ? `No reports for ${activeSite.name} yet.` : "No reports generated yet."}
+          </p>
         ) : (
           <div className="space-y-2">
             {reports.map((report: any) => (
@@ -1541,6 +1554,12 @@ export default function Reports() {
                 <WorkflowBadge status={report.workflowStatus} size="sm" />
                 <Badge variant="outline" className="text-xs">{report.reportType?.toUpperCase()}</Badge>
                 {report.reportTemplate && <Badge variant="secondary" className="text-xs capitalize">{report.reportTemplate}</Badge>}
+                {report.siteId && (
+                  <Badge variant="outline" className="text-xs flex items-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    {report.siteName || "Site"}
+                  </Badge>
+                )}
                 {report.workflowStatus !== "approved" && report.workflowStatus !== "submitted" && (
                   <Button
                     size="sm"

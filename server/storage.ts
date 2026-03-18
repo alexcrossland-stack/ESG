@@ -120,8 +120,12 @@ export interface IStorage {
   deleteActionPlan(id: string): Promise<void>;
 
   // Reports
-  getReportRuns(companyId: string): Promise<ReportRun[]>;
+  getReportRuns(companyId: string, siteId?: string | null): Promise<ReportRun[]>;
   createReportRun(report: Omit<ReportRun, "id" | "generatedAt">): Promise<ReportRun>;
+
+  // Legacy migration
+  getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
+  migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
 
   // Audit Logs
   getNotifications(companyId: string): Promise<Notification[]>;
@@ -624,13 +628,62 @@ export class DatabaseStorage implements IStorage {
     await db.delete(actionPlans).where(eq(actionPlans.id, id));
   }
 
-  async getReportRuns(companyId: string) {
-    return db.select().from(reportRuns).where(eq(reportRuns.companyId, companyId)).orderBy(desc(reportRuns.generatedAt));
+  async getReportRuns(companyId: string, siteId?: string | null) {
+    const conditions = [eq(reportRuns.companyId, companyId)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(reportRuns.siteId) : eq(reportRuns.siteId, siteId));
+    }
+    return db.select().from(reportRuns).where(and(...conditions)).orderBy(desc(reportRuns.generatedAt));
   }
 
   async createReportRun(report: Omit<ReportRun, "id" | "generatedAt">) {
     const [r] = await db.insert(reportRuns).values(report as any).returning();
     return r;
+  }
+
+  async getUnassignedCounts(companyId: string): Promise<Record<string, number>> {
+    const [mv] = await db.select({ count: sql<number>`count(*)::int` }).from(metricValues)
+      .where(and(eq(metricValues.companyId, companyId), isNull(metricValues.siteId)));
+    const [rdi] = await db.select({ count: sql<number>`count(*)::int` }).from(rawDataInputs)
+      .where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId)));
+    const [ef] = await db.select({ count: sql<number>`count(*)::int` }).from(evidenceFiles)
+      .where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)));
+    const [cc] = await db.select({ count: sql<number>`count(*)::int` }).from(carbonCalculations)
+      .where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId)));
+    const [qs] = await db.select({ count: sql<number>`count(*)::int` }).from(questionnaires)
+      .where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
+    return {
+      metric_values: mv?.count ?? 0,
+      raw_data_inputs: rdi?.count ?? 0,
+      evidence_files: ef?.count ?? 0,
+      carbon_calculations: cc?.count ?? 0,
+      questionnaires: qs?.count ?? 0,
+    };
+  }
+
+  async migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>> {
+    const updated: Record<string, number> = {};
+    if (entityTypes.includes("metric_values")) {
+      const rows = await db.update(metricValues).set({ siteId }).where(and(eq(metricValues.companyId, companyId), isNull(metricValues.siteId))).returning({ id: metricValues.id });
+      updated.metric_values = rows.length;
+    }
+    if (entityTypes.includes("raw_data_inputs")) {
+      const rows = await db.update(rawDataInputs).set({ siteId }).where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId))).returning({ id: rawDataInputs.id });
+      updated.raw_data_inputs = rows.length;
+    }
+    if (entityTypes.includes("evidence_files")) {
+      const rows = await db.update(evidenceFiles).set({ siteId }).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId))).returning({ id: evidenceFiles.id });
+      updated.evidence_files = rows.length;
+    }
+    if (entityTypes.includes("carbon_calculations")) {
+      const rows = await db.update(carbonCalculations).set({ siteId }).where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId))).returning({ id: carbonCalculations.id });
+      updated.carbon_calculations = rows.length;
+    }
+    if (entityTypes.includes("questionnaires")) {
+      const rows = await db.update(questionnaires).set({ siteId }).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId))).returning({ id: questionnaires.id });
+      updated.questionnaires = rows.length;
+    }
+    return updated;
   }
 
   async getNotifications(companyId: string) {

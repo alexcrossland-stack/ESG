@@ -291,8 +291,15 @@ function MetricCoverageTable() {
 }
 
 function EvidenceList() {
+  const { activeSiteId, activeSite } = useSiteContext();
   const { data: files = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/evidence"],
+    queryKey: ["/api/evidence", activeSiteId ?? "all"],
+    queryFn: async () => {
+      const url = activeSiteId ? `/api/evidence?siteId=${activeSiteId}` : "/api/evidence";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load evidence");
+      return res.json();
+    },
   });
   const { can } = usePermissions();
   const { toast } = useToast();
@@ -329,8 +336,14 @@ function EvidenceList() {
           <div className="text-center py-8 space-y-3" data-testid="evidence-empty-state">
             <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/30" />
             <div>
-              <p className="text-sm font-medium">No evidence files yet</p>
-              <p className="text-xs text-muted-foreground mt-1">Start by uploading documents that support your ESG data</p>
+              <p className="text-sm font-medium">
+                {activeSite ? `No evidence for ${activeSite.name} yet` : "No evidence files yet"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {activeSite
+                  ? `Upload documents that support the ESG data for ${activeSite.name}`
+                  : "Start by uploading documents that support your ESG data"}
+              </p>
             </div>
             <div className="text-xs text-muted-foreground space-y-1 max-w-xs mx-auto text-left">
               <p>Examples to upload:</p>

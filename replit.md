@@ -66,7 +66,7 @@ The application is a full-stack SaaS web application.
 - **Policy Templates:** 28 structured templates.
 - **Calculation Engine:** Centralized service for 12 automated ESG metric calculations.
 
-## Multi-Site Architecture (Phase 1 + Phase 2 — Complete)
+## Multi-Site Architecture (Phases 1–3 — Complete)
 
 The platform supports tracking ESG data across multiple physical sites per organisation.
 
@@ -102,6 +102,13 @@ The platform supports tracking ESG data across multiple physical sites per organ
 - Route: `/sites/:siteId/dashboard` — `client/src/pages/site-dashboard.tsx` — summary cards + recent data.
 - Dashboard: `SiteBreakdownCard` shows per-site metrics/evidence counts; hidden when no sites have data.
 - Startup validator in `server/index.ts` checks `organisation_sites` table and all `site_id` columns exist at boot.
+
+### Phase 3 Additions
+- **Site-scoped reports:** `getReportRuns(companyId, siteId?)` filters by site; `GET /api/reports?siteId=` threads filter; `POST /api/reports/generate` saves siteId; reports.tsx filters list by activeSiteId, shows site badge on each report, site-specific empty state.
+- **CSV import site-awareness:** `POST /api/raw-data/import/confirm` extracts and validates siteId, saves it on each upserted raw data row; CarbonImportDialog passes activeSiteId.
+- **Activity feed site indicator:** ActivityFeed shows "Org-wide" badge when a site is selected (feed itself stays org-wide since `audit_logs` has no `site_id` column).
+- **Evidence site-specific empty state:** EvidenceList filters query by activeSiteId; empty state says "No evidence for {siteName} yet" when a site is active.
+- **Legacy data migration:** `GET /api/sites/unassigned-counts` returns count of null-siteId rows per entity type (5 tables); `POST /api/sites/migrate` bulk-assigns null-siteId records; `MigrateLegacyDataPanel` on Sites page with entity checkboxes, site selector, Run Migration button.
 
 ## External Dependencies
 

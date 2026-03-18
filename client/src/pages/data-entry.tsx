@@ -714,6 +714,7 @@ const TEMPLATE_OPTIONS = [
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { activeSiteId } = useSiteContext();
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [parsedResult, setParsedResult] = useState<any>(null);
   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
@@ -740,6 +741,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
         mappings,
         rows: parsedResult?.rows || [],
         period,
+        siteId: activeSiteId || null,
       });
       return res.json();
     },

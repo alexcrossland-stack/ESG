@@ -5,9 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   UserPlus, ArrowRightLeft, CheckCircle, Plus, Trash2,
-  Activity, ChevronDown, ChevronUp,
+  Activity, ChevronDown, ChevronUp, MapPin,
 } from "lucide-react";
 import { useState } from "react";
+import { useSiteContext } from "@/hooks/use-site-context";
 
 type AuditLogEntry = {
   id: string;
@@ -137,6 +138,7 @@ const FILTERS: { key: FilterType; label: string }[] = [
 export function ActivityFeed() {
   const [collapsed, setCollapsed] = useState(true);
   const [filter, setFilter] = useState<FilterType>("all");
+  const { activeSite } = useSiteContext();
 
   const { data: logs = [], isLoading } = useQuery<AuditLogEntry[]>({
     queryKey: ["/api/audit-logs"],
@@ -148,12 +150,18 @@ export function ActivityFeed() {
     <Card data-testid="card-activity-feed">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
             <Activity className="w-4 h-4 text-primary" />
             Activity Feed
             {logs.length > 0 && (
               <Badge variant="secondary" className="text-xs">
                 {logs.length}
+              </Badge>
+            )}
+            {activeSite && (
+              <Badge variant="outline" className="text-xs font-normal flex items-center gap-1">
+                <MapPin className="w-3 h-3" />
+                Org-wide
               </Badge>
             )}
           </CardTitle>
