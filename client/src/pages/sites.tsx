@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -247,7 +248,12 @@ function SiteCard({ site, onEdit, onArchive }: { site: OrganisationSite; onEdit:
         {site.address && (
           <p className="text-xs text-muted-foreground mb-3">{site.address}</p>
         )}
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Link href={`/sites/${site.id}/dashboard`}>
+            <Button variant="default" size="sm" data-testid={`button-view-dashboard-${site.id}`}>
+              View Dashboard
+            </Button>
+          </Link>
           <Button
             variant="outline"
             size="sm"

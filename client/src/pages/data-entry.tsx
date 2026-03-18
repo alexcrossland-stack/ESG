@@ -23,6 +23,7 @@ import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
+import { useSiteContext } from "@/hooks/use-site-context";
 import { DataSourceBadge } from "@/pages/evidence";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceSuggestions } from "@/components/evidence-suggestions";
@@ -99,6 +100,7 @@ export default function DataEntry() {
   const queryClient = useQueryClient();
   const { can, isApprover } = usePermissions();
   const { isPro } = useBillingStatus();
+  const { activeSiteId } = useSiteContext();
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
@@ -248,7 +250,7 @@ export default function DataEntry() {
     for (const [k, v] of Object.entries(rawInputs)) {
       if (v !== undefined && v !== null && v.trim() !== "") nonEmpty[k] = v;
     }
-    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod });
+    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: activeSiteId || null } as any);
     await recalcMutation.mutateAsync();
   };
 
@@ -256,7 +258,7 @@ export default function DataEntry() {
     const val = manualValues[metricId];
     if (!val?.value) return;
     const dataSourceType = manualDataSourceTypes[metricId] || "manual";
-    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType });
+    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null } as any);
     toast({ title: "Saved" });
   };
 

@@ -15,15 +15,17 @@ import {
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
   TrendingUp, Building2, Activity, HeartPulse, Sparkles, HelpCircle,
-  MessageSquare, CreditCard, Users, ChevronRight,
+  MessageSquare, CreditCard, Users, ChevronRight, MapPin, Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { logout } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/lib/permissions";
+import { useSiteContext } from "@/hooks/use-site-context";
 
 const STORAGE_KEY = "sidebar_collapsed_groups";
 
@@ -84,6 +86,33 @@ function NextBadge({ show }: NavBadgeProps) {
     <span className="ml-auto shrink-0 text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary/10 text-primary leading-tight">
       Next
     </span>
+  );
+}
+
+function SiteSwitcher() {
+  const { sites, activeSiteId, setActiveSiteId } = useSiteContext();
+  if (sites.length === 0) return null;
+  return (
+    <div className="mt-2 px-0" data-testid="site-switcher">
+      <Select value={activeSiteId ?? "__all__"} onValueChange={v => setActiveSiteId(v === "__all__" ? null : v)}>
+        <SelectTrigger className="h-7 text-xs border-border bg-background" data-testid="select-active-site">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {activeSiteId ? <MapPin className="w-3 h-3 shrink-0 text-primary" /> : <Globe className="w-3 h-3 shrink-0 text-muted-foreground" />}
+            <SelectValue placeholder="All Sites" />
+          </div>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all__" data-testid="site-option-all">
+            <span className="flex items-center gap-1.5"><Globe className="w-3 h-3" /> All Sites</span>
+          </SelectItem>
+          {sites.map(s => (
+            <SelectItem key={s.id} value={s.id} data-testid={`site-option-${s.id}`}>
+              <span className="flex items-center gap-1.5"><MapPin className="w-3 h-3" /> {s.name}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -153,6 +182,7 @@ export function AppSidebar() {
             </Link>
           )}
         </div>
+        <SiteSwitcher />
       </SidebarHeader>
 
       <SidebarSeparator />

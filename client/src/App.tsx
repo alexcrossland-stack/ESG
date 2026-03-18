@@ -45,8 +45,10 @@ import AdminCompanyPage from "@/pages/admin-company";
 import BillingPage from "@/pages/billing";
 import TeamPage from "@/pages/team";
 import SitesPage from "@/pages/sites";
+import SiteDashboardPage from "@/pages/site-dashboard";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
+import { SiteProvider } from "@/hooks/use-site-context";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -189,6 +191,7 @@ function ProtectedApp() {
   }
 
   return (
+    <SiteProvider>
     <SidebarProvider style={{ "--sidebar-width": "14rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
       <div className="flex h-screen w-full bg-background">
         <AppSidebar />
@@ -231,6 +234,7 @@ function ProtectedApp() {
                 <Route path="/recommendations" component={Recommendations} />
                 <Route path="/team" component={TeamPage} />
                 <Route path="/sites" component={SitesPage} />
+                <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
                 <Route path="/help" component={HelpPage} />
                 <Route component={NotFound} />
               </Switch>
@@ -241,6 +245,7 @@ function ProtectedApp() {
       </div>
       <SupportAssistant />
     </SidebarProvider>
+    </SiteProvider>
   );
 }
 

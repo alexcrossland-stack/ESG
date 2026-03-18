@@ -1489,7 +1489,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
-      const { metricId, period, value, notes, dataSourceType } = req.body;
+      const { metricId, period, value, notes, dataSourceType, siteId: bodySiteId } = req.body;
+      // Validate siteId if provided
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const site = await storage.getSite(bodySiteId, companyId);
+        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
+      }
 
       const existing = await storage.getMetricValues(metricId);
       const existingForPeriod = existing.find(v => v.period === period);
@@ -1501,9 +1508,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         const updateData: any = { value, notes, submittedBy: userId };
         if (dataSourceType) updateData.dataSourceType = dataSourceType;
+        if (bodySiteId !== undefined) updateData.siteId = bodySiteId || null;
         result = await storage.updateMetricValue(existingForPeriod.id, updateData);
       } else {
-        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false };
+        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false, siteId: bodySiteId || null };
         if (dataSourceType) createData.dataSourceType = dataSourceType;
         result = await storage.createMetricValue(createData);
       }
@@ -1544,7 +1552,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Raw Data Inputs
   app.get("/api/raw-data/:period", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const data = await storage.getRawDataByPeriod(companyId, req.params.period);
+    const siteIdParam = req.query.siteId as string | undefined;
+    const siteId = siteIdParam === "null" ? null : siteIdParam;
+    const data = await storage.getRawDataByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
     res.json(data);
   });
 
@@ -1552,15 +1562,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { inputs, period } = req.body;
+      const { inputs, period, siteId: bodySiteId } = req.body;
+      // Validate siteId if provided
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const site = await storage.getSite(bodySiteId, companyId);
+        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
+      }
 
       const results: any[] = [];
       for (const [inputName, value] of Object.entries(inputs)) {
         if (value === null || value === undefined || value === "") continue;
         const cat = classifyRawDataCategory(inputName);
         const r = await storage.upsertRawDataInput(companyId, inputName, period, {
-          inputCategory: cat, value: String(value), unit: "", enteredBy: userId,
-        });
+          inputCategory: cat, value: String(value), unit: "", enteredBy: userId, siteId: bodySiteId || null,
+        } as any);
         results.push(r);
       }
 
@@ -2901,7 +2918,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/carbon/calculations", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const calcs = await storage.getCarbonCalculations(companyId);
+    const siteIdParam = req.query.siteId as string | undefined;
+    const siteId = siteIdParam === "null" ? null : siteIdParam;
+    const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined);
     res.json(calcs);
   });
 
@@ -2909,7 +2928,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap } = req.body;
+      const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap, siteId: bodySiteId } = req.body;
+      // Optional siteId — validate ownership if provided (null is permitted for org-wide calcs)
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const site = await storage.getSite(bodySiteId, companyId);
+        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
+      }
 
       const country = inputs.country || "UK";
       const factors = await storage.getEmissionFactors(country);
@@ -2931,7 +2957,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         dataQuality: results.dataQuality,
         methodologyNotes: results.lineItems,
         assumptions: results.assumptions,
-      });
+        siteId: bodySiteId || null,
+      } as any);
 
       await storage.createAuditLog({
         companyId, userId,
@@ -2967,7 +2994,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!company) return res.status(404).json({ error: "Company not found" });
     const { tier } = getEffectivePlanTier(company);
     if (tier !== "pro") return upgradeRequired(req, res);
-    const qs = await storage.getQuestionnaires(companyId);
+    const siteIdParam = req.query.siteId as string | undefined;
+    const siteId = siteIdParam === "null" ? null : siteIdParam;
+    const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined);
     res.json(qs);
   });
 
@@ -2987,13 +3016,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { title, source, questions } = req.body;
+      const { title, source, questions, siteId: bodySiteId } = req.body;
       const _company = await storage.getCompany(companyId);
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
+      // Validate siteId ownership if provided
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const site = await storage.getSite(bodySiteId, companyId);
+        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
+      }
 
-      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft" });
+      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null } as any);
 
       if (questions && Array.isArray(questions)) {
         for (let i = 0; i < questions.length; i++) {
@@ -3849,7 +3885,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/evidence", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const files = await storage.getEvidenceFiles(companyId);
+      // Optional siteId filter — "null" string means unassigned only; omitted means all
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" ? null : siteIdParam;
+      const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined);
       res.json(files);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3881,7 +3920,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate } = req.body;
+      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: bodySiteId } = req.body;
+      // Validate siteId ownership if provided
+      if (bodySiteId) {
+        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const site = await storage.getSite(bodySiteId, companyId);
+        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
+      }
       const _evCo = await storage.getCompany(companyId);
       if (!_evCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _evTier } = getEffectivePlanTier(_evCo);
@@ -3911,7 +3957,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reviewDate: null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
         uploadedBy: userId,
-      });
+        siteId: bodySiteId || null,
+      } as any);
 
       if (linkedModule === "metric_value" && linkedEntityId) {
         await storage.updateMetricValue(linkedEntityId, { dataSourceType: "evidenced" } as any);
@@ -6552,6 +6599,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  // GET /api/sites/summary — per-site data counts (optional ?period=) — MUST be before /:id
+  app.get("/api/sites/summary", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const period = req.query.period as string | undefined;
+      const summary = await storage.getSitesSummary(companyId, period);
+      res.json(summary);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/sites/:id — get single site
   app.get("/api/sites/:id", requireAuth, async (req, res) => {
     try {
@@ -6635,6 +6695,20 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (existing.status === "archived") return res.status(400).json({ error: "Site is already archived" });
       const site = await storage.archiveSite(req.params.id, companyId);
       res.json(site);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/sites/:id/dashboard — site-level dashboard data
+  app.get("/api/sites/:id/dashboard", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const period = req.query.period as string | undefined;
+      const dashboard = await storage.getSiteDashboard(req.params.id, companyId, period);
+      if (!dashboard) return res.status(404).json({ error: "Site not found" });
+      res.json(dashboard);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

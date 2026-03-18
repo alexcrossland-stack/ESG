@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePermissions } from "@/lib/permissions";
+import { useSiteContext } from "@/hooks/use-site-context";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
@@ -71,6 +72,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
   const [expiryDate, setExpiryDate] = useState("");
   const [fileType, setFileType] = useState("");
   const { toast } = useToast();
+  const { activeSiteId } = useSiteContext();
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -81,6 +83,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
         linkedModule: linkedModule || null,
         linkedPeriod: linkedPeriod || null,
         expiryDate: expiryDate || null,
+        siteId: activeSiteId || null,
       });
       return res.json();
     },

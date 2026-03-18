@@ -66,7 +66,7 @@ The application is a full-stack SaaS web application.
 - **Policy Templates:** 28 structured templates.
 - **Calculation Engine:** Centralized service for 12 automated ESG metric calculations.
 
-## Multi-Site Architecture (Phase 1 — Foundation Complete)
+## Multi-Site Architecture (Phase 1 + Phase 2 — Complete)
 
 The platform supports tracking ESG data across multiple physical sites per organisation.
 
@@ -78,11 +78,15 @@ The platform supports tracking ESG data across multiple physical sites per organ
 
 ### API (server/routes.ts)
 - `GET /api/sites` — list active sites; `?includeArchived=true` for all
+- `GET /api/sites/summary` — per-site data counts (metrics/evidence/questionnaires); optional `?period=`; registered BEFORE `/:id` to prevent wildcard match
 - `GET /api/sites/:id` — single site
+- `GET /api/sites/:id/dashboard` — site-scoped dashboard (metric values + evidence + questionnaires)
 - `POST /api/sites` — create site (auto-generates slug)
 - `PATCH /api/sites/:id` — update metadata (allowed even when archived)
 - `DELETE /api/sites/:id` — soft-archive (status → archived)
 - `validateSiteOwnership(siteId, companyId)` — shared helper: returns 404 if not found/wrong company, 400 if archived on writes; null siteId always passes.
+- **siteId filtering:** `GET /api/evidence`, `/api/questionnaires`, `/api/carbon/calculations`, `/api/raw-data/:period` all accept optional `?siteId=` (pass `"null"` for unassigned-only).
+- **siteId writes:** `POST /api/data-entry`, `/api/raw-data`, `/api/evidence`, `/api/questionnaires`, `/api/carbon/calculate` all accept `siteId` in body (validated, archived check, saved to DB).
 
 ### Rules
 - Archived sites: PATCH metadata allowed; data writes to archived site return 400.
@@ -90,8 +94,13 @@ The platform supports tracking ESG data across multiple physical sites per organ
 - Slugs: auto-generated from name (lowercase, hyphens, collision suffixes).
 
 ### Frontend
-- Route: `/sites` — `client/src/pages/sites.tsx`
-- Sidebar: Settings → Sites (`nav-sites` link)
+- `client/src/hooks/use-site-context.tsx` — SiteProvider + useSiteContext; persists activeSiteId in localStorage; validates against live sites list on load.
+- `client/src/App.tsx` — ProtectedApp wrapped in SiteProvider; `/sites/:siteId/dashboard` route registered.
+- Sidebar: **SiteSwitcher** dropdown (Globe = All Sites / MapPin = per-site) in SidebarHeader; hidden when no sites exist.
+- Pages that pass `activeSiteId` to mutations: data-entry, evidence, carbon-calculator.
+- Route: `/sites` — `client/src/pages/sites.tsx` — includes "View Dashboard" button per site card.
+- Route: `/sites/:siteId/dashboard` — `client/src/pages/site-dashboard.tsx` — summary cards + recent data.
+- Dashboard: `SiteBreakdownCard` shows per-site metrics/evidence counts; hidden when no sites have data.
 - Startup validator in `server/index.ts` checks `organisation_sites` table and all `site_id` columns exist at boot.
 
 ## External Dependencies

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useSiteContext } from "@/hooks/use-site-context";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -167,6 +168,7 @@ export default function CarbonCalculator() {
   const { toast } = useToast();
   const { can } = usePermissions();
   const canEdit = can("metrics_data_entry");
+  const { activeSiteId } = useSiteContext();
   const [inputs, setInputs] = useState<CarbonInputs>(defaultInputs);
   const [reportingPeriod, setReportingPeriod] = useState(PERIOD_OPTIONS[0]);
   const [periodType, setPeriodType] = useState("monthly");
@@ -215,6 +217,7 @@ export default function CarbonCalculator() {
       periodType,
       employeeCount: employeeCount ? parseInt(employeeCount, 10) : null,
       dataQuality,
+      siteId: activeSiteId || undefined,
     });
   };
 

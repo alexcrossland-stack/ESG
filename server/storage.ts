@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, lt } from "drizzle-orm";
+import { eq, and, desc, sql, lt, isNull, or, count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -99,13 +99,13 @@ export interface IStorage {
   lockPeriod(companyId: string, period: string): Promise<void>;
 
   // Raw Data Inputs
-  getRawDataByPeriod(companyId: string, period: string): Promise<RawDataInput[]>;
+  getRawDataByPeriod(companyId: string, period: string, siteId?: string | null): Promise<RawDataInput[]>;
   createRawDataInput(data: InsertRawDataInput): Promise<RawDataInput>;
   updateRawDataInput(id: string, data: Partial<RawDataInput>): Promise<RawDataInput | undefined>;
   upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>): Promise<RawDataInput>;
 
   // Evidence Files
-  getEvidenceFiles(companyId: string): Promise<EvidenceFile[]>;
+  getEvidenceFiles(companyId: string, siteId?: string | null): Promise<EvidenceFile[]>;
   getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string): Promise<EvidenceFile[]>;
   getEvidenceCoverage(companyId: string, period?: string): Promise<any>;
   createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
@@ -149,14 +149,14 @@ export interface IStorage {
   updateEmissionFactor(id: string, data: Partial<EmissionFactor>): Promise<EmissionFactor | undefined>;
 
   // Carbon Calculations
-  getCarbonCalculations(companyId: string): Promise<CarbonCalculation[]>;
+  getCarbonCalculations(companyId: string, siteId?: string | null): Promise<CarbonCalculation[]>;
   getCarbonCalculation(id: string): Promise<CarbonCalculation | undefined>;
   createCarbonCalculation(calc: InsertCarbonCalculation): Promise<CarbonCalculation>;
   updateCarbonCalculation(id: string, data: Partial<CarbonCalculation>): Promise<CarbonCalculation | undefined>;
   deleteCarbonCalculation(id: string): Promise<void>;
 
   // Questionnaires
-  getQuestionnaires(companyId: string): Promise<Questionnaire[]>;
+  getQuestionnaires(companyId: string, siteId?: string | null): Promise<Questionnaire[]>;
   getQuestionnaire(id: string): Promise<Questionnaire | undefined>;
   createQuestionnaire(q: InsertQuestionnaire): Promise<Questionnaire>;
   updateQuestionnaire(id: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
@@ -172,6 +172,8 @@ export interface IStorage {
   createSite(data: InsertOrganisationSite): Promise<OrganisationSite>;
   updateSite(id: string, companyId: string, data: Partial<InsertOrganisationSite>): Promise<OrganisationSite | undefined>;
   archiveSite(id: string, companyId: string): Promise<OrganisationSite | undefined>;
+  getSitesSummary(companyId: string, period?: string): Promise<Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }>>;
+  getSiteDashboard(siteId: string, companyId: string, period?: string): Promise<any>;
 
   // Policy Templates
   getPolicyTemplates(): Promise<PolicyTemplate[]>;
@@ -472,9 +474,13 @@ export class DatabaseStorage implements IStorage {
       );
   }
 
-  async getRawDataByPeriod(companyId: string, period: string) {
+  async getRawDataByPeriod(companyId: string, period: string, siteId?: string | null) {
+    const conditions = [eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.period, period)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, siteId));
+    }
     return db.select().from(rawDataInputs)
-      .where(and(eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.period, period)))
+      .where(and(...conditions))
       .orderBy(rawDataInputs.inputCategory, rawDataInputs.inputName);
   }
 
@@ -500,8 +506,12 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getEvidenceFiles(companyId: string) {
-    return db.select().from(evidenceFiles).where(eq(evidenceFiles.companyId, companyId)).orderBy(desc(evidenceFiles.uploadedAt));
+  async getEvidenceFiles(companyId: string, siteId?: string | null) {
+    const conditions = [eq(evidenceFiles.companyId, companyId)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
+    }
+    return db.select().from(evidenceFiles).where(and(...conditions)).orderBy(desc(evidenceFiles.uploadedAt));
   }
 
   async getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string) {
@@ -755,8 +765,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Carbon Calculations
-  async getCarbonCalculations(companyId: string) {
-    return db.select().from(carbonCalculations).where(eq(carbonCalculations.companyId, companyId)).orderBy(desc(carbonCalculations.createdAt));
+  async getCarbonCalculations(companyId: string, siteId?: string | null) {
+    const conditions = [eq(carbonCalculations.companyId, companyId)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(carbonCalculations.siteId) : eq(carbonCalculations.siteId, siteId));
+    }
+    return db.select().from(carbonCalculations).where(and(...conditions)).orderBy(desc(carbonCalculations.createdAt));
   }
 
   async getCarbonCalculation(id: string) {
@@ -779,8 +793,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Questionnaires
-  async getQuestionnaires(companyId: string) {
-    return db.select().from(questionnaires).where(eq(questionnaires.companyId, companyId)).orderBy(desc(questionnaires.createdAt));
+  async getQuestionnaires(companyId: string, siteId?: string | null) {
+    const conditions = [eq(questionnaires.companyId, companyId)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(questionnaires.siteId) : eq(questionnaires.siteId, siteId));
+    }
+    return db.select().from(questionnaires).where(and(...conditions)).orderBy(desc(questionnaires.createdAt));
   }
 
   async getQuestionnaire(id: string) {
@@ -1655,6 +1673,92 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(organisationSites.id, id), eq(organisationSites.companyId, companyId)))
       .returning();
     return site;
+  }
+
+  async getSitesSummary(companyId: string, period?: string) {
+    const activeSites = await db
+      .select()
+      .from(organisationSites)
+      .where(and(eq(organisationSites.companyId, companyId), eq(organisationSites.status, "active")))
+      .orderBy(organisationSites.name);
+
+    const rows: Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }> = [];
+
+    for (const site of activeSites) {
+      const mvConditions: any[] = [
+        sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
+        eq(metricValues.siteId, site.id),
+      ];
+      if (period) mvConditions.push(eq(metricValues.period, period));
+
+      const [mvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...mvConditions));
+
+      const evConditions: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, site.id)];
+      const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
+
+      const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
+      const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
+
+      rows.push({
+        siteId: site.id,
+        siteName: site.name,
+        status: site.status,
+        metricCount: Number(mvRow?.cnt ?? 0),
+        evidenceCount: Number(evRow?.cnt ?? 0),
+        questionnaireCount: Number(qqRow?.cnt ?? 0),
+      });
+    }
+
+    // Unassigned row — null site_id records within period
+    const unassignedMvConds: any[] = [
+      sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
+      isNull(metricValues.siteId),
+    ];
+    if (period) unassignedMvConds.push(eq(metricValues.period, period));
+    const [uMvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...unassignedMvConds));
+
+    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)));
+    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
+
+    if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
+      rows.push({ siteId: null, siteName: "Unassigned", status: "active", metricCount: Number(uMvRow?.cnt ?? 0), evidenceCount: Number(uEvRow?.cnt ?? 0), questionnaireCount: Number(uQqRow?.cnt ?? 0) });
+    }
+
+    return rows;
+  }
+
+  async getSiteDashboard(siteId: string, companyId: string, period?: string) {
+    const site = await this.getSite(siteId, companyId);
+    if (!site) return null;
+
+    const mvConditions: any[] = [
+      sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
+      eq(metricValues.siteId, siteId),
+    ];
+    if (period) mvConditions.push(eq(metricValues.period, period));
+
+    const mvRows = await db.select({
+      id: metricValues.id,
+      metricId: metricValues.metricId,
+      period: metricValues.period,
+      value: metricValues.value,
+      notes: metricValues.notes,
+    }).from(metricValues).where(and(...mvConditions)).orderBy(desc(metricValues.createdAt)).limit(20);
+
+    const evRows = await db.select().from(evidenceFiles)
+      .where(and(eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)))
+      .orderBy(desc(evidenceFiles.uploadedAt)).limit(10);
+
+    const qqRows = await db.select().from(questionnaires)
+      .where(and(eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, siteId)))
+      .orderBy(desc(questionnaires.createdAt)).limit(10);
+
+    return {
+      site,
+      metricValues: mvRows,
+      evidenceFiles: evRows,
+      questionnaires: qqRows,
+    };
   }
 }
 

@@ -25,6 +25,7 @@ import { usePermissions } from "@/lib/permissions";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
+import { Building2 } from "lucide-react";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -398,6 +399,53 @@ function BenchmarkSummaryCard() {
             </div>
           ))}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SiteBreakdownCard() {
+  const { data: summary = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/sites/summary"],
+    queryFn: () => authFetch("/api/sites/summary").then(r => r.json()),
+    staleTime: 60000,
+  });
+  if (!isLoading && summary.length === 0) return null;
+  return (
+    <Card data-testid="card-site-breakdown">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-primary" />
+          Sites Overview
+        </CardTitle>
+        <span className="text-xs text-muted-foreground">Data recorded per site</span>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-8" />
+            <Skeleton className="h-8" />
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {summary.map((row: any) => (
+              <div key={row.siteId ?? "__unassigned__"} className="flex items-center justify-between py-2 text-sm" data-testid={`row-site-summary-${row.siteId ?? "unassigned"}`}>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Building2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                  {row.siteId ? (
+                    <Link href={`/sites/${row.siteId}/dashboard`} className="font-medium truncate hover:underline">{row.siteName}</Link>
+                  ) : (
+                    <span className="font-medium text-muted-foreground truncate">{row.siteName}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 shrink-0 text-xs text-muted-foreground">
+                  <span data-testid={`text-site-metrics-${row.siteId ?? "unassigned"}`}>{row.metricCount} metrics</span>
+                  <span data-testid={`text-site-evidence-${row.siteId ?? "unassigned"}`}>{row.evidenceCount} evidence</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -955,6 +1003,8 @@ export default function Dashboard() {
         <DataQualityCard />
         <BenchmarkSummaryCard />
       </div>
+
+      <SiteBreakdownCard />
 
       <RecommendationsWidget />
 
