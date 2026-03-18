@@ -200,6 +200,34 @@ app.use((req, res, next) => {
   } catch (e) {
     console.warn("[Startup] WARN: Could not check for super_admin user:", e);
   }
+
+  // Validate organisation_sites table and site_id columns exist
+  try {
+    const orgSitesResult = await db.execute(sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_name = 'organisation_sites' AND table_schema = 'public'
+    `);
+    const orgSitesRows = (orgSitesResult as any).rows ?? [];
+    if (orgSitesRows.length === 0) {
+      console.error("[Startup] FATAL: organisation_sites table is missing — run db:push or apply schema manually");
+      process.exit(1);
+    }
+    const siteIdResult = await db.execute(sql`
+      SELECT table_name FROM information_schema.columns
+      WHERE column_name = 'site_id' AND table_schema = 'public'
+    `);
+    const siteIdTables = ((siteIdResult as any).rows ?? []).map((r: any) => r.table_name as string);
+    const required = ["metric_values", "evidence_files", "questionnaires", "report_runs", "carbon_calculations", "raw_data_inputs", "generated_policies", "user_activity", "agent_runs", "chat_sessions"];
+    const missingSiteId = required.filter(t => !siteIdTables.includes(t));
+    if (missingSiteId.length > 0) {
+      console.error(`[Startup] FATAL: site_id column missing from tables: ${missingSiteId.join(", ")}`);
+      process.exit(1);
+    }
+    console.log("[Startup] Multi-site schema check passed");
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not validate multi-site schema:", e.message ?? e);
+    process.exit(1);
+  }
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

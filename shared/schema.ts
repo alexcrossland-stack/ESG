@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, integer, serial, timestamp, jsonb, decimal, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, integer, serial, timestamp, jsonb, decimal, pgEnum, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -21,6 +21,9 @@ export const dataSourceTypeEnum = pgEnum("data_source_type", ["evidenced", "esti
 export const supportRequestCategoryEnum = pgEnum("support_request_category", ["bug", "billing", "onboarding", "report_issue", "import_issue", "feature_request", "data_rights", "general"]);
 export const supportRequestStatusEnum = pgEnum("support_request_status", ["new", "in_review", "resolved", "closed"]);
 export const supportRequestPriorityEnum = pgEnum("support_request_priority", ["low", "normal", "high", "urgent"]);
+
+export const siteTypeEnum = pgEnum("site_type", ["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]);
+export const siteStatusEnum = pgEnum("site_status", ["active", "archived"]);
 
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -81,6 +84,22 @@ export const companies = pgTable("companies", {
   status: text("status").default("active"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const organisationSites = pgTable("organisation_sites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  type: siteTypeEnum("type").notNull().default("operational"),
+  status: siteStatusEnum("status").notNull().default("active"),
+  country: text("country"),
+  city: text("city"),
+  address: text("address"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueCompanySlug: uniqueIndex("idx_org_sites_company_slug_unique").on(table.companyId, table.slug),
+}));
 
 export const companySettings = pgTable("company_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -188,6 +207,7 @@ export const metricValues = pgTable("metric_values", {
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
+  siteId: varchar("site_id"),
 });
 
 export const rawDataInputs = pgTable("raw_data_inputs", {
@@ -213,6 +233,7 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
+  siteId: varchar("site_id"),
 });
 
 export const evidenceStatusEnum = pgEnum("evidence_status", ["uploaded", "reviewed", "approved", "expired"]);
@@ -235,6 +256,7 @@ export const evidenceFiles = pgTable("evidence_files", {
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   assignedUserId: varchar("assigned_user_id"),
+  siteId: varchar("site_id"),
 });
 
 export const actionPlans = pgTable("action_plans", {
@@ -276,6 +298,7 @@ export const reportRuns = pgTable("report_runs", {
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
+  siteId: varchar("site_id"),
 });
 
 export const notifications = pgTable("notifications", {
@@ -409,6 +432,7 @@ export const carbonCalculations = pgTable("carbon_calculations", {
   assumptions: jsonb("assumptions"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  siteId: varchar("site_id"),
 });
 
 // Questionnaires
@@ -425,6 +449,7 @@ export const questionnaires = pgTable("questionnaires", {
   assignedDueDate: timestamp("assigned_due_date"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  siteId: varchar("site_id"),
 });
 
 export const questionnaireQuestions = pgTable("questionnaire_questions", {
@@ -492,6 +517,7 @@ export const generatedPolicies = pgTable("generated_policies", {
   reviewedBy: varchar("reviewed_by"),
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
+  siteId: varchar("site_id"),
 });
 
 export const evidenceRequestStatusEnum = pgEnum("evidence_request_status", ["requested", "uploaded", "under_review", "approved", "rejected", "expired"]);
@@ -664,6 +690,7 @@ export const userActivity = pgTable("user_activity", {
   action: text("action").notNull(),
   page: text("page"),
   details: jsonb("details"),
+  siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -824,6 +851,7 @@ export const agentRuns = pgTable("agent_runs", {
   durationMs: integer("duration_ms"),
   companyId: varchar("company_id"),
   userId: varchar("user_id"),
+  siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -863,6 +891,7 @@ export const chatSessions = pgTable("chat_sessions", {
   agentType: agentTypeEnum("agent_type"),
   title: text("title"),
   status: text("status").notNull().default("open"),
+  siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -899,3 +928,7 @@ export type ChatSession = typeof chatSessions.$inferSelect;
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const insertOrganisationSiteSchema = createInsertSchema(organisationSites).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertOrganisationSite = z.infer<typeof insertOrganisationSiteSchema>;
+export type OrganisationSite = typeof organisationSites.$inferSelect;

@@ -6516,6 +6516,130 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  // ============================================================
+  // SITES API
+  // ============================================================
+
+  async function generateSlug(name: string, companyId: string, excludeId?: string): Promise<string> {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    let slug = base;
+    let suffix = 2;
+    while (true) {
+      const existing = await storage.getSites(companyId, true);
+      const conflict = existing.find(s => s.slug === slug && s.id !== excludeId);
+      if (!conflict) return slug;
+      slug = `${base}-${suffix++}`;
+    }
+  }
+
+  async function validateSiteOwnership(siteId: string | null | undefined, companyId: string): Promise<{ valid: true } | { valid: false; status: number; message: string }> {
+    if (!siteId) return { valid: true };
+    const site = await storage.getSite(siteId, companyId);
+    if (!site) return { valid: false, status: 404, message: "Site not found or does not belong to your organisation" };
+    return { valid: true };
+  }
+
+  // GET /api/sites — list active sites (pass ?includeArchived=true for all)
+  app.get("/api/sites", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const includeArchived = req.query.includeArchived === "true";
+      const sites = await storage.getSites(companyId, includeArchived);
+      res.json(sites);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/sites/:id — get single site
+  app.get("/api/sites/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const site = await storage.getSite(req.params.id, companyId);
+      if (!site) return res.status(404).json({ error: "Site not found" });
+      res.json(site);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/sites — create site
+  app.post("/api/sites", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const bodySchema = z.object({
+        name: z.string().min(1).max(200),
+        type: z.enum(["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]).optional(),
+        country: z.string().optional(),
+        city: z.string().optional(),
+        address: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
+      const { name, type, country, city, address } = parsed.data;
+      const slug = await generateSlug(name, companyId);
+      const site = await storage.createSite({
+        companyId,
+        name,
+        slug,
+        type: type ?? "other",
+        status: "active",
+        country: country ?? null,
+        city: city ?? null,
+        address: address ?? null,
+      });
+      res.status(201).json(site);
+    } catch (e: any) {
+      if (e.code === "23505") return res.status(409).json({ error: "A site with this name already exists" });
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PATCH /api/sites/:id — update site metadata (allowed even for archived)
+  app.patch("/api/sites/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getSite(req.params.id, companyId);
+      if (!existing) return res.status(404).json({ error: "Site not found" });
+      const bodySchema = z.object({
+        name: z.string().min(1).max(200).optional(),
+        type: z.enum(["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]).optional(),
+        country: z.string().optional(),
+        city: z.string().optional(),
+        address: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
+      const updates: Record<string, any> = { ...parsed.data };
+      if (parsed.data.name && parsed.data.name !== existing.name) {
+        updates.slug = await generateSlug(parsed.data.name, companyId, req.params.id);
+      }
+      const site = await storage.updateSite(req.params.id, companyId, updates);
+      res.json(site);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/sites/:id — archive site (soft delete)
+  app.delete("/api/sites/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getSite(req.params.id, companyId);
+      if (!existing) return res.status(404).json({ error: "Site not found" });
+      if (existing.status === "archived") return res.status(400).json({ error: "Site is already archived" });
+      const site = await storage.archiveSite(req.params.id, companyId);
+      res.json(site);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
 }
 

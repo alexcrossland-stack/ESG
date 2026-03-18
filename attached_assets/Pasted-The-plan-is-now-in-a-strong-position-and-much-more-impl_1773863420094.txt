@@ -1,0 +1,34 @@
+The plan is now in a strong position and much more implementation-ready. The phase structure, ownership rules, aggregation logic, and migration approach are all materially improved.
+
+Before approval, I want a few final clarifications and adjustments:
+
+1. Please justify the decision to add nullable site_id with no foreign key constraint in Phase 1. I understand the rollout simplicity, but I want either:
+- FK constraints where practical, or
+- explicit follow-up hardening plus indexes on every site_id column and validation on every write path.
+
+2. Please distinguish between:
+- writing data to an archived site, which should be blocked, and
+- editing the site record itself, which may still be valid in some cases.
+The current wording risks over-blocking PATCH /api/sites/:id.
+
+3. Please define which endpoints are allowed to create null-site records in “All sites” mode and which must require explicit site selection. “Writes proceed with siteId = null” is too broad unless classified by flow.
+
+4. Please confirm dashboard/report aggregation always respects the existing reporting period/date filters, so totals are not mixed across inconsistent time windows.
+
+5. Please define read behavior for archived sites:
+- whether historical reads remain allowed for evidence, questionnaires, dashboards, and reports
+- while keeping new writes blocked
+
+6. For reports, please clarify whether site-scoped historical reports are allowed for archived sites. My preference is yes for site-specific historical reporting, while organisation-wide reports continue to exclude archived sites by default.
+
+7. Please consider adding a dry-run mode to the migration utility so super admins can see estimated row counts before executing the Primary Site assignment.
+
+8. For activity tracking, I would prefer backend route handlers to be the source of truth for site_created and site_archived as well, with frontend tracking optional for UX analytics.
+
+9. Please make mixed-data QA explicit:
+- unassigned legacy rows
+- active site-tagged rows
+- archived site historical rows
+- verification across dashboards, filters, reports, and imports
+
+Once those points are addressed, I think the tasks are in good shape to proceed.

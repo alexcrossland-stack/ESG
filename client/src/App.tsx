@@ -44,6 +44,7 @@ import AdminPage from "@/pages/admin";
 import AdminCompanyPage from "@/pages/admin-company";
 import BillingPage from "@/pages/billing";
 import TeamPage from "@/pages/team";
+import SitesPage from "@/pages/sites";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
 
@@ -229,6 +230,7 @@ function ProtectedApp() {
                 <Route path="/onboarding" component={Onboarding} />
                 <Route path="/recommendations" component={Recommendations} />
                 <Route path="/team" component={TeamPage} />
+                <Route path="/sites" component={SitesPage} />
                 <Route path="/help" component={HelpPage} />
                 <Route component={NotFound} />
               </Switch>

@@ -9,7 +9,7 @@ import {
   questionnaires, questionnaireQuestions,
   aiGenerationLogs, evidenceRequests, reportingPeriods,
   backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
-  authTokens, superAdminActions,
+  authTokens, superAdminActions, organisationSites,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
@@ -45,6 +45,7 @@ import {
   type ChatSession, type InsertChatSession,
   type ChatMessage, type InsertChatMessage,
   type SuperAdminAction, type InsertSuperAdminAction,
+  type OrganisationSite, type InsertOrganisationSite,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -164,6 +165,13 @@ export interface IStorage {
   createQuestionnaireQuestion(q: InsertQuestionnaireQuestion): Promise<QuestionnaireQuestion>;
   updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>): Promise<QuestionnaireQuestion | undefined>;
   deleteQuestionnaireQuestions(questionnaireId: string): Promise<void>;
+
+  // Organisation Sites
+  getSites(companyId: string, includeArchived?: boolean): Promise<OrganisationSite[]>;
+  getSite(id: string, companyId: string): Promise<OrganisationSite | undefined>;
+  createSite(data: InsertOrganisationSite): Promise<OrganisationSite>;
+  updateSite(id: string, companyId: string, data: Partial<InsertOrganisationSite>): Promise<OrganisationSite | undefined>;
+  archiveSite(id: string, companyId: string): Promise<OrganisationSite | undefined>;
 
   // Policy Templates
   getPolicyTemplates(): Promise<PolicyTemplate[]>;
@@ -1603,6 +1611,50 @@ export class DatabaseStorage implements IStorage {
       recentErrors: r(errorsR),
       activityTimeline: r(activityR),
     };
+  }
+
+  // --- Organisation Sites ---
+
+  async getSites(companyId: string, includeArchived = false): Promise<OrganisationSite[]> {
+    const conditions = includeArchived
+      ? [eq(organisationSites.companyId, companyId)]
+      : [eq(organisationSites.companyId, companyId), eq(organisationSites.status, "active")];
+    return db
+      .select()
+      .from(organisationSites)
+      .where(and(...conditions))
+      .orderBy(organisationSites.name);
+  }
+
+  async getSite(id: string, companyId: string): Promise<OrganisationSite | undefined> {
+    const [site] = await db
+      .select()
+      .from(organisationSites)
+      .where(and(eq(organisationSites.id, id), eq(organisationSites.companyId, companyId)));
+    return site;
+  }
+
+  async createSite(data: InsertOrganisationSite): Promise<OrganisationSite> {
+    const [site] = await db.insert(organisationSites).values(data).returning();
+    return site;
+  }
+
+  async updateSite(id: string, companyId: string, data: Partial<InsertOrganisationSite>): Promise<OrganisationSite | undefined> {
+    const [site] = await db
+      .update(organisationSites)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(organisationSites.id, id), eq(organisationSites.companyId, companyId)))
+      .returning();
+    return site;
+  }
+
+  async archiveSite(id: string, companyId: string): Promise<OrganisationSite | undefined> {
+    const [site] = await db
+      .update(organisationSites)
+      .set({ status: "archived", updatedAt: new Date() })
+      .where(and(eq(organisationSites.id, id), eq(organisationSites.companyId, companyId)))
+      .returning();
+    return site;
   }
 }
 

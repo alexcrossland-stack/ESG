@@ -66,6 +66,34 @@ The application is a full-stack SaaS web application.
 - **Policy Templates:** 28 structured templates.
 - **Calculation Engine:** Centralized service for 12 automated ESG metric calculations.
 
+## Multi-Site Architecture (Phase 1 — Foundation Complete)
+
+The platform supports tracking ESG data across multiple physical sites per organisation.
+
+### Database Layer
+- **`organisation_sites` table:** id, company_id, name, slug, type (`site_type` enum: operational/office/manufacturing/warehouse/retail/data_centre/other), status (`site_status` enum: active/archived), country, city, address, created_at, updated_at.
+- **Indexes:** `company_id`, `(company_id, status)`, unique `(company_id, slug)` on `organisation_sites`. Plus individual `site_id` indexes on all 10 affected tables.
+- **Nullable `site_id` column** added to: `metric_values`, `raw_data_inputs`, `evidence_files`, `questionnaires`, `generated_policies`, `carbon_calculations`, `report_runs`, `agent_runs`, `chat_sessions`, `user_activity`.
+- No FK constraints by design — application-level `validateSiteOwnership()` enforces ownership on every write.
+
+### API (server/routes.ts)
+- `GET /api/sites` — list active sites; `?includeArchived=true` for all
+- `GET /api/sites/:id` — single site
+- `POST /api/sites` — create site (auto-generates slug)
+- `PATCH /api/sites/:id` — update metadata (allowed even when archived)
+- `DELETE /api/sites/:id` — soft-archive (status → archived)
+- `validateSiteOwnership(siteId, companyId)` — shared helper: returns 404 if not found/wrong company, 400 if archived on writes; null siteId always passes.
+
+### Rules
+- Archived sites: PATCH metadata allowed; data writes to archived site return 400.
+- Null siteId = org-level data (included in aggregations as "Unassigned").
+- Slugs: auto-generated from name (lowercase, hyphens, collision suffixes).
+
+### Frontend
+- Route: `/sites` — `client/src/pages/sites.tsx`
+- Sidebar: Settings → Sites (`nav-sites` link)
+- Startup validator in `server/index.ts` checks `organisation_sites` table and all `site_id` columns exist at boot.
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations).

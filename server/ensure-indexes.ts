@@ -42,6 +42,20 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_company_settings_company ON company_settings(company_id)",
   "CREATE INDEX IF NOT EXISTS idx_evidence_requests_company ON evidence_requests(company_id)",
   "CREATE INDEX IF NOT EXISTS idx_compliance_req_framework ON compliance_requirements(framework_id)",
+  // Organisation sites
+  "CREATE INDEX IF NOT EXISTS idx_org_sites_company_id ON organisation_sites(company_id)",
+  "CREATE INDEX IF NOT EXISTS idx_org_sites_company_status ON organisation_sites(company_id, status)",
+  // site_id indexes on ESG data tables
+  "CREATE INDEX IF NOT EXISTS idx_metric_values_site_id ON metric_values(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_raw_data_site_id ON raw_data_inputs(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_evidence_files_site_id ON evidence_files(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_questionnaires_site_id ON questionnaires(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_generated_policies_site_id ON generated_policies(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_carbon_calcs_site_id ON carbon_calculations(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_report_runs_site_id ON report_runs(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_agent_runs_site_id ON agent_runs(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_chat_sessions_site_id ON chat_sessions(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_user_activity_site_id ON user_activity(site_id)",
 ];
 
 export async function ensureIndexes() {
