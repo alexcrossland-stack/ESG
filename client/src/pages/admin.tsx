@@ -332,7 +332,7 @@ function UsersTable() {
 function RevenueTab() {
   const { data, isLoading } = useQuery<any>({
     queryKey: ["/api/admin/revenue"],
-    queryFn: () => fetch("/api/admin/revenue", { credentials: "include" }).then(r => r.json()),
+    queryFn: () => fetch("/api/admin/revenue", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
 
   if (isLoading) {
@@ -559,10 +559,11 @@ function BetaAccessTab() {
   const [grantReason, setGrantReason] = useState("");
   const [revokeEmail, setRevokeEmail] = useState("");
 
-  const { data: betaCompanies = [], isLoading: betaLoading, refetch: refetchBeta } = useQuery<any[]>({
+  const { data: betaCompaniesRaw, isLoading: betaLoading, refetch: refetchBeta } = useQuery<any[]>({
     queryKey: ["/api/admin/beta/companies"],
-    queryFn: () => fetch("/api/admin/beta/companies", { credentials: "include" }).then(r => r.json()),
+    queryFn: () => fetch("/api/admin/beta/companies", { credentials: "include" }).then(r => r.ok ? r.json() : []),
   });
+  const betaCompanies: any[] = Array.isArray(betaCompaniesRaw) ? betaCompaniesRaw : [];
 
   const grantMutation = useMutation({
     mutationFn: async () => {
@@ -810,7 +811,7 @@ export default function AdminPage() {
 
   const { data: stats, isLoading: statsLoading } = useQuery<any>({
     queryKey: ["/api/admin/stats"],
-    queryFn: () => fetch("/api/admin/stats", { credentials: "include" }).then(r => r.json()),
+    queryFn: () => fetch("/api/admin/stats", { credentials: "include" }).then(r => r.ok ? r.json() : null),
     enabled: role === "super_admin",
   });
 
