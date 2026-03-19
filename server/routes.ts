@@ -1490,12 +1490,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
       const { metricId, period, value, notes, dataSourceType, siteId: bodySiteId } = req.body;
-      // Validate siteId if provided
+      // Validate siteId if provided (write: true blocks archived sites centrally)
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const site = await storage.getSite(bodySiteId, companyId);
-        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       const existing = await storage.getMetricValues(metricId);
@@ -1571,12 +1569,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { inputs, period, siteId: bodySiteId } = req.body;
-      // Validate siteId if provided
+      // Validate siteId if provided (write: true blocks archived sites centrally)
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const site = await storage.getSite(bodySiteId, companyId);
-        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       const results: any[] = [];
@@ -2159,10 +2155,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } = req.body;
 
       if (bodySiteId) {
-        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId);
+        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!rptOwnership.valid) return res.status(rptOwnership.status).json({ error: rptOwnership.message });
-        const rptSite = await storage.getSite(bodySiteId, companyId);
-        if (rptSite?.status === "archived") return res.status(400).json({ error: "Site is archived; reports cannot be generated for archived sites." });
       }
 
       const company = await storage.getCompany(companyId);
@@ -2964,12 +2958,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap, siteId: bodySiteId } = req.body;
-      // Optional siteId — validate ownership if provided (null is permitted for org-wide calcs)
+      // Optional siteId — validate ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const site = await storage.getSite(bodySiteId, companyId);
-        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       const country = inputs.country || "UK";
@@ -3064,12 +3056,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
-      // Validate siteId ownership if provided
+      // Validate siteId ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const site = await storage.getSite(bodySiteId, companyId);
-        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null } as any);
@@ -3968,12 +3958,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: bodySiteId } = req.body;
-      // Validate siteId ownership if provided
+      // Validate siteId ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const site = await storage.getSite(bodySiteId, companyId);
-        if (site?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
       const _evCo = await storage.getCompany(companyId);
       if (!_evCo) return res.status(404).json({ error: "Company not found" });
@@ -5275,10 +5263,8 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
       if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId);
+        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-        const importSite = await storage.getSite(bodySiteId, companyId);
-        if (importSite?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       let imported = 0;
@@ -6633,11 +6619,18 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   }
 
-  async function validateSiteOwnership(siteId: string | null | undefined, companyId: string): Promise<{ valid: true } | { valid: false; status: number; message: string }> {
+  async function validateSiteOwnership(
+    siteId: string | null | undefined,
+    companyId: string,
+    options: { write?: boolean } = {},
+  ): Promise<{ valid: true; site?: any } | { valid: false; status: number; message: string }> {
     if (!siteId) return { valid: true };
     const site = await storage.getSite(siteId, companyId);
     if (!site) return { valid: false, status: 404, message: "Site not found or does not belong to your organisation" };
-    return { valid: true };
+    if (options.write && site.status === "archived") {
+      return { valid: false, status: 400, message: "Site is archived and cannot accept new data." };
+    }
+    return { valid: true, site };
   }
 
   // GET /api/sites — list active sites (pass ?includeArchived=true for all)
@@ -6687,10 +6680,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!siteId || !Array.isArray(entityTypes) || entityTypes.length === 0) {
         return res.status(400).json({ error: "siteId and entityTypes[] are required" });
       }
-      const ownership = await validateSiteOwnership(siteId, companyId);
+      const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
       if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-      const migrateSite = await storage.getSite(siteId, companyId);
-      if (migrateSite?.status === "archived") return res.status(400).json({ error: "Cannot migrate data to an archived site." });
       const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
       res.json(result);
     } catch (e: any) {

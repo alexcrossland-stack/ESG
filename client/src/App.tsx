@@ -233,6 +233,7 @@ function ProtectedApp() {
                 <Route path="/onboarding" component={Onboarding} />
                 <Route path="/recommendations" component={Recommendations} />
                 <Route path="/team" component={TeamPage} />
+                <Route path="/settings/sites" component={SitesPage} />
                 <Route path="/sites" component={SitesPage} />
                 <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
                 <Route path="/help" component={HelpPage} />

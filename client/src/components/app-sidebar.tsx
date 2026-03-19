@@ -57,7 +57,7 @@ function useGroupState(groupKey: string, defaultOpen: boolean) {
 const ESG_SETUP_ROUTES = ["/policy", "/topics", "/esg-profile", "/team"];
 const DATA_EVIDENCE_ROUTES = ["/metrics", "/data-entry", "/evidence"];
 const SETTINGS_ROUTES = [
-  "/settings", "/billing", "/sites",
+  "/settings", "/billing", "/settings/sites", "/sites",
   "/compliance", "/benchmarks", "/recommendations",
   "/my-tasks", "/my-approvals", "/questionnaire",
   "/carbon-calculator", "/policy-templates", "/policy-generator",
@@ -382,8 +382,8 @@ export function AppSidebar() {
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
                       <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/sites")}>
-                          <Link href="/sites" data-testid="nav-sites">
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/settings/sites") || isActive(location, "/sites")}>
+                          <Link href="/settings/sites" data-testid="nav-sites">
                             <Building2 className="w-3.5 h-3.5 shrink-0" />
                             <span>Sites</span>
                           </Link>

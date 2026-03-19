@@ -210,7 +210,9 @@ export const metricValues = pgTable("metric_values", {
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_metric_values_site_id").on(table.siteId),
+}));
 
 export const rawDataInputs = pgTable("raw_data_inputs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -236,7 +238,9 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_raw_data_site_id").on(table.siteId),
+}));
 
 export const evidenceStatusEnum = pgEnum("evidence_status", ["uploaded", "reviewed", "approved", "expired"]);
 
@@ -259,7 +263,9 @@ export const evidenceFiles = pgTable("evidence_files", {
   reviewedAt: timestamp("reviewed_at"),
   assignedUserId: varchar("assigned_user_id"),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_evidence_files_site_id").on(table.siteId),
+}));
 
 export const actionPlans = pgTable("action_plans", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -301,7 +307,9 @@ export const reportRuns = pgTable("report_runs", {
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_report_runs_site_id").on(table.siteId),
+}));
 
 export const notifications = pgTable("notifications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -435,7 +443,9 @@ export const carbonCalculations = pgTable("carbon_calculations", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_carbon_calcs_site_id").on(table.siteId),
+}));
 
 // Questionnaires
 export const questionnaireStatusEnum = pgEnum("questionnaire_status", ["draft", "in_progress", "completed"]);
@@ -452,7 +462,9 @@ export const questionnaires = pgTable("questionnaires", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_questionnaires_site_id").on(table.siteId),
+}));
 
 export const questionnaireQuestions = pgTable("questionnaire_questions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -520,7 +532,9 @@ export const generatedPolicies = pgTable("generated_policies", {
   reviewedAt: timestamp("reviewed_at"),
   reviewComment: text("review_comment"),
   siteId: varchar("site_id"),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_generated_policies_site_id").on(table.siteId),
+}));
 
 export const evidenceRequestStatusEnum = pgEnum("evidence_request_status", ["requested", "uploaded", "under_review", "approved", "rejected", "expired"]);
 
@@ -694,7 +708,9 @@ export const userActivity = pgTable("user_activity", {
   details: jsonb("details"),
   siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_user_activity_site_id").on(table.siteId),
+}));
 
 export const insertBackgroundJobSchema = createInsertSchema(backgroundJobs).omit({ id: true, createdAt: true });
 export const insertPlatformHealthEventSchema = createInsertSchema(platformHealthEvents).omit({ id: true, createdAt: true });
@@ -855,7 +871,9 @@ export const agentRuns = pgTable("agent_runs", {
   userId: varchar("user_id"),
   siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_agent_runs_site_id").on(table.siteId),
+}));
 
 export const agentActions = pgTable("agent_actions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -896,7 +914,9 @@ export const chatSessions = pgTable("chat_sessions", {
   siteId: varchar("site_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  siteIdIdx: index("idx_chat_sessions_site_id").on(table.siteId),
+}));
 
 export const chatMessages = pgTable("chat_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
