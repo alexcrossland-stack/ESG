@@ -1923,6 +1923,127 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── ESG PHASE 1: METRIC DEFINITIONS ──────────────────────────────────
+
+  // GET /api/metric-definitions — list all (optionally filtered)
+  app.get("/api/metric-definitions", requireAuth, async (req, res) => {
+    try {
+      const { pillar, isCore, isActive } = req.query as Record<string, string>;
+      const filter: Record<string, any> = {};
+      if (pillar) filter.pillar = pillar;
+      if (isCore !== undefined) filter.isCore = isCore === "true";
+      if (isActive !== undefined) filter.isActive = isActive === "true";
+      const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
+      res.json(defs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/metric-definitions/:id — single definition
+  app.get("/api/metric-definitions/:id", requireAuth, async (req, res) => {
+    try {
+      const def = await storage.getMetricDefinition(req.params.id);
+      if (!def) return res.status(404).json({ error: "Not found" });
+      res.json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PATCH /api/metric-definitions/:id/active — enable/disable advanced metrics
+  app.patch("/api/metric-definitions/:id/active", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const { isActive } = req.body;
+      if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive must be boolean" });
+
+      const def = await storage.getMetricDefinition(req.params.id);
+      if (!def) return res.status(404).json({ error: "Not found" });
+      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
+
+      const updated = await storage.updateMetricDefinitionActive(req.params.id, isActive);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/metric-definitions/:id/calculation-runs — recent runs
+  app.get("/api/metric-definitions/:id/calculation-runs", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const runs = await storage.getMetricCalculationRuns(companyId, 20);
+      const filtered = runs.filter(r => r.metricDefinitionId === req.params.id);
+      res.json(filtered);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/metric-evidence/:metricValueId — evidence for a value
+  app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
+    try {
+      const evidence = await storage.getMetricEvidence(req.params.metricValueId);
+      res.json(evidence);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/metric-evidence — attach evidence to a metric value
+  app.post("/api/metric-evidence", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = req.body;
+      if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
+      const evidence = await storage.createMetricEvidence({
+        metricValueId,
+        fileName,
+        fileUrl: fileUrl || null,
+        storageKey: storageKey || null,
+        fileType: fileType || null,
+        uploadedByUserId: userId,
+        notes: notes || null,
+      });
+      res.status(201).json(evidence);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/metric-evidence/:id — remove an evidence attachment
+  app.delete("/api/metric-evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      await storage.deleteMetricEvidence(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/metric-values/:id/calculate — trigger derived calculations for a value
+  app.post("/api/metric-values/:id/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { metricCode, periodStart, periodEnd, siteId } = req.body;
+      if (!metricCode || !periodStart || !periodEnd) {
+        return res.status(400).json({ error: "metricCode, periodStart, and periodEnd are required" });
+      }
+      const { triggerDerivedCalculationsForMetric } = await import("./metric-engine");
+      await triggerDerivedCalculationsForMetric(
+        companyId,
+        metricCode,
+        new Date(periodStart),
+        new Date(periodEnd),
+        siteId || null,
+        req.params.id
+      );
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Enhanced dashboard
   app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {
     try {

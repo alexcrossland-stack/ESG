@@ -1,5 +1,6 @@
 import { db } from "./storage";
 import { sql } from "drizzle-orm";
+import { seedMetricDefinitions } from "./seed-metric-definitions";
 
 const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_users_company_id ON users(company_id)",
@@ -56,6 +57,14 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_agent_runs_site_id ON agent_runs(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_chat_sessions_site_id ON chat_sessions(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_user_activity_site_id ON user_activity(site_id)",
+  // ESG Phase 1: metric definitions engine
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definitions_code ON metric_definitions(code)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_definitions_pillar ON metric_definitions(pillar)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_definitions_is_core ON metric_definitions(is_core)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_evidence_value_id ON metric_evidence(metric_value_id)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_calc_runs_business ON metric_calculation_runs(business_id)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_calc_runs_metric_def ON metric_calculation_runs(metric_definition_id)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_def_id ON metric_values(metric_definition_id)",
 ];
 
 export async function ensureIndexes() {
@@ -68,4 +77,9 @@ export async function ensureIndexes() {
     }
   }
   console.log(`[Indexes] Ensured ${created}/${INDEXES.length} indexes`);
+  try {
+    await seedMetricDefinitions();
+  } catch (e: any) {
+    console.error("[MetricDefs] Seed error:", e.message);
+  }
 }

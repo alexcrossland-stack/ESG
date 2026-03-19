@@ -46,6 +46,10 @@ import {
   type ChatMessage, type InsertChatMessage,
   type SuperAdminAction, type InsertSuperAdminAction,
   type OrganisationSite, type InsertOrganisationSite,
+  metricDefinitions, metricEvidence, metricCalculationRuns,
+  type MetricDefinition, type InsertMetricDefinition,
+  type MetricEvidence, type InsertMetricEvidence,
+  type MetricCalculationRun,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -126,6 +130,18 @@ export interface IStorage {
   // Legacy migration
   getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
   migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
+
+  // ESG Phase 1: Metric Definitions
+  getMetricDefinitions(filter?: { pillar?: string; isCore?: boolean; isActive?: boolean }): Promise<MetricDefinition[]>;
+  getMetricDefinition(id: string): Promise<MetricDefinition | undefined>;
+  getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined>;
+  updateMetricDefinitionActive(id: string, isActive: boolean): Promise<MetricDefinition | undefined>;
+  // ESG Phase 1: Metric Evidence
+  getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]>;
+  createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence>;
+  deleteMetricEvidence(id: string): Promise<void>;
+  // ESG Phase 1: Calculation Runs
+  getMetricCalculationRuns(businessId: string, limit?: number): Promise<MetricCalculationRun[]>;
 
   // Audit Logs
   getNotifications(companyId: string): Promise<Notification[]>;
@@ -1819,6 +1835,61 @@ export class DatabaseStorage implements IStorage {
       evidenceFiles: evRows,
       questionnaires: qqRows,
     };
+  }
+
+  // ESG Phase 1: Metric Definitions
+  async getMetricDefinitions(filter?: { pillar?: string; isCore?: boolean; isActive?: boolean }): Promise<MetricDefinition[]> {
+    const conditions: any[] = [];
+    if (filter?.pillar) conditions.push(eq(metricDefinitions.pillar, filter.pillar));
+    if (filter?.isCore !== undefined) conditions.push(eq(metricDefinitions.isCore, filter.isCore));
+    if (filter?.isActive !== undefined) conditions.push(eq(metricDefinitions.isActive, filter.isActive));
+    const q = db.select().from(metricDefinitions);
+    const rows = conditions.length > 0
+      ? await q.where(and(...conditions)).orderBy(metricDefinitions.sortOrder)
+      : await q.orderBy(metricDefinitions.sortOrder);
+    return rows;
+  }
+
+  async getMetricDefinition(id: string): Promise<MetricDefinition | undefined> {
+    const [row] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.id, id)).limit(1);
+    return row;
+  }
+
+  async getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined> {
+    const [row] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.code, code)).limit(1);
+    return row;
+  }
+
+  async updateMetricDefinitionActive(id: string, isActive: boolean): Promise<MetricDefinition | undefined> {
+    const [row] = await db.update(metricDefinitions)
+      .set({ isActive, updatedAt: new Date() })
+      .where(eq(metricDefinitions.id, id))
+      .returning();
+    return row;
+  }
+
+  // ESG Phase 1: Metric Evidence
+  async getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]> {
+    return db.select().from(metricEvidence)
+      .where(eq(metricEvidence.metricValueId, metricValueId))
+      .orderBy(desc(metricEvidence.uploadedAt));
+  }
+
+  async createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence> {
+    const [row] = await db.insert(metricEvidence).values(data).returning();
+    return row;
+  }
+
+  async deleteMetricEvidence(id: string): Promise<void> {
+    await db.delete(metricEvidence).where(eq(metricEvidence.id, id));
+  }
+
+  // ESG Phase 1: Calculation Runs
+  async getMetricCalculationRuns(businessId: string, limit = 50): Promise<MetricCalculationRun[]> {
+    return db.select().from(metricCalculationRuns)
+      .where(eq(metricCalculationRuns.businessId, businessId))
+      .orderBy(desc(metricCalculationRuns.createdAt))
+      .limit(limit);
   }
 }
 

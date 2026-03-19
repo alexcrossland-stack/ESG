@@ -65,6 +65,8 @@ The application is a full-stack SaaS web application.
 - **Carbon Estimator:** SME-focused carbon module with versioned emission factors (UK DEFRA 2024).
 - **Policy Templates:** 28 structured templates.
 - **Calculation Engine:** Centralized service for 12 automated ESG metric calculations.
+- **ESG Metric Definitions Engine (Phase 1):** 58 metric definitions across Environmental (E001–E020), Social (S001–S020), and Governance (G001–G018) pillars. Three new DB tables: `metric_definitions`, `metric_evidence`, `metric_calculation_runs`. 9 new columns on `metric_values`. Derived metrics auto-calculate via `server/metric-engine.ts` when source metrics are saved. Non-core metrics can be enabled/disabled by admins. Core metrics (28) are always active.
+- **Metrics Library Page:** `/metrics-library` — browse, search, filter all 58 ESG metric definitions by pillar (E/S/G) and type (core/advanced). Summary stat cards. Toggle advanced metrics on/off. Click any metric for full detail dialog (category, data type, unit, frequency, rollup method, formula, framework tags). Sidebar link under Data & Evidence.
 
 ## Multi-Site Architecture (Phases 1–3 — Complete)
 

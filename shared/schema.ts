@@ -210,8 +210,19 @@ export const metricValues = pgTable("metric_values", {
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
   siteId: varchar("site_id"),
+  // Phase 1 new-path columns (nullable for backward compat)
+  metricDefinitionId: varchar("metric_definition_id"),
+  reportingPeriodStart: timestamp("reporting_period_start"),
+  reportingPeriodEnd: timestamp("reporting_period_end"),
+  valueNumeric: decimal("value_numeric", { precision: 15, scale: 4 }),
+  valueText: text("value_text"),
+  valueBoolean: boolean("value_boolean"),
+  valueJson: jsonb("value_json"),
+  sourceType: text("source_type"),
+  enteredByUserId: varchar("entered_by_user_id"),
 }, (table) => ({
   siteIdIdx: index("idx_metric_values_site_id").on(table.siteId),
+  metricDefIdIdx: index("idx_metric_values_metric_def_id").on(table.metricDefinitionId),
 }));
 
 export const rawDataInputs = pgTable("raw_data_inputs", {
@@ -567,6 +578,69 @@ export const reportingPeriods = pgTable("reporting_periods", {
   previousPeriodId: varchar("previous_period_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// ============================================================
+// ESG PHASE 1: METRIC DEFINITIONS & CALCULATION ENGINE
+// ============================================================
+
+export const metricDefinitions = pgTable("metric_definitions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  pillar: text("pillar").notNull(),
+  category: text("category").notNull(),
+  description: text("description"),
+  dataType: text("data_type").notNull().default("numeric"),
+  unit: text("unit"),
+  inputFrequency: text("input_frequency").notNull().default("monthly"),
+  isCore: boolean("is_core").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  isDerived: boolean("is_derived").notNull().default(false),
+  formulaJson: jsonb("formula_json"),
+  frameworkTags: jsonb("framework_tags"),
+  scoringWeight: decimal("scoring_weight", { precision: 5, scale: 2 }).default("1"),
+  sortOrder: integer("sort_order").default(0),
+  evidenceRequired: boolean("evidence_required").default(false),
+  rollupMethod: text("rollup_method").notNull().default("sum"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  codeUniqueIdx: uniqueIndex("idx_metric_definitions_code").on(table.code),
+  pillarIdx: index("idx_metric_definitions_pillar").on(table.pillar),
+  isCoreIdx: index("idx_metric_definitions_is_core").on(table.isCore),
+}));
+
+export const metricEvidence = pgTable("metric_evidence", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  metricValueId: varchar("metric_value_id").notNull(),
+  fileUrl: text("file_url"),
+  storageKey: text("storage_key"),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type"),
+  uploadedByUserId: varchar("uploaded_by_user_id"),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+  notes: text("notes"),
+}, (table) => ({
+  metricValueIdIdx: index("idx_metric_evidence_value_id").on(table.metricValueId),
+}));
+
+export const metricCalculationRuns = pgTable("metric_calculation_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessId: varchar("business_id").notNull(),
+  metricDefinitionId: varchar("metric_definition_id").notNull(),
+  siteId: varchar("site_id"),
+  reportingPeriodStart: timestamp("reporting_period_start"),
+  reportingPeriodEnd: timestamp("reporting_period_end"),
+  status: text("status").notNull().default("pending"),
+  inputsJson: jsonb("inputs_json"),
+  outputJson: jsonb("output_json"),
+  errorText: text("error_text"),
+  triggeredByMetricValueId: varchar("triggered_by_metric_value_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  businessIdIdx: index("idx_metric_calc_runs_business").on(table.businessId),
+  metricDefIdx: index("idx_metric_calc_runs_metric_def").on(table.metricDefinitionId),
+}));
 
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
@@ -954,3 +1028,16 @@ export type ChatMessage = typeof chatMessages.$inferSelect;
 export const insertOrganisationSiteSchema = createInsertSchema(organisationSites).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertOrganisationSite = z.infer<typeof insertOrganisationSiteSchema>;
 export type OrganisationSite = typeof organisationSites.$inferSelect;
+
+// ESG Phase 1 types
+export const insertMetricDefinitionSchema = createInsertSchema(metricDefinitions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMetricDefinition = z.infer<typeof insertMetricDefinitionSchema>;
+export type MetricDefinition = typeof metricDefinitions.$inferSelect;
+
+export const insertMetricEvidenceSchema = createInsertSchema(metricEvidence).omit({ id: true, uploadedAt: true });
+export type InsertMetricEvidence = z.infer<typeof insertMetricEvidenceSchema>;
+export type MetricEvidence = typeof metricEvidence.$inferSelect;
+
+export const insertMetricCalculationRunSchema = createInsertSchema(metricCalculationRuns).omit({ id: true, createdAt: true });
+export type InsertMetricCalculationRun = z.infer<typeof insertMetricCalculationRunSchema>;
+export type MetricCalculationRun = typeof metricCalculationRuns.$inferSelect;

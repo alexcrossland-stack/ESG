@@ -17,6 +17,7 @@ import Dashboard from "@/pages/dashboard";
 import Policy from "@/pages/policy";
 import Topics from "@/pages/topics";
 import Metrics from "@/pages/metrics";
+import MetricsLibrary from "@/pages/metrics-library";
 import DataEntry from "@/pages/data-entry";
 import Actions from "@/pages/actions";
 import Reports from "@/pages/reports";
@@ -209,6 +210,7 @@ function ProtectedApp() {
                 <Route path="/policy" component={Policy} />
                 <Route path="/topics" component={Topics} />
                 <Route path="/metrics" component={Metrics} />
+                <Route path="/metrics-library" component={MetricsLibrary} />
                 <Route path="/data-entry" component={DataEntry} />
                 <Route path="/actions" component={Actions} />
                 <Route path="/evidence" component={Evidence} />

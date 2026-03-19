@@ -15,7 +15,7 @@ import {
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
   TrendingUp, Building2, Activity, HeartPulse, Sparkles, HelpCircle,
-  MessageSquare, CreditCard, Users, ChevronRight, MapPin, Globe,
+  MessageSquare, CreditCard, Users, ChevronRight, MapPin, Globe, BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -55,7 +55,7 @@ function useGroupState(groupKey: string, defaultOpen: boolean) {
 }
 
 const ESG_SETUP_ROUTES = ["/policy", "/topics", "/esg-profile", "/team"];
-const DATA_EVIDENCE_ROUTES = ["/metrics", "/data-entry", "/evidence"];
+const DATA_EVIDENCE_ROUTES = ["/metrics", "/metrics-library", "/data-entry", "/evidence"];
 const SETTINGS_ROUTES = [
   "/settings", "/billing", "/settings/sites", "/sites",
   "/compliance", "/benchmarks", "/recommendations",
@@ -293,6 +293,15 @@ export function AppSidebar() {
                             <BarChart3 className="w-3.5 h-3.5 shrink-0" />
                             <span>Metrics</span>
                             <NextBadge show={nextUrls.has("/metrics")} />
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/metrics-library")}>
+                          <Link href="/metrics-library" data-testid="nav-metrics-library">
+                            <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                            <span>Metrics Library</span>
+                            <NextBadge show={nextUrls.has("/metrics-library")} />
                           </Link>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
