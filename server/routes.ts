@@ -2825,7 +2825,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           companyId,
           action: "report_generated_for_site",
           page: "/reports",
-          details: { siteId: bodySiteId, reportId: report.id, reportType: reportType || "esg_summary" },
+          details: { siteId: bodySiteId, reportId: report.id, reportType: reportType || "pdf" },
         }).catch(() => {});
       }
 
