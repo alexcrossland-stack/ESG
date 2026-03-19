@@ -76,10 +76,10 @@ const ESG_TOPICS = [
   { key: "diversity_inclusion", label: "Diversity & Inclusion", category: "social" as const, icon: Users, benefit: "Access wider talent pools and meet procurement requirements" },
   { key: "health_safety", label: "Health & Safety", category: "social" as const, icon: Shield, benefit: "Meet legal obligations and protect your workforce" },
   { key: "training_development", label: "Training & Development", category: "social" as const, icon: BarChart3, benefit: "Build capability, reduce skill gaps, and improve retention" },
-  { key: "board_governance", label: "Board Governance", category: "governance" as const, icon: Shield, benefit: "Build investor confidence and demonstrate accountability" },
-  { key: "anti_corruption", label: "Anti-Corruption", category: "governance" as const, icon: Shield, benefit: "Meet legal requirements and protect business reputation" },
-  { key: "data_privacy", label: "Data Privacy", category: "governance" as const, icon: FileText, benefit: "Comply with GDPR and build customer trust" },
-  { key: "supply_chain", label: "Supply Chain ESG", category: "governance" as const, icon: ClipboardList, benefit: "Meet growing customer due-diligence requirements" },
+  { key: "board_governance", label: "Business Oversight & Ethics", category: "governance" as const, icon: Shield, benefit: "Build stakeholder confidence and demonstrate responsible leadership" },
+  { key: "anti_corruption", label: "Anti-Corruption & Bribery", category: "governance" as const, icon: Shield, benefit: "Meet legal requirements and protect business reputation" },
+  { key: "data_privacy", label: "Data Privacy (GDPR)", category: "governance" as const, icon: FileText, benefit: "Comply with GDPR and build customer trust" },
+  { key: "supply_chain", label: "Supplier Standards", category: "governance" as const, icon: ClipboardList, benefit: "Meet growing customer supplier-assessment requirements" },
 ];
 
 type MetricRec = { key: string; name: string; desc: string; default: boolean };
@@ -87,8 +87,8 @@ type MetricRec = { key: string; name: string; desc: string; default: boolean };
 const ENV_METRICS: MetricRec[] = [
   { key: "electricity", name: "Electricity Consumption", desc: "Track electricity usage in kWh", default: true },
   { key: "gas_fuel", name: "Gas / Fuel Consumption", desc: "Natural gas and fuel oil use", default: true },
-  { key: "scope1", name: "Scope 1 Emissions", desc: "Direct emissions (auto-calculated)", default: true },
-  { key: "scope2", name: "Scope 2 Emissions", desc: "Indirect emissions from electricity (auto-calculated)", default: true },
+  { key: "scope1", name: "Direct Carbon Emissions (Scope 1)", desc: "CO₂ from gas, fuel & vehicles you own — auto-calculated from your usage data", default: true },
+  { key: "scope2", name: "Electricity Carbon Emissions (Scope 2)", desc: "CO₂ from grid electricity you buy — auto-calculated from your kWh usage", default: true },
   { key: "waste", name: "Waste Generated", desc: "Total waste produced", default: true },
   { key: "recycling", name: "Recycling Rate", desc: "Percentage of waste recycled (auto-calculated)", default: true },
   { key: "water", name: "Water Consumption", desc: "Water usage in cubic metres", default: false },
@@ -296,6 +296,7 @@ export default function Onboarding() {
   const [maturityAnswers, setMaturityAnswers] = useState<Record<string, boolean | null>>({
     q1: null, q2: null, q3: null, q4: null, q5: null,
   });
+  const [maturityUnsure, setMaturityUnsure] = useState<Set<string>>(new Set());
 
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
@@ -485,6 +486,7 @@ export default function Onboarding() {
 
   function setMaturityAnswer(key: string, val: boolean) {
     setMaturityAnswers(prev => ({ ...prev, [key]: val }));
+    setMaturityUnsure(prev => { const next = new Set(prev); next.delete(key); return next; });
   }
 
   if (!company) return null;
@@ -656,9 +658,9 @@ export default function Onboarding() {
                   <Card key={q.key} className={`transition-all ${maturityAnswers[q.key] !== null ? "border-primary/30" : ""}`} data-testid={`maturity-question-${q.key}`}>
                     <CardContent className="p-4">
                       <p className="text-sm font-medium mb-3">{idx + 1}. {q.text}</p>
-                      <div className="flex gap-3">
+                      <div className="flex gap-2">
                         <button
-                          className={`flex-1 py-2 px-4 rounded-md border text-sm font-medium transition-colors ${
+                          className={`flex-1 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${
                             maturityAnswers[q.key] === true ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"
                           }`}
                           onClick={() => setMaturityAnswer(q.key, true)}
@@ -667,13 +669,25 @@ export default function Onboarding() {
                           Yes
                         </button>
                         <button
-                          className={`flex-1 py-2 px-4 rounded-md border text-sm font-medium transition-colors ${
+                          className={`flex-1 py-2 px-3 rounded-md border text-sm font-medium transition-colors ${
                             maturityAnswers[q.key] === false ? "bg-muted text-foreground border-border" : "border-border hover:border-primary/50"
                           }`}
                           onClick={() => setMaturityAnswer(q.key, false)}
                           data-testid={`maturity-${q.key}-no`}
                         >
                           No
+                        </button>
+                        <button
+                          className={`flex-1 py-2 px-3 rounded-md border text-sm font-medium transition-colors text-muted-foreground ${
+                            maturityUnsure.has(q.key) ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400" : "border-border hover:border-primary/30"
+                          }`}
+                          onClick={() => {
+                            setMaturityAnswer(q.key, false);
+                            setMaturityUnsure(prev => { const next = new Set(prev); next.add(q.key); return next; });
+                          }}
+                          data-testid={`maturity-${q.key}-unsure`}
+                        >
+                          Not sure
                         </button>
                       </div>
                     </CardContent>
@@ -754,15 +768,16 @@ export default function Onboarding() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Reporting Frequency</Label>
+                <Label>How often will you enter data?</Label>
                 <Select value={reportingFrequency} onValueChange={setReportingFrequency}>
                   <SelectTrigger data-testid="select-frequency" className="w-48"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
+                    <SelectItem value="monthly">Monthly — most accurate for energy & carbon</SelectItem>
+                    <SelectItem value="quarterly">Quarterly — good balance for most businesses</SelectItem>
+                    <SelectItem value="annual">Annual — minimum for compliance reporting</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">You can change this later. Monthly is recommended if you have utility bills each month.</p>
               </div>
 
               <MetricCheckboxGroup title="Environmental" icon={Leaf} color="text-primary" metrics={ENV_METRICS} selected={selectedMetrics} onToggle={toggleMetric} />
@@ -830,13 +845,13 @@ export default function Onboarding() {
                   <Input value={quickEvidenceDesc} onChange={e => setQuickEvidenceDesc(e.target.value)} placeholder="e.g. January electricity invoice" data-testid="input-evidence-desc" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Linked Module</Label>
+                  <Label>What does this evidence support?</Label>
                   <Select value={quickEvidenceModule} onValueChange={setQuickEvidenceModule}>
                     <SelectTrigger data-testid="select-evidence-module" className="w-48"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="metrics">Metrics</SelectItem>
-                      <SelectItem value="policies">Policies</SelectItem>
-                      <SelectItem value="questionnaires">Questionnaires</SelectItem>
+                      <SelectItem value="metrics">A metric (e.g. electricity bill)</SelectItem>
+                      <SelectItem value="policies">A policy document</SelectItem>
+                      <SelectItem value="questionnaires">A questionnaire response</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

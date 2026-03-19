@@ -236,7 +236,7 @@ export default function Auth() {
             <CardContent className="pt-6 text-center space-y-3">
               <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
               <p className="font-semibold">Check your inbox</p>
-              <p className="text-sm text-muted-foreground">If an account exists for that email address, you'll receive a password reset link shortly.</p>
+              <p className="text-sm text-muted-foreground">If an account exists for that email address, you'll receive a password reset link shortly. If you don't see it, check your spam or junk folder.</p>
               <Button variant="ghost" className="w-full" onClick={() => setView("tabs")}>Back to sign in</Button>
             </CardContent>
           </Card>

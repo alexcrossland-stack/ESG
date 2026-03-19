@@ -1774,7 +1774,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/topics/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
       const { selected } = req.body;
+      if (selected === undefined) return res.status(400).json({ error: "selected field is required" });
+      const existing = await storage.getMaterialTopic(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Topic not found" });
+      }
       await storage.updateMaterialTopic(req.params.id, selected);
       res.json({ ok: true });
     } catch (e: any) {
@@ -1804,6 +1810,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/metrics/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const existing = await storage.getMetric(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
+      }
       const metric = await storage.updateMetric(req.params.id, req.body);
       res.json(metric);
     } catch (e: any) {
@@ -1813,6 +1824,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/metrics/:id/target", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const existing = await storage.getMetric(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
+      }
       const { targetValue, targetYear } = req.body;
       const target = await storage.upsertMetricTarget(req.params.id, targetValue, targetYear);
       res.json(target);
@@ -1822,8 +1838,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/metrics/:id/values", requireAuth, async (req, res) => {
-    const values = await storage.getMetricValues(req.params.id);
-    res.json(values);
+    try {
+      const companyId = (req.session as any).companyId;
+      const existing = await storage.getMetric(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
+      }
+      const values = await storage.getMetricValues(req.params.id);
+      res.json(values);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/data-entry/template", requireAuth, async (req, res) => {
@@ -1875,6 +1900,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
       const { metricId, period, value, notes, dataSourceType, siteId: bodySiteId } = req.body;
+      if (!metricId) return res.status(400).json({ error: "metricId is required" });
+      if (!period) return res.status(400).json({ error: "period is required" });
+      // Validate metric exists and belongs to this company
+      const metric = await storage.getMetric(metricId);
+      if (!metric || metric.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
+      }
       // Validate siteId if provided (write: true blocks archived sites centrally)
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
@@ -2255,8 +2287,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Metric history with traffic lights
   app.get("/api/metrics/:id/history", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
     const metric = await storage.getMetric(req.params.id);
-    if (!metric) return res.status(404).json({ error: "Metric not found" });
+    if (!metric || metric.companyId !== companyId) return res.status(404).json({ error: "Metric not found" });
     const values = await storage.getMetricValues(req.params.id);
     const sortedValues = values.sort((a, b) => a.period.localeCompare(b.period));
     const history = sortedValues.map((v, i) => {

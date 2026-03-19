@@ -1,6 +1,6 @@
 import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient, authFetch, StepUpRequiredError } from "./lib/queryClient";
-import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -225,6 +225,29 @@ function ImpersonationBanner() {
   );
 }
 
+function ConsentBanner() {
+  const { data } = useQuery<{ user: any; company: any; consentOutdated?: boolean }>({
+    queryKey: ["/api/auth/me"],
+  });
+  const queryClient = useQueryClient();
+
+  const accept = async () => {
+    await fetch("/api/auth/accept-terms", { method: "POST", credentials: "include" });
+    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+  };
+
+  if (!data?.consentOutdated) return null;
+
+  return (
+    <div className="bg-yellow-500 text-white text-sm px-4 py-2 flex items-center justify-between shrink-0" data-testid="banner-consent-outdated">
+      <span>Our terms and privacy policy have been updated. Please review and accept them to continue using the platform.</span>
+      <Button size="sm" variant="secondary" onClick={accept} data-testid="button-accept-terms-banner">
+        Accept
+      </Button>
+    </div>
+  );
+}
+
 function ProtectedApp() {
   const { data, isLoading } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -259,6 +282,7 @@ function ProtectedApp() {
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">
           <ImpersonationBanner />
+          <ConsentBanner />
           <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-background shrink-0">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <ThemeToggle />

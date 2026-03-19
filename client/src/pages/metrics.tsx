@@ -444,7 +444,12 @@ export default function Metrics() {
           </div>
         )}
         {filtered.length === 0 && metrics.length > 0 && (
-          <p className="text-center text-sm text-muted-foreground py-8">No metrics match your filters.</p>
+          <div className="text-center py-8 space-y-3" data-testid="metrics-filter-empty">
+            <p className="text-sm text-muted-foreground">No metrics match your filters.</p>
+            <Button variant="outline" size="sm" onClick={() => { setActiveTab("all"); setStatusFilter("all"); setTypeFilter("all"); }} data-testid="button-clear-filters">
+              Clear Filters
+            </Button>
+          </div>
         )}
       </div>
 
