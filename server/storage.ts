@@ -531,8 +531,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>) {
+    const incomingSiteId = (data as any).siteId ?? null;
+    const siteCondition = incomingSiteId
+      ? eq(rawDataInputs.siteId, incomingSiteId)
+      : isNull(rawDataInputs.siteId);
     const [existing] = await db.select().from(rawDataInputs)
-      .where(and(eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.inputName, inputName), eq(rawDataInputs.period, period)));
+      .where(and(
+        eq(rawDataInputs.companyId, companyId),
+        eq(rawDataInputs.inputName, inputName),
+        eq(rawDataInputs.period, period),
+        siteCondition,
+      ));
     if (existing) {
       const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, existing.id)).returning();
       return r;
@@ -1786,6 +1795,7 @@ export class DatabaseStorage implements IStorage {
       const [mvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...mvConditions));
 
       const evConditions: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, site.id)];
+      if (period) evConditions.push(eq(evidenceFiles.linkedPeriod, period));
       const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
 
       const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
@@ -1809,7 +1819,9 @@ export class DatabaseStorage implements IStorage {
     if (period) unassignedMvConds.push(eq(metricValues.period, period));
     const [uMvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...unassignedMvConds));
 
-    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)));
+    const uEvConds: any[] = [eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)];
+    if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
+    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
     const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
 
     if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
@@ -1837,8 +1849,10 @@ export class DatabaseStorage implements IStorage {
       notes: metricValues.notes,
     }).from(metricValues).where(and(...mvConditions)).orderBy(desc(metricValues.submittedAt)).limit(20);
 
+    const evConds: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)];
+    if (period) evConds.push(eq(evidenceFiles.linkedPeriod, period));
     const evRows = await db.select().from(evidenceFiles)
-      .where(and(eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)))
+      .where(and(...evConds))
       .orderBy(desc(evidenceFiles.uploadedAt)).limit(10);
 
     const qqRows = await db.select().from(questionnaires)

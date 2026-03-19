@@ -1497,7 +1497,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const existing = await storage.getMetricValues(metricId);
-      const existingForPeriod = existing.find(v => v.period === period);
+      const resolvedSiteId = bodySiteId || null;
+      const existingForPeriod = existing.find(v =>
+        v.period === period &&
+        (resolvedSiteId ? v.siteId === resolvedSiteId : !v.siteId)
+      );
 
       let result;
       if (existingForPeriod) {

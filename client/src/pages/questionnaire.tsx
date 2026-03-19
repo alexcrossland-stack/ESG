@@ -762,9 +762,9 @@ function PreviousQuestionnairesTab() {
                       {q.status}
                     </Badge>
                   )}
-                  {(q as any).siteId && sites.find(s => s.id === (q as any).siteId) && (
+                  {q.siteId && sites.find(s => s.id === q.siteId) && (
                     <Badge variant="secondary" className="text-xs" data-testid={`badge-site-${q.id}`}>
-                      {sites.find(s => s.id === (q as any).siteId)?.name}
+                      {sites.find(s => s.id === q.siteId)?.name}
                     </Badge>
                   )}
                   {q.createdAt && (

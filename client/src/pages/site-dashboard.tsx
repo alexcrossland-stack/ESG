@@ -20,10 +20,16 @@ export default function SiteDashboardPage() {
   const params = useParams<{ siteId: string }>();
   const siteId = params.siteId;
 
+  const { data: reportingPeriods = [] } = useQuery<any[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
+  const activePeriod = (reportingPeriods as any[]).find((rp: any) => rp.status === "active");
+  const periodParam = activePeriod ? `?period=${encodeURIComponent(activePeriod.name)}` : "";
+
   const { data, isLoading, isError } = useQuery<any>({
-    queryKey: ["/api/sites", siteId, "dashboard"],
+    queryKey: ["/api/sites", siteId, "dashboard", activePeriod?.name ?? ""],
     queryFn: async () => {
-      const r = await fetch(`/api/sites/${siteId}/dashboard`, { credentials: "include" });
+      const r = await fetch(`/api/sites/${siteId}/dashboard${periodParam}`, { credentials: "include" });
       if (!r.ok) throw new Error("Failed to load site dashboard");
       return r.json();
     },

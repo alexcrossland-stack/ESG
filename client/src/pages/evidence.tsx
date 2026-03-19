@@ -310,7 +310,7 @@ function MetricCoverageTable() {
 }
 
 function EvidenceList() {
-  const { activeSiteId, activeSite } = useSiteContext();
+  const { activeSiteId, activeSite, sites } = useSiteContext();
   const { data: files = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/evidence", activeSiteId ?? "all"],
     queryFn: async () => {
@@ -392,6 +392,11 @@ function EvidenceList() {
                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                   <span className="font-medium text-sm truncate" data-testid={`text-evidence-filename-${f.id}`}>{f.filename}</span>
                   <EvidenceStatusBadge status={isExpired(f) ? "expired" : (f.evidenceStatus || "uploaded")} />
+                  {f.siteId && (
+                    <Badge variant="secondary" className="text-xs" data-testid={`badge-site-evidence-${f.id}`}>
+                      {sites.find(s => s.id === f.siteId)?.name ?? f.siteId}
+                    </Badge>
+                  )}
                   {f.linkedModule && (
                     <Badge variant="outline" className="text-xs">{MODULE_LABELS[f.linkedModule] || f.linkedModule}</Badge>
                   )}

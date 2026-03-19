@@ -472,6 +472,7 @@ export function registerAgentRoutes(app: Express) {
     status: z.string().default("running"),
     companyId: z.string().optional(),
     userId: z.string().optional(),
+    siteId: z.string().optional(),
   });
 
   const updateRunSchema = z.object({
@@ -501,6 +502,7 @@ export function registerAgentRoutes(app: Express) {
         status: body.status,
         companyId: body.companyId || null,
         userId: body.userId || null,
+        siteId: body.siteId || null,
       } as any);
       return res.status(201).json(run);
     } catch (e: any) {
@@ -545,6 +547,7 @@ export function registerAgentRoutes(app: Express) {
     userId: z.string().optional(),
     agentType: z.enum(["technical_agent", "customer_success_agent", "esg_specialist_agent", "marketing_agent", "master_orchestrator"]).optional(),
     title: z.string().optional(),
+    siteId: z.string().optional(),
   });
 
   app.post("/api/internal/chat/sessions", requireAgentAuth, requireAgentScope("internal:chat"), async (req: Request, res: Response) => {
@@ -556,6 +559,7 @@ export function registerAgentRoutes(app: Express) {
         agentType: body.agentType || null,
         title: body.title || null,
         status: "open",
+        siteId: body.siteId || null,
       } as any);
       return res.status(201).json(session);
     } catch (e: any) {
@@ -567,8 +571,10 @@ export function registerAgentRoutes(app: Express) {
     try {
       const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
       const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
       const sessions = await storage.listChatSessions({ userId, companyId });
-      return res.json(sessions);
+      const filtered = siteId ? sessions.filter((s: any) => s.siteId === siteId) : sessions;
+      return res.json(filtered);
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
     }
