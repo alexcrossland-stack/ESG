@@ -47,7 +47,6 @@ import {
   type ChatMessage, type InsertChatMessage,
   type SuperAdminAction, type InsertSuperAdminAction,
   type OrganisationSite, type InsertOrganisationSite,
-  metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
   type MetricDefinition, type InsertMetricDefinition,
   type MetricDefinitionValue, type InsertMetricDefinitionValue,
   type MetricEvidence, type InsertMetricEvidence,
@@ -132,18 +131,6 @@ export interface IStorage {
   // Legacy migration
   getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
   migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
-
-  // ESG Phase 1: Metric Definitions
-  getMetricDefinitions(filter?: { pillar?: string; isCore?: boolean; isActive?: boolean }): Promise<MetricDefinition[]>;
-  getMetricDefinition(id: string): Promise<MetricDefinition | undefined>;
-  getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined>;
-  updateMetricDefinitionActive(id: string, isActive: boolean): Promise<MetricDefinition | undefined>;
-  // ESG Phase 1: Metric Evidence
-  getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]>;
-  createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence>;
-  deleteMetricEvidence(id: string): Promise<void>;
-  // ESG Phase 1: Calculation Runs
-  getMetricCalculationRuns(businessId: string, limit?: number): Promise<MetricCalculationRun[]>;
 
   // Audit Logs
   getNotifications(companyId: string): Promise<Notification[]>;

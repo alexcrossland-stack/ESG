@@ -1961,7 +1961,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!def) return res.status(404).json({ error: "Not found" });
       if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
 
-      const updated = await storage.updateMetricDefinitionActive(req.params.id, isActive);
+      const updated = await storage.updateMetricDefinition(req.params.id, { isActive });
       res.json(updated);
     } catch (e: any) {
       res.status(500).json({ error: e.message });

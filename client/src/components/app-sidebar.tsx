@@ -325,14 +325,6 @@ export function AppSidebar() {
                           </Link>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/metrics-library")}>
-                          <Link href="/metrics-library" data-testid="nav-metrics-library">
-                            <Library className="w-3.5 h-3.5 shrink-0" />
-                            <span>Metrics Library</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </SidebarMenuItem>
