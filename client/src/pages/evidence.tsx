@@ -72,14 +72,13 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
   const [expiryDate, setExpiryDate] = useState("");
   const [fileType, setFileType] = useState("");
   const { toast } = useToast();
-  const { activeSiteId, sites } = useSiteContext();
-  const activeSites = sites.filter(s => s.status === "active");
-  const isMultiSite = activeSites.length >= 2;
+  const { activeSiteId, activeSites } = useSiteContext();
+  const isMultiSite = activeSites.length >= 1;
   const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
-      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
+      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : null;
       const res = await apiRequest("POST", "/api/evidence", {
         filename,
         fileType: fileType || null,

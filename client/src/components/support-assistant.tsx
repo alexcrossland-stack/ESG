@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { useLocation } from "wouter";
+import { useSiteContext } from "@/hooks/use-site-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +56,7 @@ export function SupportAssistant() {
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: statusData } = useQuery<any>({ queryKey: ["/api/programme/status"] });
   const { isPro, isLoading: billingLoading } = useBillingStatus();
+  const { activeSiteId } = useSiteContext();
 
   const pageLabel = PAGE_LABELS[location] || "Platform";
 
@@ -91,6 +93,7 @@ export function SupportAssistant() {
       const res = await apiRequest("POST", "/api/chat/assist", {
         message: messageText,
         pageContext: pageLabel,
+        siteId: activeSiteId,
         companyContext: {
           maturityLevel: authData?.company?.esgMaturity || null,
           policiesAdopted: statusData?.policiesAdoptedCount ?? null,

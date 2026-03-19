@@ -166,7 +166,7 @@ export default function DataEntry() {
   }, [entryData]);
 
   const saveRawMutation = useMutation({
-    mutationFn: (data: { inputs: Record<string, string>; period: string }) =>
+    mutationFn: (data: { inputs: Record<string, string>; period: string; siteId?: string | null }) =>
       apiRequest("POST", "/api/raw-data", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
@@ -187,7 +187,7 @@ export default function DataEntry() {
   });
 
   const saveManualMutation = useMutation({
-    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string }) =>
+    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string; siteId?: string | null }) =>
       apiRequest("POST", "/api/data-entry", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
@@ -250,7 +250,7 @@ export default function DataEntry() {
     for (const [k, v] of Object.entries(rawInputs)) {
       if (v !== undefined && v !== null && v.trim() !== "") nonEmpty[k] = v;
     }
-    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: activeSiteId || null } as any);
+    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: activeSiteId || null });
     await recalcMutation.mutateAsync();
   };
 
@@ -258,7 +258,7 @@ export default function DataEntry() {
     const val = manualValues[metricId];
     if (!val?.value) return;
     const dataSourceType = manualDataSourceTypes[metricId] || "manual";
-    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null } as any);
+    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null });
     toast({ title: "Saved" });
   };
 
@@ -714,9 +714,8 @@ const TEMPLATE_OPTIONS = [
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { activeSiteId, sites } = useSiteContext();
-  const activeSites = sites.filter(s => s.status === "active");
-  const isMultiSite = activeSites.length >= 2;
+  const { activeSiteId, activeSites } = useSiteContext();
+  const isMultiSite = activeSites.length >= 1;
   const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [parsedResult, setParsedResult] = useState<any>(null);

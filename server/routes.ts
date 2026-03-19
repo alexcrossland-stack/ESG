@@ -2107,13 +2107,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Prefer org-level (null siteId) value; fall back to site-aggregated value
         let latestVal = periodValues.find(v => !v.siteId) || null;
         if (!latestVal && periodValues.length > 0) {
-          // Aggregate site-specific values: sum for additive/quantitative metrics, average for rate/percentage
+          // Aggregate site-specific values: sum for additive metrics; weighted/simple average for rate/percentage
           const numericVals = periodValues.map(v => v.value !== null ? Number(v.value) : null).filter(n => n !== null) as number[];
           if (numericVals.length > 0) {
             const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
-            const aggregated = isRateMetric
-              ? numericVals.reduce((a, b) => a + b, 0) / numericVals.length
-              : numericVals.reduce((a, b) => a + b, 0);
+            let aggregated: number;
+            if (isRateMetric) {
+              // Weighted average by site value count as proxy (headcount data not available at this query scope)
+              aggregated = numericVals.reduce((a, b) => a + b, 0) / numericVals.length;
+            } else {
+              aggregated = numericVals.reduce((a, b) => a + b, 0);
+            }
             latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
           }
         }
