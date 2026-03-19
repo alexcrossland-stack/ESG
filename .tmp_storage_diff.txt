@@ -1,0 +1,229 @@
+diff --git a/server/storage.ts b/server/storage.ts
+index 21465ec..40d17ce 100644
+--- a/server/storage.ts
++++ b/server/storage.ts
+@@ -1,4 +1,4 @@
+-import { eq, and, desc, sql, lt, isNull, or, count } from "drizzle-orm";
++import { eq, and, desc, sql, lt, isNull, or, count, gte, lte } from "drizzle-orm";
+ import { drizzle } from "drizzle-orm/node-postgres";
+ import pg from "pg";
+ import {
+@@ -47,7 +47,6 @@ import {
+   type ChatMessage, type InsertChatMessage,
+   type SuperAdminAction, type InsertSuperAdminAction,
+   type OrganisationSite, type InsertOrganisationSite,
+-  metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
+   type MetricDefinition, type InsertMetricDefinition,
+   type MetricDefinitionValue, type InsertMetricDefinitionValue,
+   type MetricEvidence, type InsertMetricEvidence,
+@@ -111,7 +110,7 @@ export interface IStorage {
+   upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>): Promise<RawDataInput>;
+ 
+   // Evidence Files
+-  getEvidenceFiles(companyId: string, siteId?: string | null): Promise<EvidenceFile[]>;
++  getEvidenceFiles(companyId: string, siteId?: string | null, period?: string): Promise<EvidenceFile[]>;
+   getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string): Promise<EvidenceFile[]>;
+   getEvidenceCoverage(companyId: string, period?: string): Promise<any>;
+   createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
+@@ -133,18 +132,6 @@ export interface IStorage {
+   getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
+   migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
+ 
+-  // ESG Phase 1: Metric Definitions
+-  getMetricDefinitions(filter?: { pillar?: string; isCore?: boolean; isActive?: boolean }): Promise<MetricDefinition[]>;
+-  getMetricDefinition(id: string): Promise<MetricDefinition | undefined>;
+-  getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined>;
+-  updateMetricDefinitionActive(id: string, isActive: boolean): Promise<MetricDefinition | undefined>;
+-  // ESG Phase 1: Metric Evidence
+-  getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]>;
+-  createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence>;
+-  deleteMetricEvidence(id: string): Promise<void>;
+-  // ESG Phase 1: Calculation Runs
+-  getMetricCalculationRuns(businessId: string, limit?: number): Promise<MetricCalculationRun[]>;
+-
+   // Audit Logs
+   getNotifications(companyId: string): Promise<Notification[]>;
+   getActiveNotifications(companyId: string): Promise<Notification[]>;
+@@ -171,14 +158,14 @@ export interface IStorage {
+   updateEmissionFactor(id: string, data: Partial<EmissionFactor>): Promise<EmissionFactor | undefined>;
+ 
+   // Carbon Calculations
+-  getCarbonCalculations(companyId: string, siteId?: string | null): Promise<CarbonCalculation[]>;
++  getCarbonCalculations(companyId: string, siteId?: string | null, period?: string): Promise<CarbonCalculation[]>;
+   getCarbonCalculation(id: string): Promise<CarbonCalculation | undefined>;
+   createCarbonCalculation(calc: InsertCarbonCalculation): Promise<CarbonCalculation>;
+   updateCarbonCalculation(id: string, data: Partial<CarbonCalculation>): Promise<CarbonCalculation | undefined>;
+   deleteCarbonCalculation(id: string): Promise<void>;
+ 
+   // Questionnaires
+-  getQuestionnaires(companyId: string, siteId?: string | null): Promise<Questionnaire[]>;
++  getQuestionnaires(companyId: string, siteId?: string | null, reportingPeriodId?: string): Promise<Questionnaire[]>;
+   getQuestionnaire(id: string): Promise<Questionnaire | undefined>;
+   createQuestionnaire(q: InsertQuestionnaire): Promise<Questionnaire>;
+   updateQuestionnaire(id: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
+@@ -194,8 +181,8 @@ export interface IStorage {
+   createSite(data: InsertOrganisationSite): Promise<OrganisationSite>;
+   updateSite(id: string, companyId: string, data: Partial<InsertOrganisationSite>): Promise<OrganisationSite | undefined>;
+   archiveSite(id: string, companyId: string): Promise<OrganisationSite | undefined>;
+-  getSitesSummary(companyId: string, period?: string): Promise<Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }>>;
+-  getSiteDashboard(siteId: string, companyId: string, period?: string): Promise<any>;
++  getSitesSummary(companyId: string, period?: string, reportingPeriodId?: string): Promise<Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }>>;
++  getSiteDashboard(siteId: string, companyId: string, period?: string, reportingPeriodId?: string): Promise<any>;
+ 
+   // Policy Templates
+   getPolicyTemplates(): Promise<PolicyTemplate[]>;
+@@ -284,6 +271,7 @@ export interface IStorage {
+   updateAgentApiKeyLastUsed(id: string): Promise<void>;
+ 
+   // Agent Runs / Actions / Escalations
++  getAgentRuns(filters?: { companyId?: string; siteId?: string; limit?: number }): Promise<AgentRun[]>;
+   createAgentRun(data: InsertAgentRun): Promise<AgentRun>;
+   updateAgentRun(id: string, updates: Partial<AgentRun>): Promise<AgentRun | undefined>;
+   createAgentAction(data: InsertAgentAction): Promise<AgentAction>;
+@@ -544,8 +532,17 @@ export class DatabaseStorage implements IStorage {
+   }
+ 
+   async upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>) {
++    const incomingSiteId = (data as any).siteId ?? null;
++    const siteCondition = incomingSiteId
++      ? eq(rawDataInputs.siteId, incomingSiteId)
++      : isNull(rawDataInputs.siteId);
+     const [existing] = await db.select().from(rawDataInputs)
+-      .where(and(eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.inputName, inputName), eq(rawDataInputs.period, period)));
++      .where(and(
++        eq(rawDataInputs.companyId, companyId),
++        eq(rawDataInputs.inputName, inputName),
++        eq(rawDataInputs.period, period),
++        siteCondition,
++      ));
+     if (existing) {
+       const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, existing.id)).returning();
+       return r;
+@@ -555,11 +552,12 @@ export class DatabaseStorage implements IStorage {
+     }
+   }
+ 
+-  async getEvidenceFiles(companyId: string, siteId?: string | null) {
+-    const conditions = [eq(evidenceFiles.companyId, companyId)];
++  async getEvidenceFiles(companyId: string, siteId?: string | null, period?: string) {
++    const conditions: any[] = [eq(evidenceFiles.companyId, companyId)];
+     if (siteId !== undefined) {
+       conditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
+     }
++    if (period) conditions.push(eq(evidenceFiles.linkedPeriod, period));
+     return db.select().from(evidenceFiles).where(and(...conditions)).orderBy(desc(evidenceFiles.uploadedAt));
+   }
+ 
+@@ -870,11 +868,12 @@ export class DatabaseStorage implements IStorage {
+   }
+ 
+   // Carbon Calculations
+-  async getCarbonCalculations(companyId: string, siteId?: string | null) {
+-    const conditions = [eq(carbonCalculations.companyId, companyId)];
++  async getCarbonCalculations(companyId: string, siteId?: string | null, period?: string) {
++    const conditions: any[] = [eq(carbonCalculations.companyId, companyId)];
+     if (siteId !== undefined) {
+       conditions.push(siteId === null ? isNull(carbonCalculations.siteId) : eq(carbonCalculations.siteId, siteId));
+     }
++    if (period) conditions.push(eq(carbonCalculations.reportingPeriod, period));
+     return db.select().from(carbonCalculations).where(and(...conditions)).orderBy(desc(carbonCalculations.createdAt));
+   }
+ 
+@@ -898,11 +897,14 @@ export class DatabaseStorage implements IStorage {
+   }
+ 
+   // Questionnaires
+-  async getQuestionnaires(companyId: string, siteId?: string | null) {
+-    const conditions = [eq(questionnaires.companyId, companyId)];
++  async getQuestionnaires(companyId: string, siteId?: string | null, reportingPeriodId?: string) {
++    const conditions: any[] = [eq(questionnaires.companyId, companyId)];
+     if (siteId !== undefined) {
+       conditions.push(siteId === null ? isNull(questionnaires.siteId) : eq(questionnaires.siteId, siteId));
+     }
++    if (reportingPeriodId) {
++      conditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
++    }
+     return db.select().from(questionnaires).where(and(...conditions)).orderBy(desc(questionnaires.createdAt));
+   }
+ 
+@@ -1505,6 +1507,16 @@ export class DatabaseStorage implements IStorage {
+   }
+ 
+   // Agent Runs
++  async getAgentRuns(filters?: { companyId?: string; siteId?: string; limit?: number }) {
++    const conditions: any[] = [];
++    if (filters?.companyId) conditions.push(eq(agentRuns.companyId, filters.companyId));
++    if (filters?.siteId) conditions.push(eq(agentRuns.siteId, filters.siteId));
++    return db.select().from(agentRuns)
++      .where(conditions.length ? and(...conditions) : undefined)
++      .orderBy(desc(agentRuns.createdAt))
++      .limit(filters?.limit ?? 100);
++  }
++
+   async createAgentRun(data: InsertAgentRun) {
+     const [run] = await db.insert(agentRuns).values(data as any).returning();
+     return run;
+@@ -1780,7 +1792,7 @@ export class DatabaseStorage implements IStorage {
+     return site;
+   }
+ 
+-  async getSitesSummary(companyId: string, period?: string) {
++  async getSitesSummary(companyId: string, period?: string, reportingPeriodId?: string) {
+     const activeSites = await db
+       .select()
+       .from(organisationSites)
+@@ -1799,9 +1811,11 @@ export class DatabaseStorage implements IStorage {
+       const [mvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...mvConditions));
+ 
+       const evConditions: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, site.id)];
++      if (period) evConditions.push(eq(evidenceFiles.linkedPeriod, period));
+       const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
+ 
+       const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
++      if (reportingPeriodId) qqConditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
+       const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
+ 
+       rows.push({
+@@ -1822,8 +1836,12 @@ export class DatabaseStorage implements IStorage {
+     if (period) unassignedMvConds.push(eq(metricValues.period, period));
+     const [uMvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...unassignedMvConds));
+ 
+-    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)));
+-    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
++    const uEvConds: any[] = [eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)];
++    if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
++    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
++    const uQqConds: any[] = [eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)];
++    if (reportingPeriodId) uQqConds.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
++    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...uQqConds));
+ 
+     if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
+       rows.push({ siteId: null, siteName: "Unassigned", status: "active", metricCount: Number(uMvRow?.cnt ?? 0), evidenceCount: Number(uEvRow?.cnt ?? 0), questionnaireCount: Number(uQqRow?.cnt ?? 0) });
+@@ -1832,7 +1850,7 @@ export class DatabaseStorage implements IStorage {
+     return rows;
+   }
+ 
+-  async getSiteDashboard(siteId: string, companyId: string, period?: string) {
++  async getSiteDashboard(siteId: string, companyId: string, period?: string, reportingPeriodId?: string) {
+     const site = await this.getSite(siteId, companyId);
+     if (!site) return null;
+ 
+@@ -1850,12 +1868,16 @@ export class DatabaseStorage implements IStorage {
+       notes: metricValues.notes,
+     }).from(metricValues).where(and(...mvConditions)).orderBy(desc(metricValues.submittedAt)).limit(20);
+ 
++    const evConds: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)];
++    if (period) evConds.push(eq(evidenceFiles.linkedPeriod, period));
+     const evRows = await db.select().from(evidenceFiles)
+-      .where(and(eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)))
++      .where(and(...evConds))
+       .orderBy(desc(evidenceFiles.uploadedAt)).limit(10);
+ 
++    const qqConds: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, siteId)];
++    if (reportingPeriodId) qqConds.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
+     const qqRows = await db.select().from(questionnaires)
+-      .where(and(eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, siteId)))
++      .where(and(...qqConds))
+       .orderBy(desc(questionnaires.createdAt)).limit(10);
+ 
+     return {
