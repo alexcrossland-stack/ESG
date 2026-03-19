@@ -880,12 +880,17 @@ export default function Reports() {
   const { can } = usePermissions();
   const canApprove = can("report_generation");
   const { isPro } = useBillingStatus();
-  const { activeSiteId, activeSite } = useSiteContext();
+  const { activeSiteId, activeSite, sites: allSites } = useSiteContext();
+  const activeSites = allSites.filter((s: any) => s.status === "active");
+  const archivedSites = allSites.filter((s: any) => s.status === "archived");
+  const hasMultipleSites = allSites.length >= 1;
+  const [reportScopeId, setReportScopeId] = useState<string>(activeSiteId || "__org__");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [reportType, setReportType] = useState("pdf");
   const [selectedTemplate, setSelectedTemplate] = useState("management");
   const [reportData, setReportData] = useState<any>(null);
+  const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
 
   const templateConfig = REPORT_TEMPLATES.find(t => t.id === selectedTemplate) || REPORT_TEMPLATES[0];
   const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
@@ -906,9 +911,9 @@ export default function Reports() {
   };
 
   const { data: reports = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/reports", activeSiteId ?? "all"],
+    queryKey: ["/api/reports", effectiveSiteId ?? "all"],
     queryFn: async () => {
-      const url = activeSiteId ? `/api/reports?siteId=${activeSiteId}` : "/api/reports";
+      const url = effectiveSiteId ? `/api/reports?siteId=${effectiveSiteId}` : "/api/reports";
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load reports");
       return res.json();
@@ -928,7 +933,7 @@ export default function Reports() {
         period: selectedPeriod,
         reportType,
         reportTemplate: selectedTemplate,
-        siteId: activeSiteId || null,
+        siteId: effectiveSiteId,
         ...effectiveSections,
       });
       return res.json();
@@ -1405,6 +1410,37 @@ export default function Reports() {
               <CardTitle className="text-sm">Report Settings</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {hasMultipleSites && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Report Scope</Label>
+                  <Select value={reportScopeId} onValueChange={(v) => { setReportScopeId(v); setReportData(null); }}>
+                    <SelectTrigger data-testid="select-report-scope"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__org__">Whole organisation</SelectItem>
+                      {activeSites.length > 0 && (
+                        <>
+                          <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Active Sites</div>
+                          {activeSites.map((s: any) => (
+                            <SelectItem key={s.id} value={s.id} data-testid={`option-report-scope-${s.id}`}>{s.name}</SelectItem>
+                          ))}
+                        </>
+                      )}
+                      {archivedSites.length > 0 && (
+                        <>
+                          <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Archived Sites</div>
+                          {archivedSites.map((s: any) => (
+                            <SelectItem key={s.id} value={s.id} data-testid={`option-report-scope-${s.id}`}>{s.name} (Archived)</SelectItem>
+                          ))}
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  {reportScopeId !== "__org__" && archivedSites.some((s: any) => s.id === reportScopeId) && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400">Reporting on archived site — historical data only</p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label className="text-xs">Reporting Period</Label>
                 <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>

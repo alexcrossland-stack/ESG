@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { EmptyState } from "@/components/empty-state";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
@@ -683,10 +684,11 @@ export default function DataEntry() {
           })}
 
           {manualMetrics.length === 0 && (
-            <div className="text-center py-12">
-              <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No manual metrics to enter.</p>
-            </div>
+            <EmptyState
+              icon={ClipboardList}
+              title="No manual metrics configured"
+              description="Your company hasn't set up any manual entry metrics yet. Contact your admin to add metrics."
+            />
           )}
 
         </TabsContent>

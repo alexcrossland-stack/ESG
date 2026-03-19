@@ -2709,6 +2709,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { period, reportType, reportTemplate },
       });
 
+      if (bodySiteId) {
+        storage.createUserActivity({
+          userId: userId || null,
+          companyId,
+          action: "report_generated_for_site",
+          page: "/reports",
+          details: { siteId: bodySiteId, period, reportTemplate: reportTemplate || "management" },
+        }).catch(() => {});
+      }
+
       res.json({ report, data: reportData });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5640,6 +5650,16 @@ Answer the user's question based on this context. If you're asked about somethin
         await storage.createAuditLog({ companyId, userId, action: "carbon_data_import", entityType: "raw_data", details: { period, imported, skipped, unmatched } });
       } catch {}
 
+      if (bodySiteId && imported > 0) {
+        storage.createUserActivity({
+          userId: userId || null,
+          companyId,
+          action: "csv_uploaded_to_site",
+          page: "/data-entry",
+          details: { siteId: bodySiteId, period, imported },
+        }).catch(() => {});
+      }
+
       res.json({ imported, skipped, unmatched, period });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6665,6 +6685,56 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.post("/api/admin/migrate-sites", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const bodySchema = z.object({
+        companyId: z.string().min(1),
+        siteId: z.string().min(1),
+        entityTypes: z.array(z.string()).min(1).default(["metric_values", "raw_data", "evidence", "questionnaires"]),
+        dryRun: z.boolean().default(false),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
+      const { companyId, siteId, entityTypes, dryRun } = parsed.data;
+
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const site = await storage.getSite(siteId, companyId);
+      if (!site) return res.status(404).json({ error: "Site not found or does not belong to this company" });
+
+      if (dryRun) {
+        const counts = await storage.getUnassignedCounts(companyId);
+        await storage.createSuperAdminAction({
+          adminUserId: adminUser.id,
+          action: "migrate_sites_dry_run",
+          targetCompanyId: companyId,
+          metadata: { siteId, entityTypes, counts },
+        } as any);
+        return res.json({ dryRun: true, counts, siteId, companyId });
+      }
+
+      const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "migrate_sites_execute",
+        targetCompanyId: companyId,
+        metadata: { siteId, entityTypes, result },
+      } as any);
+      await storage.createAuditLog({
+        companyId,
+        userId: adminUser.id,
+        action: "admin_migrate_legacy_data",
+        entityType: "site",
+        entityId: siteId,
+        details: { siteId, entityTypes, result },
+      });
+      res.json({ dryRun: false, result, siteId, companyId });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/revenue", requireAuth, requireSuperAdmin, async (_req, res) => {
     try {
       const now = new Date();
@@ -7067,6 +7137,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         city: city ?? null,
         address: address ?? null,
       });
+      const _userId = (req as any)._auth?.userId;
+      storage.createUserActivity({
+        userId: _userId || null,
+        companyId,
+        action: "site_created",
+        page: "/settings/sites",
+        details: { siteId: site.id, siteName: site.name },
+      }).catch(() => {});
       res.status(201).json(site);
     } catch (e: any) {
       if (e.code === "23505") return res.status(409).json({ error: "A site with this name already exists" });
@@ -7110,6 +7188,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!existing) return res.status(404).json({ error: "Site not found" });
       if (existing.status === "archived") return res.status(400).json({ error: "Site is already archived" });
       const site = await storage.archiveSite(req.params.id, companyId);
+      const _archUserId = (req as any)._auth?.userId;
+      storage.createUserActivity({
+        userId: _archUserId || null,
+        companyId,
+        action: "site_archived",
+        page: "/settings/sites",
+        details: { siteId: existing.id, siteName: existing.name },
+      }).catch(() => {});
       res.json(site);
     } catch (e: any) {
       res.status(500).json({ error: e.message });

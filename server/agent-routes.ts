@@ -516,6 +516,15 @@ export function registerAgentRoutes(app: Express) {
         userId: body.userId || null,
         siteId: body.siteId || null,
       } as any);
+      if (body.siteId && body.companyId) {
+        storage.createUserActivity({
+          userId: body.userId || null,
+          companyId: body.companyId,
+          action: "ai_analysis_run_for_site",
+          page: "/sites",
+          details: { siteId: body.siteId, agentName: body.agentName, agentType: body.agentType },
+        }).catch(() => {});
+      }
       return res.status(201).json(run);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
@@ -573,6 +582,15 @@ export function registerAgentRoutes(app: Express) {
         status: "open",
         siteId: body.siteId || null,
       } as any);
+      if (body.siteId && body.companyId) {
+        storage.createUserActivity({
+          userId: body.userId || null,
+          companyId: body.companyId,
+          action: "ai_analysis_run_for_site",
+          page: "/sites",
+          details: { siteId: body.siteId, agentType: body.agentType || "chat" },
+        }).catch(() => {});
+      }
       return res.status(201).json(session);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });

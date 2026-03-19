@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
+import { EmptyState } from "@/components/empty-state";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
@@ -352,33 +353,16 @@ function EvidenceList() {
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading evidence...</div>;
 
   if (!files.length) {
+    const viewedSite = resolvedSiteId ? sites.find(s => s.id === resolvedSiteId) : null;
     return (
-      <Card>
-        <CardContent className="pt-6">
-          <div className="text-center py-8 space-y-3" data-testid="evidence-empty-state">
-            <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/30" />
-            <div>
-              <p className="text-sm font-medium">
-                {activeSite ? `No evidence for ${activeSite.name} yet` : "No evidence files yet"}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {activeSite
-                  ? `Upload documents that support the ESG data for ${activeSite.name}`
-                  : "Start by uploading documents that support your ESG data"}
-              </p>
-            </div>
-            <div className="text-xs text-muted-foreground space-y-1 max-w-xs mx-auto text-left">
-              <p>Examples to upload:</p>
-              <ul className="list-disc list-inside space-y-0.5 text-muted-foreground/80">
-                <li>Energy invoices (electricity, gas)</li>
-                <li>Payroll or HR records</li>
-                <li>Training completion certificates</li>
-                <li>Board meeting minutes</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={FileCheck}
+        title={viewedSite ? `No evidence for ${viewedSite.name} yet` : "No evidence files yet"}
+        description={viewedSite
+          ? `Upload documents that support the ESG data for ${viewedSite.name}`
+          : "Start by uploading documents that support your ESG data"}
+        helpText="Examples: energy invoices, HR records, training certificates, board minutes"
+      />
     );
   }
 

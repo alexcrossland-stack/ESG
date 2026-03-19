@@ -19,7 +19,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Building2, Plus, Pencil, Archive, MapPin, Globe, AlertCircle, ArrowRightLeft, CheckCircle2 } from "lucide-react";
+import { Building2, Plus, Pencil, Archive, MapPin, Globe, AlertCircle, ArrowRightLeft, CheckCircle2, Layers } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { OrganisationSite } from "@shared/schema";
 
@@ -459,17 +460,13 @@ export default function SitesPage() {
           ))}
         </div>
       ) : sites.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <Building2 className="w-10 h-10 text-muted-foreground mb-3" />
-          <h3 className="font-medium text-lg mb-1">No sites yet</h3>
-          <p className="text-sm text-muted-foreground mb-4 max-w-sm">
-            Add your organisation's physical sites to track ESG data independently across locations.
-          </p>
-          <Button onClick={() => setShowForm(true)} data-testid="button-add-site-empty">
-            <Plus className="w-4 h-4 mr-2" />
-            Add your first site
-          </Button>
-        </div>
+        <EmptyState
+          icon={Layers}
+          title="No sites yet"
+          description="Add your organisation's physical sites to track ESG data independently across locations."
+          actionLabel="Add your first site"
+          onAction={() => setShowForm(true)}
+        />
       ) : (
         <div className="space-y-6">
           {activeSites.length > 0 && (

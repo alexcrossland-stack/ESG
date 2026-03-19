@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
+import { EmptyState } from "@/components/empty-state";
 import { WorkflowBadge, AiDraftBadge, ConfidenceBadge } from "@/components/workflow-badge";
 import { DataSourceBadge } from "@/pages/evidence";
 
@@ -739,18 +740,29 @@ function PreviousQuestionnairesTab() {
 
   if (questionnaires.length === 0) {
     return (
-      <div className="text-center py-12 space-y-2">
-        <ClipboardList className="w-8 h-8 text-muted-foreground mx-auto" />
-        <p className="text-sm text-muted-foreground">
-          No questionnaires yet. Create your first one in the "New Questionnaire" tab.
-        </p>
-      </div>
+      <EmptyState
+        icon={ClipboardList}
+        title="No questionnaires yet"
+        description="Create your first questionnaire to collect structured ESG data from your team or supply chain."
+        helpText="Use the &quot;New Questionnaire&quot; tab to get started"
+      />
     );
   }
 
   const filteredQuestionnaires = viewSiteId === "__all__"
     ? questionnaires
     : questionnaires.filter(q => q.siteId === viewSiteId);
+
+  if (filteredQuestionnaires.length === 0 && viewSiteId !== "__all__") {
+    const filterSite = sites.find(s => s.id === viewSiteId);
+    return (
+      <EmptyState
+        icon={ClipboardList}
+        title={filterSite ? `No questionnaires for ${filterSite.name}` : "No questionnaires for this site"}
+        description="There are no questionnaires assigned to this site yet."
+      />
+    );
+  }
 
   return (
     <div className="space-y-3">

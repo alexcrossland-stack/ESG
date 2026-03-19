@@ -1,13 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import {
   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
   ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
+  ArrowRightLeft, PlayCircle, Eye,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -76,6 +81,130 @@ function HealthFlag({ ok, label }: { ok: boolean; label: string }) {
         ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
         : <XCircle className="w-4 h-4 text-amber-500 shrink-0" />}
       <span className={ok ? "text-emerald-800 dark:text-emerald-200" : "text-amber-800 dark:text-amber-200"}>{label}</span>
+    </div>
+  );
+}
+
+function AdminMigrationPanel({ companyId, sites }: { companyId: string; sites: any[] }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [selectedSiteId, setSelectedSiteId] = useState<string>("");
+  const [dryRunResult, setDryRunResult] = useState<any>(null);
+  const [executeResult, setExecuteResult] = useState<any>(null);
+
+  const activeSites = sites.filter((s: any) => s.status === "active");
+
+  const dryRunMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSiteId) throw new Error("Select a target site first");
+      const res = await apiRequest("POST", "/api/admin/migrate-sites", {
+        companyId,
+        siteId: selectedSiteId,
+        entityTypes: ["metric_values", "raw_data", "evidence", "questionnaires"],
+        dryRun: true,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setDryRunResult(data);
+      setExecuteResult(null);
+      toast({ title: "Dry run complete", description: "Review the counts below before executing." });
+    },
+    onError: (e: any) => toast({ title: "Dry run failed", description: e.message, variant: "destructive" }),
+  });
+
+  const executeMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSiteId) throw new Error("Select a target site first");
+      const res = await apiRequest("POST", "/api/admin/migrate-sites", {
+        companyId,
+        siteId: selectedSiteId,
+        entityTypes: ["metric_values", "raw_data", "evidence", "questionnaires"],
+        dryRun: false,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setExecuteResult(data);
+      setDryRunResult(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company", companyId, "diagnostics"] });
+      toast({ title: "Migration complete", description: "Legacy data has been assigned to the selected site." });
+    },
+    onError: (e: any) => toast({ title: "Migration failed", description: e.message, variant: "destructive" }),
+  });
+
+  if (activeSites.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-3">
+        No active sites found for this company. Create a site before migrating data.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3" data-testid="admin-migration-panel">
+      <div className="flex items-center gap-2">
+        <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+          <SelectTrigger className="w-64" data-testid="select-migration-target-site">
+            <SelectValue placeholder="Select target site..." />
+          </SelectTrigger>
+          <SelectContent>
+            {activeSites.map((s: any) => (
+              <SelectItem key={s.id} value={s.id} data-testid={`option-migration-site-${s.id}`}>
+                {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => dryRunMutation.mutate()}
+          disabled={!selectedSiteId || dryRunMutation.isPending}
+          data-testid="button-dry-run-migration"
+        >
+          <Eye className="w-3.5 h-3.5 mr-1.5" />
+          {dryRunMutation.isPending ? "Checking..." : "Preview"}
+        </Button>
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => executeMutation.mutate()}
+          disabled={!selectedSiteId || executeMutation.isPending || !dryRunResult}
+          data-testid="button-execute-migration"
+        >
+          <PlayCircle className="w-3.5 h-3.5 mr-1.5" />
+          {executeMutation.isPending ? "Migrating..." : "Execute"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Run Preview first to see how many records will be migrated, then Execute to assign them to the site.
+      </p>
+      {dryRunResult && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3 text-xs space-y-1" data-testid="dry-run-result">
+          <p className="font-medium text-amber-800 dark:text-amber-300">Dry run — records that would be migrated:</p>
+          {Object.entries(dryRunResult.counts || {}).map(([key, count]: [string, any]) => (
+            <div key={key} className="flex justify-between">
+              <span className="text-muted-foreground capitalize">{key.replace(/_/g, " ")}</span>
+              <span className="font-medium">{count}</span>
+            </div>
+          ))}
+          <p className="text-amber-700 dark:text-amber-400 pt-1">Click Execute to apply these changes.</p>
+        </div>
+      )}
+      {executeResult && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md p-3 text-xs space-y-1" data-testid="execute-result">
+          <p className="font-medium text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Migration complete
+          </p>
+          {Object.entries(executeResult.result || {}).map(([key, count]: [string, any]) => (
+            <div key={key} className="flex justify-between">
+              <span className="text-muted-foreground capitalize">{key.replace(/_/g, " ")}</span>
+              <span className="font-medium">{count} migrated</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -298,6 +427,23 @@ export default function AdminCompanyPage() {
           </CardContent>
         </Card>
       </div>
+
+      {diag.sites && diag.sites.length >= 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <ArrowRightLeft className="w-4 h-4" />
+              Legacy Data Migration
+            </CardTitle>
+          </CardHeader>
+          <CardContent data-testid="admin-migration-section">
+            <p className="text-xs text-muted-foreground mb-3">
+              Assign untagged (legacy) records to a specific site. Use Preview first, then Execute to commit.
+            </p>
+            <AdminMigrationPanel companyId={companyId!} sites={diag.sites ?? []} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
-import { Building2, MapPin, BarChart3, FileText, ClipboardList, ArrowLeft, Archive } from "lucide-react";
+import { Building2, MapPin, BarChart3, FileText, ClipboardList, ArrowLeft, Archive, LayoutDashboard } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 
 const SITE_TYPE_LABELS: Record<string, string> = {
   operational: "Operational",
@@ -174,11 +175,15 @@ export default function SiteDashboardPage() {
 
       {/* Empty state */}
       {metricValues.length === 0 && evidenceFiles.length === 0 && questionnaires.length === 0 && (
-        <div className="text-center py-16 text-muted-foreground" data-testid="text-site-empty">
-          <Building2 className="w-12 h-12 mx-auto mb-4 opacity-30" />
-          <p className="text-lg font-medium">No data recorded for this site yet</p>
-          <p className="text-sm mt-1">Start entering metrics and uploading evidence to see them here.</p>
-        </div>
+        <EmptyState
+          icon={LayoutDashboard}
+          title="No data recorded for this site yet"
+          description="Start entering metrics and uploading evidence to see them here."
+          actionLabel="Enter data"
+          actionHref="/data-entry"
+          secondaryLabel="Upload evidence"
+          secondaryHref="/evidence"
+        />
       )}
     </div>
   );

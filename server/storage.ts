@@ -1737,6 +1737,8 @@ export class DatabaseStorage implements IStorage {
 
     const r = (x: any) => (x as any).rows ?? [];
 
+    const companySites = await this.getSites(companyId, true);
+
     return {
       id: company.id,
       name: company.name,
@@ -1762,6 +1764,7 @@ export class DatabaseStorage implements IStorage {
       lastMetricEntry: r(mvR)[0]?.last_entry ?? null,
       lastLogin: r(lastLoginR)[0]?.created_at ?? null,
       users: companyUsers.map(u => ({ id: u.id, username: u.username, email: u.email, role: u.role })),
+      sites: companySites.map(s => ({ id: s.id, name: s.name, status: s.status, type: s.type })),
       recentErrors: r(errorsR),
       activityTimeline: r(activityR),
     };
