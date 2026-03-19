@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Users, Edit, Trash2, Shield } from "lucide-react";
+import { PageGuidance } from "@/components/page-guidance";
 
 type PolicyRecord = {
   id: string;
@@ -302,6 +303,7 @@ export default function EsgPolicyRegisterPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Track policies, owners, review dates and governance area assignments</p>
         </div>
         <Dialog open={showDialog} onOpenChange={v => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
+
           <DialogTrigger asChild>
             <Button size="sm" data-testid="button-add-policy">
               <Plus className="w-4 h-4 mr-1" /> Add Policy
@@ -315,6 +317,21 @@ export default function EsgPolicyRegisterPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <PageGuidance
+        pageKey="esg-policy-register"
+        title="What is the Policy Register?"
+        summary="The Policy Register is a central record of all your ESG-related policies — from environmental management to health & safety, diversity, and data privacy. It tracks who owns each policy, when it was last reviewed, and when the next review is due. The Governance tab lets you assign board members or managers to specific ESG responsibility areas."
+        goodLooksLike="Every relevant ESG policy is listed with an active owner and a review date no more than 12 months out. Overdue reviews are resolved promptly, and governance roles are assigned to named individuals rather than job titles alone."
+        steps={[
+          "Click 'Add Policy' to create a new record for each ESG-related policy your business has.",
+          "Set the policy type (e.g. Environmental, H&S, Diversity) and assign a named owner.",
+          "Add the effective date and next review date so nothing slips through the cracks.",
+          "Optionally link to the actual policy document using the document link field.",
+          "Switch to the Governance tab to assign board or management accountability for each ESG area.",
+          "Review and update the register at least annually or after major organisational changes.",
+        ]}
+      />
 
       {(overduePolicies.length > 0 || upcomingPolicies.length > 0) && (
         <div className="flex flex-wrap gap-3">

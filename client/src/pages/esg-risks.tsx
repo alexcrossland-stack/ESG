@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertTriangle, Plus, Leaf, Users, Shield, Edit, Trash2 } from "lucide-react";
+import { PageGuidance } from "@/components/page-guidance";
 
 type EsgRisk = {
   id: string;
@@ -256,6 +257,21 @@ export default function EsgRisksPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <PageGuidance
+        pageKey="esg-risks"
+        title="What is the ESG Risk Register?"
+        summary="The ESG Risk Register helps you identify, assess, and manage the ESG-related risks your business faces. This includes physical risks (e.g. flooding, supply chain disruption), transition risks (e.g. regulatory changes, carbon pricing), and social or governance risks (e.g. labour disputes, data breaches). Each risk is scored on likelihood and impact to produce a risk score, and you can record mitigation plans and track progress."
+        goodLooksLike="All significant ESG risks are logged with realistic likelihood and impact scores. Every open risk has a mitigation plan and a named owner. High-scoring risks (Critical or High) are reviewed at least quarterly. Risks that have been successfully mitigated are marked accordingly."
+        steps={[
+          "Click 'Log Risk' to add a new ESG risk. Give it a clear, descriptive title.",
+          "Select the ESG pillar (Environmental, Social, or Governance) and the risk type.",
+          "Set the likelihood and impact ratings — the risk score is calculated automatically.",
+          "Write a mitigation plan explaining how you will reduce or manage the risk.",
+          "Assign an owner who is responsible for monitoring and acting on the risk.",
+          "Set a review date and update the risk status (Open, Mitigated, Accepted, or Closed) as it evolves.",
+        ]}
+      />
 
       <div className="grid grid-cols-3 gap-3">
         <Card className="border border-border">

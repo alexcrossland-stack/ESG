@@ -14,6 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { Target, Plus, CheckCircle, AlertTriangle, Clock, Leaf, Users, Shield, Edit, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { PageGuidance } from "@/components/page-guidance";
 
 type EsgTarget = {
   id: string;
@@ -292,6 +293,21 @@ export default function EsgTargetsPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <PageGuidance
+        pageKey="esg-targets"
+        title="What are ESG Targets & Actions?"
+        summary="ESG Targets are the specific, measurable goals your business commits to — for example, reducing carbon emissions by 30% by 2030, or achieving gender pay parity by 2026. Each target can have one or more Actions attached to it: the concrete steps needed to get there. Tracking targets and actions together gives you a clear path from ambition to delivery."
+        goodLooksLike="Targets are specific and time-bound, linked to your materiality assessment priorities. Each target has at least one action with a named owner and due date. Progress is updated regularly, and completed actions are marked so you can see momentum building."
+        steps={[
+          "Click 'Add Target' to define an ESG goal. Be specific — include a metric, a target value, and a deadline.",
+          "Select the relevant pillar (Environmental, Social, or Governance) and the associated metric if applicable.",
+          "Set the baseline value and target value so progress can be measured objectively.",
+          "Expand a target and use 'Add Action' to define the concrete steps needed to achieve it.",
+          "Assign each action to an owner and set a due date to maintain accountability.",
+          "Review targets quarterly and update the current value to track progress over time.",
+        ]}
+      />
 
       {overdueActions.length > 0 && (
         <Card className="border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20">

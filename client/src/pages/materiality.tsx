@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Leaf, Users, Shield, ChevronDown, ChevronUp, Info, Star } from "lucide-react";
+import { PageGuidance } from "@/components/page-guidance";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -137,6 +138,21 @@ export default function MaterialityPage() {
           {scoredTopics.length} of {topics.length} scored
         </Badge>
       </div>
+
+      <PageGuidance
+        pageKey="materiality"
+        title="What is Materiality Assessment?"
+        summary="Materiality assessment helps you identify which ESG topics matter most to your business and its stakeholders. You score each topic on two dimensions: how much it affects your financial performance (financial materiality), and how much your business affects people and the planet (impact materiality). The results guide where to focus your ESG efforts."
+        goodLooksLike="All topics have been scored on both dimensions with a written rationale. High-priority topics (scoring 4–5) are actively addressed in your action plan, targets, and reports. Your assessment is reviewed annually and after major business changes."
+        steps={[
+          "Review each Environmental, Social, and Governance topic in the list.",
+          "Set the Financial Materiality score (1–5): how significant is this topic to your business risk or opportunity?",
+          "Set the Impact Materiality score (1–5): how significant is your business's impact on this topic?",
+          "Add a rationale note explaining your scoring decision.",
+          "Use the Priority Matrix tab to see which topics land in the high-priority quadrant.",
+          "Focus your ESG programme on the topics that score highest on both dimensions.",
+        ]}
+      />
 
       <Tabs defaultValue="score" className="w-full">
         <TabsList>
