@@ -306,7 +306,6 @@ function MigrateLegacyDataPanel({ activeSites }: { activeSites: OrganisationSite
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/sites/migrate", {
         siteId: targetSiteId,
-        entityTypes: selectedTypes,
       });
       return res.json();
     },

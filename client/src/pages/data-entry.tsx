@@ -691,6 +691,15 @@ export default function DataEntry() {
             />
           )}
 
+          {manualMetrics.length > 0 && !canEdit && activeSiteId && existingValues.filter((v: any) => v.siteId === activeSiteId).length === 0 && (
+            <EmptyState
+              icon={ClipboardList}
+              title="No data entered for this site"
+              description="No metric values have been recorded for this site in the selected period."
+              helpText="Ask an admin or data entry user to add data for this site"
+            />
+          )}
+
         </TabsContent>
 
         <TabsContent value="upload" className="mt-4 space-y-4">

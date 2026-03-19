@@ -522,7 +522,7 @@ export function registerAgentRoutes(app: Express) {
           companyId: body.companyId,
           action: "ai_analysis_run_for_site",
           page: "/sites",
-          details: { siteId: body.siteId, agentName: body.agentName, agentType: body.agentType },
+          details: { siteId: body.siteId, agentType: body.agentType, runId: run.id },
         }).catch(() => {});
       }
       return res.status(201).json(run);
@@ -588,7 +588,7 @@ export function registerAgentRoutes(app: Express) {
           companyId: body.companyId,
           action: "ai_analysis_run_for_site",
           page: "/sites",
-          details: { siteId: body.siteId, agentType: body.agentType || "chat" },
+          details: { siteId: body.siteId, agentType: body.agentType || "chat", runId: session.id },
         }).catch(() => {});
       }
       return res.status(201).json(session);

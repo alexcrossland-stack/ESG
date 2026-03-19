@@ -177,12 +177,10 @@ export default function SiteDashboardPage() {
       {metricValues.length === 0 && evidenceFiles.length === 0 && questionnaires.length === 0 && (
         <EmptyState
           icon={LayoutDashboard}
-          title="No data recorded for this site yet"
+          title="No data for this site yet"
           description="Start entering metrics and uploading evidence to see them here."
-          actionLabel="Enter data"
+          actionLabel="Upload data"
           actionHref="/data-entry"
-          secondaryLabel="Upload evidence"
-          secondaryHref="/evidence"
         />
       )}
     </div>

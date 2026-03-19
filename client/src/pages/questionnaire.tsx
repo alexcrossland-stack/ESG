@@ -754,12 +754,12 @@ function PreviousQuestionnairesTab() {
     : questionnaires.filter(q => q.siteId === viewSiteId);
 
   if (filteredQuestionnaires.length === 0 && viewSiteId !== "__all__") {
-    const filterSite = sites.find(s => s.id === viewSiteId);
     return (
       <EmptyState
         icon={ClipboardList}
-        title={filterSite ? `No questionnaires for ${filterSite.name}` : "No questionnaires for this site"}
+        title="No questionnaires for this site"
         description="There are no questionnaires assigned to this site yet."
+        helpText="Switch to the &quot;New Questionnaire&quot; tab and assign it to this site"
       />
     );
   }

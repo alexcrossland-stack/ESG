@@ -357,11 +357,13 @@ function EvidenceList() {
     return (
       <EmptyState
         icon={FileCheck}
-        title={viewedSite ? `No evidence for ${viewedSite.name} yet` : "No evidence files yet"}
+        title={viewedSite ? "No evidence for this site" : "No evidence files yet"}
         description={viewedSite
           ? `Upload documents that support the ESG data for ${viewedSite.name}`
           : "Start by uploading documents that support your ESG data"}
         helpText="Examples: energy invoices, HR records, training certificates, board minutes"
+        actionLabel="Upload evidence"
+        actionHref={viewedSite ? `/evidence?siteId=${viewedSite.id}` : undefined}
       />
     );
   }

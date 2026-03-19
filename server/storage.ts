@@ -135,7 +135,7 @@ export interface IStorage {
 
   // Legacy migration
   getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
-  migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
+  migrateLegacyData(companyId: string, siteId: string): Promise<Record<string, number>>;
 
   // ESG Phase 2: Framework Mapping & Readiness
   getFrameworks(activeOnly?: boolean): Promise<Framework[]>;
@@ -501,6 +501,7 @@ export class DatabaseStorage implements IStorage {
         reviewedBy: metricValues.reviewedBy,
         reviewedAt: metricValues.reviewedAt,
         reviewComment: metricValues.reviewComment,
+        siteId: metricValues.siteId,
         metricName: metrics.name,
         category: metrics.category,
         unit: metrics.unit,
@@ -704,54 +705,69 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUnassignedCounts(companyId: string): Promise<Record<string, number>> {
-    const [mv] = await db.execute(sql`
+    const toInt = (v: any) => (typeof v === "string" ? parseInt(v, 10) : (v ?? 0));
+    const [mvR] = await db.execute(sql`
       SELECT count(*)::int AS count FROM metric_values
       WHERE site_id IS NULL AND metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})
     `);
-    const [rdi] = await db.select({ count: sql<number>`count(*)::int` }).from(rawDataInputs)
+    const [rdiR] = await db.select({ count: sql<number>`count(*)::int` }).from(rawDataInputs)
       .where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId)));
-    const [ef] = await db.select({ count: sql<number>`count(*)::int` }).from(evidenceFiles)
+    const [efR] = await db.select({ count: sql<number>`count(*)::int` }).from(evidenceFiles)
       .where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)));
-    const [cc] = await db.select({ count: sql<number>`count(*)::int` }).from(carbonCalculations)
+    const [ccR] = await db.select({ count: sql<number>`count(*)::int` }).from(carbonCalculations)
       .where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId)));
-    const [qs] = await db.select({ count: sql<number>`count(*)::int` }).from(questionnaires)
+    const [qsR] = await db.select({ count: sql<number>`count(*)::int` }).from(questionnaires)
       .where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
-    const mvCount = (mv as any)?.count ?? 0;
+    const [gpR] = await db.select({ count: sql<number>`count(*)::int` }).from(generatedPolicies)
+      .where(and(eq(generatedPolicies.companyId, companyId), isNull(generatedPolicies.siteId)));
+    const [rrR] = await db.select({ count: sql<number>`count(*)::int` }).from(reportRuns)
+      .where(and(eq(reportRuns.companyId, companyId), isNull(reportRuns.siteId)));
+    const [uaR] = await db.select({ count: sql<number>`count(*)::int` }).from(userActivity)
+      .where(and(eq(userActivity.companyId, companyId), isNull(userActivity.siteId)));
+    const [arR] = await db.select({ count: sql<number>`count(*)::int` }).from(agentRuns)
+      .where(and(eq(agentRuns.companyId, companyId), isNull(agentRuns.siteId)));
+    const [csR] = await db.select({ count: sql<number>`count(*)::int` }).from(chatSessions)
+      .where(and(eq(chatSessions.companyId, companyId), isNull(chatSessions.siteId)));
     return {
-      metric_values: typeof mvCount === "string" ? parseInt(mvCount, 10) : mvCount,
-      raw_data_inputs: rdi?.count ?? 0,
-      evidence_files: ef?.count ?? 0,
-      carbon_calculations: cc?.count ?? 0,
-      questionnaires: qs?.count ?? 0,
+      metric_values: toInt((mvR as any)?.count),
+      raw_data_inputs: toInt(rdiR?.count),
+      evidence_files: toInt(efR?.count),
+      carbon_calculations: toInt(ccR?.count),
+      questionnaires: toInt(qsR?.count),
+      generated_policies: toInt(gpR?.count),
+      report_runs: toInt(rrR?.count),
+      user_activity: toInt(uaR?.count),
+      agent_runs: toInt(arR?.count),
+      chat_sessions: toInt(csR?.count),
     };
   }
 
-  async migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>> {
+  async migrateLegacyData(companyId: string, siteId: string): Promise<Record<string, number>> {
     const updated: Record<string, number> = {};
-    if (entityTypes.includes("metric_values")) {
-      const result = await db.execute(sql`
-        UPDATE metric_values SET site_id = ${siteId}
-        WHERE site_id IS NULL AND metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})
-        RETURNING id
-      `);
-      updated.metric_values = ((result as any).rows ?? []).length;
-    }
-    if (entityTypes.includes("raw_data_inputs")) {
-      const rows = await db.update(rawDataInputs).set({ siteId }).where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId))).returning({ id: rawDataInputs.id });
-      updated.raw_data_inputs = rows.length;
-    }
-    if (entityTypes.includes("evidence_files")) {
-      const rows = await db.update(evidenceFiles).set({ siteId }).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId))).returning({ id: evidenceFiles.id });
-      updated.evidence_files = rows.length;
-    }
-    if (entityTypes.includes("carbon_calculations")) {
-      const rows = await db.update(carbonCalculations).set({ siteId }).where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId))).returning({ id: carbonCalculations.id });
-      updated.carbon_calculations = rows.length;
-    }
-    if (entityTypes.includes("questionnaires")) {
-      const rows = await db.update(questionnaires).set({ siteId }).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId))).returning({ id: questionnaires.id });
-      updated.questionnaires = rows.length;
-    }
+    const mvResult = await db.execute(sql`
+      UPDATE metric_values SET site_id = ${siteId}
+      WHERE site_id IS NULL AND metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})
+      RETURNING id
+    `);
+    updated.metric_values = ((mvResult as any).rows ?? []).length;
+    const rdiRows = await db.update(rawDataInputs).set({ siteId }).where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId))).returning({ id: rawDataInputs.id });
+    updated.raw_data_inputs = rdiRows.length;
+    const efRows = await db.update(evidenceFiles).set({ siteId }).where(and(eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId))).returning({ id: evidenceFiles.id });
+    updated.evidence_files = efRows.length;
+    const ccRows = await db.update(carbonCalculations).set({ siteId }).where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId))).returning({ id: carbonCalculations.id });
+    updated.carbon_calculations = ccRows.length;
+    const qsRows = await db.update(questionnaires).set({ siteId }).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId))).returning({ id: questionnaires.id });
+    updated.questionnaires = qsRows.length;
+    const gpRows = await db.update(generatedPolicies).set({ siteId }).where(and(eq(generatedPolicies.companyId, companyId), isNull(generatedPolicies.siteId))).returning({ id: generatedPolicies.id });
+    updated.generated_policies = gpRows.length;
+    const rrRows = await db.update(reportRuns).set({ siteId }).where(and(eq(reportRuns.companyId, companyId), isNull(reportRuns.siteId))).returning({ id: reportRuns.id });
+    updated.report_runs = rrRows.length;
+    const uaRows = await db.update(userActivity).set({ siteId }).where(and(eq(userActivity.companyId, companyId), isNull(userActivity.siteId))).returning({ id: userActivity.id });
+    updated.user_activity = uaRows.length;
+    const arRows = await db.update(agentRuns).set({ siteId }).where(and(eq(agentRuns.companyId, companyId), isNull(agentRuns.siteId))).returning({ id: agentRuns.id });
+    updated.agent_runs = arRows.length;
+    const csRows = await db.update(chatSessions).set({ siteId }).where(and(eq(chatSessions.companyId, companyId), isNull(chatSessions.siteId))).returning({ id: chatSessions.id });
+    updated.chat_sessions = csRows.length;
     return updated;
   }
 

@@ -2464,7 +2464,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
-      const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
+      const allPeriodValues = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
+
+      // Apply aggregation scope rules:
+      // - Site-scoped: only records with site_id = bodySiteId (archived sites allowed for historical)
+      // - Org-wide: active sites + unassigned (null), exclude archived-site records
+      let values: typeof allPeriodValues;
+      if (bodySiteId) {
+        // Site-scoped: exact site match only
+        values = allPeriodValues.filter((v: any) => v.siteId === bodySiteId);
+      } else {
+        // Org-wide: get active site IDs to exclude archived-site records
+        const activeSitesList = await storage.getSites(companyId, false);
+        const activeSiteIds = new Set(activeSitesList.map(s => s.id));
+        values = allPeriodValues.filter((v: any) => v.siteId === null || activeSiteIds.has(v.siteId));
+      }
+
       const actions = await storage.getActionPlans(companyId);
       const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
       const allEvidence = await storage.getEvidenceFiles(companyId);
@@ -2715,7 +2730,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           companyId,
           action: "report_generated_for_site",
           page: "/reports",
-          details: { siteId: bodySiteId, period, reportTemplate: reportTemplate || "management" },
+          details: { siteId: bodySiteId, reportId: report.id, reportType: reportType || "esg_summary" },
         }).catch(() => {});
       }
 
@@ -5656,7 +5671,7 @@ Answer the user's question based on this context. If you're asked about somethin
           companyId,
           action: "csv_uploaded_to_site",
           page: "/data-entry",
-          details: { siteId: bodySiteId, period, imported },
+          details: { siteId: bodySiteId, rowCount: imported, period },
         }).catch(() => {});
       }
 
@@ -6690,46 +6705,69 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const adminUser = (req as any)._superAdmin;
       const bodySchema = z.object({
         companyId: z.string().min(1),
-        siteId: z.string().min(1),
-        entityTypes: z.array(z.string()).min(1).default(["metric_values", "raw_data", "evidence", "questionnaires"]),
         dryRun: z.boolean().default(false),
       });
       const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
-      const { companyId, siteId, entityTypes, dryRun } = parsed.data;
+      const { companyId, dryRun } = parsed.data;
 
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
-      const site = await storage.getSite(siteId, companyId);
-      if (!site) return res.status(404).json({ error: "Site not found or does not belong to this company" });
 
       if (dryRun) {
-        const counts = await storage.getUnassignedCounts(companyId);
+        const estimatedRows = await storage.getUnassignedCounts(companyId);
+        const totalRows = Object.values(estimatedRows).reduce((a, b) => a + b, 0);
+        const tablesWithData = Object.values(estimatedRows).filter(n => n > 0).length;
+        await storage.createAuditLog({
+          companyId,
+          userId: adminUser.id,
+          action: "legacy_site_migration",
+          entityType: "site",
+          entityId: companyId,
+          details: { dryRun: true, triggeredBy: adminUser.id, estimatedRows },
+        });
         await storage.createSuperAdminAction({
           adminUserId: adminUser.id,
           action: "migrate_sites_dry_run",
           targetCompanyId: companyId,
-          metadata: { siteId, entityTypes, counts },
+          metadata: { estimatedRows, totalRows, tablesWithData },
         } as any);
-        return res.json({ dryRun: true, counts, siteId, companyId });
+        return res.json({ dryRun: true, estimatedRows, totalRows, tablesWithData });
       }
 
-      const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
+      // Find or create idempotent "Primary Site"
+      const existingSites = await storage.getSites(companyId, false);
+      let primarySite = existingSites.find(s => s.name === "Primary Site");
+      if (!primarySite) {
+        primarySite = await storage.createSite({
+          companyId,
+          name: "Primary Site",
+          type: "operational",
+          status: "active",
+          country: null,
+          city: null,
+          address: null,
+        } as any);
+      }
+      const siteId = primarySite.id;
+      const siteName = primarySite.name;
+
+      const tablesUpdated = await storage.migrateLegacyData(companyId, siteId);
+      await storage.createAuditLog({
+        companyId,
+        userId: adminUser.id,
+        action: "legacy_site_migration",
+        entityType: "site",
+        entityId: siteId,
+        details: { dryRun: false, triggeredBy: adminUser.id, siteId, siteName, tablesUpdated },
+      });
       await storage.createSuperAdminAction({
         adminUserId: adminUser.id,
         action: "migrate_sites_execute",
         targetCompanyId: companyId,
-        metadata: { siteId, entityTypes, result },
+        metadata: { siteId, siteName, tablesUpdated },
       } as any);
-      await storage.createAuditLog({
-        companyId,
-        userId: adminUser.id,
-        action: "admin_migrate_legacy_data",
-        entityType: "site",
-        entityId: siteId,
-        details: { siteId, entityTypes, result },
-      });
-      res.json({ dryRun: false, result, siteId, companyId });
+      res.json({ dryRun: false, siteId, siteName, tablesUpdated });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -7085,13 +7123,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const { siteId, entityTypes } = req.body;
-      if (!siteId || !Array.isArray(entityTypes) || entityTypes.length === 0) {
-        return res.status(400).json({ error: "siteId and entityTypes[] are required" });
+      const { siteId } = req.body;
+      if (!siteId) {
+        return res.status(400).json({ error: "siteId is required" });
       }
       const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
       if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-      const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
+      const result = await storage.migrateLegacyData(companyId, siteId);
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -7143,7 +7181,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         companyId,
         action: "site_created",
         page: "/settings/sites",
-        details: { siteId: site.id, siteName: site.name },
+        details: { siteId: site.id, siteName: site.name, siteType: site.type },
       }).catch(() => {});
       res.status(201).json(site);
     } catch (e: any) {
