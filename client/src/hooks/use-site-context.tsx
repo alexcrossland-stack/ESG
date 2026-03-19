@@ -26,7 +26,12 @@ export function SiteProvider({ children }: { children: ReactNode }) {
   });
 
   const { data: sites = [], isLoading } = useQuery<OrganisationSite[]>({
-    queryKey: ["/api/sites"],
+    queryKey: ["/api/sites", "includeArchived"],
+    queryFn: async () => {
+      const res = await fetch("/api/sites?includeArchived=true", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load sites");
+      return res.json();
+    },
     staleTime: 30000,
   });
 

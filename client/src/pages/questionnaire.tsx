@@ -762,11 +762,14 @@ function PreviousQuestionnairesTab() {
                       {q.status}
                     </Badge>
                   )}
-                  {q.siteId && sites.find(s => s.id === q.siteId) && (
-                    <Badge variant="secondary" className="text-xs" data-testid={`badge-site-${q.id}`}>
-                      {sites.find(s => s.id === q.siteId)?.name}
-                    </Badge>
-                  )}
+                  {q.siteId && (() => {
+                    const qqSite = sites.find(s => s.id === q.siteId);
+                    return qqSite ? (
+                      <Badge variant="secondary" className="text-xs" data-testid={`badge-site-${q.id}`}>
+                        {qqSite.name}{qqSite.status === "archived" ? " (Archived)" : ""}
+                      </Badge>
+                    ) : null;
+                  })()}
                   {q.createdAt && (
                     <span className="text-xs text-muted-foreground">
                       {new Date(q.createdAt).toLocaleDateString()}

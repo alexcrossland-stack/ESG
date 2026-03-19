@@ -2057,12 +2057,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const settings = await storage.getCompanySettings(companyId);
       const materialTopics = await storage.getMaterialTopics(companyId);
 
-      // Resolve period: if reportingPeriodId passed, look up its period label
+      // Resolve period: if reportingPeriodId passed, look up its name (the period label)
       let forcedPeriod: string | null = null;
       if (req.query.reportingPeriodId && typeof req.query.reportingPeriodId === "string") {
         const periods = await storage.getReportingPeriods(companyId);
         const rp = periods.find(p => p.id === req.query.reportingPeriodId);
-        if (rp) forcedPeriod = rp.period;
+        if (rp) forcedPeriod = rp.name;
       }
 
       let latestPeriod = forcedPeriod || "";
