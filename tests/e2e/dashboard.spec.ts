@@ -16,7 +16,7 @@ async function createAdminAndGetToken(request: APIRequestContext, suffix: string
   await client.connect();
   const hash = await bcrypt.hash("Test1234!", 10);
   const compRes = await client.query<{ id: string }>(
-    "INSERT INTO companies (name) VALUES ($1) RETURNING id",
+    "INSERT INTO companies (name, onboarding_complete, onboarding_completed_at) VALUES ($1, true, NOW()) RETURNING id",
     [`E2E Dashboard Co ${suffix}`]
   );
   const companyId = compRes.rows[0].id;

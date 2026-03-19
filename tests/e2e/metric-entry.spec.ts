@@ -17,7 +17,7 @@ async function createUserViaSql(email: string, username: string, role: "admin" |
     let resolvedCompanyId = companyId;
     if (!resolvedCompanyId) {
       const compRes = await client.query<{ id: string }>(
-        "INSERT INTO companies (name) VALUES ($1) RETURNING id",
+        "INSERT INTO companies (name, onboarding_complete, onboarding_completed_at) VALUES ($1, true, NOW()) RETURNING id",
         [`Test Co ${username}`]
       );
       resolvedCompanyId = compRes.rows[0].id;

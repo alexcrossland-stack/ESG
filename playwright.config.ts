@@ -1,4 +1,4 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -13,15 +13,22 @@ export default defineConfig({
     trace: "on-first-retry",
     actionTimeout: 15000,
     navigationTimeout: 30000,
-    // Use API testing mode (APIRequestContext) — no browser required
-    extraHTTPHeaders: {
-      "Content-Type": "application/json",
-    },
   },
   projects: [
     {
       name: "api",
-      use: {},
+      testMatch: /(?<!browser\/).*\.spec\.ts/,
+      use: {
+        extraHTTPHeaders: { "Content-Type": "application/json" },
+      },
+    },
+    {
+      name: "chromium",
+      testMatch: /browser\/.*\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        headless: true,
+      },
     },
   ],
 });

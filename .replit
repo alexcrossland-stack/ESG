@@ -4,7 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["glib", "nss", "nspr", "atk", "cups", "xorg.libX11", "xorg.libxcb", "xorg.libXcomposite", "xorg.libXcursor", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXi", "xorg.libXrandr", "xorg.libXrender", "xorg.libXtst", "cairo", "pango", "alsa-lib", "expat", "dbus", "at-spi2-atk", "at-spi2-core"]
+packages = ["glib", "nss", "nspr", "atk", "cups", "xorg.libX11", "xorg.libxcb", "xorg.libXcomposite", "xorg.libXcursor", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXi", "xorg.libXrandr", "xorg.libXrender", "xorg.libXtst", "cairo", "pango", "alsa-lib", "expat", "dbus", "at-spi2-atk", "at-spi2-core", "mesa", "libdrm", "libxkbcommon", "xorg.libXScrnSaver", "xorg.libXinerama", "wayland"]
 
 [[ports]]
 localPort = 5000

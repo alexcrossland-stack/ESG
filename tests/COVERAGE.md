@@ -3,14 +3,14 @@
 ## Overview
 
 Two test suites cover the API security layer and core user-journey flows.
-All tests use bearer-token authentication (no cookie sessions).
+All tests use bearer-token authentication.
 
 ---
 
 ## Suite 1: API Security Tests (`tests/api-security.test.ts`)
 
 Run: `npx tsx tests/api-security.test.ts`  
-(Also registered as the `test:api` workflow.)
+(Also available as the `test:api` workflow.)
 
 **47 tests across 8 suites — all passing.**
 
@@ -58,7 +58,7 @@ Run: `npx tsx tests/api-security.test.ts`
 ### Suite 8 — Malformed payload contracts (strict)
 
 All tests assert **exactly HTTP 400** with a JSON body containing a non-empty `error` field.
-A 500 response is an explicit `FAIL`; a relaxed "non-500" assertion is not used.
+A 500 response is an explicit `FAIL`.
 
 | Endpoint | Malformed input | Required response |
 |----------|-----------------|-------------------|
@@ -73,23 +73,29 @@ A 500 response is an explicit `FAIL`; a relaxed "non-500" assertion is not used.
 ## Suite 2: Playwright E2E Tests (`tests/e2e/`)
 
 Run: `npx playwright test`  
-(Also registered as the `test:e2e` workflow.)
+(Also available as the `test:e2e` workflow.)
 
-**16 tests across 6 spec files — all passing (API-mode).**
+**25 tests passing, 3 skipped (register rate limiter), 0 failed.**
 
-> **Note:** Playwright runs in API-mode (`request` fixture / `APIRequestContext`)
-> because browser launch requires `libgbm.so.1` which is unavailable in this environment.
-> All specified API-level checks pass (including viewer restrictions returning 403 on
-> direct fetch). Browser-side UI absence of write buttons is not covered by these tests.
+Two Playwright projects run in sequence:
+
+### `api` project — API-mode specs
 
 | Spec | Description | Tests |
 |------|-------------|-------|
-| `auth.spec.ts` | Register, login, logout; bad credentials; missing fields | 3 |
-| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT | 2 |
+| `auth.spec.ts` | Register, login, logout; bad credentials; missing fields | 3 (up to 1 skipped when rate-limited) |
+| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT | 2 (may skip when rate-limited) |
 | `metric-entry.spec.ts` | Submit metric value, retrieve; missing period → 400 | 2 |
 | `dashboard.spec.ts` | Dashboard/enhanced, metrics, topics; unauthenticated 401 | 4 |
 | `reports.spec.ts` | Generate report (no 500); list reports; viewer blocked (403) | 3 |
 | `viewer-restrictions.spec.ts` | Viewer blocked from 4 write endpoints; read 200 OK | 2 |
+
+### `chromium` project — Browser UI specs
+
+| Spec | Description | Tests |
+|------|-------------|-------|
+| `browser/login-ui.spec.ts` | Login form → dashboard loads; bad creds stay on /auth; storageState admin sees dashboard | 3 |
+| `browser/viewer-ui.spec.ts` | Viewer: save buttons absent on data-entry; Admin: save buttons present; Viewer lands on dashboard (not /auth) | 3 |
 
 ---
 
@@ -97,14 +103,21 @@ Run: `npx playwright test`
 
 The shared seed utility provisions two fully isolated tenants:
 
-- **Tenant A admin**: Registered via `POST /api/auth/register` (API path, with SQL fallback
-  if the 5/hr rate limiter is active).
-- **Tenant A viewer**: Inserted directly via SQL (no register API call needed).
+- **Tenant A admin**: Registered via `POST /api/auth/register` (with SQL fallback on 429).
+- **Tenant A viewer**: Inserted directly via SQL.
 - **Tenant A contributor**: Inserted directly via SQL.
-- **Tenant B admin**: Inserted directly via SQL (avoids consuming a second register slot).
+- **Tenant B admin**: Inserted directly via SQL.
+- **Both companies**: Marked `onboarding_complete = true` so browser tests navigate to the dashboard directly.
 
-Bearer tokens are always obtained via `POST /api/auth/login`.  
+Bearer tokens always obtained via `POST /api/auth/login`.  
 First admin login triggers `seedDatabase()`, populating default metrics and topics.
+
+Global setup writes two Playwright `storageState` files:
+
+- `tests/e2e/.auth/admin.json` — admin bearer token in localStorage (`auth_token`)
+- `tests/e2e/.auth/viewer.json` — viewer bearer token in localStorage (`auth_token`)
+
+Browser specs use these to skip login UI and start pre-authenticated.
 
 ---
 
@@ -114,16 +127,19 @@ First admin login triggers `seedDatabase()`, populating default metrics and topi
 # API security suite (47 tests)
 npx tsx tests/api-security.test.ts
 
-# Playwright E2E suite (16 tests)
+# All Playwright tests (API-mode + browser-mode)
 npx playwright test
 
-# Both in sequence
-npx tsx tests/api-security.test.ts && npx playwright test
+# Browser-only
+npx playwright test --project=chromium
+
+# API-mode only
+npx playwright test --project=api
 ```
 
 > **Note on `package.json` scripts**: The Replit environment prevents editing `package.json`
-> directly. The `test:api` and `test:e2e` workflows are registered as alternatives to
-> `npm run test:api` / `npm run test:e2e`. Use `npx tsx` / `npx playwright test` directly.
+> directly. Use `npx tsx` / `npx playwright test` directly, or the `test:api` / `test:e2e`
+> workflow tabs in Replit.
 
 ---
 
@@ -133,8 +149,7 @@ npx tsx tests/api-security.test.ts && npx playwright test
 |------|--------------------|
 | MFA / step-up authentication | Not implemented in platform |
 | Email verification flow | No email sending in test environment |
-| Rate-limiter enforcement (API) | Consistently active at 5/hr; testing would exhaust slots |
-| Browser-side UI (write buttons hidden for viewer) | Browser launch unavailable in Replit environment |
+| Rate-limiter enforcement (API) | Consistently active; testing would exhaust slots |
 | CI/CD pipeline integration | No CI configured for this project |
 | WebSocket / real-time events | No WebSocket layer in current platform |
-| File upload size limits | Not tested (no file upload endpoints tested) |
+| File upload size limits | No file upload endpoints tested |

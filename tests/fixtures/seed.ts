@@ -138,7 +138,7 @@ async function createUserViaSql(
   if (!companyId) {
     const companyName = opts.companyName ?? `Test Company ${opts.username}`;
     const compRes = await client.query<{ id: string }>(
-      "INSERT INTO companies (name) VALUES ($1) RETURNING id",
+      "INSERT INTO companies (name, onboarding_complete, onboarding_completed_at) VALUES ($1, true, NOW()) RETURNING id",
       [companyName]
     );
     companyId = compRes.rows[0].id;
@@ -247,6 +247,13 @@ export async function seedTestTenants(): Promise<SeededTenants> {
       companyName: `Test Company TB ${suffix}`,
     });
     tenantBCompanyId = tenantBAdmin.companyId;
+
+    // Mark both tenant companies as onboarding-complete so browser tests
+    // navigate directly to dashboard (not the /onboarding wizard).
+    await client.query(
+      "UPDATE companies SET onboarding_complete = true, onboarding_completed_at = NOW() WHERE id = ANY($1::text[])",
+      [[tenantACompanyId, tenantBCompanyId]]
+    );
   } finally {
     await client.end();
   }
