@@ -181,8 +181,8 @@ export interface IStorage {
   createSite(data: InsertOrganisationSite): Promise<OrganisationSite>;
   updateSite(id: string, companyId: string, data: Partial<InsertOrganisationSite>): Promise<OrganisationSite | undefined>;
   archiveSite(id: string, companyId: string): Promise<OrganisationSite | undefined>;
-  getSitesSummary(companyId: string, period?: string): Promise<Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }>>;
-  getSiteDashboard(siteId: string, companyId: string, period?: string): Promise<any>;
+  getSitesSummary(companyId: string, period?: string, reportingPeriodId?: string): Promise<Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }>>;
+  getSiteDashboard(siteId: string, companyId: string, period?: string, reportingPeriodId?: string): Promise<any>;
 
   // Policy Templates
   getPolicyTemplates(): Promise<PolicyTemplate[]>;
@@ -902,11 +902,7 @@ export class DatabaseStorage implements IStorage {
       conditions.push(siteId === null ? isNull(questionnaires.siteId) : eq(questionnaires.siteId, siteId));
     }
     if (reportingPeriodId) {
-      const rp = await db.select().from(reportingPeriods).where(eq(reportingPeriods.id, reportingPeriodId)).limit(1);
-      if (rp[0]?.startDate && rp[0]?.endDate) {
-        conditions.push(gte(questionnaires.createdAt, rp[0].startDate));
-        conditions.push(lte(questionnaires.createdAt, rp[0].endDate));
-      }
+      conditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
     }
     return db.select().from(questionnaires).where(and(...conditions)).orderBy(desc(questionnaires.createdAt));
   }
@@ -1785,7 +1781,7 @@ export class DatabaseStorage implements IStorage {
     return site;
   }
 
-  async getSitesSummary(companyId: string, period?: string) {
+  async getSitesSummary(companyId: string, period?: string, reportingPeriodId?: string) {
     const activeSites = await db
       .select()
       .from(organisationSites)
@@ -1808,6 +1804,7 @@ export class DatabaseStorage implements IStorage {
       const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
 
       const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
+      if (reportingPeriodId) qqConditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
       const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
 
       rows.push({
@@ -1832,6 +1829,7 @@ export class DatabaseStorage implements IStorage {
     if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
     const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
     const uQqConds: any[] = [eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)];
+    if (reportingPeriodId) uQqConds.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
     const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...uQqConds));
 
     if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
@@ -1841,7 +1839,7 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
-  async getSiteDashboard(siteId: string, companyId: string, period?: string) {
+  async getSiteDashboard(siteId: string, companyId: string, period?: string, reportingPeriodId?: string) {
     const site = await this.getSite(siteId, companyId);
     if (!site) return null;
 
@@ -1865,8 +1863,10 @@ export class DatabaseStorage implements IStorage {
       .where(and(...evConds))
       .orderBy(desc(evidenceFiles.uploadedAt)).limit(10);
 
+    const qqConds: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, siteId)];
+    if (reportingPeriodId) qqConds.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
     const qqRows = await db.select().from(questionnaires)
-      .where(and(eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, siteId)))
+      .where(and(...qqConds))
       .orderBy(desc(questionnaires.createdAt)).limit(10);
 
     return {

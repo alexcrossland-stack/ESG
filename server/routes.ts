@@ -2104,21 +2104,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           v.period === latestPeriod &&
           (v.siteId === null || activeSiteIds.has(v.siteId))
         );
-        // Prefer org-level (null siteId) value; fall back to site-aggregated value
-        let latestVal = periodValues.find(v => !v.siteId) || null;
-        if (!latestVal && periodValues.length > 0) {
-          // Aggregate site-specific values: sum for additive metrics; weighted/simple average for rate/percentage
+        // Aggregate ALL period values (active-site + unassigned) for org-level totals
+        let latestVal: typeof periodValues[0] | null = null;
+        if (periodValues.length === 1) {
+          latestVal = periodValues[0];
+        } else if (periodValues.length > 1) {
           const numericVals = periodValues.map(v => v.value !== null ? Number(v.value) : null).filter(n => n !== null) as number[];
           if (numericVals.length > 0) {
             const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
-            let aggregated: number;
-            if (isRateMetric) {
-              // Weighted average by site value count as proxy (headcount data not available at this query scope)
-              aggregated = numericVals.reduce((a, b) => a + b, 0) / numericVals.length;
-            } else {
-              aggregated = numericVals.reduce((a, b) => a + b, 0);
-            }
+            const aggregated = isRateMetric
+              ? numericVals.reduce((a, b) => a + b, 0) / numericVals.length
+              : numericVals.reduce((a, b) => a + b, 0);
             latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
+          } else {
+            latestVal = periodValues[0];
           }
         }
         const cat = metric.category;
@@ -2208,7 +2207,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const manualMetrics = metricSummaries.filter(m => m.metricType === "manual").length;
 
       // Site breakdown: active sites with data counts for the selected period
-      const siteBreakdown = await storage.getSitesSummary(companyId, latestPeriod);
+      const _rpIdForBreakdown = typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : undefined;
+      const siteBreakdown = await storage.getSitesSummary(companyId, latestPeriod, _rpIdForBreakdown);
 
       res.json({
         totalMetrics: enabledMetrics.length,
@@ -3224,7 +3224,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { title, source, questions, siteId: bodySiteId } = req.body;
+      const { title, source, questions, siteId: bodySiteId, reportingPeriodId: bodyRpId } = req.body;
       const _company = await storage.getCompany(companyId);
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
@@ -3243,7 +3243,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
 
-      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null } as any);
+      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null, reportingPeriodId: bodyRpId || null } as any);
 
       if (questions && Array.isArray(questions)) {
         for (let i = 0; i < questions.length; i++) {
@@ -6866,7 +6866,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
       const period = req.query.period as string | undefined;
-      const summary = await storage.getSitesSummary(companyId, period);
+      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
+      const summary = await storage.getSitesSummary(companyId, period, reportingPeriodId);
       res.json(summary);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6997,7 +6998,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
       const period = req.query.period as string | undefined;
-      const dashboard = await storage.getSiteDashboard(req.params.id, companyId, period);
+      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
+      const dashboard = await storage.getSiteDashboard(req.params.id, companyId, period, reportingPeriodId);
       if (!dashboard) return res.status(404).json({ error: "Site not found" });
       res.json(dashboard);
     } catch (e: any) {

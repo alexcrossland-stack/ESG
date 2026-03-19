@@ -473,6 +473,7 @@ export const questionnaires = pgTable("questionnaires", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   siteId: varchar("site_id"),
+  reportingPeriodId: varchar("reporting_period_id"),
 }, (table) => ({
   siteIdIdx: index("idx_questionnaires_site_id").on(table.siteId),
 }));
