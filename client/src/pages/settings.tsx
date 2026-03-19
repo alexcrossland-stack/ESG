@@ -22,6 +22,7 @@ import {
   Settings as SettingsIcon, Building2, Clock, Save, Library, FileText,
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
   Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon, UserPlus,
+  Key, KeyRound, Trash2, Plus, AlertCircle, CheckCircle, XCircle,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -425,6 +426,7 @@ function AdminPanel() {
     { key: "branding", label: "Report Branding", icon: Palette },
     { key: "periods", label: "Reporting Periods", icon: Calendar },
     { key: "audit", label: "Audit Log", icon: Search },
+    { key: "security", label: "Security & API Keys", icon: Shield },
   ];
 
   return (
@@ -456,6 +458,7 @@ function AdminPanel() {
       {section === "branding" && <ReportBranding />}
       {section === "periods" && <ReportingPeriodsAdmin />}
       {section === "audit" && <AuditLogAdmin />}
+      {section === "security" && <SecurityAdmin />}
     </div>
   );
 }
@@ -1992,5 +1995,280 @@ function PasswordChangeCard() {
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+function SecurityAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState("");
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>([]);
+  const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const { data: apiKeys = [], isLoading: keysLoading } = useQuery<any[]>({ queryKey: ["/api/company/api-keys"] });
+  const { data: auditLogs = [], isLoading: logsLoading } = useQuery<any[]>({ queryKey: ["/api/audit-logs"] });
+
+  const activeKeys = (apiKeys as any[]).filter((k: any) => !k.revokedAt);
+  const revokedKeys = (apiKeys as any[]).filter((k: any) => k.revokedAt);
+  const recentEvents = (auditLogs as any[]).slice(0, 20);
+
+  const AVAILABLE_SCOPES = [
+    { value: "read:metrics", label: "Read Metrics" },
+    { value: "write:metrics", label: "Write Metrics" },
+    { value: "read:reports", label: "Read Reports" },
+    { value: "read:evidence", label: "Read Evidence" },
+    { value: "write:evidence", label: "Write Evidence" },
+  ];
+
+  const createMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/company/api-keys", { label: newKeyLabel, scopes: newKeyScopes }),
+    onSuccess: async (res) => {
+      const data = await res.json();
+      setNewKeyResult(data.key);
+      queryClient.invalidateQueries({ queryKey: ["/api/company/api-keys"] });
+    },
+    onError: () => toast({ title: "Failed to create API key", variant: "destructive" }),
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/company/api-keys/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company/api-keys"] });
+      toast({ title: "API key revoked" });
+    },
+    onError: () => toast({ title: "Failed to revoke key", variant: "destructive" }),
+  });
+
+  const copyKey = () => {
+    if (newKeyResult) {
+      navigator.clipboard.writeText(newKeyResult);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const toggleScope = (scope: string) => {
+    setNewKeyScopes(prev => prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]);
+  };
+
+  const getActionColor = (action: string) => {
+    if (action.includes("fail") || action.includes("delet") || action.includes("revok") || action.includes("block")) return "text-destructive";
+    if (action.includes("creat") || action.includes("success") || action.includes("upload")) return "text-green-600 dark:text-green-400";
+    return "text-muted-foreground";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
+              <Key className="w-4 h-4 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-active-keys">{activeKeys.length}</p>
+              <p className="text-xs text-muted-foreground">Active API Keys</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted">
+              <XCircle className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-revoked-keys">{revokedKeys.length}</p>
+              <p className="text-xs text-muted-foreground">Revoked Keys</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted">
+              <Shield className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-security-events">{(auditLogs as any[]).length}</p>
+              <p className="text-xs text-muted-foreground">Audit Events</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <KeyRound className="w-4 h-4" /> API Keys
+            </CardTitle>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => { setShowCreate(true); setNewKeyResult(null); setNewKeyLabel(""); setNewKeyScopes([]); }}
+              data-testid="button-create-api-key"
+            >
+              <Plus className="w-3 h-3 mr-1" /> New Key
+            </Button>
+          </div>
+          <CardDescription className="text-xs">Keys are shown once at creation. Store them securely — they cannot be retrieved later.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {keysLoading ? (
+            <Skeleton className="h-12 w-full" />
+          ) : (apiKeys as any[]).length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">No API keys created yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {(apiKeys as any[]).map((key: any) => (
+                <div
+                  key={key.id}
+                  className={`flex items-center justify-between p-2 rounded-md border text-xs ${key.revokedAt ? "opacity-50 bg-muted/30" : "bg-background"}`}
+                  data-testid={`row-api-key-${key.id}`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Key className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{key.label}</p>
+                      <p className="text-muted-foreground font-mono">{key.keyPrefix}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {key.lastUsedAt && (
+                      <span className="text-muted-foreground hidden sm:block">
+                        Used {new Date(key.lastUsedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                    {key.revokedAt ? (
+                      <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">Revoked</Badge>
+                    ) : (
+                      <>
+                        <Badge variant="outline" className="text-[10px] text-green-600 dark:text-green-400 border-green-300 dark:border-green-700">Active</Badge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                          onClick={() => revokeMutation.mutate(key.id)}
+                          disabled={revokeMutation.isPending}
+                          data-testid={`button-revoke-key-${key.id}`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Search className="w-4 h-4" /> Recent Security Events
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {logsLoading ? (
+            <Skeleton className="h-24 w-full" />
+          ) : recentEvents.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">No events recorded yet.</p>
+          ) : (
+            <div className="space-y-0 max-h-64 overflow-y-auto">
+              {recentEvents.map((log: any) => (
+                <div
+                  key={log.id}
+                  className="flex items-start justify-between gap-2 py-1.5 border-b last:border-0 text-xs"
+                  data-testid={`row-security-event-${log.id}`}
+                >
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span className={`font-mono mt-0.5 flex-shrink-0 ${getActionColor(log.action)}`}>●</span>
+                    <div className="min-w-0">
+                      <span className="font-medium">{log.action}</span>
+                      {log.performedBy && <span className="text-muted-foreground ml-1">by {log.performedBy}</span>}
+                      {log.entityType && (
+                        <Badge variant="outline" className="ml-1 text-[9px] py-0">{log.entityType}</Badge>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-muted-foreground flex-shrink-0 text-[10px]">
+                    {log.createdAt ? new Date(log.createdAt).toLocaleString() : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create API Key</DialogTitle>
+          </DialogHeader>
+          {newKeyResult ? (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-md">
+                <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-800 dark:text-amber-200">
+                  Copy this key now. It will not be shown again after you close this dialog.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <code
+                  className="flex-1 text-xs font-mono bg-muted p-2 rounded break-all"
+                  data-testid="text-new-api-key"
+                >
+                  {newKeyResult}
+                </code>
+                <Button variant="outline" size="sm" onClick={copyKey} data-testid="button-copy-api-key">
+                  {copied ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                </Button>
+              </div>
+              <Button className="w-full" onClick={() => { setShowCreate(false); setNewKeyResult(null); }}>Done</Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label className="text-xs font-medium">Label</Label>
+                <Input
+                  value={newKeyLabel}
+                  onChange={e => setNewKeyLabel(e.target.value)}
+                  placeholder="e.g. My integration"
+                  data-testid="input-api-key-label"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Permissions (Scopes)</Label>
+                <div className="space-y-2">
+                  {AVAILABLE_SCOPES.map(scope => (
+                    <div key={scope.value} className="flex items-center gap-2">
+                      <Checkbox
+                        id={scope.value}
+                        checked={newKeyScopes.includes(scope.value)}
+                        onCheckedChange={() => toggleScope(scope.value)}
+                        data-testid={`checkbox-scope-${scope.value.replace(":", "-")}`}
+                      />
+                      <label htmlFor={scope.value} className="text-sm cursor-pointer">{scope.label}</label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <Button
+                className="w-full"
+                disabled={createMutation.isPending || !newKeyLabel.trim() || newKeyLabel.trim().length < 2}
+                onClick={() => createMutation.mutate()}
+                data-testid="button-confirm-create-api-key"
+              >
+                {createMutation.isPending ? "Creating..." : "Create API Key"}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

@@ -469,9 +469,13 @@ export const auditLogs = pgTable("audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id"),
   userId: varchar("user_id"),
+  actorType: text("actor_type").default("user"),
+  actorAgentId: varchar("actor_agent_id"),
   action: text("action").notNull(),
   entityType: text("entity_type"),
   entityId: varchar("entity_id"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
   details: jsonb("details"),
   createdAt: timestamp("created_at").defaultNow(),
 });

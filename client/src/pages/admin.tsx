@@ -19,7 +19,7 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, ExternalLink, Crown,
+  DollarSign, ExternalLink, Crown, Shield, Key,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -855,6 +855,9 @@ export default function AdminPage() {
           <TabsTrigger value="beta-access" data-testid="tab-beta-access">
             <Crown className="w-4 h-4 mr-2" /> Beta Access
           </TabsTrigger>
+          <TabsTrigger value="security" data-testid="tab-security">
+            <Shield className="w-4 h-4 mr-2" /> Security
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="companies" className="mt-4">
           <CompaniesTable />
@@ -871,7 +874,156 @@ export default function AdminPage() {
         <TabsContent value="beta-access" className="mt-4">
           <BetaAccessTab />
         </TabsContent>
+        <TabsContent value="security" className="mt-4">
+          <SecurityAuditTab />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function SecurityAuditTab() {
+  const [filter, setFilter] = useState("");
+
+  const { data: auditLogs = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/audit-logs"],
+  });
+
+  const logs = auditLogs as any[];
+
+  const failedLogins = logs.filter((l: any) => l.action === "login_failed");
+  const privilegedActions = logs.filter((l: any) =>
+    ["api_key_created", "api_key_revoked", "User role changed", "password_reset"].includes(l.action)
+  );
+  const subscriptionEvents = logs.filter((l: any) =>
+    l.action?.toLowerCase().includes("subscription") || l.action?.toLowerCase().includes("billing") || l.action?.toLowerCase().includes("payment")
+  );
+
+  const filtered = filter
+    ? logs.filter((l: any) =>
+        (l.action || "").toLowerCase().includes(filter.toLowerCase()) ||
+        (l.entityType || "").toLowerCase().includes(filter.toLowerCase()) ||
+        (l.ipAddress || "").includes(filter)
+      )
+    : logs;
+
+  const getActionBadgeVariant = (action: string): "default" | "outline" | "destructive" | "secondary" => {
+    if (action?.includes("fail") || action?.includes("block") || action?.includes("revok")) return "destructive";
+    if (action?.includes("creat") || action?.includes("success")) return "default";
+    return "outline";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted">
+              <FileText className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-total-audit-events">{logs.length}</p>
+              <p className="text-xs text-muted-foreground">Total Events</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-destructive/10">
+              <ShieldOff className="w-4 h-4 text-destructive" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-destructive" data-testid="stat-failed-logins">{failedLogins.length}</p>
+              <p className="text-xs text-muted-foreground">Failed Logins</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30">
+              <Key className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-privileged-actions">{privilegedActions.length}</p>
+              <p className="text-xs text-muted-foreground">Privileged Actions</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted">
+              <CreditCard className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xl font-bold" data-testid="stat-subscription-events">{subscriptionEvents.length}</p>
+              <p className="text-xs text-muted-foreground">Billing Events</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardContent className="pt-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Search className="w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Filter by action, entity type, or IP address..."
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              className="text-xs"
+              data-testid="input-security-log-filter"
+            />
+          </div>
+
+          {isLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">No audit events found.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="pb-2 text-left font-medium">Action</th>
+                    <th className="pb-2 text-left font-medium">Entity</th>
+                    <th className="pb-2 text-left font-medium hidden sm:table-cell">IP</th>
+                    <th className="pb-2 text-left font-medium hidden md:table-cell">Actor Type</th>
+                    <th className="pb-2 text-left font-medium">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.slice(0, 100).map((log: any) => (
+                    <tr key={log.id} className="border-b last:border-0 hover:bg-muted/30" data-testid={`row-security-log-${log.id}`}>
+                      <td className="py-1.5 pr-2">
+                        <Badge variant={getActionBadgeVariant(log.action)} className="text-[9px] font-mono">
+                          {log.action}
+                        </Badge>
+                      </td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">{log.entityType || "—"}</td>
+                      <td className="py-1.5 pr-2 font-mono text-muted-foreground hidden sm:table-cell">
+                        {log.ipAddress || "—"}
+                      </td>
+                      <td className="py-1.5 pr-2 text-muted-foreground hidden md:table-cell">
+                        {log.actorType || "user"}
+                      </td>
+                      <td className="py-1.5 text-muted-foreground whitespace-nowrap">
+                        {log.createdAt ? formatDistanceToNow(new Date(log.createdAt), { addSuffix: true }) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filtered.length > 100 && (
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  Showing 100 of {filtered.length} events
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

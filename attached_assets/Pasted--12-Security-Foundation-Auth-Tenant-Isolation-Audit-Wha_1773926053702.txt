@@ -1,0 +1,53 @@
+#12 - Security Foundation: Auth, Tenant Isolation & Audit
+
+What & Why
+
+Harden the platform with a practical SaaS security baseline that addresses the highest-likelihood and highest-impact risks before real users and data enter the system: account compromise, cross-tenant data leakage, insecure file access, weak agent/API key controls, and poor auditability. This phase replaces the earlier narrower security hardening scope with a full enforced baseline. The governing principle is simple: never trust the frontend. Access, roles, company ownership, site ownership, and agent identity must all be enforced server-side.
+
+Done looks like
+
+All protected routes use a central requireAuth middleware and reject unauthenticated access by default; only explicitly marked public routes are open.
+Session and auth cookies in production use httpOnly: true, secure: true, and sameSite: lax or stricter. Session expiry is explicit. Logout invalidates the session server-side.
+Password and login flows do not leak whether an email exists, using consistent error messages and safe comparison patterns.
+Reusable requireRole(...roles) and requireSuperAdmin() guards are applied to all company settings, team and role management, billing, metric approval and rejection, framework config, and super-admin routes. Frontend guards alone are never the only protection; forbidden access returns 403.
+Every tenant-owned read and write route is scoped by company_id sourced from session context. Any siteId in a request is validated as belonging to the authenticated company. Insecure routes are refactored — not just documented — before the task is complete. A written isolation audit document (docs/security-isolation-audit.md) is committed listing every audited route, the enforcement mechanism, and findings.
+Agent API keys are generated with cryptographically secure randomness. Only key_hash and key_prefix are stored; the raw key is shown once at creation. Revoked or expired keys fail auth immediately. Key list endpoints never return raw key material. Historical agent runs remain after revocation.
+File uploads validate both extension and MIME type (mandatory). Content-based verification (magic bytes / first 512 bytes) is preferred where feasible but is not a blocker if it cannot be cleanly implemented. Executable and script-like file types are blocked. Files are stored privately, not in public static paths. Retrieval requires authenticated, authorised access via a controlled backend endpoint enforcing tenant ownership. Download and delete routes enforce tenant ownership.
+Audit logging captures: login success/failure, password reset, role changes, team invite/remove, company settings changes, subscription changes, API key create/revoke, agent escalation/actions, metric approval/rejection, evidence upload/delete, and super-admin actions. Each event records actor type, actor ID, action, target type/ID, IP, user-agent, metadata, and timestamp. Audit log writes are fire-and-forget — if a log write fails, the core business action still completes and the failure is logged internally rather than surfaced to the user.
+Login, password reset, and invite resend endpoints are strictly rate-limited. Upload endpoints are moderately rate-limited. Broader throttling on report generation, CSV import, and AI/agent endpoints is applied where low-risk and straightforward. 429 is returned on threshold breach. Internal workers are not inadvertently blocked.
+Security headers are set: Strict-Transport-Security (production only), X-Content-Type-Options: nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors, and a baseline Content-Security-Policy. The global error handler logs full detail server-side and returns sanitised messages in production. Health endpoints expose only safe status, not secrets or internals.
+.env.example documents all required variables with descriptions. No hardcoded secrets exist in the repo. Secret rotation requires no code changes. A deployment checklist (docs/deployment-checklist.md) and backup/restore runbook (docs/backup-restore.md) are committed.
+Company admin UI shows: recent audit events, active API key count, revoked API key history, and API key management (create with scope selection, one-time raw key display, revoke action, last-used timestamp).
+Super-admin UI shows: platform-wide audit events, recent failed auth attempts, recent privileged actions, and recent subscription and admin changes.
+Out of scope
+
+SSO or SAML integration
+Full MFA rollout
+Full SOC 2 policy pack
+WAF or CDN automation
+SIEM integration
+Advanced anomaly detection
+Customer-managed encryption keys
+Full data residency controls
+Penetration testing or external security audit
+Mandatory ClamAV installation
+Tasks
+
+Auth and session hardening — Create a central requireAuth middleware used across all protected routes. Harden session and cookie config for production with httpOnly, secure, and sameSite. Make session expiry explicit. Ensure logout invalidates session state server-side. Normalise login and password-reset error messages to prevent email enumeration. Confirm passwords are hashed with bcrypt or argon2 with adequate cost.
+Backend RBAC guards — Add requireRole(...roles) and requireSuperAdmin() middleware in server/permissions.ts. Apply them to company settings, team and role management, billing, metric approval and rejection, framework configuration if admin-restricted, and super-admin platform routes. All forbidden access must return 403. Frontend guards alone must not be the only protection.
+Tenant isolation and site ownership enforcement — Audit every route that reads or writes tenant-owned data to confirm company_id is always sourced from session context. Fix any routes that trust client-supplied companyId — refactor them, do not just document the gap. Validate siteId ownership on every request that includes one. Scope all record updates and deletes by both id and company_id. Add shared helper functions so ownership enforcement is not duplicated inconsistently. Commit docs/security-isolation-audit.md listing every audited route, enforcement mechanism, and findings.
+Agent and API key hardening — Generate API keys using cryptographically secure randomness (crypto.randomBytes). At creation, show the raw key once only; store only key_hash and key_prefix. Add or confirm schema fields: name, scopes, created_by_user_id, created_at, last_used_at, expires_at (nullable), revoked_at (nullable). Reject revoked or expired keys immediately. List endpoints must never return raw key material. Historical agent runs remain after revocation.
+Secure file upload and evidence protection — Validate uploads by both extension and MIME type (mandatory). Content-based verification is preferred where feasible but is not a blocker. Block executable and script-like file types. Enforce per-file max size and request size limits. Sanitise or replace original filenames. Store files privately, not in public static paths. All retrieval must go through a controlled authenticated backend endpoint enforcing tenant ownership. Apply the same ownership check to file delete routes.
+Audit logging — Add or extend the audit_logs table with fields: id, company_id (nullable), actor_type, actor_user_id (nullable), actor_agent_id (nullable), action, target_type (nullable), target_id (nullable), ip_address (nullable), user_agent (nullable), metadata jsonb, created_at. Create an auditLog() service function and instrument all security-relevant events listed in the Done looks like section. Writes must be fire-and-forget: if the log write fails, the core business action still completes and the failure is logged internally, not surfaced to the user.
+Rate limiting and abuse protection — Add server/rate-limit.ts with strict rate limits on login, password reset, and invite resend, and moderate limits on uploads. Add broader endpoint throttling on report generation, CSV import, and AI/agent endpoints where this is low-risk and straightforward in the current architecture. Return 429 on threshold breach. Ensure internal worker calls are not inadvertently blocked.
+Security headers and sanitised error handling — Add security headers middleware: Strict-Transport-Security (production only), X-Content-Type-Options: nosniff, Referrer-Policy, X-Frame-Options or CSP frame-ancestors, and a baseline Content-Security-Policy. Update the global error handler to log full detail server-side and return sanitised, non-leaking messages in production. Review /health and similar endpoints to confirm they expose only safe status.
+Secrets, env config, and operational documentation — Audit the codebase for hardcoded secrets and remove them. Update .env.example to document all required variables with descriptions. Separate secrets by concern (session, JWT if used, webhook signing, email provider, storage). Commit a deployment checklist at docs/deployment-checklist.md and a backup/restore runbook at docs/backup-restore.md.
+Security admin UI — Add a Security section to the company admin UI showing: recent audit events, active API key count, revoked API key history, and API key management with create, scope selection, one-time raw key display, revoke action, and last-used timestamp. Add a security and audit panel to the super-admin console showing: platform-wide audit events, recent failed auth attempts, recent privileged actions, and recent subscription and admin changes.
+Relevant files
+
+server/index.ts
+server/routes.ts
+server/storage.ts
+server/permissions.ts
+shared/schema.ts
+client/src/pages/admin

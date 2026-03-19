@@ -28,6 +28,7 @@ import { generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { registerAgentRoutes } from "./agent-routes";
+import { generateAgentApiKey } from "./agent-auth";
 import { dispatchCriticalHealthEvent } from "./webhooks";
 import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
@@ -625,6 +626,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     validate: false,
   });
 
+  const uploadLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 60,
+    message: { error: "Too many upload requests. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
+  const reportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    message: { error: "Too many report generation requests. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
+  const csvImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { error: "Too many CSV import requests. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
+  const inviteLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    message: { error: "Too many invite requests. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
   // Auth routes
   app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
@@ -686,24 +723,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { email, password } = req.body;
       const user = await storage.getUserByEmail(email);
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const clientUa = req.headers["user-agent"] || null;
+
       if (!user) {
-        await storage.createAuditLog({
+        storage.createAuditLog({
           action: "login_failed",
+          actorType: "user",
           entityType: "auth",
+          ipAddress: clientIp,
+          userAgent: clientUa,
           details: { email, reason: "user_not_found" },
-        });
+        } as any).catch(() => {});
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
       const passwordValid = await verifyPassword(password, user.password);
       if (!passwordValid) {
-        await storage.createAuditLog({
+        storage.createAuditLog({
           companyId: user.companyId || undefined,
           userId: user.id,
+          actorType: "user",
           action: "login_failed",
           entityType: "auth",
+          ipAddress: clientIp,
+          userAgent: clientUa,
           details: { email, reason: "wrong_password" },
-        });
+        } as any).catch(() => {});
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
@@ -732,13 +778,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
       }
 
-      await storage.createAuditLog({
+      storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId: user.id,
+        actorType: "user",
         action: "login_success",
         entityType: "auth",
+        ipAddress: clientIp,
+        userAgent: clientUa,
         details: { email: user.email },
-      });
+      } as any).catch(() => {});
 
       const token = generateToken();
       tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
@@ -1603,7 +1652,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entry/bulk-upload", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/data-entry/bulk-upload", requireAuth, requirePermission("metrics_data_entry"), csvImportLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2516,7 +2565,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), reportLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2924,6 +2973,98 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       performedBy: log.userId ? userMap.get(log.userId) || null : null,
     }));
     res.json(enriched);
+  });
+
+  app.get("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const keys = await storage.listAgentApiKeysByCompany(companyId);
+      const safe = keys.map(k => ({
+        id: k.id,
+        label: k.label,
+        agentType: k.agentType,
+        keyPrefix: k.keyPrefix,
+        scopes: k.scopes,
+        lastUsedAt: k.lastUsedAt,
+        expiresAt: k.expiresAt,
+        revokedAt: k.revokedAt,
+        createdAt: k.createdAt,
+      }));
+      res.json(safe);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const { label, scopes, expiresAt } = req.body;
+      if (!label || typeof label !== "string" || label.trim().length < 2) {
+        return res.status(400).json({ error: "Label is required (min 2 characters)" });
+      }
+      const allowedScopes = ["read:metrics", "write:metrics", "read:reports", "read:evidence", "write:evidence"];
+      const keyScopes: string[] = Array.isArray(scopes) ? scopes.filter((s: string) => allowedScopes.includes(s)) : [];
+      const { plaintext, hash, prefix } = generateAgentApiKey();
+      const key = await storage.createAgentApiKey({
+        agentType: "technical_agent" as any,
+        label: label.trim(),
+        keyHash: hash,
+        keyPrefix: prefix,
+        scopes: keyScopes,
+        companyId,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+      } as any);
+      storage.createAuditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "api_key_created",
+        entityType: "api_key",
+        entityId: key.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { keyPrefix: prefix, label: label.trim(), scopes: keyScopes },
+      } as any).catch(() => {});
+      res.status(201).json({
+        id: key.id,
+        label: key.label,
+        keyPrefix: key.keyPrefix,
+        scopes: key.scopes,
+        expiresAt: key.expiresAt,
+        createdAt: key.createdAt,
+        key: plaintext,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/company/api-keys/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const key = await storage.getAgentApiKey(req.params.id);
+      if (!key || key.companyId !== companyId) {
+        return res.status(404).json({ error: "API key not found" });
+      }
+      await storage.revokeAgentApiKey(req.params.id);
+      storage.createAuditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "api_key_revoked",
+        entityType: "api_key",
+        entityId: req.params.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { keyPrefix: key.keyPrefix, label: key.label },
+      } as any).catch(() => {});
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/notifications", requireAuth, async (req, res) => {
@@ -3931,13 +4072,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const previousRole = targetUser.role;
       const updated = await storage.updateUser(req.params.id, { role });
-      await storage.createAuditLog({
+      await auditLog({
         companyId,
         userId,
         action: "User role changed",
         entityType: "user",
         entityId: req.params.id,
         details: { previousRole, newRole: role, targetUsername: targetUser.username },
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"],
       });
       if (updated) {
         const { password, ...sanitized } = updated;
@@ -4457,7 +4600,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/evidence", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  const BLOCKED_EXTENSIONS = /\.(exe|bat|cmd|sh|ps1|msi|vbs|js|jsx|ts|tsx|py|rb|pl|php|java|class|jar|dll|so|elf|dmg|pkg|app|cpl|scr|pif|com|gadget|reg|inf|sys|drv|bin|run|deb|rpm|apk)$/i;
+  const ALLOWED_FILE_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "png", "jpg", "jpeg", "gif", "webp", "svg", "ppt", "pptx", "odt", "ods", "odp", "zip", "eml", "msg"];
+
+  app.post("/api/evidence", requireAuth, requirePermission("metrics_data_entry"), uploadLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4486,6 +4632,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (!filename) {
         return res.status(400).json({ error: "Filename is required" });
+      }
+      if (BLOCKED_EXTENSIONS.test(filename)) {
+        return res.status(400).json({ error: "File type not allowed. Executable and script files cannot be uploaded." });
+      }
+      if (fileType) {
+        const normalizedType = fileType.toLowerCase().replace(/^\./, "");
+        if (!ALLOWED_FILE_TYPES.includes(normalizedType)) {
+          return res.status(400).json({ error: `File type '${fileType}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}` });
+        }
       }
       const validModules = ["metric_value", "raw_data", "policy", "questionnaire_answer", "report"];
       if (linkedModule && !validModules.includes(linkedModule)) {
@@ -4517,14 +4672,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateQuestionnaireQuestion(linkedEntityId, { dataSourceType: "evidenced" } as any);
       }
 
-      await storage.createAuditLog({
+      storage.createAuditLog({
         companyId,
         userId,
-        action: "Evidence uploaded",
-        entityType: linkedModule || "evidence",
+        actorType: "user",
+        action: "evidence_uploaded",
+        entityType: "evidence_file",
         entityId: file.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
         details: { filename, linkedModule, linkedEntityId, linkedPeriod },
-      });
+      } as any).catch(() => {});
       res.json(file);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4565,10 +4723,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       const allFiles = await storage.getEvidenceFiles(companyId);
       const owned = allFiles.find(f => f.id === req.params.id);
       if (!owned) return res.status(404).json({ error: "Evidence not found" });
       await storage.deleteEvidenceFile(req.params.id);
+      storage.createAuditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "evidence_deleted",
+        entityType: "evidence_file",
+        entityId: req.params.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { filename: owned.filename, linkedModule: owned.linkedModule },
+      } as any).catch(() => {});
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6593,12 +6763,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!company || !company.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription found" });
       await stripe.subscriptions.update(company.stripeSubscriptionId, { cancel_at_period_end: true });
       await storage.updateCompanyBilling(companyId, { planStatus: "cancelled" });
-      await storage.createAuditLog({
+      await auditLog({
         companyId,
         userId: (req.session as any).userId,
         action: "subscription_cancelled",
         entityType: "billing",
         details: { subscriptionId: company.stripeSubscriptionId },
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"],
       });
       res.json({ ok: true });
     } catch (e: any) {
@@ -6650,6 +6822,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             stripeSubscriptionId: session.subscription as string,
             currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
           });
+          await auditLog({
+            companyId,
+            action: "subscription_activated",
+            entityType: "billing",
+            details: { subscriptionId: session.subscription, planTier: "pro" },
+            actorType: "system",
+          });
         }
       } else if (event.type === "invoice.payment_succeeded") {
         const invoice = event.data.object as any;
@@ -6683,6 +6862,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             planStatus: "active",
             stripeSubscriptionId: null as any,
             currentPeriodEnd: null,
+          });
+          await auditLog({
+            companyId: rows[0].id,
+            action: "subscription_deleted",
+            entityType: "billing",
+            details: { subscriptionId: sub.id },
+            actorType: "system",
           });
         }
       }
@@ -6745,6 +6931,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       res.json({ ok: true });
     } catch {
       res.json({ ok: true });
+    }
+  });
+
+  app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit || "200")), 500);
+      const logs = await storage.getAllAuditLogs(limit);
+      res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

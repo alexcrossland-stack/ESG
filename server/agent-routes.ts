@@ -184,6 +184,7 @@ export function registerAgentRoutes(app: Express) {
     try {
       const body = createKeySchema.parse(req.body);
       const { plaintext, hash, prefix } = generateAgentApiKey();
+      const actorUserId = (req.session as any)?.userId;
       const key = await storage.createAgentApiKey({
         agentType: body.agentType,
         label: body.label,
@@ -193,6 +194,16 @@ export function registerAgentRoutes(app: Express) {
         companyId: body.companyId || null,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
       } as any);
+      storage.createAuditLog({
+        userId: actorUserId || null,
+        actorType: "user",
+        action: "api_key_created",
+        entityType: "agent_api_key",
+        entityId: key.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { keyPrefix: prefix, agentType: body.agentType, label: body.label, scopes: body.scopes },
+      } as any).catch(() => {});
       return res.status(201).json({
         id: key.id,
         agentType: key.agentType,
@@ -232,7 +243,18 @@ export function registerAgentRoutes(app: Express) {
 
   app.delete("/api/internal/agent/keys/:id", requireAdminUser, async (req: Request, res: Response) => {
     try {
+      const actorUserId = (req.session as any)?.userId;
       await storage.revokeAgentApiKey(req.params.id);
+      storage.createAuditLog({
+        userId: actorUserId || null,
+        actorType: "user",
+        action: "api_key_revoked",
+        entityType: "agent_api_key",
+        entityId: req.params.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: {},
+      } as any).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       return res.status(500).json({ error: e.message });

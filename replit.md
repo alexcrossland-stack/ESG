@@ -53,7 +53,7 @@ The application is a full-stack SaaS web application.
     - **Platform Health Monitoring:** Super-admin dashboard.
     - **PDF/DOCX Report Engine:** Generates branded reports.
     - **Carbon Data Import:** Two-step import with column auto-mapping.
-    - **Security Hardening:** Helmet.js, CORS, body size limits, rate limiting on AI endpoints.
+    - **Security Hardening (Task #12):** Helmet.js with full header suite (HSTS, referrer-policy, X-Content-Type-Options, X-Frame-Options), CORS, body size limits. Comprehensive rate limiting: login (10/15min), register (5/hr), password change (5/15min), AI/agents (20/min), uploads (60/15min), reports (30/15min), CSV import (20/15min), invites (20/hr). File upload validation with blocked extensions and allowlisted MIME types. Production error sanitization. Extended audit log schema (ip_address, user_agent, actor_type, actor_agent_id). Audit events with IP/UA enrichment for login, evidence, role changes, API key operations, and billing lifecycle events. Company API key management UI (settings page). Super-admin Security & Audit tab (admin panel) with platform-wide event log and stats. Operational documentation: `docs/deployment-checklist.md`, `docs/backup-restore.md`, `docs/security-isolation-audit.md`, `.env.example`.
 - **AI Agent Integration Layer:**
     - **Agent Authentication:** API key-based authentication.
     - **Webhook Dispatch:** Critical health events to optional agent webhook.

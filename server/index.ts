@@ -49,6 +49,9 @@ app.use(
     },
     crossOriginEmbedderPolicy: false,
     hsts: isProd ? { maxAge: 31536000, includeSubDomains: true } : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xContentTypeOptions: true,
+    xFrameOptions: { action: "deny" },
   })
 );
 
@@ -258,7 +261,11 @@ app.use((req, res, next) => {
       return next(err);
     }
 
-    return res.status(status).json({ message });
+    const safeMessage = isProd && status >= 500
+      ? "An unexpected error occurred. Please try again later."
+      : message;
+
+    return res.status(status).json({ message: safeMessage });
   });
 
   if (process.env.NODE_ENV === "production") {

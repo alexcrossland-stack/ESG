@@ -168,7 +168,8 @@ export interface IStorage {
   deleteNotificationsBySourceKey(sourceKeyPrefix: string, companyId: string): Promise<void>;
   getNotificationBySourceKey(sourceKey: string, companyId: string): Promise<Notification | undefined>;
 
-  getAuditLogs(companyId: string): Promise<AuditLog[]>;
+  getAuditLogs(companyId: string, limit?: number): Promise<AuditLog[]>;
+  getAllAuditLogs(limit?: number, filters?: { action?: string; actorType?: string }): Promise<AuditLog[]>;
   createAuditLog(log: Omit<AuditLog, "id" | "createdAt">): Promise<AuditLog>;
 
   // Dashboard
@@ -294,6 +295,8 @@ export interface IStorage {
   createAgentApiKey(data: InsertAgentApiKey): Promise<AgentApiKey>;
   getAgentApiKeyByHash(hash: string): Promise<AgentApiKey | undefined>;
   listAgentApiKeys(): Promise<AgentApiKey[]>;
+  listAgentApiKeysByCompany(companyId: string): Promise<AgentApiKey[]>;
+  getAgentApiKey(id: string): Promise<AgentApiKey | undefined>;
   revokeAgentApiKey(id: string): Promise<void>;
   updateAgentApiKeyLastUsed(id: string): Promise<void>;
 
@@ -862,8 +865,13 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
-  async getAuditLogs(companyId: string) {
-    return db.select().from(auditLogs).where(eq(auditLogs.companyId, companyId)).orderBy(desc(auditLogs.createdAt)).limit(100);
+  async getAuditLogs(companyId: string, limit = 100) {
+    return db.select().from(auditLogs).where(eq(auditLogs.companyId, companyId)).orderBy(desc(auditLogs.createdAt)).limit(limit);
+  }
+
+  async getAllAuditLogs(limit = 200, filters?: { action?: string; actorType?: string }) {
+    let query = db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit) as any;
+    return query;
   }
 
   async createAuditLog(log: Omit<AuditLog, "id" | "createdAt">) {
@@ -1580,6 +1588,15 @@ export class DatabaseStorage implements IStorage {
 
   async listAgentApiKeys() {
     return db.select().from(agentApiKeys).orderBy(desc(agentApiKeys.createdAt));
+  }
+
+  async listAgentApiKeysByCompany(companyId: string) {
+    return db.select().from(agentApiKeys).where(eq(agentApiKeys.companyId, companyId)).orderBy(desc(agentApiKeys.createdAt));
+  }
+
+  async getAgentApiKey(id: string) {
+    const [key] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, id));
+    return key;
   }
 
   async revokeAgentApiKey(id: string) {
