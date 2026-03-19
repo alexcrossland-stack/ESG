@@ -72,10 +72,14 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
   const [expiryDate, setExpiryDate] = useState("");
   const [fileType, setFileType] = useState("");
   const { toast } = useToast();
-  const { activeSiteId } = useSiteContext();
+  const { activeSiteId, sites } = useSiteContext();
+  const activeSites = sites.filter(s => s.status === "active");
+  const isMultiSite = activeSites.length >= 2;
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
+      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
       const res = await apiRequest("POST", "/api/evidence", {
         filename,
         fileType: fileType || null,
@@ -83,7 +87,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
         linkedModule: linkedModule || null,
         linkedPeriod: linkedPeriod || null,
         expiryDate: expiryDate || null,
-        siteId: activeSiteId || null,
+        siteId: resolvedSiteId,
       });
       return res.json();
     },
@@ -118,6 +122,21 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
           <DialogTitle>Upload Evidence</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {isMultiSite && (
+            <div>
+              <Label>Site *</Label>
+              <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+                <SelectTrigger data-testid="select-evidence-site">
+                  <SelectValue placeholder="Select a site" />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeSites.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div>
             <Label>Filename *</Label>
             <Input value={filename} onChange={e => setFilename(e.target.value)} placeholder="e.g. electricity-bill-jan-2025.pdf" data-testid="input-evidence-filename" />
@@ -164,7 +183,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
             <Label>Expiry / Review Date</Label>
             <Input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} data-testid="input-evidence-expiry" />
           </div>
-          <Button onClick={() => uploadMutation.mutate()} disabled={!filename || uploadMutation.isPending} className="w-full" data-testid="button-submit-evidence">
+          <Button onClick={() => uploadMutation.mutate()} disabled={!filename || uploadMutation.isPending || (isMultiSite && !selectedSiteId)} className="w-full" data-testid="button-submit-evidence">
             {uploadMutation.isPending ? "Uploading..." : "Upload Evidence"}
           </Button>
         </div>

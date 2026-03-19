@@ -404,10 +404,11 @@ function BenchmarkSummaryCard() {
   );
 }
 
-function SiteBreakdownCard() {
+function SiteBreakdownCard({ period }: { period?: string }) {
+  const periodParam = period ? `?period=${encodeURIComponent(period)}` : "";
   const { data: summary = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/sites/summary"],
-    queryFn: () => authFetch("/api/sites/summary").then(r => r.json()),
+    queryKey: ["/api/sites/summary", period || ""],
+    queryFn: () => authFetch(`/api/sites/summary${periodParam}`).then(r => r.json()),
     staleTime: 60000,
   });
   if (!isLoading && summary.length === 0) return null;
@@ -1004,7 +1005,7 @@ export default function Dashboard() {
         <BenchmarkSummaryCard />
       </div>
 
-      <SiteBreakdownCard />
+      <SiteBreakdownCard period={enhanced?.latestPeriod} />
 
       <RecommendationsWidget />
 

@@ -2053,11 +2053,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const settings = await storage.getCompanySettings(companyId);
       const materialTopics = await storage.getMaterialTopics(companyId);
 
-      let latestPeriod = "";
-      for (const metric of enabledMetrics) {
-        const vals = await storage.getMetricValues(metric.id);
-        for (const v of vals) {
-          if (v.period > latestPeriod) latestPeriod = v.period;
+      // Resolve period: if reportingPeriodId passed, look up its period label
+      let forcedPeriod: string | null = null;
+      if (req.query.reportingPeriodId && typeof req.query.reportingPeriodId === "string") {
+        const periods = await storage.getReportingPeriods(companyId);
+        const rp = periods.find(p => p.id === req.query.reportingPeriodId);
+        if (rp) forcedPeriod = rp.period;
+      }
+
+      let latestPeriod = forcedPeriod || "";
+      if (!forcedPeriod) {
+        for (const metric of enabledMetrics) {
+          const vals = await storage.getMetricValues(metric.id);
+          for (const v of vals) {
+            if (v.period > latestPeriod) latestPeriod = v.period;
+          }
         }
       }
       if (!latestPeriod) latestPeriod = new Date().toISOString().slice(0, 7);
@@ -2161,6 +2171,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const calculatedMetrics = metricSummaries.filter(m => m.metricType === "calculated" || m.metricType === "derived").length;
       const manualMetrics = metricSummaries.filter(m => m.metricType === "manual").length;
 
+      // Site breakdown: active sites with data counts for the selected period
+      const siteBreakdown = await storage.getSitesSummary(companyId, latestPeriod);
+
       res.json({
         totalMetrics: enabledMetrics.length,
         statusCounts,
@@ -2176,6 +2189,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         submissionRate,
         calculatedMetrics,
         manualMetrics,
+        siteBreakdown,
       });
 
       generateReminders(companyId).catch(() => {});
@@ -3177,6 +3191,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
+      // Enforce siteId for multi-site companies
+      if (!bodySiteId) {
+        const _qSites = await storage.getSites(companyId);
+        const _qActiveSites = _qSites.filter(s => s.status === "active");
+        if (_qActiveSites.length >= 2) {
+          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and questionnaires must be assigned to a specific site." });
+        }
+      }
       // Validate siteId ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
@@ -4079,6 +4101,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: bodySiteId } = req.body;
+      // Enforce siteId for multi-site companies
+      if (!bodySiteId) {
+        const _evSites = await storage.getSites(companyId);
+        const _evActiveSites = _evSites.filter(s => s.status === "active");
+        if (_evActiveSites.length >= 2) {
+          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and evidence must be assigned to a specific site." });
+        }
+      }
       // Validate siteId ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
@@ -5383,6 +5413,14 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
+      // Enforce siteId for multi-site companies
+      if (!bodySiteId) {
+        const _impSites = await storage.getSites(companyId);
+        const _impActiveSites = _impSites.filter(s => s.status === "active");
+        if (_impActiveSites.length >= 2) {
+          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and imported data must be assigned to a specific site." });
+        }
+      }
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });

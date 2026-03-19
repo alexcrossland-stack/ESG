@@ -714,7 +714,10 @@ const TEMPLATE_OPTIONS = [
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { activeSiteId } = useSiteContext();
+  const { activeSiteId, sites } = useSiteContext();
+  const activeSites = sites.filter(s => s.status === "active");
+  const isMultiSite = activeSites.length >= 2;
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [parsedResult, setParsedResult] = useState<any>(null);
   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
@@ -737,11 +740,12 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
   const confirmMutation = useMutation({
     mutationFn: async () => {
+      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
       const res = await apiRequest("POST", "/api/raw-data/import/confirm", {
         mappings,
         rows: parsedResult?.rows || [],
         period,
-        siteId: activeSiteId || null,
+        siteId: resolvedSiteId,
       });
       return res.json();
     },
@@ -845,7 +849,25 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
               </Button>
               <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
             </div>
-            <p className="text-xs text-muted-foreground">Period: {period}</p>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Period: {period}</span>
+              {!isMultiSite && activeSiteId && <span>Site: {activeSites.find(s => s.id === activeSiteId)?.name}</span>}
+            </div>
+            {isMultiSite && (
+              <div>
+                <Label className="text-xs">Site * <span className="text-muted-foreground font-normal">(required for import)</span></Label>
+                <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+                  <SelectTrigger className="mt-1 h-8 text-sm" data-testid="select-import-site">
+                    <SelectValue placeholder="Select a site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeSites.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
         )}
 
@@ -907,7 +929,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
               <Button variant="outline" onClick={() => setStep("upload")}>Back</Button>
               <Button
                 onClick={() => confirmMutation.mutate()}
-                disabled={confirmMutation.isPending || mappings.every(m => !m.inputKey)}
+                disabled={confirmMutation.isPending || mappings.every(m => !m.inputKey) || (isMultiSite && !selectedSiteId)}
                 data-testid="button-confirm-import"
               >
                 {confirmMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}
