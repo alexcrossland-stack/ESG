@@ -43,6 +43,7 @@ import HelpPage from "@/pages/help";
 import AdminSupportPage from "@/pages/admin-support";
 import AdminPage from "@/pages/admin";
 import AdminCompanyPage from "@/pages/admin-company";
+import AdminEsgPage from "@/pages/admin-esg";
 import BillingPage from "@/pages/billing";
 import TeamPage from "@/pages/team";
 import SitesPage from "@/pages/sites";
@@ -237,6 +238,7 @@ function ProtectedApp() {
                 <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
                 <Route path="/admin/analytics" component={() => <SuperAdminRoute component={AdminAnalyticsPage} />} />
                 <Route path="/admin/support" component={() => <SuperAdminRoute component={AdminSupportPage} />} />
+                <Route path="/admin/esg" component={() => <SuperAdminRoute component={AdminEsgPage} />} />
                 <Route path="/billing" component={BillingPage} />
                 <Route path="/onboarding" component={Onboarding} />
                 <Route path="/recommendations" component={Recommendations} />

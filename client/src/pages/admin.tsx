@@ -817,9 +817,17 @@ export default function AdminPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold" data-testid="heading-admin-console">Platform Admin Console</h1>
-        <p className="text-muted-foreground text-sm mt-1">Manage all tenants, users, and platform health from one place.</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold" data-testid="heading-admin-console">Platform Admin Console</h1>
+          <p className="text-muted-foreground text-sm mt-1">Manage all tenants, users, and platform health from one place.</p>
+        </div>
+        <Link href="/admin/esg">
+          <Button variant="outline" size="sm" data-testid="link-admin-esg-management" className="gap-1.5">
+            <ExternalLink className="w-3.5 h-3.5" />
+            ESG Platform Management
+          </Button>
+        </Link>
       </div>
 
       {statsLoading ? (

@@ -8153,6 +8153,808 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  // ============================================================
+  // ESG PHASE 5: EXTENDED REPORT EXPORTS
+  // Six structured report types with measured/derived/estimated/missing labelling
+  // ============================================================
+
+  app.post("/api/reports/export/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const { reportType } = req.params;
+      const { format: fmt = "pdf", period, siteId, dateFrom, dateTo } = req.body;
+
+      const VALID_TYPES = ["esg_metrics_summary", "framework_readiness_summary", "target_progress_summary", "policy_register_summary", "risk_register_summary", "site_comparison_summary"];
+      if (!VALID_TYPES.includes(reportType)) {
+        return res.status(400).json({ error: `Invalid report type. Must be one of: ${VALID_TYPES.join(", ")}` });
+      }
+
+      // Build date range for filtering (inclusive)
+      const dateFromObj = dateFrom ? new Date(dateFrom) : null;
+      const dateToObj = dateTo ? new Date(dateTo) : null;
+
+      // Helper: filter values by date range (period string "YYYY-MM" comparison) and siteId
+      function filterValues(values: any[], opts: { siteId?: string; dateFrom?: Date | null; dateTo?: Date | null }): any[] {
+        return values.filter(v => {
+          // Site filter: if siteId given, only include values for that site
+          if (opts.siteId && v.siteId !== opts.siteId) return false;
+          // Date range filter: period is "YYYY-MM" or "YYYY-QN" or "YYYY"
+          if (opts.dateFrom || opts.dateTo) {
+            if (v.period) {
+              // Parse period to a representative date (first day of period)
+              let periodDate: Date | null = null;
+              const periodStr = String(v.period);
+              if (/^\d{4}-\d{2}$/.test(periodStr)) {
+                periodDate = new Date(`${periodStr}-01`);
+              } else if (/^\d{4}$/.test(periodStr)) {
+                periodDate = new Date(`${periodStr}-01-01`);
+              } else {
+                periodDate = new Date(periodStr);
+              }
+              if (!isNaN(periodDate.getTime())) {
+                if (opts.dateFrom && periodDate < opts.dateFrom) return false;
+                if (opts.dateTo && periodDate > opts.dateTo) return false;
+              }
+            }
+          }
+          return true;
+        });
+      }
+
+      const company = await storage.getCompany(companyId);
+      const companyName = company?.name || "Organisation";
+
+      const {
+        buildEsgMetricsSummaryReport,
+        buildFrameworkReadinessSummaryReport,
+        buildTargetProgressSummaryReport,
+        buildPolicyRegisterSummaryReport,
+        buildRiskRegisterSummaryReport,
+        buildSiteComparisonSummaryReport,
+        generatePdf: genPdf,
+        generateDocx: genDocx,
+      } = await import("./report-engine");
+
+      let reportData: any;
+
+      if (reportType === "esg_metrics_summary") {
+        const metrics = await storage.getMetrics(companyId);
+        const enabledMetrics = metrics.filter((m: any) => m.enabled);
+        let site: any = null;
+        if (siteId) site = await storage.getSite(siteId, companyId);
+
+        // Fetch values: use period if given, else use date range if given, else all values
+        let allValues: any[] = [];
+        if (period) {
+          allValues = await storage.getMetricValuesByPeriod(companyId, period);
+        } else {
+          // Fetch all values across all metrics for the company
+          const allMetricIds = enabledMetrics.map((m: any) => m.id);
+          for (const metricId of allMetricIds) {
+            const vals = await storage.getMetricValues(metricId);
+            allValues.push(...vals.map((v: any) => ({ ...v, metricId })));
+          }
+        }
+
+        // Apply site and date range filters
+        const values = filterValues(allValues, { siteId, dateFrom: dateFromObj, dateTo: dateToObj });
+
+        // Compute accurate metric counts: only count metrics that have reported values in the filtered set
+        const reportedMetricIds = new Set(values.map((v: any) => v.metricId));
+        const totalMetrics = enabledMetrics.length;
+        const reportedCount = enabledMetrics.filter((m: any) => reportedMetricIds.has(m.id)).length;
+        const missingCount = Math.max(0, totalMetrics - reportedCount);
+
+        reportData = buildEsgMetricsSummaryReport({
+          company, metrics: enabledMetrics, values, period,
+          siteName: site?.name,
+          dateFrom: dateFrom || null,
+          dateTo: dateTo || null,
+          reportedCount,
+          missingCount,
+        });
+
+      } else if (reportType === "framework_readiness_summary") {
+        const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
+        const allFrameworks = await storage.getFrameworks(true);
+        const selections = await storage.getBusinessFrameworkSelections(companyId);
+        const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
+        const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
+        reportData = buildFrameworkReadinessSummaryReport({ company, frameworkReadiness, selectedFrameworks, period, dateFrom: dateFrom || null, dateTo: dateTo || null });
+
+      } else if (reportType === "target_progress_summary") {
+        let targets = await storage.getEsgTargets(companyId);
+        // Filter targets by date range (using targetDate or createdAt)
+        if (dateFromObj || dateToObj) {
+          targets = targets.filter((t: any) => {
+            const d = t.targetDate ? new Date(t.targetDate) : null;
+            if (!d) return true;
+            if (dateFromObj && d < dateFromObj) return false;
+            if (dateToObj && d > dateToObj) return false;
+            return true;
+          });
+        }
+        reportData = buildTargetProgressSummaryReport({ company, targets, period, dateFrom: dateFrom || null, dateTo: dateTo || null });
+
+      } else if (reportType === "policy_register_summary") {
+        let policyRecords = await storage.getPolicyRecords(companyId);
+        // Filter by date range (reviewDate or effectiveDate)
+        if (dateFromObj || dateToObj) {
+          policyRecords = policyRecords.filter((p: any) => {
+            const d = p.reviewDate ? new Date(p.reviewDate) : (p.effectiveDate ? new Date(p.effectiveDate) : null);
+            if (!d) return true;
+            if (dateFromObj && d < dateFromObj) return false;
+            if (dateToObj && d > dateToObj) return false;
+            return true;
+          });
+        }
+        reportData = buildPolicyRegisterSummaryReport({ company, policyRecords, period, dateFrom: dateFrom || null, dateTo: dateTo || null });
+
+      } else if (reportType === "risk_register_summary") {
+        let risks = await storage.getEsgRisks(companyId);
+        // Filter by date range (identifiedDate or reviewDate)
+        if (dateFromObj || dateToObj) {
+          risks = risks.filter((r: any) => {
+            const d = r.identifiedDate ? new Date(r.identifiedDate) : (r.reviewDate ? new Date(r.reviewDate) : null);
+            if (!d) return true;
+            if (dateFromObj && d < dateFromObj) return false;
+            if (dateToObj && d > dateToObj) return false;
+            return true;
+          });
+        }
+        reportData = buildRiskRegisterSummaryReport({ company, risks, period, dateFrom: dateFrom || null, dateTo: dateTo || null });
+
+      } else if (reportType === "site_comparison_summary") {
+        // Get all active sites
+        let sites = await storage.getSites(companyId, false);
+        // If siteId specified, filter to just that site (for narrowed comparison)
+        if (siteId) sites = sites.filter((s: any) => s.id === siteId);
+
+        const allSitesSummary = await storage.getSitesSummary(companyId, period);
+        // Filter sitesSummary to only include scoped sites
+        const scopedSiteIds = new Set(sites.map((s: any) => s.id));
+        const sitesSummary = allSitesSummary.filter((s: any) => scopedSiteIds.has(s.siteId));
+        const metricsBySite: Record<string, any[]> = {};
+
+        // Fetch and distribute metric values by site
+        const metrics = await storage.getMetrics(companyId);
+        const enabledMetrics = metrics.filter((m: any) => m.enabled);
+        // Build a map of metricId -> metadata so values can carry name/unit/category
+        const metricMetaMap = new Map(enabledMetrics.map((m: any) => [m.id, { metricName: m.name, unit: m.unit, category: m.category }]));
+        let allValues: any[] = [];
+
+        if (period) {
+          const periodVals = await storage.getMetricValuesByPeriod(companyId, period);
+          // Enrich with metric metadata by matching metricId
+          allValues = periodVals.map((v: any) => {
+            const meta = metricMetaMap.get(v.metricId) || {};
+            return { ...v, ...meta };
+          });
+        } else {
+          for (const m of enabledMetrics) {
+            const vals = await storage.getMetricValues(m.id);
+            allValues.push(...vals.map((v: any) => ({
+              ...v,
+              metricId: m.id,
+              metricName: m.name,
+              unit: m.unit,
+              category: m.category,
+            })));
+          }
+        }
+
+        // Apply date range filter
+        const filteredValues = filterValues(allValues, { dateFrom: dateFromObj, dateTo: dateToObj });
+
+        // Group by siteId — only include sites that are in the sites list
+        const siteIds = new Set(sites.map((s: any) => s.id));
+        for (const v of filteredValues) {
+          const vSiteId = v.siteId || "org-wide";
+          if (v.siteId && !siteIds.has(v.siteId)) continue;
+          if (!metricsBySite[vSiteId]) metricsBySite[vSiteId] = [];
+          metricsBySite[vSiteId].push(v);
+        }
+
+        reportData = buildSiteComparisonSummaryReport({
+          company, sites, sitesSummary, metricsBySite, period,
+          dateFrom: dateFrom || null, dateTo: dateTo || null,
+        });
+      }
+
+      let fileBuffer: Buffer;
+      let contentType: string;
+      let ext: string;
+
+      if (fmt === "docx") {
+        fileBuffer = await genDocx(reportData, reportType, companyName);
+        contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        ext = "docx";
+      } else {
+        fileBuffer = await genPdf(reportData, reportType, companyName);
+        contentType = "application/pdf";
+        ext = "pdf";
+      }
+
+      const periodLabel = period || (dateFrom && dateTo ? `${dateFrom}_to_${dateTo}` : new Date().toISOString().slice(0, 10));
+      const filename = `${reportType}_${periodLabel}.${ext}`;
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Length", fileBuffer.length);
+      res.send(fileBuffer);
+
+      storage.createAuditLog({
+        companyId,
+        userId,
+        action: "export_report",
+        entityType: "report",
+        details: { reportType, format: fmt, period, siteId, dateFrom, dateTo },
+      }).catch(() => {});
+    } catch (e: any) {
+      console.error("[report-export]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/reports/export-data/:reportType — returns JSON data for preview
+  app.get("/api/reports/export-data/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const { reportType } = req.params;
+      const { period, siteId } = req.query as { period?: string; siteId?: string };
+
+      const company = await storage.getCompany(companyId);
+
+      if (reportType === "esg_metrics_summary") {
+        const metrics = await storage.getMetrics(companyId);
+        const enabledMetrics = metrics.filter((m: any) => m.enabled);
+        const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
+        let site: any = null;
+        if (siteId) site = await storage.getSite(siteId, companyId);
+        res.json({ metrics: enabledMetrics, values, site, period });
+      } else if (reportType === "framework_readiness_summary") {
+        const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
+        const allFrameworks = await storage.getFrameworks(true);
+        const selections = await storage.getBusinessFrameworkSelections(companyId);
+        const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
+        const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
+        res.json({ frameworkReadiness, selectedFrameworks, period });
+      } else if (reportType === "target_progress_summary") {
+        const targets = await storage.getEsgTargets(companyId);
+        res.json({ targets, period });
+      } else if (reportType === "policy_register_summary") {
+        const policyRecords = await storage.getPolicyRecords(companyId);
+        res.json({ policyRecords, period });
+      } else if (reportType === "risk_register_summary") {
+        const risks = await storage.getEsgRisks(companyId);
+        res.json({ risks, period });
+      } else if (reportType === "site_comparison_summary") {
+        const sites = await storage.getSites(companyId, false);
+        const sitesSummary = await storage.getSitesSummary(companyId, period);
+        res.json({ sites, sitesSummary, period });
+      } else {
+        res.status(400).json({ error: "Unknown report type" });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 5: SUPER-ADMIN — METRIC DEFINITIONS MANAGEMENT
+  // Admin can edit metric_definitions without migrations
+  // Historical metric_values are NOT bulk-editable
+  // ============================================================
+
+  app.get("/api/admin/metric-definitions", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pillar, isCore, isActive, search } = req.query;
+      const filters: any = {};
+      if (pillar) filters.pillar = pillar as string;
+      if (isCore !== undefined) filters.isCore = isCore === "true";
+      if (isActive !== undefined) filters.isActive = isActive === "true";
+      if (search) filters.search = search as string;
+      const defs = await storage.getMetricDefinitions(filters);
+      res.json(defs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/metric-definitions/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const def = await storage.getMetricDefinition(req.params.id);
+      if (!def) return res.status(404).json({ error: "Not found" });
+      res.json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/metric-definitions", requireSuperAdmin, async (req, res) => {
+    try {
+      const { code, name, pillar, category, description, dataType, unit, inputFrequency,
+        isCore, isActive, isDerived, formulaJson, frameworkTags, scoringWeight, sortOrder,
+        evidenceRequired, rollupMethod } = req.body;
+
+      if (!code || !name || !pillar || !category) {
+        return res.status(400).json({ error: "code, name, pillar, and category are required" });
+      }
+
+      const existing = await storage.getMetricDefinitionByCode(code);
+      if (existing) return res.status(409).json({ error: "A metric definition with this code already exists" });
+
+      const def = await storage.createMetricDefinition({
+        code, name, pillar, category,
+        description: description || null,
+        dataType: dataType || "numeric",
+        unit: unit || null,
+        inputFrequency: inputFrequency || "quarterly",
+        isCore: isCore ?? false,
+        isActive: isActive ?? true,
+        isDerived: isDerived ?? false,
+        formulaJson: formulaJson || null,
+        frameworkTags: frameworkTags || [],
+        scoringWeight: scoringWeight ?? "1",
+        sortOrder: sortOrder ?? 0,
+        evidenceRequired: evidenceRequired ?? false,
+        rollupMethod: rollupMethod || "sum",
+      });
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "create_metric_definition",
+        metadata: { defId: def.id, code: def.code, name: def.name },
+      });
+
+      res.status(201).json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/metric-definitions/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getMetricDefinition(id);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+
+      // Prevent editing historical metric_values directly — only definition metadata can change
+      const allowedFields = ["name", "description", "unit", "inputFrequency", "isCore", "isActive",
+        "isDerived", "formulaJson", "frameworkTags", "scoringWeight", "sortOrder",
+        "evidenceRequired", "rollupMethod", "category", "pillar"];
+      const updates: any = {};
+      for (const f of allowedFields) {
+        if (req.body[f] !== undefined) updates[f] = req.body[f];
+      }
+
+      const def = await storage.updateMetricDefinition(id, updates);
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "update_metric_definition",
+        metadata: { defId: id, updates },
+      });
+
+      res.json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/metric-definitions/:id/toggle-active", requireSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getMetricDefinition(id);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+
+      const def = await storage.updateMetricDefinition(id, { isActive: !existing.isActive });
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: existing.isActive ? "deactivate_metric_definition" : "activate_metric_definition",
+        metadata: { defId: id, code: existing.code },
+      });
+
+      res.json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 5: SUPER-ADMIN — FRAMEWORK MANAGEMENT
+  // ============================================================
+
+  app.get("/api/admin/frameworks", requireSuperAdmin, async (req, res) => {
+    try {
+      const frameworks = await storage.getFrameworks();
+      res.json(frameworks);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/frameworks", requireSuperAdmin, async (req, res) => {
+    try {
+      const { code, name, fullName, description, version, isActive } = req.body;
+      if (!code || !name) return res.status(400).json({ error: "code and name are required" });
+
+      const existing = await storage.getFrameworkByCode(code);
+      if (existing) return res.status(409).json({ error: "A framework with this code already exists" });
+
+      const fw = await db.insert(
+        (await import("@shared/schema")).frameworks
+      ).values({ code, name, fullName: fullName || null, description: description || null, version: version || null, isActive: isActive ?? true }).returning();
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "create_framework",
+        metadata: { frameworkId: fw[0]?.id, code },
+      });
+
+      res.status(201).json(fw[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/frameworks/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { frameworks } = await import("@shared/schema");
+      const { name, fullName, description, version, isActive } = req.body;
+      const updates: any = {};
+      if (name !== undefined) updates.name = name;
+      if (fullName !== undefined) updates.fullName = fullName;
+      if (description !== undefined) updates.description = description;
+      if (version !== undefined) updates.version = version;
+      if (isActive !== undefined) updates.isActive = isActive;
+
+      const [fw] = await db.update(frameworks).set(updates).where(eq(frameworks.id, req.params.id)).returning();
+      if (!fw) return res.status(404).json({ error: "Framework not found" });
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "update_framework",
+        metadata: { frameworkId: req.params.id, updates },
+      });
+
+      res.json(fw);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Framework Requirements
+  app.get("/api/admin/framework-requirements", requireSuperAdmin, async (req, res) => {
+    try {
+      const { frameworkId } = req.query;
+      let reqs: any[];
+      if (frameworkId) {
+        reqs = await storage.getFrameworkRequirements(frameworkId as string);
+      } else {
+        reqs = await storage.getAllFrameworkRequirements();
+      }
+      res.json(reqs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/framework-requirements", requireSuperAdmin, async (req, res) => {
+    try {
+      const { frameworkRequirements } = await import("@shared/schema");
+      const { frameworkId, code, title, description, requirementType, pillar, mandatoryLevel, sortOrder } = req.body;
+      if (!frameworkId || !code || !title) return res.status(400).json({ error: "frameworkId, code, and title are required" });
+
+      const [req_] = await db.insert(frameworkRequirements).values({
+        frameworkId, code, title,
+        description: description || null,
+        requirementType: requirementType || "metric",
+        pillar: pillar || null,
+        mandatoryLevel: mandatoryLevel || "core",
+        sortOrder: sortOrder ?? 0,
+      }).returning();
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "create_framework_requirement",
+        metadata: { reqId: req_?.id, code, frameworkId },
+      });
+
+      res.status(201).json(req_);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/framework-requirements/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { frameworkRequirements } = await import("@shared/schema");
+      const { title, description, requirementType, pillar, mandatoryLevel, sortOrder } = req.body;
+      const updates: any = {};
+      if (title !== undefined) updates.title = title;
+      if (description !== undefined) updates.description = description;
+      if (requirementType !== undefined) updates.requirementType = requirementType;
+      if (pillar !== undefined) updates.pillar = pillar;
+      if (mandatoryLevel !== undefined) updates.mandatoryLevel = mandatoryLevel;
+      if (sortOrder !== undefined) updates.sortOrder = sortOrder;
+
+      const [r] = await db.update(frameworkRequirements).set(updates).where(eq(frameworkRequirements.id, req.params.id)).returning();
+      if (!r) return res.status(404).json({ error: "Not found" });
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/framework-requirements/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { frameworkRequirements } = await import("@shared/schema");
+      await db.delete(frameworkRequirements).where(eq(frameworkRequirements.id, req.params.id));
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "delete_framework_requirement",
+        metadata: { reqId: req.params.id },
+      });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Metric-Framework Mappings
+  app.get("/api/admin/metric-framework-mappings", requireSuperAdmin, async (req, res) => {
+    try {
+      const mappings = await storage.getAllMappings();
+      res.json(mappings);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/metric-framework-mappings", requireSuperAdmin, async (req, res) => {
+    try {
+      const { metricFrameworkMappings } = await import("@shared/schema");
+      const { metricDefinitionId, frameworkRequirementId, mappingStrength, notes } = req.body;
+      if (!metricDefinitionId || !frameworkRequirementId) {
+        return res.status(400).json({ error: "metricDefinitionId and frameworkRequirementId are required" });
+      }
+
+      const [mapping] = await db.insert(metricFrameworkMappings).values({
+        metricDefinitionId,
+        frameworkRequirementId,
+        mappingStrength: mappingStrength || "direct",
+        notes: notes || null,
+      }).onConflictDoUpdate({
+        target: [metricFrameworkMappings.metricDefinitionId, metricFrameworkMappings.frameworkRequirementId],
+        set: { mappingStrength: mappingStrength || "direct", notes: notes || null },
+      }).returning();
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "upsert_metric_framework_mapping",
+        metadata: { metricDefinitionId, frameworkRequirementId, mappingStrength },
+      });
+
+      res.json(mapping);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/metric-framework-mappings/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { metricFrameworkMappings } = await import("@shared/schema");
+      const { mappingStrength, notes } = req.body;
+      const updates: any = {};
+      if (mappingStrength !== undefined) updates.mappingStrength = mappingStrength;
+      if (notes !== undefined) updates.notes = notes;
+      const [mapping] = await db.update(metricFrameworkMappings).set(updates).where(eq(metricFrameworkMappings.id, req.params.id)).returning();
+      if (!mapping) return res.status(404).json({ error: "Not found" });
+      res.json(mapping);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/metric-framework-mappings/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { metricFrameworkMappings } = await import("@shared/schema");
+      await db.delete(metricFrameworkMappings).where(eq(metricFrameworkMappings.id, req.params.id));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 5: SUPER-ADMIN — MATERIAL TOPICS & SCORING CONFIG
+  // ============================================================
+
+  // Global material topics management (not company-scoped — seed set management)
+  app.get("/api/admin/material-topics-seed", requireSuperAdmin, async (req, res) => {
+    try {
+      // Return all distinct topic names/categories from the system
+      const result = await db.execute(
+        sql`SELECT DISTINCT topic, category, is_default, COUNT(*) as company_count
+            FROM material_topics
+            GROUP BY topic, category, is_default
+            ORDER BY category, topic`
+      );
+      res.json((result as any).rows || []);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Scoring weight configuration (stored in company_settings as jsonb extension)
+  // Ensure platform_settings table exists (created on first use)
+  async function ensurePlatformSettings() {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+  }
+
+  const DEFAULT_DIMENSION_WEIGHTS = {
+    completeness: 25,
+    performance: 35,
+    maturity: 20,
+    readiness: 20,
+  };
+
+  app.get("/api/admin/scoring-config", requireSuperAdmin, async (req, res) => {
+    try {
+      await ensurePlatformSettings();
+      // Return platform default scoring weights
+      const result = await db.execute(
+        sql`SELECT AVG(CAST(scoring_weight AS FLOAT)) as avg_weight, pillar, COUNT(*) as count
+            FROM metric_definitions
+            WHERE is_active = true
+            GROUP BY pillar`
+      );
+      const rows = (result as any).rows || [];
+
+      // Get dimension weights from platform_settings
+      const dimSettingsResult = await db.execute(
+        sql`SELECT value FROM platform_settings WHERE key = 'dimension_weights'`
+      );
+      const dimRows = (dimSettingsResult as any).rows || [];
+      const dimensionWeights = dimRows.length > 0 ? dimRows[0].value : DEFAULT_DIMENSION_WEIGHTS;
+
+      const config = {
+        dimensions: ["completeness", "performance", "maturity", "readiness"],
+        dimensionWeights,
+        currentWeights: rows.map((r: any) => ({
+          pillar: r.pillar,
+          count: r.count,
+          avgWeight: parseFloat(r.avg_weight || "1").toFixed(2),
+        })),
+        description: "Scoring weights configure how each metric contributes to the pillar score. Adjust individual metric weights via the Metric Definitions page.",
+      };
+      res.json(config);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Update dimension weights (completeness/performance/maturity/readiness split)
+  app.patch("/api/admin/scoring-config/dimension-weights", requireSuperAdmin, async (req, res) => {
+    try {
+      await ensurePlatformSettings();
+      const { completeness, performance, maturity, readiness } = req.body;
+      if ([completeness, performance, maturity, readiness].some(v => v === undefined || typeof v !== "number")) {
+        return res.status(400).json({ error: "All four dimension weights (completeness, performance, maturity, readiness) must be provided as numbers" });
+      }
+      const total = completeness + performance + maturity + readiness;
+      if (Math.abs(total - 100) > 0.1) {
+        return res.status(400).json({ error: `Dimension weights must sum to 100 (got ${total})` });
+      }
+      const weights = { completeness, performance, maturity, readiness };
+      await db.execute(
+        sql`INSERT INTO platform_settings (key, value, updated_at)
+            VALUES ('dimension_weights', ${JSON.stringify(weights)}::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(weights)}::jsonb, updated_at = NOW()`
+      );
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "update_dimension_weights",
+        metadata: weights,
+      });
+      res.json({ success: true, dimensionWeights: weights });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Bulk update scoring weights for a pillar
+  app.patch("/api/admin/scoring-config/pillar-weights", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pillar, scoringWeight } = req.body;
+      if (!pillar || scoringWeight === undefined) {
+        return res.status(400).json({ error: "pillar and scoringWeight are required" });
+      }
+      const { metricDefinitions: mdTable } = await import("@shared/schema");
+      const result = await db.update(mdTable)
+        .set({ scoringWeight: String(scoringWeight) })
+        .where(and(eq(mdTable.pillar, pillar as any), eq(mdTable.isActive, true)));
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "bulk_update_pillar_scoring_weight",
+        metadata: { pillar, scoringWeight },
+      });
+
+      res.json({ success: true, message: `Updated scoring weight for all active ${pillar} metrics to ${scoringWeight}` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Seed a new global material topic into all companies
+  app.post("/api/admin/material-topics-seed", requireSuperAdmin, async (req, res) => {
+    try {
+      const { topic, category } = req.body;
+      if (!topic || !category) return res.status(400).json({ error: "topic and category are required" });
+
+      // Get all distinct company IDs that have material topics
+      const companiesResult = await db.execute(
+        sql`SELECT DISTINCT company_id FROM material_topics`
+      );
+      const companyIds: string[] = ((companiesResult as any).rows || []).map((r: any) => r.company_id);
+
+      let seeded = 0;
+      for (const cId of companyIds) {
+        try {
+          const { materialTopics: mtTable } = await import("@shared/schema");
+          // Only insert if it doesn't already exist for this company
+          const existing = await db.execute(
+            sql`SELECT id FROM material_topics WHERE company_id = ${cId} AND topic = ${topic} LIMIT 1`
+          );
+          if (((existing as any).rows || []).length === 0) {
+            await db.insert(mtTable).values({
+              companyId: cId,
+              topic,
+              category: category as any,
+              selected: false,
+              isDefault: true,
+            });
+            seeded++;
+          }
+        } catch {}
+      }
+
+      const adminUser = (req as any)._superAdmin;
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser?.id,
+        action: "seed_material_topic",
+        metadata: { topic, category, companiesSeeded: seeded },
+      });
+
+      res.json({ success: true, seeded, message: `Seeded "${topic}" into ${seeded} companies` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
 }
 

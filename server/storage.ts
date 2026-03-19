@@ -2055,20 +2055,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateMetricDefinition(id: string, data: Partial<MetricDefinition>): Promise<MetricDefinition | undefined> {
-    const [r] = await db.update(metricDefinitions).set({
-      name: data.name,
-      description: data.description,
-      isCore: data.isCore,
-      isActive: data.isActive,
-      isDerived: data.isDerived,
-      formulaJson: data.formulaJson,
-      frameworkTags: data.frameworkTags,
-      scoringWeight: data.scoringWeight,
-      sortOrder: data.sortOrder,
-      evidenceRequired: data.evidenceRequired,
-      rollupMethod: data.rollupMethod,
-      updatedAt: new Date(),
-    }).where(eq(metricDefinitions.id, id)).returning();
+    const updateFields: Record<string, any> = { updatedAt: new Date() };
+    if (data.name !== undefined) updateFields.name = data.name;
+    if (data.description !== undefined) updateFields.description = data.description;
+    if (data.pillar !== undefined) updateFields.pillar = data.pillar;
+    if (data.category !== undefined) updateFields.category = data.category;
+    if (data.unit !== undefined) updateFields.unit = data.unit;
+    if (data.inputFrequency !== undefined) updateFields.inputFrequency = data.inputFrequency;
+    if (data.dataType !== undefined) updateFields.dataType = data.dataType;
+    if (data.isCore !== undefined) updateFields.isCore = data.isCore;
+    if (data.isActive !== undefined) updateFields.isActive = data.isActive;
+    if (data.isDerived !== undefined) updateFields.isDerived = data.isDerived;
+    if (data.formulaJson !== undefined) updateFields.formulaJson = data.formulaJson;
+    if (data.frameworkTags !== undefined) updateFields.frameworkTags = data.frameworkTags;
+    if (data.scoringWeight !== undefined) updateFields.scoringWeight = data.scoringWeight;
+    if (data.sortOrder !== undefined) updateFields.sortOrder = data.sortOrder;
+    if (data.evidenceRequired !== undefined) updateFields.evidenceRequired = data.evidenceRequired;
+    if (data.rollupMethod !== undefined) updateFields.rollupMethod = data.rollupMethod;
+    const [r] = await db.update(metricDefinitions).set(updateFields).where(eq(metricDefinitions.id, id)).returning();
     return r;
   }
 

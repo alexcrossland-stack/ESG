@@ -408,11 +408,12 @@ function BenchmarkSummaryCard() {
 
 function SiteBreakdownCard({ period }: { period?: string }) {
   const periodParam = period ? `?period=${encodeURIComponent(period)}` : "";
-  const { data: summary = [], isLoading } = useQuery<any[]>({
+  const { data: rawSummary, isLoading } = useQuery<any>({
     queryKey: ["/api/sites/summary", period || ""],
     queryFn: () => authFetch(`/api/sites/summary${periodParam}`).then(r => r.json()),
     staleTime: 60000,
   });
+  const summary: any[] = Array.isArray(rawSummary) ? rawSummary : [];
   if (!isLoading && summary.length === 0) return null;
   return (
     <Card data-testid="card-site-breakdown">

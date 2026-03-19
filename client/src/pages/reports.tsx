@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
@@ -15,13 +16,285 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
-  Gauge, Scale, ArrowUpDown, MapPin,
+  Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { useSiteContext } from "@/hooks/use-site-context";
+
+const ESG_EXPORT_TYPES = [
+  {
+    id: "esg_metrics_summary",
+    label: "ESG Metrics Summary",
+    description: "All tracked metrics with measured/derived/estimated/missing labels by category",
+    icon: BarChart3,
+    color: "text-green-600",
+  },
+  {
+    id: "framework_readiness_summary",
+    label: "Framework Readiness Summary",
+    description: "Alignment/readiness assessment against selected ESG frameworks (no certification implied)",
+    icon: Network,
+    color: "text-blue-600",
+  },
+  {
+    id: "target_progress_summary",
+    label: "Target Progress Summary",
+    description: "Progress against all ESG targets by pillar with status and completion rate",
+    icon: Target,
+    color: "text-purple-600",
+  },
+  {
+    id: "policy_register_summary",
+    label: "Policy Register Summary",
+    description: "All policy records with type, owner, status, and review dates",
+    icon: FileText,
+    color: "text-amber-600",
+  },
+  {
+    id: "risk_register_summary",
+    label: "Risk Register Summary",
+    description: "ESG risk register with likelihood, impact, score, and mitigation status",
+    icon: AlertOctagon,
+    color: "text-red-600",
+  },
+  {
+    id: "site_comparison_summary",
+    label: "Site Comparison Summary",
+    description: "Side-by-side comparison of ESG data across all active sites",
+    icon: Building2,
+    color: "text-indigo-600",
+  },
+];
+
+function EsgExportsSection() {
+  const { toast } = useToast();
+  const [selectedType, setSelectedType] = useState<string>("esg_metrics_summary");
+  const [selectedFormat, setSelectedFormat] = useState<"pdf" | "docx">("pdf");
+  const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [useDateRange, setUseDateRange] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const { data: sitesData } = useQuery<any[]>({ queryKey: ["/api/sites"] });
+  const [selectedSite, setSelectedSite] = useState<string>("all-sites");
+
+  const periods = generatePeriods();
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const body: any = {
+        format: selectedFormat,
+        period: (!useDateRange && selectedPeriod && selectedPeriod !== "all") ? selectedPeriod : undefined,
+        siteId: selectedSite && selectedSite !== "all-sites" ? selectedSite : undefined,
+        dateFrom: (useDateRange && dateFrom) ? dateFrom : undefined,
+        dateTo: (useDateRange && dateTo) ? dateTo : undefined,
+      };
+      const res = await authFetch(`/api/reports/export/${selectedType}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Export failed" }));
+        throw new Error(err.error || "Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const periodLabel = body.period || (body.dateFrom ? `${body.dateFrom}_to_${body.dateTo || "now"}` : format(new Date(), "yyyy-MM-dd"));
+      a.download = `${selectedType}_${periodLabel}.${selectedFormat}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export downloaded successfully" });
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const selectedTypeInfo = ESG_EXPORT_TYPES.find(t => t.id === selectedType);
+  const showSiteScope = selectedType === "esg_metrics_summary" || selectedType === "site_comparison_summary";
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Download className="w-4 h-4" />
+          ESG Report Exports
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Generate structured ESG reports as PDF or DOCX. All reports clearly label measured, derived, estimated, and missing values.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {ESG_EXPORT_TYPES.map(t => {
+            const Icon = t.icon;
+            const isSelected = selectedType === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setSelectedType(t.id)}
+                data-testid={`button-export-type-${t.id}`}
+                className={`text-left p-3 rounded-md border transition-colors ${
+                  isSelected
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/50 hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon className={`w-4 h-4 ${t.color}`} />
+                  <span className="text-xs font-medium">{t.label}</span>
+                  {isSelected && <CheckCircle className="w-3 h-3 text-primary ml-auto" />}
+                </div>
+                <p className="text-xs text-muted-foreground leading-snug">{t.description}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="pt-2 border-t border-border space-y-3">
+          {/* Scope mode toggle */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => setUseDateRange(false)}
+                data-testid="button-scope-period"
+                className={`px-2.5 py-1 rounded-md border text-xs ${!useDateRange ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"}`}
+              >
+                By Period
+              </button>
+              <button
+                onClick={() => setUseDateRange(true)}
+                data-testid="button-scope-daterange"
+                className={`px-2.5 py-1 rounded-md border text-xs ${useDateRange ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"}`}
+              >
+                Date Range
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {!useDateRange ? (
+              <div>
+                <Label className="text-xs mb-1.5 block">Reporting Period</Label>
+                <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+                  <SelectTrigger data-testid="select-export-period" className="h-8 text-xs">
+                    <SelectValue placeholder="All periods" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All periods</SelectItem>
+                    {periods.map(p => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <Label className="text-xs mb-1.5 block">Date From</Label>
+                  <Input
+                    type="date"
+                    value={dateFrom}
+                    onChange={e => setDateFrom(e.target.value)}
+                    className="h-8 text-xs"
+                    data-testid="input-export-date-from"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs mb-1.5 block">Date To</Label>
+                  <Input
+                    type="date"
+                    value={dateTo}
+                    onChange={e => setDateTo(e.target.value)}
+                    className="h-8 text-xs"
+                    data-testid="input-export-date-to"
+                  />
+                </div>
+              </>
+            )}
+
+            {showSiteScope && (
+              <div>
+                <Label className="text-xs mb-1.5 block">Site Scope</Label>
+                <Select value={selectedSite} onValueChange={setSelectedSite}>
+                  <SelectTrigger data-testid="select-export-site" className="h-8 text-xs">
+                    <SelectValue placeholder="All sites (org-wide)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all-sites">All sites (org-wide)</SelectItem>
+                    {(sitesData || []).map((s: any) => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label className="text-xs mb-1.5 block">Format</Label>
+            <div className="flex gap-2 w-fit">
+              <Button
+                size="sm"
+                variant={selectedFormat === "pdf" ? "default" : "outline"}
+                onClick={() => setSelectedFormat("pdf")}
+                data-testid="button-format-pdf"
+                className="h-8 text-xs px-4"
+              >
+                PDF
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedFormat === "docx" ? "default" : "outline"}
+                onClick={() => setSelectedFormat("docx")}
+                data-testid="button-format-docx"
+                className="h-8 text-xs px-4"
+              >
+                DOCX
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {selectedTypeInfo && (
+          <div className="flex items-center justify-between pt-2 border-t border-border">
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{selectedTypeInfo.label}</span>
+              {!useDateRange && selectedPeriod && selectedPeriod !== "all" && ` · ${selectedPeriod}`}
+              {useDateRange && dateFrom && ` · ${dateFrom}`}
+              {useDateRange && dateTo && ` to ${dateTo}`}
+              {selectedSite && selectedSite !== "all-sites" && " · Single site"}
+              {` · ${selectedFormat.toUpperCase()}`}
+            </div>
+            <Button
+              size="sm"
+              onClick={handleExport}
+              disabled={exporting || (useDateRange && (!dateFrom || !dateTo))}
+              data-testid="button-export-esg-report"
+              className="gap-1.5"
+            >
+              {exporting ? (
+                <div className="w-3.5 h-3.5 border border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              {exporting ? "Generating…" : "Download"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 const REPORT_TEMPLATES = [
   {
@@ -1717,6 +1990,8 @@ export default function Reports() {
           </div>
         </CardContent>
       </Card>
+
+      <EsgExportsSection />
     </div>
   );
 }
