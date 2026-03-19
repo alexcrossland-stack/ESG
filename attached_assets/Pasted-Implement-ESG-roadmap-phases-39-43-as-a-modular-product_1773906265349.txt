@@ -1,0 +1,568 @@
+Implement ESG roadmap phases #39–#43 as a modular, production-safe extension of the existing platform.
+
+This is an ESG management and framework-readiness system. It is NOT a formal compliance or certification engine. Use the language “readiness”, “alignment”, and “support”, not “compliance”, “certified”, or “fully compliant”, unless explicitly stated in existing code for unrelated legacy reasons.
+
+Critical delivery rules
+
+1. Preserve backwards compatibility
+- Do not break existing metric entry flows, dashboards, reports, APIs, or current user data.
+- Phase 1 must be introduced behind the existing abstraction where needed so current UX continues to work.
+- Do not remove old structures until the new path is fully wired and verified.
+
+2. Build reusable backend architecture
+- Prefer structured schema, typed storage methods, calculation services, and reusable route handlers.
+- Do not hardcode ESG logic into page components.
+- Calculation and readiness logic must live in backend/service layers, not only the frontend.
+
+3. Keep site-level support first-class
+- All new ESG data models that represent business records must support `business_id` and `site_id` where relevant.
+- `site_id` remains nullable.
+- Rollups must be deliberate and configurable, not page-specific hacks.
+
+4. Keep the product SME-friendly
+- Core metrics remain default-on.
+- Advanced capabilities should be progressively enabled without overwhelming the default experience.
+
+5. Safe admin extensibility
+- By Phase 5, admins should be able to evolve the ESG model without code changes.
+- Avoid designs that require migrations for every new metric/framework adjustment.
+
+-----------------------------------
+PHASE #39 — ESG Phase 1: Metric Definitions & Calculation Engine
+-----------------------------------
+
+Objective
+
+Refactor the current metric model into a proper `metric_definitions` architecture, seed 28 core metrics plus 30 advanced metrics, create structured `metric_values` and `metric_evidence`, and build a derived metric calculation engine with site-level rollup support.
+
+Must deliver
+
+- `metric_definitions` table
+- `metric_values` table
+- `metric_evidence` table
+- `metric_calculation_runs` audit table (or clearly equivalent)
+- seed data for 58 metrics total
+- derived metric engine
+- `/metrics-library` page
+- evidence attachment support
+- site-level rollup support
+- no regression in existing metric flows
+
+Schema requirements
+
+Create `metric_definitions` with fields equivalent to:
+- id
+- code (stable unique identifier)
+- name
+- pillar
+- category
+- description
+- data_type
+- unit
+- input_frequency
+- is_core
+- is_active
+- is_derived
+- formula_json
+- framework_tags
+- scoring_weight
+- sort_order
+- evidence_required
+- rollup_method
+- created_at
+- updated_at
+
+Create `metric_values` with fields equivalent to:
+- id
+- business_id
+- site_id nullable
+- metric_definition_id
+- reporting_period_start
+- reporting_period_end
+- value_numeric nullable
+- value_text nullable
+- value_boolean nullable
+- value_json nullable
+- source_type (`manual`, `import`, `calculated`)
+- status (`draft`, `submitted`, `approved`)
+- notes
+- entered_by_user_id
+- created_at
+- updated_at
+
+Create `metric_evidence` with fields equivalent to:
+- id
+- metric_value_id
+- file_url or storage_key
+- file_name
+- file_type
+- uploaded_by_user_id
+- uploaded_at
+- notes
+
+Create `metric_calculation_runs` with fields equivalent to:
+- id
+- business_id
+- metric_definition_id
+- site_id nullable
+- reporting_period_start
+- reporting_period_end
+- status
+- inputs_json
+- output_json
+- error_text nullable
+- triggered_by_metric_value_id nullable
+- created_at
+
+Seed requirements
+
+Seed:
+- 28 existing core metrics
+- 30 advanced metrics
+
+Rules:
+- core metrics: `is_core = true`, `is_active = true`
+- advanced metrics: `is_core = false`, `is_active = false`
+- derived metrics must use `is_derived = true`
+- formulas must refer to stable metric codes, never display labels
+
+Phase 1 UI
+
+Build `/metrics-library`:
+- grouped by pillar and category
+- search/filter
+- show core vs advanced
+- show input frequency
+- show evidence required
+- advanced metric enable/disable toggle
+- do not allow disabling core metrics in this phase unless already supported
+
+Calculation engine requirements
+
+Implement a dedicated calculation service in `server/calculations.ts` or equivalent:
+- read `formula_json`
+- resolve source dependencies by metric code
+- calculate derived outputs for the same business / site / period context
+- write derived values to `metric_values` using `source_type = calculated`
+- log every run
+- be idempotent
+- prevent circular dependency loops
+- handle missing source values safely
+- trigger recalculation when a dependent source metric is created or updated
+
+Rollup requirements
+
+Support `rollup_method` values such as:
+- `sum`
+- `weighted_average`
+- `latest`
+- `none`
+
+Rollups must work from site-level values to company-level aggregates where applicable.
+
+Backward compatibility requirements
+
+Mandatory:
+- existing metric entry flows still work
+- existing dashboards still load
+- existing API consumers do not break
+- introduce compatibility adapters in routes/storage if needed
+
+Relevant files
+- `shared/schema.ts`
+- `server/calculations.ts`
+- `server/storage.ts`
+- `server/routes.ts`
+- `client/src/pages`
+
+-----------------------------------
+PHASE #40 — ESG Phase 2: Framework Mapping & Readiness Dashboard
+-----------------------------------
+
+Objective
+
+Build framework mapping so metrics can support GRI, ISSB, TCFD, ESRS, CDP, and UNGC readiness views without claiming formal compliance.
+
+Must deliver
+
+- `frameworks` table
+- `framework_requirements` table
+- `metric_framework_mappings` table
+- `business_framework_selections` table
+- seeded framework records
+- seeded initial requirement sets
+- framework selection UI
+- readiness dashboard
+- metric detail alignment panel
+
+Schema requirements
+
+Create `frameworks` with fields equivalent to:
+- id
+- code
+- name
+- description
+- is_active
+
+Create `framework_requirements` with fields equivalent to:
+- id
+- framework_id
+- code
+- title
+- description
+- requirement_type (`metric`, `narrative`, `policy`, `target`, `risk`, `evidence`)
+- pillar
+- mandatory_level (`core`, `conditional`, `advanced`)
+- active
+
+Create `metric_framework_mappings` with fields equivalent to:
+- id
+- metric_definition_id
+- framework_requirement_id
+- mapping_strength (`direct`, `partial`, `supporting`)
+- notes
+
+Create `business_framework_selections` with fields equivalent to:
+- id
+- business_id
+- framework_id
+- is_enabled
+- created_at
+- updated_at
+
+Seed requirements
+
+Seed frameworks:
+- GRI
+- ISSB
+- TCFD
+- ESRS
+- CDP
+- UNGC
+
+Seed initial requirement sets for each.
+
+Mapping requirements
+
+Start with the 28 core metrics.
+Map advanced metrics where practical.
+Do not overstate coverage. Use `partial` and `supporting` where appropriate.
+
+Phase 2 UI
+
+1. Framework Settings page
+- business selects which frameworks to track
+
+2. Readiness page
+For each selected framework show:
+- covered items
+- partially covered items
+- missing items
+- next best actions
+- status indicators or progress visuals
+Do not collapse into one opaque score yet.
+
+3. Metric detail / entry page
+Add “Framework Alignment” section showing:
+- supported frameworks
+- mapping strength
+- additional required items beyond the metric
+
+Relevant files
+- `shared/schema.ts`
+- `server/storage.ts`
+- `server/routes.ts`
+- `client/src/pages`
+
+Dependency
+- Requires Phase 1 complete
+
+-----------------------------------
+PHASE #41 — ESG Phase 3: ESG Management Controls
+-----------------------------------
+
+Objective
+
+Add the non-metric ESG management layer:
+- materiality assessment
+- policy register
+- governance ownership
+- targets and action plans
+- ESG risk register
+
+Must deliver
+
+- materiality module
+- policies module
+- governance assignment support
+- targets/actions module
+- risk register module
+- linking between related objects
+
+Schema requirements
+
+Create:
+- `material_topics`
+- `business_materiality_assessments`
+- `policy_records`
+- `governance_assignments`
+- `esg_targets`
+- `esg_actions`
+- `esg_risks`
+
+Seed an initial starter set of material topics across E, S, and G.
+
+Materiality module
+
+Build a Materiality page that lets businesses score topics on:
+- financial materiality
+- impact materiality
+
+Output:
+- ranked list and/or matrix
+- recommended metrics and policies based on selected material topics
+
+Policies module
+
+Build a Policies page with:
+- type
+- title
+- owner
+- status
+- effective date
+- review date
+- document link
+- overdue and upcoming review indicators
+
+Also store governance ownership records for areas like:
+- environment
+- social
+- governance
+- climate
+- privacy / cyber where applicable
+
+Targets and actions module
+
+Build a Targets page with:
+- target creation wizard
+- metric linkage
+- baseline value
+- target value
+- baseline year
+- target year
+- owner
+
+Under each target:
+- linked actions
+- due dates
+- status
+- progress percent
+
+Surface overdue actions on dashboard views.
+
+Risk register module
+
+Build a Risk Register page with:
+- pillar
+- risk_type
+- likelihood
+- impact
+- risk_score
+- mitigation_plan
+- owner
+- review_date
+
+Add:
+- risk matrix view
+- filtering by pillar and risk type
+
+Cross-linking requirements
+
+Where relevant, support links such as:
+- material topic -> recommended metrics
+- material topic -> policies
+- material topic -> risks
+- target -> actions
+- metric -> target
+- risk -> action
+- policy -> governance owner
+
+Relevant files
+- `shared/schema.ts`
+- `server/storage.ts`
+- `server/routes.ts`
+- `client/src/pages`
+- `server/calculations.ts`
+
+Dependency
+- Requires Phase 2 complete
+
+-----------------------------------
+PHASE #42 — ESG Phase 4: Multi-Dimensional Scoring & AI Assistant
+-----------------------------------
+
+Objective
+
+Replace the single ESG score with a four-dimensional model and upgrade the assistant into an ESG advisor layer.
+
+Must deliver
+
+Dashboard score outputs:
+- Core ESG Completeness
+- ESG Performance
+- Management Maturity
+- Framework Readiness
+
+Assistant capabilities:
+- explain metrics
+- identify missing submissions and evidence
+- identify missing policies / targets / owners
+- recommend next actions
+- summarise readiness in plain language
+- suggest draft ESG action plans
+
+Scoring requirements
+
+Implement four separate backend scoring services:
+
+1. Completeness
+- expected data vs submitted data for current period
+
+2. Performance
+- metric values vs targets and/or prior period trends
+
+3. Management Maturity
+- factors in policies, ownership, targets, actions, evidence, review cycles
+
+4. Framework Readiness
+- covered / partial / missing requirements by selected framework
+
+Important:
+- scoring logic belongs in backend/service layer
+- frontend only renders outputs and explanations
+
+Dashboard UI
+
+Update dashboard to show:
+- four score cards or gauges
+- plain-language explanations
+- per-framework readiness if selected
+
+Assistant upgrade
+
+Extend assistant logic so it can:
+- explain metric definitions
+- recognise framework selections
+- interpret readiness gaps
+- detect missing evidence
+- recommend policies, targets, actions
+- highlight overdue reviews and unassigned ownership
+- use “alignment/readiness” language only
+
+Relevant files
+- `server/calculations.ts`
+- `server/routes.ts`
+- `shared/schema.ts`
+- `client/src/pages`
+
+Dependency
+- Requires Phase 3 complete
+
+-----------------------------------
+PHASE #43 — ESG Phase 5: Reporting, Exports & Admin Tools
+-----------------------------------
+
+Objective
+
+Extend reporting across the full ESG system and add super-admin tools so the ESG model can be evolved without code changes.
+
+Must deliver
+
+Report/export outputs:
+- ESG metrics summary
+- framework readiness summary
+- target progress summary
+- policy register summary
+- risk register summary
+- site comparison summary
+
+Admin tools:
+- metric definition management
+- derived formula management
+- framework management
+- framework requirement management
+- metric-framework mapping management
+- material topic management
+- scoring weight/default management
+
+Reporting requirements
+
+Reports must clearly distinguish:
+- measured
+- derived
+- estimated
+- missing
+
+Framework sections must use “alignment/readiness” language only.
+
+Export UI
+
+Add or extend a Reports & Exports page with:
+- report type
+- date range
+- site scope
+- PDF / DOCX export
+
+Admin requirements
+
+Add super-admin pages for:
+- editing `metric_definitions`
+- activating/deactivating metrics
+- editing derived formulas
+- editing frameworks
+- editing framework requirements
+- editing mappings
+- editing material topics
+- editing scoring weights and defaults
+
+Control rule
+
+Do not allow unsafe direct edits to historical metric values from admin tooling unless explicitly audited and scoped.
+
+Relevant files
+- `server/report-engine.ts`
+- `server/routes.ts`
+- `server/storage.ts`
+- `shared/schema.ts`
+- `client/src/pages`
+
+Dependency
+- Requires Phase 4 complete
+
+-----------------------------------
+IMPLEMENTATION EXPECTATIONS
+-----------------------------------
+
+Use phased delivery. Complete one phase cleanly before starting the next.
+
+For each phase, provide:
+1. schema changes
+2. storage layer changes
+3. route additions/changes
+4. frontend pages/components
+5. seed data additions
+6. migration/backwards-compatibility notes
+7. any assumptions made
+
+Important architecture expectations
+
+- Use stable codes for metrics and framework requirements
+- Avoid hardcoded ESG logic in React pages
+- Prefer typed helpers and service-layer functions
+- Keep nullable `site_id`
+- Enforce business/site ownership validation on writes
+- Keep derived metrics non-editable by end users
+- Design formulas and mappings so future admin UI can manage them safely
+
+Deliver Phase 1 first.
+Do not start Phase 2 until Phase 1 is complete and stable.
