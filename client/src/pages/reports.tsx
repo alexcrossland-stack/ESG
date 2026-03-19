@@ -23,6 +23,10 @@ import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { useSiteContext } from "@/hooks/use-site-context";
+import { EmptyState } from "@/components/empty-state";
+import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
+import { useActivationState } from "@/hooks/use-activation-state";
+import { EsgTooltip } from "@/components/esg-tooltip";
 
 const ESG_EXPORT_TYPES = [
   {
@@ -1202,6 +1206,8 @@ export default function Reports() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const [exportingAssurance, setExportingAssurance] = useState(false);
 
+  const activation = useActivationState();
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/reports/generate", {
@@ -1214,11 +1220,20 @@ export default function Reports() {
       return res.json();
     },
     onSuccess: (data: any) => {
+      const isFirstReport = !activation.hasGeneratedReport;
       setReportData(data.data);
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      if (isFirstReport) trackEvent(AnalyticsEvents.FIRST_REPORT_GENERATED, { template: selectedTemplate, period: selectedPeriod });
       toast({ title: "Report generated", description: `${templateConfig.label} is ready to preview and export.` });
     },
-    onError: () => toast({ title: "Generation failed", variant: "destructive" }),
+    onError: (e: any) => toast({
+      title: "Report generation failed",
+      description: e?.message?.includes("data") || e?.message?.includes("metric")
+        ? "Not enough data to generate a report. Add at least one month of data in Data Entry first."
+        : "Something went wrong generating the report. Try selecting a different period or report type.",
+      variant: "destructive",
+    }),
   });
 
   const exportReport = () => {
@@ -1846,9 +1861,12 @@ export default function Reports() {
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : reports.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {activeSite ? `No reports for ${activeSite.name} yet.` : "No reports generated yet."}
-          </p>
+          <EmptyState
+            icon={FileText}
+            title={activeSite ? `No reports for ${activeSite.name} yet` : "No reports generated yet"}
+            description="Generate your first ESG report using the form above. Reports summarise your performance and can be shared with customers, lenders, or your own team."
+            helpText="Tip: you need at least one period of data entered before you can generate a meaningful report."
+          />
         ) : (
           <div className="space-y-2">
             {reports.map((report: any) => (

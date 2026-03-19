@@ -27,8 +27,10 @@ import { useSiteContext } from "@/hooks/use-site-context";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
-import { Building2 } from "lucide-react";
+import { Building2, ArrowRight } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
+import { useActivationState } from "@/hooks/use-activation-state";
+import { EsgTooltip } from "@/components/esg-tooltip";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -136,7 +138,7 @@ function ActivationCard() {
     },
   });
 
-  if (isLoading || !status || status.complete) return null;
+  if (isLoading || !status || status.activationComplete) return null;
   if (status.dismissedAt) return null;
 
   const completedCount = status.completedCount ?? 0;
@@ -144,8 +146,6 @@ function ActivationCard() {
   const overallPercent = status.overallPercent ?? 0;
   const steps: any[] = status.steps ?? [];
   const nextStep = status.nextStep;
-  const allDone = completedCount >= totalSteps;
-  if (allDone) return null;
 
   return (
     <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
@@ -153,7 +153,7 @@ function ActivationCard() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-primary" />
-            Get up and running
+            Get up and running — {completedCount} of {totalSteps} complete
           </CardTitle>
           <button
             className="text-muted-foreground hover:text-foreground transition-colors"
@@ -209,6 +209,52 @@ function ActivationCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function NextStepBanner() {
+  const activation = useActivationState();
+  if (activation.isLoading || activation.activationComplete) return null;
+
+  let message = "";
+  let href = "/data-entry";
+  let actionLabel = "Add your first data point";
+
+  if (!activation.hasCompletedOnboarding) {
+    message = "Complete your setup to activate your ESG workspace.";
+    href = "/onboarding";
+    actionLabel = "Continue setup";
+  } else if (!activation.hasAddedData) {
+    message = "Your workspace is ready. Add your first data point to see your ESG score.";
+    href = "/data-entry";
+    actionLabel = "Add data now";
+  } else if (!activation.hasUploadedEvidence) {
+    message = "Great start! Upload supporting evidence (an invoice or certificate) to improve your data quality.";
+    href = "/evidence";
+    actionLabel = "Upload evidence";
+  } else if (!activation.hasGeneratedReport) {
+    message = "You have data and evidence. Generate your first ESG report to share with stakeholders.";
+    href = "/reports";
+    actionLabel = "Generate report";
+  }
+
+  if (!message) return null;
+
+  return (
+    <div
+      className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-primary/20 bg-primary/5"
+      data-testid="banner-next-step"
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <Zap className="w-4 h-4 text-primary shrink-0" />
+        <p className="text-sm text-foreground leading-snug">{message}</p>
+      </div>
+      <Link href={href}>
+        <Button size="sm" className="shrink-0" data-testid="button-next-step-banner">
+          {actionLabel} <ArrowRight className="w-3.5 h-3.5 ml-1" />
+        </Button>
+      </Link>
+    </div>
   );
 }
 
@@ -583,6 +629,7 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <NextStepBanner />
       <ActivationCard />
 
       {hasAlerts && (
@@ -628,7 +675,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1 row-span-2">
           <CardContent className="p-4 flex flex-col items-center justify-center h-full gap-1">
-            <p className="text-xs font-medium text-muted-foreground text-center">ESG Position</p>
+            <p className="text-xs font-medium text-muted-foreground text-center flex items-center gap-1 justify-center">ESG Position <EsgTooltip term="esg" /></p>
             <ScoreRing score={esgScore} label="Overall" />
             <p className="text-[10px] text-center text-muted-foreground leading-tight mt-1">See 4-dimension breakdown below</p>
           </CardContent>

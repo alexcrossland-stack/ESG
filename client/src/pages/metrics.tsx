@@ -438,9 +438,11 @@ export default function Metrics() {
             </div>
             <div>
               <p className="text-sm font-medium">No metrics activated yet</p>
-              <p className="text-xs text-muted-foreground mt-1">Enable metrics to start tracking your ESG performance</p>
+              <p className="text-xs text-muted-foreground mt-1">Activate metrics to start tracking your ESG performance — each metric measures one aspect of your environment, social, or governance impact.</p>
             </div>
-            <p className="text-xs text-muted-foreground">Use the toggle on each metric below to activate it, or go to Data Entry to start recording values.</p>
+            <p className="text-xs text-muted-foreground">
+              Toggle individual metrics on below, or complete the onboarding setup to have metrics pre-selected for your industry.
+            </p>
           </div>
         )}
         {filtered.length === 0 && metrics.length > 0 && (

@@ -16,6 +16,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { EmptyState } from "@/components/empty-state";
+import { EsgTooltip } from "@/components/esg-tooltip";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
@@ -359,14 +360,14 @@ function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId
     return (
       <EmptyState
         icon={FileCheck}
-        title={viewedSite ? "No evidence for this site" : "No evidence files yet"}
+        title={viewedSite ? "No evidence for this site yet" : "No evidence files yet"}
         description={viewedSite
-          ? `Upload documents that support the ESG data for ${viewedSite.name}`
-          : "Start by uploading documents that support your ESG data"}
+          ? `Upload documents that support the ESG data for ${viewedSite.name}. Evidence strengthens your data quality score and builds trust with customers, lenders, and supply chain partners.`
+          : "Evidence files (invoices, certificates, HR records) prove your ESG data is accurate. They improve your data quality score and are often requested by customers and lenders."}
         helpText={isArchivedSiteSelected
           ? "This site is archived. Historical records are available but new uploads are disabled."
-          : "Examples: energy invoices, HR records, training certificates, board minutes"}
-        actionLabel={(!isArchivedSiteSelected && can("metrics_data_entry")) ? "Upload evidence" : undefined}
+          : "Good starting documents: your most recent electricity bill, last month's gas invoice, or an HR headcount record."}
+        actionLabel={(!isArchivedSiteSelected && can("metrics_data_entry")) ? "Upload your first file" : undefined}
         onAction={(!isArchivedSiteSelected && can("metrics_data_entry")) ? onUploadClick : undefined}
       />
     );
@@ -492,8 +493,8 @@ export default function Evidence() {
       />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="text-evidence-title">Evidence Management</h1>
-          <p className="text-sm text-muted-foreground mt-1">Upload, track, and review supporting evidence for your ESG data</p>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Evidence Management <EsgTooltip term="evidence" /></h1>
+          <p className="text-sm text-muted-foreground mt-1">Upload, track, and review supporting documents for your ESG data</p>
         </div>
         {canUpload && (
           <UploadEvidenceDialog forceOpen={uploadOpen} onOpenChange={setUploadOpen} />

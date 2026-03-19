@@ -1,0 +1,277 @@
+#52 — SME Activation UX Fixes
+
+## Objective
+
+Remove all hesitation, ambiguity, and cognitive load so a first-time SME user can:
+
+- Sign up
+- Complete onboarding
+- Add their first ESG data point
+- Understand what they’ve done
+- Generate a first report
+
+All in one uninterrupted 10–15 minute session without assistance.
+
+This is a UX, copy, and usability optimisation. No new features. Improve clarity and flow only.
+
+Core rule:
+Every screen must clearly answer:
+1. What is this?
+2. Why does it matter?
+3. What should I do next?
+
+This task supersedes draft tasks #5, #6, #7, #19, and #24. Do not implement those separately.
+
+---
+
+## Required approach
+
+1. Audit first (mandatory)
+   - Review all listed screens
+   - Identify:
+     - unclear wording
+     - missing guidance
+     - dead ends
+     - hidden validation issues
+
+2. Implement changes in the order below
+
+3. Use the exact copy provided
+   - Do not reword unless technically required
+
+4. After implementation:
+   - Run full journey with a fresh account
+   - Fix any hesitation points before marking complete
+
+Do not skip steps. Do not partially implement.
+
+---
+
+## Done looks like
+
+A new SME user must:
+
+- Not hesitate at any step
+- Not be confused by wording
+- Always know what to do next
+- Complete onboarding smoothly
+- Add first data point without uncertainty
+- Reach dashboard with a clear next action
+
+If the user pauses or asks “what do I do next?” — the task is not complete.
+
+---
+
+## Out of scope
+
+- New features or new data models
+- New reporting frameworks or metrics
+- Admin-side changes
+- Changes to calculation or scoring logic
+
+---
+
+## Tasks (execute in order)
+
+---
+
+### 1. Sign-up improvements
+
+- Default tab = "Create Account"
+- Add link: "Already have an account? Sign in"
+
+Fields:
+
+Full name  
+Placeholder: e.g. Jane Smith
+
+Password helper:
+At least 6 characters
+
+Add above legal checkboxes:
+By creating an account, you agree to our terms and privacy policy
+
+Loading state:
+Setting up your account…
+
+After submit (NEW transition screen):
+Account created — setting up your workspace…
+
+---
+
+### 2. Onboarding entry (path choice)
+
+Replace all copy:
+
+Title:
+Let's set up your ESG tracking
+
+Guided Setup:
+Step-by-step setup  
+We'll guide you through everything you need to get started
+
+Quick Start:
+Set it up for me  
+We'll create a working setup for you — you can adjust it later
+
+---
+
+### 3. Company profile step
+
+Rename:
+Operational Profile → What type of business are you?
+
+Employee helper:
+Include full-time and part-time employees
+
+Continue button behaviour (critical):
+- On click:
+  - highlight missing field(s)
+  - scroll to first missing field
+  - show inline error:
+
+Please complete this field to continue
+
+---
+
+### 4. ESG maturity step
+
+Add helper:
+“Not sure” counts as “No” for now — you can update this later
+
+Add progress indicator:
+Question X of 5
+
+---
+
+### 5. ESG priorities step
+
+Add guidance text:
+
+Select 3–5 areas to focus on first  
+Most businesses like yours start with these
+
+Behaviour:
+- Pre-select 3–5 topics based on industry
+- If none selected on continue:
+  show inline message:
+
+Select at least one area to continue
+
+---
+
+### 6. Reporting setup step
+
+Add label:
+These metrics are based on your selected areas
+
+Replace helper:
+These are the recommended defaults for your business — you can adjust them later
+
+---
+
+### 7. First data entry step (critical)
+
+Replace period input:
+- Use month picker or dropdown
+- Do NOT allow free text
+
+Label:
+Reporting period
+
+Value field:
+Value (unit) — dynamic (e.g. Value (kWh))
+
+Placeholder:
+e.g. 1500
+
+Remove duplicate skip messaging:
+Keep only button:
+Skip this step
+
+---
+
+### 8. Evidence step
+
+Replace copy:
+
+You'll upload files after setup — this step helps organise what evidence you'll need
+
+---
+
+### 9. Action plan & completion
+
+Loading state:
+Generating your action plan — this takes a few seconds
+
+Add top priority section:
+
+Start here  
+Add your first energy data point
+
+Replace button:
+Finish setup and go to dashboard
+
+---
+
+### 10. Dashboard first-run
+
+Replace empty scores:
+
+No data yet — add your first entry to see your score
+
+Add banner:
+
+You're all set up — now let's add your first data point
+
+Highlight primary action:
+
+Next step: Add your first data point
+
+---
+
+## Global requirements (apply everywhere)
+
+- All errors must:
+  - explain what went wrong
+  - explain how to fix it
+
+- No silent failures
+  - every action shows success OR error
+
+- All async actions:
+  - must show loading state
+
+- All CTAs:
+  - must route correctly
+  - no dead links
+
+---
+
+## Final validation (required)
+
+Test full journey with a fresh user:
+
+- Sign up
+- Complete onboarding
+- Add one data point
+- Reach dashboard
+
+The user must:
+- never hesitate
+- never be confused
+- always know the next step
+
+If the user stops or asks “what do I do next?” → task is incomplete.
+
+---
+
+## Relevant files
+
+client/src/pages/onboarding.tsx  
+client/src/pages/dashboard.tsx  
+client/src/pages/data-entry.tsx  
+client/src/components/empty-state.tsx  
+client/src/components/page-guidance.tsx  
+client/src/components/ui/tooltip.tsx  
+client/src/components/ui/form.tsx  

@@ -2,6 +2,9 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
+import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
+import { EsgTooltip } from "@/components/esg-tooltip";
+import { format, subMonths } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -110,6 +113,43 @@ const GOV_METRICS: MetricRec[] = [
   { key: "supplier_screening", name: "Supplier ESG Screening", desc: "Percentage of suppliers assessed", default: true },
   { key: "anti_bribery", name: "Anti-Bribery Policy", desc: "Whether an anti-bribery policy is in place", default: false },
 ];
+
+const INDUSTRY_TOPICS: Record<string, string[]> = {
+  "Manufacturing": ["climate_change", "energy_efficiency", "waste_management", "health_safety"],
+  "Logistics & Transport": ["climate_change", "energy_efficiency", "health_safety", "supply_chain"],
+  "Technology": ["energy_efficiency", "data_privacy", "board_governance", "employee_wellbeing"],
+  "Retail": ["climate_change", "waste_management", "supply_chain", "diversity_inclusion"],
+  "Professional Services": ["employee_wellbeing", "diversity_inclusion", "board_governance", "data_privacy"],
+  "Healthcare": ["health_safety", "employee_wellbeing", "waste_management", "data_privacy"],
+  "Financial Services": ["board_governance", "anti_corruption", "data_privacy", "employee_wellbeing"],
+  "Construction": ["climate_change", "health_safety", "waste_management", "supply_chain"],
+  "Education": ["employee_wellbeing", "training_development", "health_safety", "energy_efficiency"],
+  "Hospitality": ["energy_efficiency", "waste_management", "employee_wellbeing", "water_conservation"],
+  "Agriculture": ["climate_change", "water_conservation", "waste_management", "supply_chain"],
+  "Other": ["energy_efficiency", "employee_wellbeing", "board_governance"],
+};
+
+const METRIC_UNITS: Record<string, string> = {
+  electricity: "kWh", gas_fuel: "kWh", scope1: "tCO₂e", scope2: "tCO₂e",
+  waste: "tonnes", recycling: "%", water: "m³", vehicle_fuel: "litres",
+  headcount: "people", gender_diversity: "%", turnover: "%", training_hours: "hours",
+  health_safety: "incidents", living_wage: "%", board_meetings: "number",
+  esg_policy: "yes/no", supplier_screening: "%", anti_bribery: "yes/no",
+};
+
+function generateOnboardingPeriods() {
+  const periods = [];
+  const now = new Date();
+  let d = new Date(now.getFullYear(), now.getMonth(), 1);
+  const start = new Date(2023, 0, 1);
+  while (d >= start) {
+    periods.push({ value: format(d, "yyyy-MM"), label: format(d, "MMM yyyy") });
+    d = subMonths(d, 1);
+  }
+  return periods;
+}
+
+const ONBOARDING_PERIODS = generateOnboardingPeriods();
 
 const POLICY_MAP: Record<string, { name: string; url: string }> = {
   climate_change: { name: "Climate Change & Carbon Policy", url: "/policy-generator" },
@@ -284,6 +324,7 @@ export default function Onboarding() {
   const company = authData?.company;
 
   const [showWizard, setShowWizard] = useState(false);
+  const [showCompletion, setShowCompletion] = useState(false);
   const [step, setStep] = useState(1);
   const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
 
@@ -304,7 +345,7 @@ export default function Onboarding() {
 
   const [quickDataMetric, setQuickDataMetric] = useState("");
   const [quickDataValue, setQuickDataValue] = useState("");
-  const [quickDataPeriod, setQuickDataPeriod] = useState("");
+  const [quickDataPeriod, setQuickDataPeriod] = useState(ONBOARDING_PERIODS[0]?.value || "");
 
   const [quickEvidenceDesc, setQuickEvidenceDesc] = useState("");
   const [quickEvidenceModule, setQuickEvidenceModule] = useState("metrics");
@@ -356,6 +397,13 @@ export default function Onboarding() {
     }
   }, [selectedTopics]);
 
+  useEffect(() => {
+    if (industry && selectedTopics.size === 0) {
+      const defaults = INDUSTRY_TOPICS[industry];
+      if (defaults) setSelectedTopics(new Set(defaults));
+    }
+  }, [industry]);
+
   const saveMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PUT", "/api/onboarding/step", data),
     onSuccess: () => {
@@ -369,11 +417,16 @@ export default function Onboarding() {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      toast({ title: "Setup complete!", description: "Your ESG workspace is ready. Your action plan is waiting on the dashboard." });
-      setLocation("/");
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      trackEvent(AnalyticsEvents.ONBOARDING_COMPLETED, { path: "guided" });
+      setShowCompletion(true);
     },
     onError: (e: any) => {
-      toast({ title: "Setup failed", description: e.message, variant: "destructive" });
+      toast({
+        title: "Setup could not be saved",
+        description: "There was a problem saving your setup. Please check your connection and try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -434,7 +487,10 @@ export default function Onboarding() {
 
   function saveAndNext() {
     const stepKey = V2_STEPS[step - 1]?.key;
-    if (stepKey) setCompletedSteps(prev => new Set([...prev, stepKey]));
+    if (stepKey) {
+      setCompletedSteps(prev => new Set([...prev, stepKey]));
+      trackEvent(AnalyticsEvents.ONBOARDING_STEP_COMPLETED, { step, stepKey });
+    }
     const data = getStepData();
     saveMutation.mutate({ ...data, step: step + 1 });
     const nextStep = step + 1;
@@ -463,8 +519,9 @@ export default function Onboarding() {
   function startQuickStart() {
     apiRequest("POST", "/api/onboarding/complete", { path: "quick_start", onboardingVersion: 2 }).then(() => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Welcome!", description: "Your workspace is ready. Check the dashboard to get started." });
-      setLocation("/");
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      trackEvent(AnalyticsEvents.ONBOARDING_COMPLETED, { path: "quick_start" });
+      setShowCompletion(true);
     });
   }
 
@@ -490,6 +547,78 @@ export default function Onboarding() {
   }
 
   if (!company) return null;
+
+  if (showCompletion) {
+    const topicsSelected = Array.from(selectedTopics);
+    const metricsCount = selectedMetrics.size || 5;
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background p-4">
+        <div className="max-w-lg w-full space-y-6 text-center">
+          <div className="space-y-3">
+            <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
+              <CheckCircle2 className="w-8 h-8 text-primary" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold" data-testid="text-completion-title">
+              Your ESG workspace is ready!
+            </h1>
+            <p className="text-muted-foreground text-sm sm:text-base max-w-md mx-auto">
+              Here's what we've set up for you.
+            </p>
+          </div>
+
+          <div className="text-left space-y-3">
+            {companyName && (
+              <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+                <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">Company profile created</p>
+                  <p className="text-xs text-muted-foreground">{companyName} — {industry || "your industry"}</p>
+                </div>
+              </div>
+            )}
+            {topicsSelected.length > 0 && (
+              <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+                <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">{topicsSelected.length} ESG topics selected</p>
+                  <p className="text-xs text-muted-foreground">Including {topicsSelected.slice(0, 2).join(", ").replace(/_/g, " ")}{topicsSelected.length > 2 ? " and more" : ""}</p>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+              <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+              <div>
+                <p className="text-sm font-medium">{metricsCount} metrics activated</p>
+                <p className="text-xs text-muted-foreground">Reporting {reportingFrequency} — you can change this any time</p>
+              </div>
+            </div>
+            {actionPlan && (
+              <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+                <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">Personalised action plan saved</p>
+                  <p className="text-xs text-muted-foreground">View it any time from your dashboard</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <p className="text-sm font-medium">What to do next</p>
+            <p className="text-xs text-muted-foreground">Add your first real data point — it only takes a minute. Your electricity bill is the easiest place to start.</p>
+            <div className="flex flex-col sm:flex-row gap-2 justify-center pt-1">
+              <Button onClick={() => setLocation("/data-entry")} data-testid="button-go-data-entry">
+                Add your first data point <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-go-dashboard">
+                Go to dashboard
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!showWizard) {
     return (
@@ -617,13 +746,13 @@ export default function Onboarding() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Number of Employees</Label>
+                  <Label>Number of Employees <span className="text-xs text-muted-foreground font-normal">(full-time equivalent)</span></Label>
                   <Input type="number" value={employeeCount} onChange={e => setEmployeeCount(e.target.value)} placeholder="e.g. 50" data-testid="input-employees" />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <Label>Operational Profile</Label>
+                <Label>How do you mainly operate? <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {OP_PROFILES.map(op => (
                     <button
@@ -636,10 +765,23 @@ export default function Onboarding() {
                     >
                       <op.icon className={`w-4 h-4 mb-1.5 ${operationalProfile === op.value ? "text-primary" : "text-muted-foreground"}`} />
                       <p className="text-sm font-medium">{op.label}</p>
+                      <p className="text-xs text-muted-foreground">{op.desc}</p>
                     </button>
                   ))}
                 </div>
               </div>
+
+              {step === 1 && !isStepValid() && (companyName || industry || country || employeeCount) && (
+                <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="text-step1-validation-hint">
+                  Still needed:{" "}
+                  {[
+                    !companyName && "company name",
+                    !industry && "industry",
+                    !country && "country",
+                    !employeeCount && "number of employees",
+                  ].filter(Boolean).join(", ")}
+                </p>
+              )}
             </div>
           )}
 
@@ -648,7 +790,7 @@ export default function Onboarding() {
               <Card className="bg-muted/30 border-dashed">
                 <CardContent className="p-4">
                   <p className="text-sm text-muted-foreground">
-                    Answer these 5 quick questions to help us understand where you are on your ESG journey. There are no right or wrong answers.
+                    Answer these 5 quick questions to help us understand where you are on your <span className="inline-flex items-center gap-1">ESG journey <EsgTooltip term="maturity" /></span>. There are no right or wrong answers — we use this to suggest a starting plan.
                   </p>
                 </CardContent>
               </Card>
@@ -770,14 +912,14 @@ export default function Onboarding() {
               <div className="space-y-1.5">
                 <Label>How often will you enter data?</Label>
                 <Select value={reportingFrequency} onValueChange={setReportingFrequency}>
-                  <SelectTrigger data-testid="select-frequency" className="w-48"><SelectValue /></SelectTrigger>
+                  <SelectTrigger data-testid="select-frequency" className="w-60"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Monthly — most accurate for energy & carbon</SelectItem>
-                    <SelectItem value="quarterly">Quarterly — good balance for most businesses</SelectItem>
-                    <SelectItem value="annual">Annual — minimum for compliance reporting</SelectItem>
+                    <SelectItem value="monthly">Monthly — best for energy & carbon</SelectItem>
+                    <SelectItem value="quarterly">Quarterly — good for most businesses</SelectItem>
+                    <SelectItem value="annual">Annual — minimum for compliance</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">You can change this later. Monthly is recommended if you have utility bills each month.</p>
+                <p className="text-xs text-muted-foreground">Monthly is recommended — you can enter figures straight from your utility bills. You can change this any time.</p>
               </div>
 
               <MetricCheckboxGroup title="Environmental" icon={Leaf} color="text-primary" metrics={ENV_METRICS} selected={selectedMetrics} onToggle={toggleMetric} />
@@ -792,16 +934,16 @@ export default function Onboarding() {
                 <CardContent className="p-4">
                   <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Try entering your first data point</p>
                   <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                    You can enter real data or an estimate. This helps you see how the platform works.
+                    Use your most recent utility bill or HR record. You can use an estimate — you can update it later.
                   </p>
                 </CardContent>
               </Card>
 
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <Label>Metric</Label>
+                  <Label>What are you recording?</Label>
                   <Select value={quickDataMetric} onValueChange={setQuickDataMetric}>
-                    <SelectTrigger data-testid="select-quick-metric"><SelectValue placeholder="Choose a metric" /></SelectTrigger>
+                    <SelectTrigger data-testid="select-quick-metric"><SelectValue placeholder="Choose a type of data" /></SelectTrigger>
                     <SelectContent>
                       {[...ENV_METRICS, ...SOCIAL_METRICS, ...GOV_METRICS]
                         .filter(m => selectedMetrics.has(m.key))
@@ -812,12 +954,24 @@ export default function Onboarding() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label>Value</Label>
+                    <Label>
+                      Value
+                      {quickDataMetric && METRIC_UNITS[quickDataMetric] && (
+                        <span className="ml-1 text-xs text-muted-foreground font-normal">({METRIC_UNITS[quickDataMetric]})</span>
+                      )}
+                    </Label>
                     <Input type="number" value={quickDataValue} onChange={e => setQuickDataValue(e.target.value)} placeholder="e.g. 1500" data-testid="input-quick-value" />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Period</Label>
-                    <Input value={quickDataPeriod} onChange={e => setQuickDataPeriod(e.target.value)} placeholder="e.g. Jan 2025" data-testid="input-quick-period" />
+                    <Label className="flex items-center gap-1">Which month is this for? <EsgTooltip term="reporting_period" /></Label>
+                    <Select value={quickDataPeriod} onValueChange={setQuickDataPeriod}>
+                      <SelectTrigger data-testid="select-quick-period"><SelectValue placeholder="Select month" /></SelectTrigger>
+                      <SelectContent>
+                        {ONBOARDING_PERIODS.slice(0, 24).map(p => (
+                          <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </div>

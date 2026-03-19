@@ -28,6 +28,10 @@ import { useSiteContext } from "@/hooks/use-site-context";
 import { DataSourceBadge } from "@/pages/evidence";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceSuggestions } from "@/components/evidence-suggestions";
+import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
+import { useActivationState } from "@/hooks/use-activation-state";
+import { EsgTooltip } from "@/components/esg-tooltip";
+import { Link } from "wouter";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -168,14 +172,28 @@ export default function DataEntry() {
     }
   }, [entryData]);
 
+  const activation = useActivationState();
+
   const saveRawMutation = useMutation({
     mutationFn: (data: { inputs: Record<string, string>; period: string; siteId?: string | null }) =>
       apiRequest("POST", "/api/raw-data", data),
     onSuccess: () => {
+      const isFirstData = !activation.hasAddedData;
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
-      toast({ title: "Raw data saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      if (isFirstData) trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: selectedPeriod });
+      toast({
+        title: "Data saved",
+        description: isFirstData
+          ? "Great first entry! Next: upload an evidence file to back up this data."
+          : "Your figures have been saved and metrics recalculated.",
+      });
     },
-    onError: (e: any) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+    onError: () => toast({
+      title: "Save failed",
+      description: "We couldn't save your data. Check your internet connection and try again. If the problem persists, refresh the page.",
+      variant: "destructive",
+    }),
   });
 
   const recalcMutation = useMutation({
@@ -186,7 +204,7 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       toast({ title: "Metrics recalculated", description: `${data.updated?.length || 0} metrics updated` });
     },
-    onError: (e: any) => toast({ title: "Recalculation failed", description: e.message, variant: "destructive" }),
+    onError: () => toast({ title: "Recalculation failed", description: "Data was saved but metrics couldn't be recalculated. Try clicking Save again.", variant: "destructive" }),
   });
 
   const saveManualMutation = useMutation({
@@ -262,7 +280,15 @@ export default function DataEntry() {
     if (!val?.value) return;
     const dataSourceType = manualDataSourceTypes[metricId] || "manual";
     await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null });
-    toast({ title: "Saved" });
+    const isFirstData = !activation.hasAddedData;
+    if (isFirstData) {
+      trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: selectedPeriod, source: "manual" });
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+    }
+    toast({
+      title: "Value saved",
+      description: isFirstData ? "First data point recorded. Next: add an evidence file to support this entry." : "Metric updated for this period.",
+    });
   };
 
   const metrics = entryData?.metrics || [];
@@ -517,6 +543,22 @@ export default function DataEntry() {
             </div>
           )}
 
+          {activation.hasAddedData && !activation.hasUploadedEvidence && (
+            <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800" data-testid="banner-upload-evidence">
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <p className="text-sm text-blue-800 dark:text-blue-200 leading-snug">
+                  Data saved! Back it up with an evidence file — an invoice or utility bill proves the figure is accurate.
+                </p>
+              </div>
+              <Link href="/evidence">
+                <Button size="sm" variant="outline" className="shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300" data-testid="button-goto-evidence">
+                  Upload evidence <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                </Button>
+              </Link>
+            </div>
+          )}
+
           {recalcResults && recalcResults.length > 0 && (
             <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
               <CardHeader className="pb-2">
@@ -529,7 +571,12 @@ export default function DataEntry() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {recalcResults.map((r: any, i: number) => (
                     <div key={i} className="flex items-center justify-between p-2 bg-white dark:bg-emerald-950/30 rounded border border-emerald-100 dark:border-emerald-900">
-                      <span className="text-sm">{r.metric}</span>
+                      <span className="text-sm flex items-center gap-1">
+                        {r.metric}
+                        {r.metric === "Scope 1 Emissions" && <EsgTooltip term="scope1" />}
+                        {r.metric === "Scope 2 Emissions" && <EsgTooltip term="scope2" />}
+                        {r.metric === "Scope 3 Emissions" && <EsgTooltip term="scope3" />}
+                      </span>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold">{typeof r.value === "number" ? r.value.toFixed(2) : r.value}</span>
                         <div className={`w-2 h-2 rounded-full ${r.status === "green" ? "bg-emerald-500" : r.status === "amber" ? "bg-amber-500" : "bg-red-500"}`} />

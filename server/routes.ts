@@ -1437,10 +1437,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      if (company.onboardingComplete) {
-        return res.json({ complete: true, steps: [], overallPercent: 100 });
-      }
-
       const now = new Date();
       const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
@@ -1478,8 +1474,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const completedCount = steps.filter(s => s.complete).length;
       const overallPercent = Math.round((completedCount / steps.length) * 100);
       const nextStep = steps.find(s => !s.complete) || null;
+      const activationComplete = steps.every(s => s.complete);
 
-      res.json({ complete: false, steps, overallPercent, completedCount, totalSteps: steps.length, nextStep, dismissedAt: company.activationCardDismissedAt });
+      res.json({
+        complete: activationComplete,
+        onboardingComplete: !!company.onboardingComplete,
+        activationComplete,
+        hasAddedData: step4Complete,
+        hasUploadedEvidence: step5Complete,
+        hasGeneratedReport: step6Complete,
+        steps,
+        overallPercent,
+        completedCount,
+        totalSteps: steps.length,
+        nextStep,
+        dismissedAt: company.activationCardDismissedAt,
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1491,6 +1501,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { dismiss } = req.body;
       await storage.updateCompany(companyId, { activationCardDismissedAt: dismiss ? new Date() : null });
       res.json({ dismissed: !!dismiss });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/analytics/events", requireAuth, async (req, res) => {
+    try {
+      const session = req.session as any;
+      const { event_name, properties } = req.body;
+      if (!event_name || typeof event_name !== "string") {
+        return res.status(400).json({ error: "event_name is required" });
+      }
+      const payload = {
+        timestamp: new Date().toISOString(),
+        user_id: session.userId,
+        company_id: session.companyId,
+        event_name,
+        properties: properties || {},
+      };
+      console.info("[analytics]", JSON.stringify(payload));
+      res.status(204).end();
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
