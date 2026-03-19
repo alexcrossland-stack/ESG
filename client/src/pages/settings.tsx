@@ -23,6 +23,7 @@ import {
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
   Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon, UserPlus,
   Key, KeyRound, Trash2, Plus, AlertCircle, CheckCircle, XCircle,
+  Monitor, Smartphone, Globe, RefreshCw, LogOut,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -221,6 +222,8 @@ export default function Settings() {
 
           <MfaCard />
 
+          <SessionManagementCard />
+
           <ActivityLogCard />
         </TabsContent>
 
@@ -235,6 +238,240 @@ export default function Settings() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ============================================================
+// STEP-UP AUTHENTICATION DIALOG
+// ============================================================
+
+export function StepUpDialog({ open, onClose, onSuccess, actionLabel }: {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  actionLabel?: string;
+}) {
+  const { toast } = useToast();
+  const [password, setPassword] = useState("");
+  const [totpToken, setTotpToken] = useState("");
+  const [backupCode, setBackupCode] = useState("");
+  const [useTotpOrBackup, setUseTotpOrBackup] = useState<"totp" | "backup">("totp");
+
+  const { data: mfaStatus } = useQuery<any>({ queryKey: ["/api/auth/mfa/status"] });
+  const requiresMfa = mfaStatus?.mfaEnabled;
+
+  const stepUpMutation = useMutation({
+    mutationFn: async () => {
+      const body: any = { password };
+      if (requiresMfa) {
+        if (useTotpOrBackup === "totp") body.totpToken = totpToken;
+        else body.backupCode = backupCode;
+      }
+      const res = await apiRequest("POST", "/api/auth/step-up", body);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Re-authentication failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setPassword(""); setTotpToken(""); setBackupCode("");
+      onSuccess();
+    },
+    onError: (e: any) => toast({ title: "Authentication failed", description: e.message, variant: "destructive" }),
+  });
+
+  if (!open) return null;
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-primary" />
+            Confirm Your Identity
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {actionLabel
+              ? `For your security, please verify your identity before ${actionLabel}.`
+              : "This action requires re-authentication. Please verify your identity to continue."}
+          </p>
+          <div className="space-y-2">
+            <Label className="text-xs">Password</Label>
+            <Input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Your current password"
+              data-testid="input-stepup-password"
+            />
+          </div>
+          {requiresMfa && (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <Button size="sm" variant={useTotpOrBackup === "totp" ? "default" : "outline"} onClick={() => setUseTotpOrBackup("totp")} className="text-xs">Authenticator</Button>
+                <Button size="sm" variant={useTotpOrBackup === "backup" ? "default" : "outline"} onClick={() => setUseTotpOrBackup("backup")} className="text-xs">Backup Code</Button>
+              </div>
+              {useTotpOrBackup === "totp" ? (
+                <Input value={totpToken} onChange={e => setTotpToken(e.target.value)} placeholder="6-digit code" maxLength={6} data-testid="input-stepup-totp" />
+              ) : (
+                <Input value={backupCode} onChange={e => setBackupCode(e.target.value)} placeholder="Backup code" data-testid="input-stepup-backup" />
+              )}
+            </div>
+          )}
+          <div className="flex gap-2 justify-end pt-1">
+            <Button size="sm" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={() => stepUpMutation.mutate()}
+              disabled={stepUpMutation.isPending || !password || (requiresMfa && !totpToken && !backupCode)}
+              data-testid="button-stepup-confirm"
+            >
+              {stepUpMutation.isPending ? "Verifying..." : "Confirm"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// SESSION MANAGEMENT CARD
+// ============================================================
+
+function SessionManagementCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
+
+  const { data: sessions, isLoading } = useQuery<any[]>({ queryKey: ["/api/auth/sessions"] });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      const res = await apiRequest("DELETE", `/api/auth/sessions/${sessionId}`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/sessions"] });
+      if (data.loggedOut) {
+        toast({ title: "Session revoked", description: "You have been logged out of this session." });
+      } else {
+        toast({ title: "Session revoked", description: "The session has been terminated." });
+      }
+      setRevokeConfirmId(null);
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const revokeAllMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/sessions/revoke-others");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/sessions"] });
+      toast({ title: "Sessions terminated", description: `${data.revokedCount} other session(s) have been logged out.` });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const otherSessions = sessions?.filter(s => !s.isCurrent) || [];
+
+  return (
+    <Card data-testid="card-sessions">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Monitor className="w-4 h-4 text-primary" />
+          Active Sessions
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Manage where you are logged in. Revoke sessions from devices you no longer use.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <div className="space-y-2">{[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
+        ) : !sessions || sessions.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No active sessions found. Your sessions will appear here after logging in.</p>
+        ) : (
+          <div className="space-y-2">
+            {sessions.map(session => (
+              <div key={session.id} className="flex items-start justify-between p-2.5 rounded-lg border border-border bg-muted/30" data-testid={`row-session-${session.id}`}>
+                <div className="flex items-start gap-2.5">
+                  <Globe className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-medium">{session.deviceSummary}</p>
+                      {session.isCurrent && (
+                        <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">Current</Badge>
+                      )}
+                    </div>
+                    {session.ipAddress && (
+                      <p className="text-[11px] text-muted-foreground">IP: {session.ipAddress}</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Last active: {session.lastSeenAt ? format(new Date(session.lastSeenAt), "MMM d, HH:mm") : "Unknown"}
+                    </p>
+                    {session.createdAt && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Started: {format(new Date(session.createdAt), "MMM d, yyyy")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  {!session.isCurrent && (
+                    revokeConfirmId === session.sessionId ? (
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="h-6 text-xs px-2"
+                          onClick={() => revokeMutation.mutate(session.sessionId)}
+                          disabled={revokeMutation.isPending}
+                          data-testid={`button-confirm-revoke-${session.id}`}
+                        >
+                          Revoke
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setRevokeConfirmId(null)}>Cancel</Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-xs px-2"
+                        onClick={() => setRevokeConfirmId(session.sessionId)}
+                        data-testid={`button-revoke-${session.id}`}
+                      >
+                        <LogOut className="w-3 h-3 mr-1" />
+                        Revoke
+                      </Button>
+                    )
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {otherSessions.length > 0 && (
+          <div className="pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+              onClick={() => revokeAllMutation.mutate()}
+              disabled={revokeAllMutation.isPending}
+              data-testid="button-revoke-all-sessions"
+            >
+              <LogOut className="w-3 h-3 mr-1.5" />
+              {revokeAllMutation.isPending ? "Revoking..." : `Log out ${otherSessions.length} other session(s)`}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -281,7 +518,7 @@ function MfaCard() {
 
   const disableMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/auth/mfa/disable", { password: disablePassword, token: disableToken });
+      const res = await apiRequest("POST", "/api/auth/mfa/disable", { password: disablePassword, token: disableToken }, () => disableMutation.mutate());
       return res.json();
     },
     onSuccess: () => {
@@ -290,12 +527,16 @@ function MfaCard() {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
       toast({ title: "MFA disabled", description: "Two-factor authentication has been removed." });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Error", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   const regenMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/auth/mfa/regenerate-codes", { token: regenToken });
+      const res = await apiRequest("POST", "/api/auth/mfa/regenerate-codes", { token: regenToken }, () => regenMutation.mutate());
       return res.json();
     },
     onSuccess: (data) => {
@@ -305,7 +546,11 @@ function MfaCard() {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
       toast({ title: "Backup codes regenerated", description: "Save these codes somewhere safe." });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Error", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   if (isLoading) return null;
@@ -639,14 +884,18 @@ function DataExportCard() {
 
   const requestExportMutation = useMutation({
     mutationFn: async (scope: string) => {
-      const res = await apiRequest("POST", "/api/gdpr/export", { scope });
+      const res = await apiRequest("POST", "/api/gdpr/export", { scope }, () => requestExportMutation.mutate(scope));
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/gdpr/exports"] });
       toast({ title: "Export requested", description: "Your data export is being prepared. Check below for the download link once ready." });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Error", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   return (
@@ -706,14 +955,18 @@ function AccountDeletionCard({ companyName }: { companyName?: string }) {
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/gdpr/delete-account", { confirmationText: confirmText });
+      const res = await apiRequest("POST", "/api/gdpr/delete-account", { confirmationText: confirmText }, () => deleteMutation.mutate());
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Account deleted", description: "Your account has been anonymised. You will be logged out." });
       setTimeout(() => window.location.href = "/auth", 2000);
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Error", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   return (
@@ -817,8 +1070,8 @@ function UserManagement() {
   });
 
   const updateRoleMutation = useMutation({
-    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
-      await apiRequest("PUT", `/api/users/${userId}/role`, { role });
+    mutationFn: async ({ userId: targetUserId, role }: { userId: string; role: string }) => {
+      await apiRequest("PUT", `/api/users/${targetUserId}/role`, { role }, () => updateRoleMutation.mutate({ userId: targetUserId, role }));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
@@ -826,7 +1079,9 @@ function UserManagement() {
       toast({ title: "Role updated", description: "User role has been changed successfully." });
     },
     onError: (e: any) => {
-      toast({ title: "Failed to update role", description: e.message || "Something went wrong", variant: "destructive" });
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Failed to update role", description: e.message || "Something went wrong", variant: "destructive" });
+      }
     },
   });
 
@@ -2368,13 +2623,17 @@ function SecurityAdmin() {
   ];
 
   const createMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/company/api-keys", { label: newKeyLabel, scopes: newKeyScopes }),
+    mutationFn: () => apiRequest("POST", "/api/company/api-keys", { label: newKeyLabel, scopes: newKeyScopes }, () => createMutation.mutate()),
     onSuccess: async (res) => {
       const data = await res.json();
       setNewKeyResult(data.key);
       queryClient.invalidateQueries({ queryKey: ["/api/company/api-keys"] });
     },
-    onError: () => toast({ title: "Failed to create API key", variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Failed to create API key", variant: "destructive" });
+      }
+    },
   });
 
   const revokeMutation = useMutation({
@@ -2709,14 +2968,18 @@ function CompanyGdprAdmin() {
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/gdpr/delete-company", { confirmationText: confirmText, password: deletePassword });
+      const res = await apiRequest("POST", "/api/gdpr/delete-company", { confirmationText: confirmText, password: deletePassword }, () => deleteMutation.mutate());
       return res.json();
     },
     onSuccess: (data) => {
       toast({ title: "Company deletion scheduled", description: data.message || "Your company account will be deleted in 7 days. Contact support to cancel." });
       setShowDeleteConfirm(false); setConfirmText(""); setDeletePassword("");
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      if (e?.name !== "StepUpRequiredError") {
+        toast({ title: "Error", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   return (

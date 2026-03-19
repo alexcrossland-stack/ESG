@@ -14,6 +14,8 @@ import {
   businessMaterialityAssessments, policyRecords, governanceAssignments,
   esgTargets, esgActions, esgRisks,
   identityProviders, dataExportJobs, dataDeletionRequests,
+  userSessions,
+  type UserSession, type InsertUserSession,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
@@ -420,6 +422,16 @@ export interface IStorage {
   updateDataDeletionRequest(id: string, data: Partial<DataDeletionRequest>): Promise<DataDeletionRequest | undefined>;
   anonymiseUser(userId: string): Promise<void>;
   deleteCompanyData(companyId: string): Promise<void>;
+
+  // User Sessions (extended tracking)
+  createUserSession(data: InsertUserSession): Promise<UserSession>;
+  getUserSession(sessionId: string): Promise<UserSession | undefined>;
+  getUserSessions(userId: string): Promise<UserSession[]>;
+  updateUserSessionLastSeen(sessionId: string): Promise<void>;
+  revokeUserSession(sessionId: string): Promise<void>;
+  revokeAllUserSessionsExcept(userId: string, currentSessionId: string): Promise<number>;
+  setUserSessionStepUp(sessionId: string): Promise<void>;
+  cleanupExpiredUserSessions(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2891,6 +2903,53 @@ export class DatabaseStorage implements IStorage {
       name: `deleted_${companyId}`,
       deletionScheduledAt: new Date(),
     }).where(eq(companies.id, companyId));
+  }
+
+  async createUserSession(data: InsertUserSession): Promise<UserSession> {
+    const [s] = await db.insert(userSessions).values(data).returning();
+    return s;
+  }
+
+  async getUserSession(sessionId: string): Promise<UserSession | undefined> {
+    const [s] = await db.select().from(userSessions).where(eq(userSessions.sessionId, sessionId));
+    return s;
+  }
+
+  async getUserSessions(userId: string): Promise<UserSession[]> {
+    return db.select().from(userSessions)
+      .where(and(eq(userSessions.userId, userId), isNull(userSessions.revokedAt)))
+      .orderBy(desc(userSessions.lastSeenAt));
+  }
+
+  async updateUserSessionLastSeen(sessionId: string): Promise<void> {
+    await db.update(userSessions).set({ lastSeenAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+  }
+
+  async revokeUserSession(sessionId: string): Promise<void> {
+    await db.update(userSessions).set({ revokedAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+  }
+
+  async revokeAllUserSessionsExcept(userId: string, currentSessionId: string): Promise<number> {
+    const result = await db.update(userSessions)
+      .set({ revokedAt: new Date() })
+      .where(and(
+        eq(userSessions.userId, userId),
+        isNull(userSessions.revokedAt),
+        sql`${userSessions.sessionId} != ${currentSessionId}`
+      ))
+      .returning();
+    return result.length;
+  }
+
+  async setUserSessionStepUp(sessionId: string): Promise<void> {
+    await db.update(userSessions).set({ stepUpAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+  }
+
+  async cleanupExpiredUserSessions(): Promise<number> {
+    const result = await db.delete(userSessions)
+      .where(lt(userSessions.expiresAt, new Date()))
+      .returning();
+    return result.length;
   }
 }
 

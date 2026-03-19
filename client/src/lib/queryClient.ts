@@ -28,15 +28,28 @@ export function authFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, headers, credentials: "include" });
 }
 
+export class StepUpRequiredError extends Error {
+  readonly code = "STEP_UP_REQUIRED";
+  constructor() {
+    super("Step-up authentication required");
+    this.name = "StepUpRequiredError";
+  }
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     let message: string;
+    let code: string | undefined;
     try {
       const json = JSON.parse(text);
       message = json.error || json.message || text;
+      code = json.code;
     } catch {
       message = text;
+    }
+    if (res.status === 403 && code === "STEP_UP_REQUIRED") {
+      throw new StepUpRequiredError();
     }
     if (res.status === 429) {
       message = "Too many attempts. Please wait a few minutes before trying again.";
@@ -49,6 +62,7 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  retryFn?: () => void,
 ): Promise<Response> {
   const headers: Record<string, string> = { ...getAuthHeaders() };
   if (data) headers["Content-Type"] = "application/json";
@@ -60,7 +74,30 @@ export async function apiRequest(
     credentials: "include",
   });
 
-  await throwIfResNotOk(res);
+  if (!res.ok) {
+    const text = (await res.text()) || res.statusText;
+    let message: string;
+    let code: string | undefined;
+    try {
+      const json = JSON.parse(text);
+      message = json.error || json.message || text;
+      code = json.code;
+    } catch {
+      message = text;
+    }
+    if (res.status === 403 && code === "STEP_UP_REQUIRED") {
+      const err = new StepUpRequiredError();
+      if (retryFn) {
+        window.dispatchEvent(new CustomEvent("stepup-required", { detail: { retry: retryFn } }));
+      }
+      throw err;
+    }
+    if (res.status === 429) {
+      message = "Too many attempts. Please wait a few minutes before trying again.";
+    }
+    throw new Error(message);
+  }
+
   return res;
 }
 

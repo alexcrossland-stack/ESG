@@ -1,5 +1,5 @@
 import { Switch, Route, Redirect, useLocation } from "wouter";
-import { queryClient, authFetch } from "./lib/queryClient";
+import { queryClient, authFetch, StepUpRequiredError } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,8 +9,9 @@ import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun, TriangleAlert } from "lucide-react";
 import { SupportAssistant } from "@/components/support-assistant";
-import { useEffect, useRef, Component, type ComponentType } from "react";
+import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, type ComponentType } from "react";
 import type { ReactNode, ErrorInfo } from "react";
+import { StepUpDialog } from "@/pages/settings";
 import NotFound from "@/pages/not-found";
 import Auth from "@/pages/auth";
 import Dashboard from "@/pages/dashboard";
@@ -57,6 +58,58 @@ import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
 import FrameworkSettingsPage from "@/pages/framework-settings";
 import FrameworkReadinessPage from "@/pages/framework-readiness";
+
+// ============================================================
+// GLOBAL STEP-UP AUTHENTICATION CONTEXT
+// ============================================================
+
+interface StepUpContextValue {
+  requestStepUp: (onComplete: () => void) => void;
+}
+
+const StepUpContext = createContext<StepUpContextValue>({ requestStepUp: () => {} });
+
+export function useStepUp() {
+  return useContext(StepUpContext);
+}
+
+function StepUpProvider({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const pendingCallback = useRef<(() => void) | null>(null);
+
+  const requestStepUp = useCallback((onComplete: () => void) => {
+    pendingCallback.current = onComplete;
+    setOpen(true);
+  }, []);
+
+  const handleSuccess = useCallback(() => {
+    setOpen(false);
+    const cb = pendingCallback.current;
+    pendingCallback.current = null;
+    if (cb) cb();
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    pendingCallback.current = null;
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ retry: () => void }>;
+      requestStepUp(ce.detail.retry);
+    };
+    window.addEventListener("stepup-required", handler);
+    return () => window.removeEventListener("stepup-required", handler);
+  }, [requestStepUp]);
+
+  return (
+    <StepUpContext.Provider value={{ requestStepUp }}>
+      {children}
+      <StepUpDialog open={open} onClose={handleClose} onSuccess={handleSuccess} />
+    </StepUpContext.Provider>
+  );
+}
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -286,7 +339,9 @@ function App() {
       <ThemeProvider>
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <StepUpProvider>
+            <Router />
+          </StepUpProvider>
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

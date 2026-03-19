@@ -10,6 +10,7 @@ import {
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
   users, type InsertMetricDefinition,
+  type UserSession,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -89,7 +90,7 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
   return storedHash === legacyHashPassword(password);
 }
 
-const tokenSessions = new Map<string, { userId: string; companyId: string; expiresAt: number }>();
+const tokenSessions = new Map<string, { userId: string; companyId: string; expiresAt: number; sessionId?: string }>();
 
 function generateToken(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -138,6 +139,78 @@ async function requireAuth(req: Request, res: Response, next: Function) {
   (req.session as any).companyId = auth.companyId;
 
   try {
+    const IDLE_TIMEOUT = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || "") || 4 * 60 * 60 * 1000;
+    const ABSOLUTE_LIFETIME = parseInt(process.env.SESSION_ABSOLUTE_LIFETIME_MS || "") || 7 * 24 * 60 * 60 * 1000;
+    // Only exempt logout from session lifecycle (revoke-on-logout uses a different code path)
+    const sessionLifecycleExempt = ["/api/auth/logout"];
+    const isExempt = sessionLifecycleExempt.some(p => req.path.startsWith(p));
+
+    // Check if this is a bearer token request: enforce revocation and lifecycle via server-side session record
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice(7);
+      const tokenSession = tokenSessions.get(token);
+      if (tokenSession?.sessionId) {
+        const extSession = await storage.getUserSession(tokenSession.sessionId).catch(() => null);
+        if (extSession && extSession.revokedAt) {
+          tokenSessions.delete(token);
+          return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+        }
+        if (!isExempt && extSession) {
+          // Enforce idle/absolute timeout for bearer sessions using server-side timestamps
+          const now = Date.now();
+          const createdMs = extSession.createdAt ? new Date(extSession.createdAt).getTime() : 0;
+          const lastSeenMs = extSession.lastSeenAt ? new Date(extSession.lastSeenAt).getTime() : 0;
+          const idleMs = now - lastSeenMs;
+          const ageMs = createdMs > 0 ? now - createdMs : 0;
+          if (lastSeenMs > 0 && idleMs > IDLE_TIMEOUT) {
+            tokenSessions.delete(token);
+            return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
+          }
+          if (ageMs > 0 && ageMs > ABSOLUTE_LIFETIME) {
+            tokenSessions.delete(token);
+            return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+          }
+          // Update last seen for bearer sessions
+          storage.updateUserSessionLastSeen(tokenSession.sessionId).catch(() => {});
+        }
+      }
+    }
+
+    // Session lifecycle enforcement for cookie-based sessions
+    const sessionData = req.session as any;
+    if (sessionData.userId && sessionData.lastActivity !== undefined) {
+      const now = Date.now();
+      const idleMs = now - (sessionData.lastActivity || 0);
+      const ageMs = now - (sessionData.createdAt || 0);
+      if (!isExempt) {
+        if (idleMs > IDLE_TIMEOUT) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
+        }
+        if (ageMs > ABSOLUTE_LIFETIME) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+        }
+      }
+      // Update idle timer
+      sessionData.lastActivity = now;
+    }
+
+    // Check if cookie session has been server-side revoked
+    const expressSessionId = req.session?.id;
+    if (expressSessionId) {
+      const extSession = await storage.getUserSession(expressSessionId).catch(() => null);
+      if (extSession && extSession.revokedAt) {
+        req.session.destroy(() => {});
+        return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+      }
+      // Update last seen asynchronously
+      if (extSession) {
+        storage.updateUserSessionLastSeen(expressSessionId).catch(() => {});
+      }
+    }
+
     const user = await storage.getUser(auth.userId);
     if (user && user.role !== "super_admin" && auth.companyId) {
       const companyStatus = await storage.getCompanyStatus(auth.companyId);
@@ -145,7 +218,7 @@ async function requireAuth(req: Request, res: Response, next: Function) {
         return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
       }
     }
-    const consentExemptPaths = ["/api/auth/accept-terms", "/api/auth/logout", "/api/auth/me", "/api/auth/mfa/"];
+    const consentExemptPaths = ["/api/auth/accept-terms", "/api/auth/logout", "/api/auth/me", "/api/auth/mfa/", "/api/auth/sessions", "/api/auth/step-up"];
     const isConsentExempt = consentExemptPaths.some(p => req.path.startsWith(p));
     if (!isConsentExempt && user && user.role !== "super_admin") {
       if (user.termsVersionAccepted !== CURRENT_LEGAL_VERSION || user.privacyVersionAccepted !== CURRENT_LEGAL_VERSION) {
@@ -157,6 +230,67 @@ async function requireAuth(req: Request, res: Response, next: Function) {
     return res.status(503).json({ error: "Service temporarily unavailable" });
   }
 
+  return next();
+}
+
+async function requireStepUp(req: Request, res: Response, next: Function) {
+  // Resolve sessionId: prefer cookie session, fall back to bearer-token-linked sessionId
+  let sessionId = req.session?.id;
+  const authHeader = req.headers.authorization;
+  if (!sessionId && authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    const tokenSession = tokenSessions.get(token);
+    if (tokenSession?.sessionId) sessionId = tokenSession.sessionId;
+  }
+
+  const STEP_UP_VALIDITY = parseInt(process.env.STEP_UP_VALIDITY_MS || "") || 15 * 60 * 1000;
+  const auth = (req as any)._auth;
+  const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+  const clientUa = req.headers["user-agent"] || null;
+  const targetAction = `${req.method} ${req.path}`;
+
+  if (!sessionId) {
+    return res.status(401).json({ error: "Not authenticated", code: "STEP_UP_REQUIRED" });
+  }
+  const extSession = await storage.getUserSession(sessionId).catch(() => null);
+  if (!extSession || !extSession.stepUpAt) {
+    storage.createAuditLog({
+      companyId: auth?.companyId || undefined,
+      userId: auth?.userId,
+      actorType: "user",
+      action: "step_up_initiated",
+      entityType: "auth",
+      ipAddress: clientIp,
+      userAgent: clientUa,
+      details: { sessionId, targetAction, reason: "no_step_up" },
+    } as any).catch(() => {});
+    return res.status(403).json({ error: "This action requires re-authentication. Please verify your identity first.", code: "STEP_UP_REQUIRED" });
+  }
+  const stepUpAge = Date.now() - new Date(extSession.stepUpAt).getTime();
+  if (stepUpAge > STEP_UP_VALIDITY) {
+    storage.createAuditLog({
+      companyId: auth?.companyId || undefined,
+      userId: auth?.userId,
+      actorType: "user",
+      action: "step_up_initiated",
+      entityType: "auth",
+      ipAddress: clientIp,
+      userAgent: clientUa,
+      details: { sessionId, targetAction, reason: "step_up_expired", stepUpAt: extSession.stepUpAt },
+    } as any).catch(() => {});
+    return res.status(403).json({ error: "Re-authentication has expired. Please verify your identity again.", code: "STEP_UP_REQUIRED" });
+  }
+  // Log that a high-risk action was confirmed after step-up
+  storage.createAuditLog({
+    companyId: auth?.companyId || undefined,
+    userId: auth?.userId,
+    actorType: "user",
+    action: "step_up_action_confirmed",
+    entityType: "auth",
+    ipAddress: clientIp,
+    userAgent: clientUa,
+    details: { sessionId, targetAction, stepUpAt: extSession.stepUpAt },
+  } as any).catch(() => {});
   return next();
 }
 
@@ -172,7 +306,19 @@ function requirePermission(module: PermissionModule) {
 }
 
 async function requireSuperAdmin(req: Request, res: Response, next: Function) {
-  const auth = resolveAuth(req);
+  // If requireAuth already ran (most cases: requireAuth, requireSuperAdmin in chain), reuse its auth.
+  // If called standalone, run the full requireAuth lifecycle guard first.
+  if (!(req as any)._auth) {
+    await new Promise<void>((resolve, reject) => {
+      requireAuth(req, res, (err?: any) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    }).catch(() => {});
+    // If requireAuth responded (e.g. 401/403), _auth won't be set — check headersSent
+    if ((res as any).headersSent) return;
+  }
+  const auth = (req as any)._auth || resolveAuth(req);
   if (!auth) return res.status(401).json({ error: "Not authenticated" });
   const user = await storage.getUser(auth.userId);
   if (!user || user.role !== "super_admin") {
@@ -720,10 +866,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { termsVersion: termsVersion || "1.0", privacyVersion: privacyVersion || "1.0", acceptedAt: now.toISOString() },
       });
 
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const clientUa = req.headers["user-agent"] || null;
+      // Use establishSession so the session is fully tracked (lifecycle, user_sessions_ext, bearer token linked)
+      // Note: establishSession is defined after SESSION_* constants; call it in a save-callback pattern
       const token = generateToken();
-      tokenSessions.set(token, { userId: user.id, companyId: company.id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+      const SESSION_ABS = parseInt(process.env.SESSION_ABSOLUTE_LIFETIME_MS || "") || 7 * 24 * 60 * 60 * 1000;
       (req.session as any).userId = user.id;
       (req.session as any).companyId = company.id;
+      (req.session as any).lastActivity = Date.now();
+      (req.session as any).createdAt = Date.now();
+      const sessionId = req.session.id;
+      tokenSessions.set(token, { userId: user.id, companyId: company.id, expiresAt: Date.now() + SESSION_ABS, sessionId });
+      const expiresAt = new Date(Date.now() + SESSION_ABS);
+      storage.createAuditLog({
+        companyId: company.id,
+        userId: user.id,
+        actorType: "user",
+        action: "session_created",
+        entityType: "auth",
+        ipAddress: clientIp,
+        userAgent: clientUa,
+        details: { email: user.email, sessionId },
+      } as any).catch(() => {});
+      storage.getUserSession(sessionId).then(existing => {
+        if (!existing) {
+          storage.createUserSession({
+            userId: user.id,
+            companyId: company.id,
+            sessionId,
+            ipAddress: clientIp,
+            userAgent: clientUa,
+            deviceSummary: (() => {
+              if (!clientUa) return "Unknown device";
+              const browsers: [RegExp, string][] = [[/Edg\//, "Edge"], [/Chrome\//, "Chrome"], [/Firefox\//, "Firefox"], [/Safari\//, "Safari"], [/Opera\//, "Opera"]];
+              const oses: [RegExp, string][] = [[/Windows NT/, "Windows"], [/Mac OS X/, "macOS"], [/Linux/, "Linux"], [/Android/, "Android"], [/iPhone|iPad/, "iOS"]];
+              const browser = browsers.find(([rx]) => rx.test(clientUa))?.[1] || "Browser";
+              const os = oses.find(([rx]) => rx.test(clientUa))?.[1] || "Unknown OS";
+              return `${browser} on ${os}`;
+            })(),
+            lastSeenAt: new Date(),
+            expiresAt,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
       req.session.save((err) => {
         if (err) return res.status(500).json({ error: "Session error" });
         res.json({ user: { ...user, password: undefined }, company, token });
@@ -733,21 +919,62 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  const SESSION_IDLE_TIMEOUT_MS = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || "") || 4 * 60 * 60 * 1000; // 4 hours default
+  const SESSION_ABSOLUTE_LIFETIME_MS = parseInt(process.env.SESSION_ABSOLUTE_LIFETIME_MS || "") || 7 * 24 * 60 * 60 * 1000; // 7 days default
+  const STEP_UP_VALIDITY_MS = parseInt(process.env.STEP_UP_VALIDITY_MS || "") || 15 * 60 * 1000; // 15 minutes default
+
+  function parseUserAgent(ua: string | null): string {
+    if (!ua) return "Unknown device";
+    const browsers: [RegExp, string][] = [
+      [/Edg\//, "Edge"], [/Chrome\//, "Chrome"], [/Firefox\//, "Firefox"],
+      [/Safari\//, "Safari"], [/Opera\//, "Opera"],
+    ];
+    const oses: [RegExp, string][] = [
+      [/Windows NT/, "Windows"], [/Mac OS X/, "macOS"], [/Linux/, "Linux"],
+      [/Android/, "Android"], [/iPhone|iPad/, "iOS"],
+    ];
+    const browser = browsers.find(([rx]) => rx.test(ua))?.[1] || "Browser";
+    const os = oses.find(([rx]) => rx.test(ua))?.[1] || "Unknown OS";
+    return `${browser} on ${os}`;
+  }
+
   function establishSession(req: any, res: any, user: any, company: any, auditDetails: { ipAddress?: string | null; userAgent?: string | null } = {}) {
     const token = generateToken();
-    tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+    const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
     (req.session as any).userId = user.id;
     (req.session as any).companyId = user.companyId;
+    (req.session as any).lastActivity = Date.now();
+    (req.session as any).createdAt = Date.now();
+    const sessionId = req.session.id;
+    // Store sessionId alongside token so revocation checks can reference it
+    tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + SESSION_ABSOLUTE_LIFETIME_MS, sessionId });
     storage.createAuditLog({
       companyId: user.companyId || undefined,
       userId: user.id,
       actorType: "user",
-      action: "login_success",
+      action: "session_created",
       entityType: "auth",
       ipAddress: auditDetails.ipAddress || null,
       userAgent: auditDetails.userAgent || null,
-      details: { email: user.email },
+      details: { email: user.email, sessionId },
     } as any).catch(() => {});
+    // Upsert extended session tracking record
+    storage.getUserSession(sessionId).then(existing => {
+      if (existing) {
+        storage.updateUserSessionLastSeen(sessionId).catch(() => {});
+      } else {
+        storage.createUserSession({
+          userId: user.id,
+          companyId: user.companyId || null,
+          sessionId,
+          ipAddress: auditDetails.ipAddress || null,
+          userAgent: auditDetails.userAgent || null,
+          deviceSummary: parseUserAgent(auditDetails.userAgent || null),
+          lastSeenAt: new Date(),
+          expiresAt,
+        }).catch(() => {});
+      }
+    }).catch(() => {});
     req.session.save((err: Error | null) => {
       if (err) return res.status(500).json({ error: "Session error" });
       res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
@@ -941,6 +1168,49 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/auth/me", async (req, res) => {
     const auth = resolveAuth(req);
     if (!auth) return res.status(401).json({ error: "Not authenticated" });
+
+    // Enforce session lifecycle and revocation (same logic as requireAuth)
+    try {
+      const sessionData = req.session as any;
+      const IDLE_TIMEOUT = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || "") || 4 * 60 * 60 * 1000;
+      const ABSOLUTE_LIFETIME = parseInt(process.env.SESSION_ABSOLUTE_LIFETIME_MS || "") || 7 * 24 * 60 * 60 * 1000;
+      if (sessionData.userId && sessionData.lastActivity !== undefined) {
+        const now = Date.now();
+        const idleMs = now - (sessionData.lastActivity || 0);
+        const ageMs = now - (sessionData.createdAt || 0);
+        if (idleMs > IDLE_TIMEOUT) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
+        }
+        if (ageMs > ABSOLUTE_LIFETIME) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+        }
+        sessionData.lastActivity = now;
+      }
+      const expressSessionId = req.session?.id;
+      if (expressSessionId) {
+        const extSession = await storage.getUserSession(expressSessionId).catch(() => null);
+        if (extSession && extSession.revokedAt) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+        }
+      }
+      // Check bearer token revocation
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        const token = authHeader.slice(7);
+        const tokenSession = tokenSessions.get(token);
+        if (tokenSession?.sessionId) {
+          const extSession = await storage.getUserSession(tokenSession.sessionId).catch(() => null);
+          if (extSession && extSession.revokedAt) {
+            tokenSessions.delete(token);
+            return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+          }
+        }
+      }
+    } catch (_e) {}
+
     const user = await storage.getUser(auth.userId);
     if (!user) return res.status(401).json({ error: "User not found" });
     const sessionData = req.session as any;
@@ -3059,7 +3329,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), requireStepUp, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4113,7 +4383,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/users/:id/role", requireAuth, requirePermission("user_management"), async (req, res) => {
+  app.put("/api/users/:id/role", requireAuth, requirePermission("user_management"), requireStepUp, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -9069,9 +9339,28 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         delete (req.session as any).mfaPendingUserId;
         (req.session as any).userId = userId;
         (req.session as any).companyId = user.companyId;
+        (req.session as any).lastActivity = Date.now();
+        (req.session as any).createdAt = Date.now();
+        const sessionId = req.session.id;
         const sessionToken = generateToken();
-        tokenSessions.set(sessionToken, { userId, companyId: user.companyId, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+        tokenSessions.set(sessionToken, { userId, companyId: user.companyId, expiresAt: Date.now() + SESSION_ABSOLUTE_LIFETIME_MS, sessionId });
         const company = await storage.getCompany(user.companyId);
+        const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
+        const clientIpMfa = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+        const clientUaMfa = req.headers["user-agent"] || null;
+        storage.createAuditLog({
+          companyId: user.companyId || undefined,
+          userId,
+          actorType: "user",
+          action: "session_created",
+          entityType: "auth",
+          ipAddress: clientIpMfa,
+          userAgent: clientUaMfa,
+          details: { email: user.email, sessionId, via: "mfa_setup" },
+        } as any).catch(() => {});
+        storage.getUserSession(sessionId).then(ex => {
+          if (!ex) storage.createUserSession({ userId, companyId: user.companyId, sessionId, ipAddress: clientIpMfa, userAgent: clientUaMfa, deviceSummary: parseUserAgent(clientUaMfa), lastSeenAt: new Date(), expiresAt }).catch(() => {});
+        }).catch(() => {});
         return req.session.save((err) => {
           if (err) return res.status(500).json({ error: "Session error" });
           res.json({
@@ -9135,7 +9424,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/auth/mfa/disable", requireAuth, mfaLimiter, async (req, res) => {
+  app.post("/api/auth/mfa/disable", requireAuth, requireStepUp, mfaLimiter, async (req, res) => {
     try {
       const userId = (req as any)._auth.userId;
       const { password, token } = req.body;
@@ -9168,7 +9457,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/auth/mfa/regenerate-codes", requireAuth, mfaLimiter, async (req, res) => {
+  app.post("/api/auth/mfa/regenerate-codes", requireAuth, requireStepUp, mfaLimiter, async (req, res) => {
     try {
       const userId = (req as any)._auth.userId;
       const { token } = req.body;
@@ -9273,7 +9562,227 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/admin/mfa-policy", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  // ============================================================
+  // SESSION MANAGEMENT ROUTES
+  // ============================================================
+
+  app.get("/api/auth/sessions", requireAuth, async (req, res) => {
+    try {
+      const { userId } = (req as any)._auth;
+      const currentSessionId = req.session?.id;
+      const sessions = await storage.getUserSessions(userId);
+      const now = new Date();
+      const result = sessions
+        .filter(s => !s.revokedAt && new Date(s.expiresAt) > now)
+        .map(s => ({
+          id: s.id,
+          sessionId: s.sessionId,
+          isCurrent: s.sessionId === currentSessionId,
+          deviceSummary: s.deviceSummary || "Unknown device",
+          ipAddress: s.ipAddress ? s.ipAddress.replace(/\.\d+$/, ".***") : null, // Mask last octet
+          createdAt: s.createdAt,
+          lastSeenAt: s.lastSeenAt,
+          expiresAt: s.expiresAt,
+        }));
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/auth/sessions/:sessionId", requireAuth, async (req, res) => {
+    try {
+      const { userId } = (req as any)._auth;
+      const { sessionId } = req.params;
+      const targetSession = await storage.getUserSession(sessionId);
+      if (!targetSession || targetSession.userId !== userId) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+      if (targetSession.revokedAt) {
+        return res.status(400).json({ error: "Session already revoked" });
+      }
+      const isCurrent = sessionId === req.session?.id;
+      await storage.revokeUserSession(sessionId);
+      // Also evict any bearer tokens linked to this sessionId from the in-memory map
+      for (const [token, ts] of tokenSessions.entries()) {
+        if (ts.sessionId === sessionId) tokenSessions.delete(token);
+      }
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      await storage.createAuditLog({
+        companyId: (req as any)._auth.companyId || undefined,
+        userId,
+        actorType: "user",
+        action: "session_revoked",
+        entityType: "auth",
+        ipAddress: clientIp,
+        userAgent: req.headers["user-agent"] || null,
+        details: { revokedSessionId: sessionId, isCurrent },
+      } as any);
+      if (isCurrent) {
+        req.session.destroy(() => {});
+        return res.json({ ok: true, loggedOut: true });
+      }
+      res.json({ ok: true, loggedOut: false });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/auth/sessions/revoke-others", requireAuth, async (req, res) => {
+    try {
+      const { userId } = (req as any)._auth;
+      const currentSessionId = req.session?.id || "";
+      const count = await storage.revokeAllUserSessionsExcept(userId, currentSessionId);
+      // Evict all bearer tokens except those linked to the current session
+      for (const [token, ts] of tokenSessions.entries()) {
+        if (ts.userId === userId && ts.sessionId !== currentSessionId) tokenSessions.delete(token);
+      }
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      await storage.createAuditLog({
+        companyId: (req as any)._auth.companyId || undefined,
+        userId,
+        actorType: "user",
+        action: "logout_all_other_sessions",
+        entityType: "auth",
+        ipAddress: clientIp,
+        userAgent: req.headers["user-agent"] || null,
+        details: { revokedCount: count, currentSessionPreserved: true },
+      } as any);
+      res.json({ ok: true, revokedCount: count });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // STEP-UP AUTHENTICATION ROUTES
+  // ============================================================
+
+  const stepUpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: "Too many step-up attempts. Please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+  });
+
+  app.post("/api/auth/step-up", requireAuth, stepUpLimiter, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { password, totpToken, backupCode } = req.body;
+      const sessionId = req.session?.id;
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const clientUa = req.headers["user-agent"] || null;
+
+      if (!sessionId) {
+        return res.status(401).json({ error: "No active session" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Require password
+      if (!password) {
+        return res.status(400).json({ error: "Password is required for re-authentication" });
+      }
+      const pwValid = await verifyPassword(password, user.password);
+      if (!pwValid) {
+        await storage.createAuditLog({
+          companyId: companyId || undefined,
+          userId,
+          actorType: "user",
+          action: "step_up_failed",
+          entityType: "auth",
+          ipAddress: clientIp,
+          userAgent: clientUa,
+          details: { reason: "wrong_password" },
+        } as any).catch(() => {});
+        return res.status(401).json({ error: "Invalid password" });
+      }
+
+      // If MFA enabled, require TOTP or backup code
+      if (user.mfaEnabled) {
+        if (!totpToken && !backupCode) {
+          return res.status(400).json({ error: "MFA verification required", code: "MFA_REQUIRED" });
+        }
+        let mfaVerified = false;
+        if (backupCode && user.mfaBackupCodesHash && user.mfaBackupCodesHash.length > 0) {
+          for (let i = 0; i < user.mfaBackupCodesHash.length; i++) {
+            const match = await verifyBackupCode(backupCode, user.mfaBackupCodesHash[i]);
+            if (match) {
+              const remaining = user.mfaBackupCodesHash.filter((_, idx) => idx !== i);
+              await storage.updateUser(userId, { mfaBackupCodesHash: remaining });
+              mfaVerified = true;
+              break;
+            }
+          }
+        } else if (totpToken && user.mfaSecretEncrypted) {
+          const secret = decryptSecret(user.mfaSecretEncrypted);
+          mfaVerified = await verifyTotpToken(totpToken, secret);
+        }
+        if (!mfaVerified) {
+          await storage.createAuditLog({
+            companyId: companyId || undefined,
+            userId,
+            actorType: "user",
+            action: "step_up_failed",
+            entityType: "auth",
+            ipAddress: clientIp,
+            userAgent: clientUa,
+            details: { reason: "mfa_failed" },
+          } as any).catch(() => {});
+          return res.status(401).json({ error: "Invalid MFA token" });
+        }
+      }
+
+      // Grant step-up — scoped to this session
+      await storage.setUserSessionStepUp(sessionId);
+      await storage.createAuditLog({
+        companyId: companyId || undefined,
+        userId,
+        actorType: "user",
+        action: "step_up_success",
+        entityType: "auth",
+        ipAddress: clientIp,
+        userAgent: clientUa,
+        details: { sessionId },
+      } as any).catch(() => {});
+      res.json({ ok: true, stepUpGranted: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/auth/step-up/status", requireAuth, async (req, res) => {
+    try {
+      const sessionId = req.session?.id;
+      const STEP_UP_VALIDITY = parseInt(process.env.STEP_UP_VALIDITY_MS || "") || 15 * 60 * 1000;
+      if (!sessionId) {
+        return res.json({ stepUpValid: false, requiresMfa: false });
+      }
+      const extSession = await storage.getUserSession(sessionId).catch(() => null);
+      const { userId } = (req as any)._auth;
+      const user = await storage.getUser(userId);
+      let stepUpValid = false;
+      if (extSession?.stepUpAt) {
+        const age = Date.now() - new Date(extSession.stepUpAt).getTime();
+        stepUpValid = age < STEP_UP_VALIDITY;
+      }
+      res.json({
+        stepUpValid,
+        stepUpAt: extSession?.stepUpAt || null,
+        stepUpExpiresIn: extSession?.stepUpAt
+          ? Math.max(0, STEP_UP_VALIDITY - (Date.now() - new Date(extSession.stepUpAt).getTime()))
+          : 0,
+        requiresMfa: user?.mfaEnabled ?? false,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/mfa-policy", requireAuth, requireStepUp, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
@@ -9414,7 +9923,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/gdpr/export", requireAuth, async (req, res) => {
+  app.post("/api/gdpr/export", requireAuth, requireStepUp, async (req, res) => {
     try {
       const { userId, companyId } = (req as any)._auth;
       const { scope } = req.body;
@@ -9548,7 +10057,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/gdpr/delete-account", requireAuth, async (req, res) => {
+  app.post("/api/gdpr/delete-account", requireAuth, requireStepUp, async (req, res) => {
     try {
       const { userId, companyId } = (req as any)._auth;
       const { confirmationText } = req.body;
@@ -9593,7 +10102,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/gdpr/delete-company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/gdpr/delete-company", requireAuth, requirePermission("settings_admin"), requireStepUp, async (req, res) => {
     try {
       const { userId, companyId } = (req as any)._auth;
       const { confirmationText, password } = req.body;

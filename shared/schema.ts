@@ -1356,3 +1356,29 @@ export type InsertDataExportJob = z.infer<typeof insertDataExportJobSchema>;
 export const insertDataDeletionRequestSchema = createInsertSchema(dataDeletionRequests).omit({ id: true, createdAt: true });
 export type DataDeletionRequest = typeof dataDeletionRequests.$inferSelect;
 export type InsertDataDeletionRequest = z.infer<typeof insertDataDeletionRequestSchema>;
+
+// ============================================================
+// USER SESSIONS (extended session tracking)
+// ============================================================
+
+export const userSessions = pgTable("user_sessions_ext", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull(),
+  companyId: varchar("company_id"),
+  sessionId: text("session_id").notNull().unique(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  deviceSummary: text("device_summary"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  revokedAt: timestamp("revoked_at"),
+  stepUpAt: timestamp("step_up_at"),
+}, (table) => ({
+  userIdIdx: index("idx_user_sessions_ext_user_id").on(table.userId),
+  sessionIdIdx: uniqueIndex("idx_user_sessions_ext_session_id").on(table.sessionId),
+}));
+
+export const insertUserSessionSchema = createInsertSchema(userSessions).omit({ id: true, createdAt: true });
+export type UserSession = typeof userSessions.$inferSelect;
+export type InsertUserSession = z.infer<typeof insertUserSessionSchema>;
