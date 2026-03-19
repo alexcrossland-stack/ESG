@@ -271,6 +271,7 @@ export interface IStorage {
   updateAgentApiKeyLastUsed(id: string): Promise<void>;
 
   // Agent Runs / Actions / Escalations
+  getAgentRuns(filters?: { companyId?: string; siteId?: string; limit?: number }): Promise<AgentRun[]>;
   createAgentRun(data: InsertAgentRun): Promise<AgentRun>;
   updateAgentRun(id: string, updates: Partial<AgentRun>): Promise<AgentRun | undefined>;
   createAgentAction(data: InsertAgentAction): Promise<AgentAction>;
@@ -1506,6 +1507,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Agent Runs
+  async getAgentRuns(filters?: { companyId?: string; siteId?: string; limit?: number }) {
+    const conditions: any[] = [];
+    if (filters?.companyId) conditions.push(eq(agentRuns.companyId, filters.companyId));
+    if (filters?.siteId) conditions.push(eq(agentRuns.siteId, filters.siteId));
+    return db.select().from(agentRuns)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(agentRuns.createdAt))
+      .limit(filters?.limit ?? 100);
+  }
+
   async createAgentRun(data: InsertAgentRun) {
     const [run] = await db.insert(agentRuns).values(data as any).returning();
     return run;

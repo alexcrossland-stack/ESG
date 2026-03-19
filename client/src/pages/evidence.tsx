@@ -310,10 +310,14 @@ function MetricCoverageTable() {
 
 function EvidenceList() {
   const { activeSiteId, activeSite, sites } = useSiteContext();
+  // Allow overriding the active site for historical viewing (includes archived)
+  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
+  const hasMultipleSites = sites.length >= 1;
+  const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId;
   const { data: files = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/evidence", activeSiteId ?? "all"],
+    queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
     queryFn: async () => {
-      const url = activeSiteId ? `/api/evidence?siteId=${activeSiteId}` : "/api/evidence";
+      const url = resolvedSiteId ? `/api/evidence?siteId=${resolvedSiteId}` : "/api/evidence";
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load evidence");
       return res.json();
@@ -382,6 +386,23 @@ function EvidenceList() {
 
   return (
     <div className="space-y-2">
+      {hasMultipleSites && (
+        <div className="flex items-center gap-2 pb-1">
+          <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-evidence-site-filter">
+            <SelectTrigger className="w-48" data-testid="trigger-evidence-site-filter">
+              <SelectValue placeholder="All sites" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All sites</SelectItem>
+              {sites.map(s => (
+                <SelectItem key={s.id} value={s.id} data-testid={`option-evidence-site-${s.id}`}>
+                  {s.name}{s.status === "archived" ? " (Archived)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       {files.map((f: any) => (
         <Card key={f.id} className={isExpired(f) ? "border-red-300 dark:border-red-800" : ""} data-testid={`card-evidence-${f.id}`}>
           <CardContent className="py-3 px-4">

@@ -611,7 +611,10 @@ function PreviousQuestionnairesTab() {
   const { can } = usePermissions();
   const canDelete = can("questionnaire_access");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { sites } = useSiteContext();
+  const { activeSiteId, sites } = useSiteContext();
+  // Allow filtering by any site including archived for historical viewing
+  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
+  const hasMultipleSites = sites.length >= 1;
 
   const { data: questionnaires = [], isLoading } = useQuery<Questionnaire[]>({
     queryKey: ["/api/questionnaires"],
@@ -745,9 +748,30 @@ function PreviousQuestionnairesTab() {
     );
   }
 
+  const filteredQuestionnaires = viewSiteId === "__all__"
+    ? questionnaires
+    : questionnaires.filter(q => q.siteId === viewSiteId);
+
   return (
     <div className="space-y-3">
-      {questionnaires.map((q) => (
+      {hasMultipleSites && (
+        <div className="flex items-center gap-2 pb-1">
+          <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-questionnaire-site-filter">
+            <SelectTrigger className="w-48" data-testid="trigger-questionnaire-site-filter">
+              <SelectValue placeholder="All sites" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All sites</SelectItem>
+              {sites.map(s => (
+                <SelectItem key={s.id} value={s.id} data-testid={`option-questionnaire-site-${s.id}`}>
+                  {s.name}{s.status === "archived" ? " (Archived)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      {filteredQuestionnaires.map((q) => (
         <Card key={q.id} data-testid={`questionnaire-card-${q.id}`}>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">

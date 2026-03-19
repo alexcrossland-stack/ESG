@@ -2097,6 +2097,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Reuse the active site IDs already fetched above for archive exclusion
       const activeSiteIds = _activeSiteIdsForPeriod;
 
+      // Build siteId → headcount map from carbon calculations for the selected period
+      // Used for headcount-weighted averaging of rate/% metrics
+      const _carbonCalcsForPeriod = latestPeriod
+        ? await storage.getCarbonCalculations(companyId, undefined, latestPeriod)
+        : [];
+      const _siteHeadcount = new Map<string | null, number>();
+      for (const cc of _carbonCalcsForPeriod) {
+        if (cc.employeeCount && cc.employeeCount > 0) {
+          const key = cc.siteId ?? null;
+          // Keep the largest headcount if multiple calcs exist for same site+period
+          if (!_siteHeadcount.has(key) || (_siteHeadcount.get(key) ?? 0) < cc.employeeCount) {
+            _siteHeadcount.set(key, cc.employeeCount);
+          }
+        }
+      }
+      // If no per-site headcount available, try company-level employeeCount as fallback weight
+      const _companyForHC = await storage.getCompany(companyId);
+      const _fallbackHeadcount = _companyForHC?.employeeCount ?? 0;
+
       for (const metric of enabledMetrics) {
         const values = await storage.getMetricValues(metric.id);
         // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
@@ -2109,12 +2128,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (periodValues.length === 1) {
           latestVal = periodValues[0];
         } else if (periodValues.length > 1) {
-          const numericVals = periodValues.map(v => v.value !== null ? Number(v.value) : null).filter(n => n !== null) as number[];
+          const numericVals = periodValues
+            .map(v => ({ siteId: v.siteId ?? null, value: v.value !== null ? Number(v.value) : null }))
+            .filter(e => e.value !== null) as { siteId: string | null; value: number }[];
           if (numericVals.length > 0) {
             const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
-            const aggregated = isRateMetric
-              ? numericVals.reduce((a, b) => a + b, 0) / numericVals.length
-              : numericVals.reduce((a, b) => a + b, 0);
+            let aggregated: number;
+            if (isRateMetric) {
+              // Headcount-weighted average: use per-site employeeCount weights if available
+              const weights = numericVals.map(e => _siteHeadcount.get(e.siteId) ?? _fallbackHeadcount);
+              const totalWeight = weights.reduce((a, b) => a + b, 0);
+              if (totalWeight > 0) {
+                aggregated = numericVals.reduce((sum, e, i) => sum + e.value * weights[i], 0) / totalWeight;
+              } else {
+                // Fallback: simple average when no headcount data is available
+                aggregated = numericVals.reduce((a, e) => a + e.value, 0) / numericVals.length;
+              }
+            } else {
+              // Additive metrics: sum across all sites
+              aggregated = numericVals.reduce((a, e) => a + e.value, 0);
+            }
             latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
           } else {
             latestVal = periodValues[0];

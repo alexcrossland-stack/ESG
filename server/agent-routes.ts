@@ -491,6 +491,18 @@ export function registerAgentRoutes(app: Express) {
     error: z.string().optional(),
   });
 
+  app.get("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
+    try {
+      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+      const runs = await storage.getAgentRuns({ companyId, siteId, limit });
+      return res.json(runs);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
     try {
       const body = createRunSchema.parse(req.body);
