@@ -99,6 +99,8 @@ export const organisationSites = pgTable("organisation_sites", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   uniqueCompanySlug: uniqueIndex("idx_org_sites_company_slug_unique").on(table.companyId, table.slug),
+  companyIdIdx: index("idx_org_sites_company_id").on(table.companyId),
+  companyStatusIdx: index("idx_org_sites_company_status").on(table.companyId, table.status),
 }));
 
 export const companySettings = pgTable("company_settings", {

@@ -1551,11 +1551,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Raw Data Inputs
   app.get("/api/raw-data/:period", requireAuth, async (req, res) => {
-    const companyId = (req.session as any).companyId;
-    const siteIdParam = req.query.siteId as string | undefined;
-    const siteId = siteIdParam === "null" ? null : siteIdParam;
-    const data = await storage.getRawDataByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
-    res.json(data);
+    try {
+      const companyId = (req.session as any).companyId;
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" ? null : siteIdParam;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+      const data = await storage.getRawDataByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post("/api/raw-data", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
@@ -2124,11 +2132,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Reports
   app.get("/api/reports", requireAuth, async (req, res) => {
-    const companyId = (req.session as any).companyId;
-    const rawSiteId = req.query.siteId as string | undefined;
-    const siteId = rawSiteId === "null" ? null : rawSiteId;
-    const reports = await storage.getReportRuns(companyId, siteId);
-    res.json(reports);
+    try {
+      const companyId = (req.session as any).companyId;
+      const rawSiteId = req.query.siteId as string | undefined;
+      const siteId = rawSiteId === "null" ? null : rawSiteId;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+      const reports = await storage.getReportRuns(companyId, siteId);
+      res.json(reports);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), async (req, res) => {
@@ -2141,6 +2157,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
         siteId: bodySiteId,
       } = req.body;
+
+      if (bodySiteId) {
+        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId);
+        if (!rptOwnership.valid) return res.status(rptOwnership.status).json({ error: rptOwnership.message });
+        const rptSite = await storage.getSite(bodySiteId, companyId);
+        if (rptSite?.status === "archived") return res.status(400).json({ error: "Site is archived; reports cannot be generated for archived sites." });
+      }
 
       const company = await storage.getCompany(companyId);
       const { tier: _rptTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
@@ -2921,11 +2944,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/carbon/calculations", requireAuth, async (req, res) => {
-    const companyId = (req.session as any).companyId;
-    const siteIdParam = req.query.siteId as string | undefined;
-    const siteId = siteIdParam === "null" ? null : siteIdParam;
-    const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined);
-    res.json(calcs);
+    try {
+      const companyId = (req.session as any).companyId;
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" ? null : siteIdParam;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+      const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined);
+      res.json(calcs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post("/api/carbon/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
@@ -2993,15 +3024,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ===== QUESTIONNAIRE AUTOFILL =====
   app.get("/api/questionnaires", requireAuth, async (req, res) => {
-    const companyId = (req.session as any).companyId;
-    const company = await storage.getCompany(companyId);
-    if (!company) return res.status(404).json({ error: "Company not found" });
-    const { tier } = getEffectivePlanTier(company);
-    if (tier !== "pro") return upgradeRequired(req, res);
-    const siteIdParam = req.query.siteId as string | undefined;
-    const siteId = siteIdParam === "null" ? null : siteIdParam;
-    const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined);
-    res.json(qs);
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const { tier } = getEffectivePlanTier(company);
+      if (tier !== "pro") return upgradeRequired(req, res);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" ? null : siteIdParam;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+      const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined);
+      res.json(qs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/questionnaires/:id", requireAuth, async (req, res) => {
@@ -3892,6 +3931,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Optional siteId filter — "null" string means unassigned only; omitted means all
       const siteIdParam = req.query.siteId as string | undefined;
       const siteId = siteIdParam === "null" ? null : siteIdParam;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
       const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined);
       res.json(files);
     } catch (e: any) {
@@ -5233,7 +5276,9 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId);
-        if (ownership) return res.status(ownership.status).json({ error: ownership.error });
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        const importSite = await storage.getSite(bodySiteId, companyId);
+        if (importSite?.status === "archived") return res.status(400).json({ error: "Site is archived and cannot accept new data." });
       }
 
       let imported = 0;
@@ -6643,7 +6688,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(400).json({ error: "siteId and entityTypes[] are required" });
       }
       const ownership = await validateSiteOwnership(siteId, companyId);
-      if (ownership) return res.status(ownership.status).json({ error: ownership.error });
+      if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      const migrateSite = await storage.getSite(siteId, companyId);
+      if (migrateSite?.status === "archived") return res.status(400).json({ error: "Cannot migrate data to an archived site." });
       const result = await storage.migrateLegacyData(companyId, siteId, entityTypes);
       res.json(result);
     } catch (e: any) {

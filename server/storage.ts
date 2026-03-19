@@ -642,8 +642,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUnassignedCounts(companyId: string): Promise<Record<string, number>> {
-    const [mv] = await db.select({ count: sql<number>`count(*)::int` }).from(metricValues)
-      .where(and(eq(metricValues.companyId, companyId), isNull(metricValues.siteId)));
+    const [mv] = await db.execute(sql`
+      SELECT count(*)::int AS count FROM metric_values
+      WHERE site_id IS NULL AND metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})
+    `);
     const [rdi] = await db.select({ count: sql<number>`count(*)::int` }).from(rawDataInputs)
       .where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId)));
     const [ef] = await db.select({ count: sql<number>`count(*)::int` }).from(evidenceFiles)
@@ -652,8 +654,9 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(carbonCalculations.companyId, companyId), isNull(carbonCalculations.siteId)));
     const [qs] = await db.select({ count: sql<number>`count(*)::int` }).from(questionnaires)
       .where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
+    const mvCount = (mv as any)?.count ?? 0;
     return {
-      metric_values: mv?.count ?? 0,
+      metric_values: typeof mvCount === "string" ? parseInt(mvCount, 10) : mvCount,
       raw_data_inputs: rdi?.count ?? 0,
       evidence_files: ef?.count ?? 0,
       carbon_calculations: cc?.count ?? 0,
@@ -664,8 +667,12 @@ export class DatabaseStorage implements IStorage {
   async migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>> {
     const updated: Record<string, number> = {};
     if (entityTypes.includes("metric_values")) {
-      const rows = await db.update(metricValues).set({ siteId }).where(and(eq(metricValues.companyId, companyId), isNull(metricValues.siteId))).returning({ id: metricValues.id });
-      updated.metric_values = rows.length;
+      const result = await db.execute(sql`
+        UPDATE metric_values SET site_id = ${siteId}
+        WHERE site_id IS NULL AND metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})
+        RETURNING id
+      `);
+      updated.metric_values = ((result as any).rows ?? []).length;
     }
     if (entityTypes.includes("raw_data_inputs")) {
       const rows = await db.update(rawDataInputs).set({ siteId }).where(and(eq(rawDataInputs.companyId, companyId), isNull(rawDataInputs.siteId))).returning({ id: rawDataInputs.id });
@@ -1796,7 +1803,7 @@ export class DatabaseStorage implements IStorage {
       period: metricValues.period,
       value: metricValues.value,
       notes: metricValues.notes,
-    }).from(metricValues).where(and(...mvConditions)).orderBy(desc(metricValues.createdAt)).limit(20);
+    }).from(metricValues).where(and(...mvConditions)).orderBy(desc(metricValues.submittedAt)).limit(20);
 
     const evRows = await db.select().from(evidenceFiles)
       .where(and(eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, siteId)))
