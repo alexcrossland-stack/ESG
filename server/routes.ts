@@ -2088,7 +2088,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       for (const metric of enabledMetrics) {
         const values = await storage.getMetricValues(metric.id);
-        const latestVal = values.find(v => v.period === latestPeriod);
+        // Period values: prefer org-level (null siteId), otherwise aggregate across active sites + unassigned
+        const periodValues = values.filter(v => v.period === latestPeriod);
+        let latestVal = periodValues.find(v => !v.siteId) || periodValues[0] || null;
+        // If multiple site values and no org-level value, aggregate numerically
+        if (periodValues.length > 1 && !periodValues.find(v => !v.siteId)) {
+          const numericVals = periodValues.map(v => v.value !== null ? Number(v.value) : null).filter(n => n !== null) as number[];
+          if (numericVals.length > 0) {
+            const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
+            const aggregated = isRateMetric
+              ? numericVals.reduce((a, b) => a + b, 0) / numericVals.length
+              : numericVals.reduce((a, b) => a + b, 0);
+            latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
+          }
+        }
         const cat = metric.category;
         categorySummary[cat].total++;
 
@@ -5371,11 +5384,21 @@ Answer the user's question based on this context. If you're asked about somethin
 
   app.post("/api/raw-data/import/parse", requireAuth, async (req, res) => {
     try {
-      const _parseCo = await storage.getCompany((req.session as any).companyId);
+      const companyId = (req.session as any).companyId;
+      const _parseCo = await storage.getCompany(companyId);
       if (!_parseCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
       if (_parseTier !== "pro") return upgradeRequired(req, res);
-      const { format, content } = req.body;
+      // Enforce siteId for multi-site companies at parse time
+      const { format, content, siteId: parseSiteId } = req.body;
+      const activeSitesForParse = await storage.getSites(companyId);
+      if (activeSitesForParse.length >= 2 && !parseSiteId) {
+        return res.status(400).json({ error: "siteId is required when company has multiple active sites" });
+      }
+      if (parseSiteId) {
+        const parseOwnership = await validateSiteOwnership(parseSiteId, companyId, { write: true });
+        if (!parseOwnership.valid) return res.status(parseOwnership.status).json({ error: parseOwnership.message });
+      }
       if (!content) { res.status(400).json({ error: "Content is required" }); return; }
       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
       if (typeof content === "string" && content.length > MAX_IMPORT_BYTES) { res.status(400).json({ error: "File exceeds 5MB limit" }); return; }

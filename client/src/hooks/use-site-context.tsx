@@ -6,6 +6,7 @@ const STORAGE_KEY = "activeSiteId";
 
 interface SiteContextValue {
   sites: OrganisationSite[];
+  activeSites: OrganisationSite[];
   activeSiteId: string | null;
   activeSite: OrganisationSite | null;
   setActiveSiteId: (id: string | null) => void;
@@ -14,6 +15,7 @@ interface SiteContextValue {
 
 const SiteContext = createContext<SiteContextValue>({
   sites: [],
+  activeSites: [],
   activeSiteId: null,
   activeSite: null,
   setActiveSiteId: () => {},
@@ -35,9 +37,11 @@ export function SiteProvider({ children }: { children: ReactNode }) {
     staleTime: 30000,
   });
 
+  const activeSites = sites.filter(s => s.status === "active");
+
   useEffect(() => {
     if (!isLoading && activeSiteId) {
-      const found = sites.find(s => s.id === activeSiteId && s.status === "active");
+      const found = activeSites.find(s => s.id === activeSiteId);
       if (!found) {
         setActiveSiteIdState(null);
         try { localStorage.removeItem(STORAGE_KEY); } catch {}
@@ -53,10 +57,10 @@ export function SiteProvider({ children }: { children: ReactNode }) {
     } catch {}
   };
 
-  const activeSite = activeSiteId ? (sites.find(s => s.id === activeSiteId) ?? null) : null;
+  const activeSite = activeSiteId ? (activeSites.find(s => s.id === activeSiteId) ?? null) : null;
 
   return (
-    <SiteContext.Provider value={{ sites, activeSiteId, activeSite, setActiveSiteId, isLoading }}>
+    <SiteContext.Provider value={{ sites, activeSites, activeSiteId, activeSite, setActiveSiteId, isLoading }}>
       {children}
     </SiteContext.Provider>
   );

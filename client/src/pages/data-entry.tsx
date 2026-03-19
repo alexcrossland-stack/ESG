@@ -726,7 +726,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
   const fileRef = useRef<HTMLInputElement>(null);
 
   const parseMutation = useMutation({
-    mutationFn: async (data: { format: string; content: string }) => {
+    mutationFn: async (data: { format: string; content: string; siteId?: string | null }) => {
       const res = await apiRequest("POST", "/api/raw-data/import/parse", data);
       return res.json();
     },
@@ -767,7 +767,8 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
       const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
-      parseMutation.mutate({ format, content: base64 });
+      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
+      parseMutation.mutate({ format, content: base64, siteId: resolvedSiteId });
     };
     reader.readAsArrayBuffer(file);
     if (fileRef.current) fileRef.current.value = "";
@@ -843,7 +844,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
             <div className="border-2 border-dashed rounded-lg p-8 text-center">
               <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-sm text-muted-foreground mb-3">Drop a CSV or Excel file here</p>
-              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending} data-testid="button-import-choose-file">
+              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending || (isMultiSite && !selectedSiteId)} data-testid="button-import-choose-file">
                 {parseMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
                 {parseMutation.isPending ? "Parsing..." : "Choose File"}
               </Button>

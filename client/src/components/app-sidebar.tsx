@@ -90,8 +90,8 @@ function NextBadge({ show }: NavBadgeProps) {
 }
 
 function SiteSwitcher() {
-  const { sites, activeSiteId, setActiveSiteId } = useSiteContext();
-  if (sites.length === 0) return null;
+  const { activeSites, activeSiteId, setActiveSiteId } = useSiteContext();
+  if (activeSites.length === 0) return null;
   return (
     <div className="mt-2 px-0" data-testid="site-switcher">
       <Select value={activeSiteId ?? "__all__"} onValueChange={v => setActiveSiteId(v === "__all__" ? null : v)}>
@@ -105,7 +105,7 @@ function SiteSwitcher() {
           <SelectItem value="__all__" data-testid="site-option-all">
             <span className="flex items-center gap-1.5"><Globe className="w-3 h-3" /> All Sites</span>
           </SelectItem>
-          {sites.map(s => (
+          {activeSites.map(s => (
             <SelectItem key={s.id} value={s.id} data-testid={`site-option-${s.id}`}>
               <span className="flex items-center gap-1.5"><MapPin className="w-3 h-3" /> {s.name}</span>
             </SelectItem>
