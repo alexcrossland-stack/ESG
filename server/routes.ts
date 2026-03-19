@@ -2107,6 +2107,84 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // --- Phase 4: Multi-Dimensional ESG Scoring ---
+  // GET /api/esg-scores/completeness
+  app.get("/api/esg-scores/completeness", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { scoreCompleteness } = await import("./esg-scoring");
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const result = await scoreCompleteness(companyId, period);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/esg-scores/performance
+  app.get("/api/esg-scores/performance", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { scorePerformance } = await import("./esg-scoring");
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      // siteId: pass "null" string for org-level, a real ID for site scope, or omit for company-wide
+      const siteIdParam = req.query.siteId;
+      const siteId = siteIdParam === "null" ? null
+        : typeof siteIdParam === "string" ? siteIdParam
+        : undefined;
+      const result = await scorePerformance(companyId, period, siteId);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/esg-scores/management-maturity
+  app.get("/api/esg-scores/management-maturity", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { scoreManagementMaturity } = await import("./esg-scoring");
+      const result = await scoreManagementMaturity(companyId);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/esg-scores/framework-readiness
+  app.get("/api/esg-scores/framework-readiness", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { scoreFrameworkReadiness } = await import("./esg-scoring");
+      const result = await scoreFrameworkReadiness(companyId);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/esg-scores/all — fetch all 4 dimensions in one request
+  app.get("/api/esg-scores/all", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { scoreCompleteness, scorePerformance, scoreManagementMaturity, scoreFrameworkReadiness } = await import("./esg-scoring");
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const siteIdParam = req.query.siteId;
+      const siteId = siteIdParam === "null" ? null
+        : typeof siteIdParam === "string" ? siteIdParam
+        : undefined;
+      const [completeness, performance, maturity, frameworkReadiness] = await Promise.all([
+        scoreCompleteness(companyId, period),
+        scorePerformance(companyId, period, siteId),
+        scoreManagementMaturity(companyId),
+        scoreFrameworkReadiness(companyId),
+      ]);
+      res.json({ completeness, performance, maturity, frameworkReadiness });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/metric-definitions/:id/framework-alignment — alignment for a metric definition
   app.get("/api/metric-definitions/:id/framework-alignment", requireAuth, async (req, res) => {
     try {
@@ -5009,19 +5087,121 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const site = await storage.getSite(chatSiteId, companyId);
         if (site) siteContext = `\n- Currently viewing site: ${site.name}`;
       }
-      const systemPrompt = `You are an ESG implementation coach for small and medium-sized businesses (SMEs). Your role is to help business owners and managers understand ESG (Environmental, Social, and Governance) practices and take practical action.
 
-Respond in plain, simple English. Be concise — 2-4 sentences maximum. Focus on what the user should do next. Avoid jargon. Be encouraging and practical.
+      // Pull rich context from Phase 1-3 data
+      let advisorContext = "";
+      try {
+        const [
+          allMetrics,
+          actions,
+          policy,
+          evidenceFiles,
+          materialTopics,
+          frameworkReadiness,
+          metricDefinitions,
+        ] = await Promise.all([
+          storage.getMetrics(companyId),
+          storage.getActionPlans(companyId),
+          storage.getPolicy(companyId),
+          storage.getEvidenceFiles(companyId),
+          storage.getMaterialTopics(companyId),
+          storage.getFrameworkReadiness(companyId).catch(() => []),
+          storage.getMetricDefinitions({ isActive: true }),
+        ]);
 
-The user is currently on the ${pageContext || "dashboard"} page of their ESG management platform.
+        const enabledMetrics = allMetrics.filter(m => m.enabled);
 
-Company context:
-- ESG maturity level: ${companyContext?.maturityLevel ? maturityLabel : "Unknown"}
-- Policies adopted: ${companyContext?.policiesAdopted ?? "Unknown"}
-- Metrics with data entered: ${companyContext?.metricsWithData ?? "Unknown"}
-- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}${siteContext}
+        // Missing submissions — reuse completeness scoring to cover all enabled metrics with frequency-aware lookback
+        const now = new Date();
+        const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const { scoreCompleteness: _scoreComp } = await import("./esg-scoring");
+        const completenessCtx = await _scoreComp(companyId, currentPeriod).catch(() => null);
+        const missingMetrics: string[] = completenessCtx
+          ? completenessCtx.missingMetrics.map(m => m.name)
+          : [];
 
-Answer the user's question based on this context. If you're asked about something outside ESG, gently redirect to ESG topics.`;
+        // Metrics missing targets
+        const metricsWithoutTarget = enabledMetrics.filter(m => !m.targetValue && !m.targetMin && !m.targetMax).map(m => m.name);
+
+        // Metrics missing owner
+        const metricsWithoutOwner = enabledMetrics.filter(m => !m.dataOwner && !m.assignedUserId).map(m => m.name);
+
+        // Overdue actions
+        const overdueActions = actions.filter(a => a.status !== "complete" && a.dueDate && new Date(a.dueDate) < now);
+
+        // Policy status
+        const policyStatus = !policy ? "no policy"
+          : policy.status !== "published" ? "draft (not published)"
+          : policy.reviewDate && new Date(policy.reviewDate) < now ? "published but review overdue"
+          : "published and current";
+
+        // Evidence gaps
+        const metricsWithEvidence = new Set(evidenceFiles.filter(e => e.linkedEntityId).map(e => e.linkedEntityId));
+        const metricsWithoutEvidence = enabledMetrics.filter(m => !metricsWithEvidence.has(m.id)).map(m => m.name);
+
+        // Selected material topics
+        const selectedTopics = materialTopics.filter(t => t.selected).map(t => t.topic);
+
+        // Framework readiness summary
+        const frameworkSummary = (frameworkReadiness || []).map((r: any) =>
+          `${r.framework?.name}: ${r.summary?.covered ?? 0} covered, ${r.summary?.partial ?? 0} partial, ${r.summary?.missing ?? 0} missing`
+        );
+
+        // Phase 1 metric definitions — canonical reference for the AI to explain ALL metrics accurately (no truncation)
+        const metricDefSummary = metricDefinitions.map(d =>
+          `  - ${d.code}: ${d.name} (${d.pillar}, ${d.category})${d.unit ? ` [${d.unit}]` : ""}${d.description ? ` — ${d.description}` : ""}`
+        ).join("\n");
+
+        advisorContext = `
+LIVE COMPANY DATA (use this to give specific, accurate advice):
+
+Metrics:
+- Total enabled metrics: ${enabledMetrics.length}
+- Metrics missing recent data: ${missingMetrics.slice(0, 8).join(", ") || "None"}${missingMetrics.length > 8 ? ` (+${missingMetrics.length - 8} more)` : ""}
+- Metrics without targets: ${metricsWithoutTarget.slice(0, 5).join(", ") || "None"}${metricsWithoutTarget.length > 5 ? ` (+${metricsWithoutTarget.length - 5} more)` : ""}
+- Metrics without an assigned owner: ${metricsWithoutOwner.slice(0, 5).join(", ") || "None"}${metricsWithoutOwner.length > 5 ? ` (+${metricsWithoutOwner.length - 5} more)` : ""}
+- Metrics without supporting evidence: ${metricsWithoutEvidence.slice(0, 5).join(", ") || "None"}${metricsWithoutEvidence.length > 5 ? ` (+${metricsWithoutEvidence.length - 5} more)` : ""}
+
+Governance & Management:
+- ESG policy status: ${policyStatus}
+- Action plans: ${actions.length} total, ${overdueActions.length} overdue (${overdueActions.slice(0, 3).map(a => a.title).join("; ") || "none"})
+- Evidence files uploaded: ${evidenceFiles.length}
+- Material topics selected: ${selectedTopics.slice(0, 5).join(", ") || "None selected"}
+
+Framework Alignment (readiness, not compliance/certification):
+${frameworkSummary.length > 0 ? frameworkSummary.join("\n") : "No frameworks selected yet"}
+
+Platform Metric Definitions (canonical reference — use these to accurately explain what any metric measures):
+${metricDefSummary || "No metric definitions available"}`;
+      } catch (ctxErr) {
+        console.error("[chat/assist] Context build error:", ctxErr);
+      }
+
+      const systemPrompt = `You are an ESG advisor for small and medium-sized businesses (SMEs). You help business owners and managers improve their ESG position, understand their data, identify gaps, and take practical action.
+
+IMPORTANT LANGUAGE RULES:
+- Always use "alignment", "readiness", or "coverage" — never "compliant", "certified", or "compliance".
+- Frame gaps as opportunities to strengthen alignment, not regulatory failures.
+- Be specific and reference the actual company data provided below.
+- Respond in plain, clear English. Be concise but substantive — 3-6 sentences. Avoid jargon.
+- When asked about specific metrics, explain what they measure and why they matter.
+- When asked what to do next, give 2-3 concrete, prioritised actions based on the live data.
+- When asked about action plans, reference the actual overdue or missing items.
+- When asked about framework readiness, summarise gaps in plain language without compliance framing.
+- When asked to draft or create an ESG action plan, produce a concise structured list with: action title, responsible owner (based on metrics with/without owners), suggested due date (3–6 months out), and a brief success metric. Focus on the top 3–5 gaps identified in the live data above.
+
+The user is currently on the ${pageContext || "dashboard"} page of their ESG platform.
+
+Company overview:
+- Company: ${company?.name || "Unknown"}
+- ESG maturity stage: ${maturityLabel}
+- ESG maturity: ${company?.esgMaturity || "Unknown"}
+- Industry: ${company?.industry || "Unknown"}
+- Employee count: ${company?.employeeCount || "Unknown"}${siteContext}
+
+${advisorContext}
+
+Use the live data above to give accurate, specific advice. If you don't have information to answer precisely, say so and suggest where the user can find it in the platform.`;
 
       try {
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -5031,8 +5211,8 @@ Answer the user's question based on this context. If you're asked about somethin
             { role: "system", content: systemPrompt },
             { role: "user", content: message.trim() },
           ],
-          max_tokens: 200,
-          temperature: 0.7,
+          max_tokens: 350,
+          temperature: 0.6,
         });
         const reply = completion.choices[0]?.message?.content?.trim() || "I'm unable to answer right now. Please visit the Help Centre.";
         res.json({ reply });

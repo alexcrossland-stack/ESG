@@ -13,6 +13,7 @@ import {
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
   Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
+  Database, TrendingDown, BookOpen, Globe,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import { format } from "date-fns";
 import { ActivityFeed } from "@/components/activity-feed";
 import { Progress } from "@/components/ui/progress";
 import { usePermissions } from "@/lib/permissions";
+import { useSiteContext } from "@/hooks/use-site-context";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
@@ -463,9 +465,14 @@ export default function Dashboard() {
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
   const { can, isAdmin } = usePermissions();
+  const { activeSiteId } = useSiteContext();
 
   const isLoading = enhancedLoading || oldLoading;
   const activePeriod = reportingPeriods.find((rp: any) => rp.id === selectedPeriodId);
+  // Derive a YYYY-MM period string from the selected reporting period for the scoring API
+  const scorePeriod = activePeriod?.startDate
+    ? (() => { const d = new Date(activePeriod.startDate); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })()
+    : undefined;
 
   if (isLoading) {
     return (
@@ -606,9 +613,10 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1 row-span-2">
-          <CardContent className="p-4 flex flex-col items-center justify-center h-full">
-            <ScoreRing score={esgScore} label="ESG Score" />
-            <ScoreMethodology weightedScore={weightedScore} />
+          <CardContent className="p-4 flex flex-col items-center justify-center h-full gap-1">
+            <p className="text-xs font-medium text-muted-foreground text-center">ESG Position</p>
+            <ScoreRing score={esgScore} label="Overall" />
+            <p className="text-[10px] text-center text-muted-foreground leading-tight mt-1">See 4-dimension breakdown below</p>
           </CardContent>
         </Card>
 
@@ -653,6 +661,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <MultiDimensionalScoreCards period={scorePeriod} siteId={activeSiteId} />
 
       <ProgrammeStatusCard />
 
@@ -1012,6 +1022,290 @@ export default function Dashboard() {
       <ActivityFeed />
 
       <NotificationsPanel />
+    </div>
+  );
+}
+
+function ScoreDimensionCard({
+  title,
+  icon: Icon,
+  score,
+  description,
+  explanation,
+  details,
+  testId,
+  color,
+}: {
+  title: string;
+  icon: any;
+  score: number;
+  description: string;
+  explanation: string;
+  details?: React.ReactNode;
+  testId: string;
+  color: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const scoreColor = score >= 70 ? "text-emerald-600 dark:text-emerald-400"
+    : score >= 40 ? "text-amber-600 dark:text-amber-400"
+    : "text-red-600 dark:text-red-400";
+  const trackColor = score >= 70 ? "bg-emerald-500" : score >= 40 ? "bg-amber-500" : "bg-red-500";
+
+  return (
+    <Card data-testid={testId}>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
+            <Icon className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">{title}</p>
+              <span className={`text-xl font-bold shrink-0 ${scoreColor}`} data-testid={`${testId}-score`}>{score}%</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+            <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${trackColor}`} style={{ width: `${score}%` }} />
+            </div>
+            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{explanation}</p>
+            {details && (
+              <>
+                <button
+                  onClick={() => setExpanded(!expanded)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors"
+                  data-testid={`${testId}-toggle`}
+                >
+                  {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  {expanded ? "Less detail" : "More detail"}
+                </button>
+                {expanded && <div className="mt-2">{details}</div>}
+              </>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MultiDimensionalScoreCards({ period, siteId }: { period?: string; siteId?: string | null }) {
+  // siteId===null means "All Sites" (company-wide) — do NOT send siteId param so backend uses company-wide scope.
+  // siteId===string means a specific site is selected — send that site UUID.
+  const params = new URLSearchParams();
+  if (period) params.set("period", period);
+  if (typeof siteId === "string") params.set("siteId", siteId);
+  const queryStr = params.toString() ? `?${params.toString()}` : "";
+
+  const { data: scores, isLoading } = useQuery<any>({
+    queryKey: ["/api/esg-scores/all", period ?? null, siteId ?? null],
+    queryFn: () => authFetch(`/api/esg-scores/all${queryStr}`).then(r => r.json()),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-5 w-48" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-32" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (!scores) return null;
+
+  const { completeness, performance, maturity, frameworkReadiness } = scores;
+
+  return (
+    <div className="space-y-3" data-testid="section-multidimensional-scores">
+      <div>
+        <h2 className="text-sm font-semibold">ESG Score Breakdown</h2>
+        <p className="text-xs text-muted-foreground">Four dimensions of your ESG position</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <ScoreDimensionCard
+          title="Data Completeness"
+          icon={Database}
+          score={completeness?.score ?? 0}
+          description="Expected submissions vs actual submissions"
+          explanation={completeness?.explanation ?? "Loading..."}
+          testId="card-score-completeness"
+          color="bg-blue-100 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400"
+          details={
+            completeness?.byCategory && (
+              <div className="space-y-1.5">
+                {Object.entries(completeness.byCategory).map(([cat, data]: [string, any]) => (
+                  <div key={cat} className="flex items-center gap-2 text-xs">
+                    <span className="capitalize w-24 text-muted-foreground">{cat}</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${data.score >= 70 ? "bg-emerald-500" : data.score >= 40 ? "bg-amber-500" : "bg-red-500"}`}
+                        style={{ width: `${data.score}%` }}
+                      />
+                    </div>
+                    <span className="w-20 text-right font-medium">{data.submitted}/{data.expected} ({data.score}%)</span>
+                  </div>
+                ))}
+                {completeness.missingMetrics?.length > 0 && (
+                  <div className="pt-1 mt-1 border-t border-border">
+                    <p className="text-xs text-muted-foreground font-medium mb-1">Missing data:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {completeness.missingMetrics.slice(0, 6).map((m: any, i: number) => (
+                        <Badge key={i} variant="outline" className="text-xs">{m.name}</Badge>
+                      ))}
+                      {completeness.missingMetrics.length > 6 && (
+                        <Badge variant="outline" className="text-xs">+{completeness.missingMetrics.length - 6} more</Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          }
+        />
+
+        <ScoreDimensionCard
+          title="Performance"
+          icon={TrendingUp}
+          score={performance?.score ?? 0}
+          description="Metric values vs targets and prior trends"
+          explanation={performance?.explanation ?? "Loading..."}
+          testId="card-score-performance"
+          color="bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400"
+          details={
+            performance?.byCategory && (
+              <div className="space-y-1.5">
+                {Object.entries(performance.byCategory).map(([cat, data]: [string, any]) => (
+                  data.total > 0 && (
+                    <div key={cat} className="text-xs">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="capitalize text-muted-foreground">{cat}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-emerald-600">{data.greenCount} on track</span>
+                          {data.amberCount > 0 && <span className="text-amber-600">{data.amberCount} at risk</span>}
+                          {data.redCount > 0 && <span className="text-red-600">{data.redCount} off track</span>}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            )
+          }
+        />
+
+        <ScoreDimensionCard
+          title="Management Maturity"
+          icon={BookOpen}
+          score={maturity?.score ?? 0}
+          description="Policy, ownership, targets, evidence & review cycles"
+          explanation={maturity?.explanation ?? "Loading..."}
+          testId="card-score-maturity"
+          color="bg-purple-100 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400"
+          details={
+            maturity?.dimensions && (
+              <div className="space-y-1.5">
+                {Object.entries(maturity.dimensions).map(([key, dim]: [string, any]) => {
+                  const labels: Record<string, string> = {
+                    policiesInPlace: "Policy",
+                    governanceOwnership: "Ownership",
+                    targetsSet: "Targets",
+                    actionsInProgress: "Actions",
+                    evidenceAttached: "Evidence",
+                    reviewCycles: "Review cycles",
+                  };
+                  return (
+                    <div key={key} className="text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-24 text-muted-foreground">{labels[key] || key}</span>
+                        <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${dim.score >= 70 ? "bg-emerald-500" : dim.score >= 40 ? "bg-amber-500" : "bg-red-500"}`}
+                            style={{ width: `${dim.score}%` }}
+                          />
+                        </div>
+                        <span className="w-8 text-right font-medium">{dim.score}%</span>
+                      </div>
+                      <p className="text-muted-foreground pl-[104px] mt-0.5">{dim.detail}</p>
+                    </div>
+                  );
+                })}
+                {maturity.gaps?.length > 0 && (
+                  <div className="pt-1 mt-1 border-t border-border">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Recommended actions:</p>
+                    <ul className="space-y-0.5">
+                      {maturity.gaps.slice(0, 4).map((gap: string, i: number) => (
+                        <li key={i} className="text-xs text-muted-foreground flex items-start gap-1">
+                          <span className="text-amber-500 shrink-0 mt-0.5">•</span>
+                          {gap}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )
+          }
+        />
+
+        <ScoreDimensionCard
+          title="Framework Readiness"
+          icon={Globe}
+          score={frameworkReadiness?.score ?? 0}
+          description="Coverage across your selected reporting frameworks"
+          explanation={frameworkReadiness?.explanation ?? "Loading..."}
+          testId="card-score-framework-readiness"
+          color="bg-orange-100 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400"
+          details={
+            frameworkReadiness?.frameworks && frameworkReadiness.frameworks.length > 0 ? (
+              <div className="space-y-2">
+                {frameworkReadiness.frameworks.map((fw: any) => (
+                  <div key={fw.id} className="text-xs" data-testid={`framework-readiness-${fw.id}`}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="font-medium">{fw.name}</span>
+                      <span className={`font-semibold ${fw.readinessPercent >= 70 ? "text-emerald-600" : fw.readinessPercent >= 40 ? "text-amber-600" : "text-red-600"}`}>
+                        {fw.readinessPercent}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${fw.readinessPercent >= 70 ? "bg-emerald-500" : fw.readinessPercent >= 40 ? "bg-amber-500" : "bg-red-500"}`}
+                        style={{ width: `${fw.readinessPercent}%` }}
+                      />
+                    </div>
+                    <div className="flex gap-3 mt-1 text-muted-foreground">
+                      <span className="text-emerald-600">{fw.covered} covered</span>
+                      <span className="text-amber-600">{fw.partial} partial</span>
+                      <span className="text-red-600">{fw.missing} missing</span>
+                    </div>
+                  </div>
+                ))}
+                {frameworkReadiness.topGaps?.length > 0 && (
+                  <div className="pt-1 mt-1 border-t border-border">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Top gaps to address:</p>
+                    <ul className="space-y-0.5">
+                      {frameworkReadiness.topGaps.slice(0, 3).map((gap: string, i: number) => (
+                        <li key={i} className="text-xs text-muted-foreground flex items-start gap-1">
+                          <span className="text-orange-500 shrink-0 mt-0.5">•</span>
+                          {gap}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                No frameworks selected.{" "}
+                <Link href="/framework-settings" className="text-primary hover:underline">
+                  Select frameworks
+                </Link>{" "}
+                to see per-framework readiness.
+              </div>
+            )
+          }
+        />
+      </div>
     </div>
   );
 }
