@@ -1,0 +1,62 @@
+I want you to perform a thorough end-to-end testing and debugging pass of this platform.
+
+Your task:
+1. Understand the full codebase, architecture, routes, services, database interactions, auth flow, background jobs, and third-party integrations.
+2. Create a test plan covering:
+   - unit tests
+   - integration tests
+   - end-to-end/user journey tests
+   - edge cases
+   - error handling
+   - permission/auth cases
+   - mobile/responsive behavior
+   - performance bottlenecks
+   - logging/observability gaps
+3. Run the platform locally and identify all broken flows, console errors, server errors, failed API calls, race conditions, state bugs, validation issues, and UI inconsistencies.
+4. For every issue found:
+   - reproduce it
+   - explain root cause
+   - implement a fix
+   - verify the fix
+   - document what changed
+5. Add or improve automated tests so the issue is covered going forward.
+6. Continue iterating until all critical flows pass.
+
+Critical user flows to test:
+- signup / login / logout
+- password reset
+- onboarding
+- dashboard load
+- CRUD flows for core objects
+- search / filtering / sorting
+- billing / payments (if applicable)
+- notifications / email flows
+- file upload / download (if applicable)
+- admin flows
+- role-based access control
+- API failure handling
+- empty states / loading states / retry behavior
+
+Requirements:
+- Do not just inspect code statically; actually run and exercise the app.
+- Do not stop at the first error; keep going and compile a full bug list.
+- Prioritize bugs by severity: critical, high, medium, low.
+- Fix critical and high severity issues first.
+- After fixes, rerun tests and provide a final QA report.
+
+Deliverables:
+1. A bug report table with:
+   - ID
+   - severity
+   - area
+   - reproduction steps
+   - root cause
+   - fix implemented
+   - test coverage added
+   - status
+2. A list of all commands run
+3. A summary of code changes
+4. Remaining risks / known issues
+5. Recommendations for hardening the platform further
+
+Be rigorous and skeptical. Assume there are hidden bugs. Try to break the platform, not just confirm happy paths.
