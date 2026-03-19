@@ -607,7 +607,7 @@ function NewQuestionnaireTab() {
   );
 }
 
-function PreviousQuestionnairesTab() {
+function PreviousQuestionnairesTab({ onCreateQuestionnaire }: { onCreateQuestionnaire?: () => void }) {
   const { toast } = useToast();
   const { can } = usePermissions();
   const canDelete = can("questionnaire_access");
@@ -759,7 +759,8 @@ function PreviousQuestionnairesTab() {
         icon={ClipboardList}
         title="No questionnaires for this site"
         description="There are no questionnaires assigned to this site yet."
-        helpText="Switch to the &quot;New Questionnaire&quot; tab and assign it to this site"
+        actionLabel={onCreateQuestionnaire ? "Create questionnaire" : undefined}
+        onAction={onCreateQuestionnaire}
       />
     );
   }
@@ -1154,6 +1155,7 @@ export default function QuestionnairePage() {
   const { can } = usePermissions();
   const canAccess = can("questionnaire_access");
   const [importOpen, setImportOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState(canAccess ? "generator" : "previous");
   const { isPro, isLoading: billingLoading } = useBillingStatus();
 
   if (!billingLoading && !isPro) {
@@ -1194,7 +1196,7 @@ export default function QuestionnairePage() {
 
       <ImportQuestionnaireDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
-      <Tabs defaultValue={canAccess ? "generator" : "previous"} className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList data-testid="tabs-questionnaire">
           {canAccess && (
             <TabsTrigger value="generator" data-testid="tab-ai-generator">
@@ -1222,7 +1224,7 @@ export default function QuestionnairePage() {
           </TabsContent>
         )}
         <TabsContent value="previous">
-          <PreviousQuestionnairesTab />
+          <PreviousQuestionnairesTab onCreateQuestionnaire={canAccess ? () => setActiveTab("new") : undefined} />
         </TabsContent>
       </Tabs>
     </div>

@@ -2483,8 +2483,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const actions = await storage.getActionPlans(companyId);
       const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
-      const allEvidence = await storage.getEvidenceFiles(companyId);
-      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+      // Evidence and carbon: apply same scope rules as metrics
+      let allEvidence: Awaited<ReturnType<typeof storage.getEvidenceFiles>>;
+      let allCarbonCalcs: Awaited<ReturnType<typeof storage.getCarbonCalculations>>;
+      if (bodySiteId) {
+        // Site-scoped: exact site only
+        allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId);
+        const tmpCarbon = await storage.getCarbonCalculations(companyId);
+        allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === bodySiteId);
+      } else {
+        // Org-wide: active sites + unassigned; exclude archived-site records
+        const activeOnly = await storage.getSites(companyId, false);
+        const activeIds = new Set(activeOnly.map((s: any) => s.id));
+        const allEv = await storage.getEvidenceFiles(companyId);
+        allEvidence = allEv.filter((e: any) => e.siteId === null || activeIds.has(e.siteId));
+        const tmpCarbon = await storage.getCarbonCalculations(companyId);
+        allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === null || activeIds.has(c.siteId));
+      }
       const generatingUser = await storage.getUser(userId);
 
       const periodSchema = z.object({
@@ -2524,10 +2539,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const selectedTopics = topics.filter((t: any) => t.selected);
       const weightedScore = calculateWeightedEsgScore(scoredMetrics, selectedTopics);
 
-      const periodCarbon = period
-        ? carbonCalcs.find((c: any) => c.reportingPeriod === period || c.reportingPeriod?.startsWith(period.substring(0, 4)))
-        : carbonCalcs[0];
-      const matchedCarbon = periodCarbon || (carbonCalcs.length > 0 ? carbonCalcs[0] : null);
+      // Period filter first — no cross-period fallback (scope already applied above)
+      const matchedCarbon = period
+        ? (allCarbonCalcs.find((c: any) => c.reportingPeriod === period) ??
+           allCarbonCalcs.find((c: any) => c.reportingPeriod?.startsWith(period.substring(0, 4))) ??
+           null)
+        : (allCarbonCalcs[0] ?? null);
       const carbonPeriodMismatch = matchedCarbon && period && matchedCarbon.reportingPeriod !== period;
       const carbonSummary = matchedCarbon ? {
         scope1: parseFloat(matchedCarbon.scope1Total as string) || 0,
@@ -7127,22 +7144,12 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  // POST /api/sites/migrate — bulk-assign null-siteId records to a site — MUST be before /:id
-  app.post("/api/sites/migrate", requireAuth, async (req, res) => {
-    try {
-      const companyId = req.session?.companyId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const { siteId } = req.body;
-      if (!siteId) {
-        return res.status(400).json({ error: "siteId is required" });
-      }
-      const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
-      if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-      const result = await storage.migrateLegacyData(companyId, siteId);
-      res.json(result);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
+  // POST /api/sites/migrate — DEPRECATED: Use /api/admin/migrate-sites instead (requires super-admin + dry-run flow)
+  // This endpoint is disabled to enforce the admin-triggered migration contract
+  app.post("/api/sites/migrate", requireAuth, async (_req, res) => {
+    return res.status(403).json({
+      error: "This endpoint is no longer available. Use /api/admin/migrate-sites with dry-run preview via the admin panel.",
+    });
   });
 
   // GET /api/sites/:id — get single site
