@@ -711,7 +711,9 @@ async function run() {
     await testCrossTenantIsolation(tenants);
     await testRBACEnforcement(tenants);
 
-    // Seed a fresh set for Suite 7 (logout will invalidate the admin token) and Suite 8
+    // Seed a fresh set of tenants for Suite 8 (malformed payload tests need a
+    // valid admin token; Suite 7 will have invalidated the original tenants token
+    // via logout). Suite 7 uses `tenants` so its logout only affects `tenants`.
     const freshTenants = await seedTestTenants();
     await testSessionLifecycle(tenants);
     await testMalformedPayloads(freshTenants);

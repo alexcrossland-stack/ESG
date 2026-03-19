@@ -1,0 +1,355 @@
+#52 — SME Activation & Onboarding Optimisation (Execution-Hardened)
+
+What & Why
+
+Transform the first-use experience so a non-technical SME user can complete a full activation journey in one session (10–15 minutes):
+
+Sign up → complete onboarding → add first data → understand outcome → generate first report
+
+This is not a feature build. It is a system-wide usability and activation optimisation pass.
+
+Core rule:
+
+Every screen must answer:
+	•	What is this?
+	•	Why does it matter?
+	•	What should I do next?
+
+⸻
+
+Critical clarification (must follow)
+
+This task is not copy-only and not UI-only.
+
+It must:
+	•	remove friction,
+	•	eliminate dead ends,
+	•	enforce linear progress where needed,
+	•	and ensure the system actively guides the user forward.
+
+If a user can land on a page and do nothing, the task is incomplete.
+
+⸻
+
+Required execution approach (strict order)
+
+Phase 1 — Full UX audit (no coding)
+
+Audit ALL listed pages and identify:
+	•	empty states
+	•	unclear terminology
+	•	missing CTAs
+	•	dead-end flows
+	•	inconsistent button labels
+	•	missing defaults
+	•	places where the user must “figure things out”
+
+Output required before coding:
+	•	structured issue list grouped by page
+	•	severity: Critical / High / Medium
+	•	proposed fix for each
+
+Do not proceed until this is complete.
+
+⸻
+
+Phase 2 — Activation flow enforcement
+
+Before touching UI details, enforce this system-level flow:
+	1.	Onboarding completes
+	2.	User lands on dashboard
+	3.	System immediately directs them to first data entry
+	4.	After data entry → directs to report generation
+
+This must be:
+	•	visible,
+	•	persistent,
+	•	state-aware.
+
+⸻
+
+Phase 3 — Implementation (in this order)
+
+⸻
+
+1. Dashboard activation system (highest priority)
+
+Add persistent activation checklist
+
+Top of dashboard:
+
+“Get started” checklist (3 steps)
+	•	Add your first data point
+	•	Upload supporting evidence
+	•	Generate your first report
+
+Requirements:
+	•	live progress (0–100%)
+	•	updates immediately after actions
+	•	never disappears until complete
+
+⸻
+
+Add dynamic “Next step” banner
+
+Above dashboard content:
+
+Examples:
+	•	No data →
+“Start by adding your first ESG data point” → CTA: Add data
+	•	Data added, no report →
+“You’re ready to generate your first report” → CTA: Generate report
+	•	Report generated →
+“Your report is ready. You can now improve your score or add more data”
+
+This must be:
+	•	state-driven (backend or derived logic)
+	•	always present until activation complete
+
+⸻
+
+Remove all dead/blank states
+
+No:
+	•	empty charts
+	•	“0” values without explanation
+	•	blank tables
+
+Replace with:
+	•	explanation
+	•	why it matters
+	•	single clear CTA
+
+⸻
+
+2. Onboarding rewrite & defaults
+
+Copy requirements (strict)
+
+Every step must include:
+	•	Title (plain English)
+	•	One-line explanation: what this is
+	•	One-line: why this matters
+
+Example:
+
+“Choose your reporting standard”
+“This defines how your ESG performance is measured.”
+“This helps you meet customer and regulatory expectations.”
+
+⸻
+
+Defaults (must implement)
+
+Pre-select:
+	•	framework
+	•	reporting period
+	•	core metrics
+
+Auto-create:
+	•	first site
+
+Quick Start must:
+	•	produce a usable dashboard
+	•	avoid empty states immediately after onboarding
+
+⸻
+
+Completion screen (replace entirely)
+
+Must show:
+	•	success confirmation
+	•	what has been set up
+	•	CTA: “Add your first data point”
+
+⸻
+
+3. First data entry UX (critical path)
+
+Inputs must include:
+	•	units (e.g. kWh, tCO₂e)
+	•	example values (placeholder)
+	•	inline validation
+
+⸻
+
+Terminology fix
+
+Rename:
+	•	“Metric category” → “Type of data”
+
+Add:
+	•	1-line explanation per type
+
+⸻
+
+Feedback
+
+After save:
+	•	visible success message
+	•	immediate UI update
+	•	clear next step CTA
+
+⸻
+
+4. Empty states (global system)
+
+Apply to ALL:
+	•	dashboard
+	•	metrics
+	•	data entry
+	•	evidence
+	•	reports
+	•	policies
+
+Each empty state must include:
+	1.	What this section is
+	2.	Why it matters
+	3.	What to do next
+	4.	One primary CTA
+
+No exceptions.
+
+⸻
+
+5. Reports — first-run experience
+
+Empty state
+	•	explanation of reports
+	•	CTA: Generate report
+
+⸻
+
+Framework selector
+
+Add:
+	•	plain English explanation
+
+⸻
+
+Insufficient data handling
+
+Must:
+	•	explain what’s missing
+	•	link directly to relevant data entry
+
+Example:
+
+“You need at least one data point to generate a report”
+→ CTA: Add data
+
+⸻
+
+6. Tooltip & helper system
+
+Add tooltip icons for:
+	•	framework
+	•	evidence
+	•	maturity
+	•	scope 1 / 2 / 3
+	•	type of data
+
+Rules:
+	•	one sentence only
+	•	plain English
+	•	no jargon
+
+Use existing tooltip system.
+
+⸻
+
+7. Error handling & micro UX
+
+Replace all generic errors
+
+Every error must:
+	•	state what happened
+	•	state how to fix it
+
+⸻
+
+Standardise buttons
+	•	“Submit” → Save data
+	•	“Continue” → Next step
+
+⸻
+
+Async UX
+
+All async actions:
+	•	must show loading state
+	•	must resolve with success or clear error
+
+No silent failures.
+
+⸻
+
+8. Analytics (activation tracking)
+
+Track:
+	•	onboarding step completed
+	•	onboarding completed
+	•	first data added
+	•	first report generated
+	•	onboarding drop-off
+
+Use:
+	•	existing tracking endpoint
+	•	or create: POST /api/analytics/events
+
+⸻
+
+9. Final validation (mandatory)
+
+Manually test full journey:
+
+A new user must be able to:
+	1.	Sign up
+	2.	Complete onboarding
+	3.	Add one data point
+	4.	Understand what they did
+	5.	Generate a report
+
+Constraints:
+	•	no confusion
+	•	no hesitation
+	•	no external help
+
+If at any point the user asks:
+
+“What do I do next?”
+
+→ task is not complete.
+
+⸻
+
+Key implementation guardrails
+
+Do not:
+	•	introduce new features
+	•	add new data models
+	•	redesign core architecture
+
+Do:
+	•	reuse existing components
+	•	improve clarity and flow
+	•	enforce progression
+	•	remove ambiguity
+
+⸻
+
+Critical success metric
+
+This task is successful only if:
+
+A non-ESG SME user can reach a meaningful output (a report) in under 15 minutes, without needing to think about the system.
+
+⸻
+
+Final instruction to Replit
+
+Do not treat this as a UI polish task.
+
+Treat it as:
+
+Activation system design implemented through UX, copy, and flow control.
