@@ -303,6 +303,27 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
     assertTargetedBlocked("Tenant A PUT Tenant B topic blocked (403/404)", res.status, res.body);
   }
 
+  // ── Targeted report-by-ID cross-tenant access ──
+  // GET /api/reports/:id/files scopes by session companyId; Tenant A should see 0 files
+  // for a Tenant B report (data isolation via empty-result, not HTTP block).
+  if (tenantB.reportId) {
+    const res = await request("GET", `/api/reports/${tenantB.reportId}/files`, undefined, tenantA.adminToken);
+    if (res.status === 200 && isJsonApiResponse(res.body)) {
+      const files = JSON.parse(res.body) as unknown[];
+      if (Array.isArray(files) && files.length === 0) {
+        pass("GET /api/reports/:tbId/files returns empty array for Tenant A (data isolated)", `status=200, files=0`);
+      } else {
+        fail("GET /api/reports/:tbId/files returned Tenant B files to Tenant A!", `body=${res.body.slice(0, 200)}`);
+      }
+    } else if (res.status === 403 || res.status === 404) {
+      pass("GET /api/reports/:tbId/files blocked with 403/404 for Tenant A", `status=${res.status}`);
+    } else {
+      fail("GET /api/reports/:tbId/files unexpected response for Tenant A", `status=${res.status}, body=${res.body.slice(0, 100)}`);
+    }
+  } else {
+    pass("GET /api/reports/:tbId/files — Tenant B report not generated (rate-limited); skip targeted check", "skipped");
+  }
+
   // ── Company-scoped list endpoints — 200 is OK, but no Tenant B data must appear ──
 
   {

@@ -36,6 +36,7 @@ export interface TenantB {
   companyId: string;
   metricId: string;
   topicId: string;
+  reportId: string | null;
   adminEmail: string;
 }
 
@@ -157,28 +158,30 @@ async function createUserViaSql(
 }
 
 /**
- * Register Tenant A admin via the API if not already created.
- * Falls back to direct SQL insert when the API rate limiter is active.
+ * Register a tenant admin via the API if not already created.
+ * Falls back to direct SQL insert when the API rate limiter is active (5/hr per IP).
+ * Works for both Tenant A and Tenant B admins.
  */
-async function getOrRegisterTenantAAdmin(
-  suffix: string,
-  client: Client
+async function getOrRegisterAdmin(
+  opts: { suffix: string; tenant: "A" | "B"; client: Client }
 ): Promise<{ email: string; companyId: string; via: "api" | "sql" }> {
-  const email = `ta-admin-${suffix}@test-esg.example`;
+  const tag = opts.tenant === "A" ? "ta" : "tb";
+  const email = `${tag}-admin-${opts.suffix}@test-esg.example`;
+  const companyName = `Test Company T${opts.tenant} ${opts.suffix}`;
 
-  const existingUser = await client.query<{ id: string; company_id: string }>(
+  const existing = await opts.client.query<{ id: string; company_id: string }>(
     "SELECT id, company_id FROM users WHERE email = $1",
     [email]
   );
-  if (existingUser.rows.length > 0) {
-    return { email, companyId: existingUser.rows[0].company_id, via: "sql" };
+  if (existing.rows.length > 0) {
+    return { email, companyId: existing.rows[0].company_id, via: "sql" };
   }
 
   const res = await apiRequest("POST", "/api/auth/register", {
-    username: `taadmin${suffix}`,
+    username: `${tag}admin${opts.suffix}`,
     email,
     password: TEST_PASSWORD,
-    companyName: `Test Company TA ${suffix}`,
+    companyName,
     termsAccepted: true,
     privacyAccepted: true,
     termsVersion: "1.0",
@@ -192,14 +195,35 @@ async function getOrRegisterTenantAAdmin(
     }
   }
 
-  // Rate-limited or other error — fall back to SQL
-  const result = await createUserViaSql(client, {
+  // Rate-limited or other error — fall back to direct SQL
+  const result = await createUserViaSql(opts.client, {
     email,
-    username: `taadmin${suffix}`,
+    username: `${tag}admin${opts.suffix}`,
     role: "admin",
-    companyName: `Test Company TA ${suffix}`,
+    companyName,
   });
   return { email, companyId: result.companyId, via: "sql" };
+}
+
+/**
+ * Attempt to generate a report for a tenant so we have a concrete report ID
+ * for cross-tenant isolation tests. Returns the report ID or null if not supported
+ * (e.g. rate-limited, plan restriction).
+ */
+async function generateTenantReport(token: string): Promise<string | null> {
+  const res = await apiRequest("POST", "/api/reports/generate", {
+    reportType: "management",
+    period: "2024-Q1",
+  }, token);
+  if (res.status === 200 || res.status === 201) {
+    try {
+      const parsed = JSON.parse(res.body) as { id?: string };
+      return parsed.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export async function seedTestTenants(): Promise<SeededTenants> {
@@ -219,8 +243,8 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   const tenantBAdminEmail = `tb-admin-${suffix}@test-esg.example`;
 
   try {
-    // Tenant A admin — try API first, SQL fallback
-    const tenantAAdmin = await getOrRegisterTenantAAdmin(suffix, client);
+    // Tenant A admin — try API first, SQL fallback on rate limit
+    const tenantAAdmin = await getOrRegisterAdmin({ suffix, tenant: "A", client });
     tenantACompanyId = tenantAAdmin.companyId;
 
     // Tenant A viewer — direct SQL only
@@ -239,13 +263,8 @@ export async function seedTestTenants(): Promise<SeededTenants> {
       companyId: tenantACompanyId,
     });
 
-    // Tenant B admin — direct SQL (second API register would hit rate limit)
-    const tenantBAdmin = await createUserViaSql(client, {
-      email: tenantBAdminEmail,
-      username: `tbadmin${suffix}`,
-      role: "admin",
-      companyName: `Test Company TB ${suffix}`,
-    });
+    // Tenant B admin — try API first, SQL fallback on rate limit
+    const tenantBAdmin = await getOrRegisterAdmin({ suffix, tenant: "B", client });
     tenantBCompanyId = tenantBAdmin.companyId;
 
     // Mark both tenant companies as onboarding-complete so browser tests
@@ -267,6 +286,9 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   const metricId = await getMetricId(tenantBAdminToken);
   const topicId = await getTopicId(tenantBAdminToken);
 
+  // Generate a Tenant B report so Suite 5 can test targeted cross-tenant report access
+  const tenantBReportId = await generateTenantReport(tenantBAdminToken);
+
   return {
     tenantA: {
       adminToken: tenantAAdminToken,
@@ -282,6 +304,7 @@ export async function seedTestTenants(): Promise<SeededTenants> {
       companyId: tenantBCompanyId,
       metricId,
       topicId,
+      reportId: tenantBReportId,
       adminEmail: tenantBAdminEmail,
     },
   };
