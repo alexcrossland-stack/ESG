@@ -37,6 +37,7 @@ export interface TenantB {
   metricId: string;
   topicId: string;
   reportId: string | null;
+  actionId: string | null;
   adminEmail: string;
 }
 
@@ -206,6 +207,28 @@ async function getOrRegisterAdmin(
 }
 
 /**
+ * Create an action plan for a tenant so we have a concrete action ID
+ * for cross-tenant isolation tests. Returns the action ID or null on failure.
+ */
+async function createTenantAction(token: string): Promise<string | null> {
+  const res = await apiRequest("POST", "/api/actions", {
+    title: "Seed cross-tenant test action",
+    description: "Created by seed for isolation testing",
+    owner: "Test",
+    status: "not_started",
+  }, token);
+  if (res.status === 200 || res.status === 201) {
+    try {
+      const parsed = JSON.parse(res.body) as { id?: string };
+      return parsed.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
  * Attempt to generate a report for a tenant so we have a concrete report ID
  * for cross-tenant isolation tests. Returns the report ID or null if not supported
  * (e.g. rate-limited, plan restriction).
@@ -289,6 +312,9 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   // Generate a Tenant B report so Suite 5 can test targeted cross-tenant report access
   const tenantBReportId = await generateTenantReport(tenantBAdminToken);
 
+  // Create a Tenant B action so Suite 5 can test targeted cross-tenant action access
+  const tenantBActionId = await createTenantAction(tenantBAdminToken);
+
   return {
     tenantA: {
       adminToken: tenantAAdminToken,
@@ -305,6 +331,7 @@ export async function seedTestTenants(): Promise<SeededTenants> {
       metricId,
       topicId,
       reportId: tenantBReportId,
+      actionId: tenantBActionId,
       adminEmail: tenantBAdminEmail,
     },
   };

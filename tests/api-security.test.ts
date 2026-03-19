@@ -220,6 +220,7 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
   const tbMetricId = tenantB.metricId;
   const tbTopicId = tenantB.topicId;
   const tbCompanyId = tenantB.companyId;
+  const tbActionId = tenantB.actionId;
 
   /**
    * For targeted cross-tenant operations (accessing a specific Tenant B resource by ID),
@@ -322,6 +323,21 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
     }
   } else {
     pass("GET /api/reports/:tbId/files — Tenant B report not generated (rate-limited); skip targeted check", "skipped");
+  }
+
+  // ── Targeted cross-tenant action access — must return 403 or 404 only ──
+
+  if (tbActionId) {
+    {
+      const res = await request("PUT", `/api/actions/${tbActionId}`, { status: "in_progress" }, tenantA.adminToken);
+      assertTargetedBlocked("Tenant A PUT Tenant B action blocked (403/404)", res.status, res.body);
+    }
+    {
+      const res = await request("DELETE", `/api/actions/${tbActionId}`, undefined, tenantA.adminToken);
+      assertTargetedBlocked("Tenant A DELETE Tenant B action blocked (403/404)", res.status, res.body);
+    }
+  } else {
+    pass("Targeted action cross-tenant tests — Tenant B action not created; skip", "skipped");
   }
 
   // ── Company-scoped list endpoints — 200 is OK, but no Tenant B data must appear ──
@@ -662,16 +678,26 @@ async function testMalformedPayloads(tenants: SeededTenants) {
   }
 
   // PUT /api/metrics/:id/target — missing targetValue entirely
+  // targetValue is optional in this route; server treats undefined as "clear target"
   {
     const res = await request("PUT", `/api/metrics/${tenantAMetricId}/target`, {
       targetYear: 2030,
     }, adminToken);
-    // Missing targetValue is either accepted (null/undefined skipped) or rejected (400)
-    // It must never cause a 500
-    if (res.status === 500) {
-      fail("PUT /api/metrics/:id/target missing targetValue must not return 500", `body=${res.body.slice(0, 100)}`);
+    if (res.status === 200) {
+      pass("PUT /api/metrics/:id/target missing targetValue accepted as optional clear (200)", `status=200`);
+    } else if (res.status === 400) {
+      try {
+        const parsed = JSON.parse(res.body) as { error?: string };
+        if (typeof parsed.error === "string" && parsed.error.length > 0) {
+          pass("PUT /api/metrics/:id/target missing targetValue returns 400 with error", `error="${parsed.error.slice(0, 60)}"`);
+        } else {
+          fail("PUT /api/metrics/:id/target missing targetValue — 400 but no error field", `body=${res.body.slice(0, 100)}`);
+        }
+      } catch {
+        fail("PUT /api/metrics/:id/target missing targetValue — 400 but not valid JSON", `body=${res.body.slice(0, 100)}`);
+      }
     } else {
-      pass("PUT /api/metrics/:id/target missing targetValue does not return 500", `status=${res.status}`);
+      fail("PUT /api/metrics/:id/target missing targetValue — expected 200 or 400, got " + res.status, `body=${res.body.slice(0, 100)}`);
     }
   }
 }
@@ -695,6 +721,7 @@ async function run() {
     console.log(`  Tenant B companyId: ${tenants.tenantB.companyId}`);
     console.log(`  Tenant B metricId: ${tenants.tenantB.metricId}`);
     console.log(`  Tenant B topicId: ${tenants.tenantB.topicId}`);
+    console.log(`  Tenant B actionId: ${tenants.tenantB.actionId}`);
 
     await testCrossTenantIsolation(tenants);
     await testRBACEnforcement(tenants);

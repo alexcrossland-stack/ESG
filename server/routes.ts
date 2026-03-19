@@ -2890,6 +2890,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
+      const existing = await storage.getActionPlan(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Action not found" });
+      }
       const plan = await storage.updateActionPlan(req.params.id, req.body);
       await storage.createAuditLog({
         companyId, userId,
@@ -2906,6 +2910,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/actions/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const existing = await storage.getActionPlan(req.params.id);
+      if (!existing || existing.companyId !== companyId) {
+        return res.status(404).json({ error: "Action not found" });
+      }
       await storage.deleteActionPlan(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {
