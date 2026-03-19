@@ -47,6 +47,7 @@ import BillingPage from "@/pages/billing";
 import TeamPage from "@/pages/team";
 import SitesPage from "@/pages/sites";
 import SiteDashboardPage from "@/pages/site-dashboard";
+import MetricsLibraryPage from "@/pages/metrics-library";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
@@ -238,6 +239,7 @@ function ProtectedApp() {
                 <Route path="/settings/sites" component={SitesPage} />
                 <Route path="/sites" component={SitesPage} />
                 <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
+                <Route path="/metrics-library" component={MetricsLibraryPage} />
                 <Route path="/help" component={HelpPage} />
                 <Route component={NotFound} />
               </Switch>

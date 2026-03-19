@@ -9,7 +9,7 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users,
+  users, type InsertMetricDefinition,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -6907,6 +6907,207 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const dashboard = await storage.getSiteDashboard(req.params.id, companyId, period);
       if (!dashboard) return res.status(404).json({ error: "Site not found" });
       res.json(dashboard);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // METRIC DEFINITIONS API
+  // ============================================================
+
+  app.get("/api/metric-definitions", requireAuth, async (req, res) => {
+    try {
+      const { pillar, search, isCore, isActive } = req.query;
+      const filters: any = {};
+      if (pillar && typeof pillar === "string") filters.pillar = pillar;
+      if (search && typeof search === "string") filters.search = search;
+      if (isCore !== undefined) filters.isCore = isCore === "true";
+      if (isActive !== undefined) filters.isActive = isActive === "true";
+      const defs = await storage.getMetricDefinitions(filters);
+      res.json(defs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/metric-definitions/:id", requireAuth, async (req, res) => {
+    try {
+      const def = await storage.getMetricDefinition(req.params.id);
+      if (!def) return res.status(404).json({ error: "Not found" });
+      res.json(def);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/metric-definitions/:id/toggle", requireAuth, async (req, res) => {
+    try {
+      const def = await storage.getMetricDefinition(req.params.id);
+      if (!def) return res.status(404).json({ error: "Metric definition not found" });
+      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
+      const updated = await storage.updateMetricDefinition(req.params.id, { isActive: !def.isActive });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/metric-definitions/seed", requireAuth, async (req, res) => {
+    try {
+      const { ALL_METRIC_DEFINITIONS } = await import("./metric-definitions-seed");
+      const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
+      res.json({ seeded: count, message: `Seeded ${count} new metric definitions` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // METRIC DEFINITION VALUES API
+  // ============================================================
+
+  app.get("/api/metric-definition-values", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { metricDefinitionId, siteId, periodStart, periodEnd } = req.query;
+      const filters: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date } = {};
+      if (metricDefinitionId) filters.metricDefinitionId = metricDefinitionId as string;
+      if (siteId !== undefined) filters.siteId = siteId === "null" ? null : siteId as string;
+      if (periodStart) filters.periodStart = new Date(periodStart as string);
+      if (periodEnd) filters.periodEnd = new Date(periodEnd as string);
+      const values = await storage.getMetricDefinitionValues(companyId, filters);
+      res.json(values);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/metric-definition-values", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      const userId = (req as any)._auth?.userId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const { metricDefinitionId, siteId, reportingPeriodStart, reportingPeriodEnd, valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes } = req.body;
+      if (!metricDefinitionId || !reportingPeriodStart || !reportingPeriodEnd) {
+        return res.status(400).json({ error: "metricDefinitionId, reportingPeriodStart, and reportingPeriodEnd are required" });
+      }
+
+      const def = await storage.getMetricDefinition(metricDefinitionId);
+      if (!def) return res.status(404).json({ error: "Metric definition not found" });
+      if (def.isDerived) return res.status(400).json({ error: "Derived metrics cannot be entered manually" });
+
+      const periodStart = new Date(reportingPeriodStart);
+      const periodEnd = new Date(reportingPeriodEnd);
+      const resolvedSiteId = siteId ?? null;
+
+      if (resolvedSiteId) {
+        const siteOwnership = await validateSiteOwnership(resolvedSiteId, companyId, { write: true });
+        if (!siteOwnership.valid) return res.status(siteOwnership.status).json({ error: siteOwnership.message });
+      }
+
+      const value = await storage.upsertMetricDefinitionValue(
+        companyId, metricDefinitionId, resolvedSiteId, periodStart, periodEnd,
+        { valueNumeric, valueText, valueBoolean: valueBoolean, valueJson, sourceType: sourceType ?? "manual", notes, enteredByUserId: userId }
+      );
+
+      const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
+      await triggerCalculationsForMetricValue(value.id, companyId, resolvedSiteId, periodStart, periodEnd).catch(err => {
+        console.error("[MetricEngine] Calculation trigger failed:", err);
+      });
+
+      res.json(value);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/metric-definition-values/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const existing = await storage.getMetricDefinitionValueById(req.params.id, companyId);
+      if (!existing) return res.status(404).json({ error: "Not found" });
+
+      const def = await storage.getMetricDefinition(existing.metricDefinitionId);
+      if (def?.isDerived) return res.status(400).json({ error: "Derived metric values cannot be edited directly" });
+
+      const updated = await storage.updateMetricDefinitionValue(req.params.id, companyId, req.body);
+      if (!updated) return res.status(404).json({ error: "Not found" });
+
+      const periodStart = updated.reportingPeriodStart ?? (req.body.reportingPeriodStart ? new Date(req.body.reportingPeriodStart) : null);
+      const periodEnd = updated.reportingPeriodEnd ?? (req.body.reportingPeriodEnd ? new Date(req.body.reportingPeriodEnd) : null);
+      if (periodStart && periodEnd) {
+        const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
+        await triggerCalculationsForMetricValue(updated.id, companyId, updated.siteId ?? null, periodStart, periodEnd).catch(() => {});
+      }
+
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // METRIC EVIDENCE API
+  // ============================================================
+
+  app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const metricValue = await storage.getMetricDefinitionValueById(req.params.metricValueId, companyId);
+      if (!metricValue) return res.status(404).json({ error: "Metric value not found" });
+      const evidence = await storage.getMetricEvidence(req.params.metricValueId);
+      res.json(evidence);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/metric-evidence", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      const userId = (req as any)._auth?.userId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { metricValueId, fileUrl, storageKey, fileName, fileType, notes } = req.body;
+      if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
+      const metricValue = await storage.getMetricDefinitionValueById(metricValueId, companyId);
+      if (!metricValue) return res.status(404).json({ error: "Metric value not found or not accessible" });
+      const evidence = await storage.createMetricEvidence({ metricValueId, fileUrl: fileUrl ?? null, storageKey: storageKey ?? null, fileName, fileType: fileType ?? null, notes: notes ?? null, uploadedByUserId: userId });
+      res.json(evidence);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/metric-evidence/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const ev = await storage.getMetricEvidenceById(req.params.id, companyId);
+      if (!ev) return res.status(404).json({ error: "Evidence not found or not accessible" });
+      await storage.deleteMetricEvidence(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // METRIC CALCULATION RUNS API
+  // ============================================================
+
+  app.get("/api/metric-calculation-runs", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { metricDefinitionId } = req.query;
+      const runs = await storage.getMetricCalculationRuns(companyId, metricDefinitionId as string | undefined);
+      res.json(runs);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

@@ -10,6 +10,7 @@ import {
   aiGenerationLogs, evidenceRequests, reportingPeriods,
   backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
   authTokens, superAdminActions, organisationSites,
+  metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
@@ -46,10 +47,11 @@ import {
   type ChatMessage, type InsertChatMessage,
   type SuperAdminAction, type InsertSuperAdminAction,
   type OrganisationSite, type InsertOrganisationSite,
-  metricDefinitions, metricEvidence, metricCalculationRuns,
+  metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
   type MetricDefinition, type InsertMetricDefinition,
+  type MetricDefinitionValue, type InsertMetricDefinitionValue,
   type MetricEvidence, type InsertMetricEvidence,
-  type MetricCalculationRun,
+  type MetricCalculationRun, type InsertMetricCalculationRun,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -304,6 +306,33 @@ export interface IStorage {
   createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">): Promise<SuperAdminAction>;
   getCompanyStatus(companyId: string): Promise<string | null>;
   adminGetCompanyDiagnostics(companyId: string): Promise<any>;
+
+  // Metric Definitions
+  getMetricDefinitions(filters?: { pillar?: string; isCore?: boolean; isActive?: boolean; search?: string }): Promise<MetricDefinition[]>;
+  getMetricDefinition(id: string): Promise<MetricDefinition | undefined>;
+  getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined>;
+  createMetricDefinition(data: InsertMetricDefinition): Promise<MetricDefinition>;
+  updateMetricDefinition(id: string, data: Partial<MetricDefinition>): Promise<MetricDefinition | undefined>;
+  seedMetricDefinitions(definitions: InsertMetricDefinition[]): Promise<number>;
+
+  // Metric Definition Values
+  getMetricDefinitionValues(businessId: string, filters?: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date }): Promise<MetricDefinitionValue[]>;
+  getMetricDefinitionValueById(id: string, businessId: string): Promise<MetricDefinitionValue | undefined>;
+  createMetricDefinitionValue(data: InsertMetricDefinitionValue): Promise<MetricDefinitionValue>;
+  updateMetricDefinitionValue(id: string, businessId: string, data: Partial<MetricDefinitionValue>): Promise<MetricDefinitionValue | undefined>;
+  upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>): Promise<MetricDefinitionValue>;
+  rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null>;
+
+  // Metric Evidence
+  getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]>;
+  getMetricEvidenceById(id: string, businessId: string): Promise<MetricEvidence | undefined>;
+  createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence>;
+  deleteMetricEvidence(id: string): Promise<void>;
+
+  // Metric Calculation Runs
+  createMetricCalculationRun(data: InsertMetricCalculationRun): Promise<MetricCalculationRun>;
+  updateMetricCalculationRun(id: string, data: Partial<MetricCalculationRun>): Promise<MetricCalculationRun | undefined>;
+  getMetricCalculationRuns(businessId: string, metricDefinitionId?: string): Promise<MetricCalculationRun[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1837,59 +1866,292 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  // ESG Phase 1: Metric Definitions
-  async getMetricDefinitions(filter?: { pillar?: string; isCore?: boolean; isActive?: boolean }): Promise<MetricDefinition[]> {
+  // ============================================================
+  // METRIC DEFINITIONS
+  // ============================================================
+
+  async getMetricDefinitions(filters?: { pillar?: string; isCore?: boolean; isActive?: boolean; search?: string }) {
     const conditions: any[] = [];
-    if (filter?.pillar) conditions.push(eq(metricDefinitions.pillar, filter.pillar));
-    if (filter?.isCore !== undefined) conditions.push(eq(metricDefinitions.isCore, filter.isCore));
-    if (filter?.isActive !== undefined) conditions.push(eq(metricDefinitions.isActive, filter.isActive));
-    const q = db.select().from(metricDefinitions);
-    const rows = conditions.length > 0
-      ? await q.where(and(...conditions)).orderBy(metricDefinitions.sortOrder)
-      : await q.orderBy(metricDefinitions.sortOrder);
-    return rows;
+    if (filters?.pillar) conditions.push(sql`${metricDefinitions.pillar} = ${filters.pillar}`);
+    if (filters?.isCore !== undefined) conditions.push(eq(metricDefinitions.isCore, filters.isCore));
+    if (filters?.isActive !== undefined) conditions.push(eq(metricDefinitions.isActive, filters.isActive));
+    if (filters?.search) {
+      const s = `%${filters.search.toLowerCase()}%`;
+      conditions.push(sql`(lower(${metricDefinitions.name}) LIKE ${s} OR lower(${metricDefinitions.code}) LIKE ${s} OR lower(coalesce(${metricDefinitions.description}, '')) LIKE ${s})`);
+    }
+    const q = conditions.length > 0
+      ? db.select().from(metricDefinitions).where(and(...conditions))
+      : db.select().from(metricDefinitions);
+    return q.orderBy(metricDefinitions.sortOrder, metricDefinitions.name);
   }
 
-  async getMetricDefinition(id: string): Promise<MetricDefinition | undefined> {
-    const [row] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.id, id)).limit(1);
-    return row;
+  async getMetricDefinition(id: string) {
+    const [r] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.id, id));
+    return r;
   }
 
-  async getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined> {
-    const [row] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.code, code)).limit(1);
-    return row;
+  async getMetricDefinitionByCode(code: string) {
+    const [r] = await db.select().from(metricDefinitions).where(eq(metricDefinitions.code, code));
+    return r;
   }
 
-  async updateMetricDefinitionActive(id: string, isActive: boolean): Promise<MetricDefinition | undefined> {
-    const [row] = await db.update(metricDefinitions)
-      .set({ isActive, updatedAt: new Date() })
-      .where(eq(metricDefinitions.id, id))
+  async createMetricDefinition(data: InsertMetricDefinition): Promise<MetricDefinition> {
+    const [r] = await db.insert(metricDefinitions).values({
+      code: data.code,
+      name: data.name,
+      pillar: data.pillar,
+      category: data.category,
+      description: data.description ?? null,
+      dataType: data.dataType ?? "numeric",
+      unit: data.unit ?? null,
+      inputFrequency: data.inputFrequency ?? "quarterly",
+      isCore: data.isCore ?? true,
+      isActive: data.isActive ?? true,
+      isDerived: data.isDerived ?? false,
+      formulaJson: data.formulaJson ?? null,
+      frameworkTags: data.frameworkTags ?? null,
+      scoringWeight: data.scoringWeight ?? "1",
+      sortOrder: data.sortOrder ?? 0,
+      evidenceRequired: data.evidenceRequired ?? false,
+      rollupMethod: data.rollupMethod ?? "sum",
+    }).returning();
+    return r;
+  }
+
+  async updateMetricDefinition(id: string, data: Partial<MetricDefinition>): Promise<MetricDefinition | undefined> {
+    const [r] = await db.update(metricDefinitions).set({
+      name: data.name,
+      description: data.description,
+      isCore: data.isCore,
+      isActive: data.isActive,
+      isDerived: data.isDerived,
+      formulaJson: data.formulaJson,
+      frameworkTags: data.frameworkTags,
+      scoringWeight: data.scoringWeight,
+      sortOrder: data.sortOrder,
+      evidenceRequired: data.evidenceRequired,
+      rollupMethod: data.rollupMethod,
+      updatedAt: new Date(),
+    }).where(eq(metricDefinitions.id, id)).returning();
+    return r;
+  }
+
+  async seedMetricDefinitions(definitions: InsertMetricDefinition[]): Promise<number> {
+    let seeded = 0;
+    for (const def of definitions) {
+      const existing = await this.getMetricDefinitionByCode(def.code);
+      if (!existing) {
+        await this.createMetricDefinition(def);
+        seeded++;
+      }
+    }
+    return seeded;
+  }
+
+  // ============================================================
+  // METRIC DEFINITION VALUES
+  // ============================================================
+
+  async getMetricDefinitionValues(businessId: string, filters?: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date }) {
+    const conditions: any[] = [eq(metricDefinitionValues.businessId, businessId)];
+    if (filters?.metricDefinitionId) conditions.push(eq(metricDefinitionValues.metricDefinitionId, filters.metricDefinitionId));
+    if (filters?.siteId !== undefined) {
+      conditions.push(filters.siteId === null ? isNull(metricDefinitionValues.siteId) : eq(metricDefinitionValues.siteId, filters.siteId));
+    }
+    if (filters?.periodStart) conditions.push(sql`${metricDefinitionValues.reportingPeriodStart} >= ${filters.periodStart}`);
+    if (filters?.periodEnd) conditions.push(sql`${metricDefinitionValues.reportingPeriodEnd} <= ${filters.periodEnd}`);
+    return db.select().from(metricDefinitionValues).where(and(...conditions)).orderBy(desc(metricDefinitionValues.reportingPeriodStart));
+  }
+
+  async getMetricDefinitionValueById(id: string, businessId: string): Promise<MetricDefinitionValue | undefined> {
+    const [r] = await db.select().from(metricDefinitionValues)
+      .where(and(eq(metricDefinitionValues.id, id), eq(metricDefinitionValues.businessId, businessId)));
+    return r;
+  }
+
+  async createMetricDefinitionValue(data: InsertMetricDefinitionValue): Promise<MetricDefinitionValue> {
+    const insertData: typeof metricDefinitionValues.$inferInsert = {
+      businessId: data.businessId,
+      metricDefinitionId: data.metricDefinitionId,
+      siteId: data.siteId ?? null,
+      reportingPeriodStart: data.reportingPeriodStart,
+      reportingPeriodEnd: data.reportingPeriodEnd,
+      valueNumeric: data.valueNumeric ?? null,
+      valueText: data.valueText ?? null,
+      valueBoolean: data.valueBoolean ?? null,
+      valueJson: data.valueJson ?? null,
+      sourceType: data.sourceType ?? undefined,
+      notes: data.notes ?? null,
+      enteredByUserId: data.enteredByUserId ?? null,
+      status: data.status ?? undefined,
+    };
+    const [r] = await db.insert(metricDefinitionValues).values(insertData).returning();
+    return r;
+  }
+
+  async updateMetricDefinitionValue(id: string, businessId: string, data: Partial<MetricDefinitionValue>): Promise<MetricDefinitionValue | undefined> {
+    const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status } = data;
+    const [r] = await db.update(metricDefinitionValues)
+      .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, updatedAt: new Date() })
+      .where(and(eq(metricDefinitionValues.id, id), eq(metricDefinitionValues.businessId, businessId)))
       .returning();
-    return row;
+    return r;
   }
 
-  // ESG Phase 1: Metric Evidence
+  async upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>) {
+    const conditions: any[] = [
+      eq(metricDefinitionValues.businessId, businessId),
+      eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
+      eq(metricDefinitionValues.reportingPeriodStart, periodStart),
+      eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
+    ];
+    if (siteId === null) {
+      conditions.push(isNull(metricDefinitionValues.siteId));
+    } else {
+      conditions.push(eq(metricDefinitionValues.siteId, siteId));
+    }
+    const [existing] = await db.select().from(metricDefinitionValues).where(and(...conditions));
+    if (existing) {
+      const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
+      const [r] = await db.update(metricDefinitionValues)
+        .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId, updatedAt: new Date() })
+        .where(eq(metricDefinitionValues.id, existing.id))
+        .returning();
+      return r;
+    } else {
+      const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
+      const [r] = await db.insert(metricDefinitionValues).values({
+        businessId, metricDefinitionId, siteId, reportingPeriodStart: periodStart, reportingPeriodEnd: periodEnd,
+        valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId,
+      }).returning();
+      return r;
+    }
+  }
+
+  async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null> {
+    const defn = await this.getMetricDefinition(metricDefinitionId);
+    if (!defn || defn.rollupMethod === "none") return null;
+
+    const siteValues = await db.select().from(metricDefinitionValues)
+      .where(
+        and(
+          eq(metricDefinitionValues.businessId, businessId),
+          eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
+          eq(metricDefinitionValues.reportingPeriodStart, periodStart),
+          eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
+          sql`${metricDefinitionValues.siteId} IS NOT NULL`,
+        )
+      )
+      .orderBy(desc(metricDefinitionValues.updatedAt));
+
+    if (siteValues.length === 0) return null;
+
+    const validSiteValues = siteValues.filter(v => v.valueNumeric !== null && !isNaN(parseFloat(v.valueNumeric!)));
+    if (validSiteValues.length === 0) return null;
+
+    let rollupValue: number | null = null;
+    if (defn.rollupMethod === "sum") {
+      rollupValue = validSiteValues.reduce((a, v) => a + parseFloat(v.valueNumeric!), 0);
+    } else if (defn.rollupMethod === "weighted_average") {
+      // Weighted average: sites are weighted by scoringWeight from metricDefinitionValues if available,
+      // otherwise each site contributes an equal weight of 1.
+      // For percentage-type metrics (e.g. % female in management), equal-weight mean is semantically correct
+      // when no site headcount weight is available.
+      const totalWeight = validSiteValues.reduce((a, v) => {
+        const w = v.sourceType === "manual" ? 1 : 1; // extend here when per-site weights are introduced
+        return a + w;
+      }, 0);
+      const weightedSum = validSiteValues.reduce((a, v) => {
+        const w = 1; // uniform weight per site — extend when weight column added to metricDefinitionValues
+        return a + parseFloat(v.valueNumeric!) * w;
+      }, 0);
+      rollupValue = totalWeight > 0 ? weightedSum / totalWeight : null;
+    } else if (defn.rollupMethod === "latest") {
+      // ORDER BY updatedAt DESC already applied; first record is the most recently updated
+      rollupValue = parseFloat(validSiteValues[0].valueNumeric!);
+    }
+
+    if (rollupValue !== null) {
+      await this.upsertMetricDefinitionValue(businessId, metricDefinitionId, null, periodStart, periodEnd, {
+        valueNumeric: String(rollupValue),
+        sourceType: "calculated",
+      });
+    }
+
+    return rollupValue;
+  }
+
+  // ============================================================
+  // METRIC EVIDENCE
+  // ============================================================
+
   async getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]> {
-    return db.select().from(metricEvidence)
-      .where(eq(metricEvidence.metricValueId, metricValueId))
-      .orderBy(desc(metricEvidence.uploadedAt));
+    return db.select().from(metricEvidence).where(eq(metricEvidence.metricValueId, metricValueId)).orderBy(desc(metricEvidence.uploadedAt));
+  }
+
+  async getMetricEvidenceById(id: string, businessId: string): Promise<MetricEvidence | undefined> {
+    const [ev] = await db.select({ ev: metricEvidence })
+      .from(metricEvidence)
+      .innerJoin(metricDefinitionValues, eq(metricEvidence.metricValueId, metricDefinitionValues.id))
+      .where(and(eq(metricEvidence.id, id), eq(metricDefinitionValues.businessId, businessId)));
+    return ev?.ev;
   }
 
   async createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence> {
-    const [row] = await db.insert(metricEvidence).values(data).returning();
-    return row;
+    const [r] = await db.insert(metricEvidence).values({
+      metricValueId: data.metricValueId,
+      fileUrl: data.fileUrl ?? null,
+      storageKey: data.storageKey ?? null,
+      fileName: data.fileName,
+      fileType: data.fileType ?? null,
+      uploadedByUserId: data.uploadedByUserId ?? null,
+      notes: data.notes ?? null,
+    }).returning();
+    return r;
   }
 
   async deleteMetricEvidence(id: string): Promise<void> {
     await db.delete(metricEvidence).where(eq(metricEvidence.id, id));
   }
 
-  // ESG Phase 1: Calculation Runs
-  async getMetricCalculationRuns(businessId: string, limit = 50): Promise<MetricCalculationRun[]> {
-    return db.select().from(metricCalculationRuns)
-      .where(eq(metricCalculationRuns.businessId, businessId))
-      .orderBy(desc(metricCalculationRuns.createdAt))
-      .limit(limit);
+  // ============================================================
+  // METRIC CALCULATION RUNS
+  // ============================================================
+
+  async createMetricCalculationRun(data: InsertMetricCalculationRun): Promise<MetricCalculationRun> {
+    const [r] = await db.insert(metricCalculationRuns).values({
+      businessId: data.businessId,
+      metricDefinitionId: data.metricDefinitionId,
+      siteId: data.siteId ?? null,
+      reportingPeriodStart: data.reportingPeriodStart,
+      reportingPeriodEnd: data.reportingPeriodEnd,
+      status: data.status ?? "pending",
+      inputsJson: data.inputsJson ?? null,
+      outputJson: data.outputJson ?? null,
+      errorText: data.errorText ?? null,
+      triggeredByMetricValueId: data.triggeredByMetricValueId ?? null,
+    }).returning();
+    return r;
+  }
+
+  async updateMetricCalculationRun(id: string, data: Partial<MetricCalculationRun>): Promise<MetricCalculationRun | undefined> {
+    const [r] = await db.update(metricCalculationRuns)
+      .set({
+        status: data.status,
+        outputJson: data.outputJson,
+        errorText: data.errorText,
+      })
+      .where(eq(metricCalculationRuns.id, id))
+      .returning();
+    return r;
+  }
+
+  async getMetricCalculationRuns(businessId: string, metricDefinitionId?: string): Promise<MetricCalculationRun[]> {
+    const baseCondition = eq(metricCalculationRuns.businessId, businessId);
+    const whereClause = metricDefinitionId
+      ? and(baseCondition, eq(metricCalculationRuns.metricDefinitionId, metricDefinitionId))
+      : baseCondition;
+    return db.select().from(metricCalculationRuns).where(whereClause).orderBy(desc(metricCalculationRuns.createdAt)).limit(100);
   }
 }
 
