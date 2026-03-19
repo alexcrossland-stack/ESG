@@ -2486,15 +2486,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let allEvidence: Awaited<ReturnType<typeof storage.getEvidenceFiles>>;
       let allCarbonCalcs: Awaited<ReturnType<typeof storage.getCarbonCalculations>>;
       if (bodySiteId) {
-        // Site-scoped: exact site only
-        allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId);
+        // Site-scoped: exact site, period-filtered
+        allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId, period || undefined);
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === bodySiteId);
       } else {
-        // Org-wide: active sites + unassigned; exclude archived-site records
+        // Org-wide: active sites + unassigned; exclude archived-site records; period-filtered
         const activeOnly = await storage.getSites(companyId, false);
         const activeIds = new Set(activeOnly.map((s: any) => s.id));
-        const allEv = await storage.getEvidenceFiles(companyId);
+        const allEv = await storage.getEvidenceFiles(companyId, undefined, period || undefined);
         allEvidence = allEv.filter((e: any) => e.siteId === null || activeIds.has(e.siteId));
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === null || activeIds.has(c.siteId));
