@@ -48,6 +48,10 @@ import TeamPage from "@/pages/team";
 import SitesPage from "@/pages/sites";
 import SiteDashboardPage from "@/pages/site-dashboard";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
+import MaterialityPage from "@/pages/materiality";
+import EsgPolicyRegisterPage from "@/pages/esg-policy-register";
+import EsgTargetsPage from "@/pages/esg-targets";
+import EsgRisksPage from "@/pages/esg-risks";
 import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
 import FrameworkSettingsPage from "@/pages/framework-settings";
@@ -243,6 +247,10 @@ function ProtectedApp() {
                 <Route path="/help" component={HelpPage} />
                 <Route path="/framework-settings" component={FrameworkSettingsPage} />
                 <Route path="/framework-readiness" component={FrameworkReadinessPage} />
+                <Route path="/materiality" component={MaterialityPage} />
+                <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
+                <Route path="/esg-targets" component={EsgTargetsPage} />
+                <Route path="/esg-risks" component={EsgRisksPage} />
                 <Route component={NotFound} />
               </Switch>
             </AppErrorBoundary>

@@ -16,6 +16,7 @@ import {
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
   TrendingUp, Building2, Activity, HeartPulse, Sparkles, HelpCircle,
   MessageSquare, CreditCard, Users, ChevronRight, MapPin, Globe, BookOpen,
+  Star, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -63,6 +64,9 @@ const SETTINGS_ROUTES = [
   "/my-tasks", "/my-approvals", "/questionnaire",
   "/carbon-calculator", "/policy-templates", "/policy-generator",
   "/answer-library", "/control-centre",
+];
+const ESG_MANAGEMENT_ROUTES = [
+  "/materiality", "/esg-policy-register", "/esg-targets", "/esg-risks",
 ];
 const ADVANCED_ROUTES = [
   "/compliance", "/benchmarks", "/recommendations",
@@ -147,12 +151,14 @@ export function AppSidebar() {
   const frameworkGroupDefault = isGroupActive(location, FRAMEWORK_ROUTES);
   const settingsGroupDefault = isGroupActive(location, SETTINGS_ROUTES);
   const advancedGroupDefault = isGroupActive(location, ADVANCED_ROUTES);
+  const mgmtGroupDefault = isGroupActive(location, ESG_MANAGEMENT_ROUTES);
 
   const [esgOpen, setEsgOpen] = useGroupState("esg_setup", esgGroupDefault);
   const [dataOpen, setDataOpen] = useGroupState("data_evidence", dataGroupDefault);
   const [frameworkOpen, setFrameworkOpen] = useGroupState("frameworks", frameworkGroupDefault);
   const [settingsOpen, setSettingsOpen] = useGroupState("settings", settingsGroupDefault);
   const [advancedOpen, setAdvancedOpen] = useGroupState("advanced", advancedGroupDefault);
+  const [mgmtOpen, setMgmtOpen] = useGroupState("esg_management", mgmtGroupDefault);
 
   useEffect(() => {
     if (isGroupActive(location, ESG_SETUP_ROUTES)) setEsgOpen(true);
@@ -160,6 +166,7 @@ export function AppSidebar() {
     if (isGroupActive(location, FRAMEWORK_ROUTES)) setFrameworkOpen(true);
     if (isGroupActive(location, SETTINGS_ROUTES)) setSettingsOpen(true);
     if (isGroupActive(location, ADVANCED_ROUTES)) setAdvancedOpen(true);
+    if (isGroupActive(location, ESG_MANAGEMENT_ROUTES)) setMgmtOpen(true);
   }, [location]);
 
   return (
@@ -266,6 +273,63 @@ export function AppSidebar() {
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              {/* ESG Management */}
+              <Collapsible open={mgmtOpen} onOpenChange={setMgmtOpen} asChild>
+                <SidebarMenuItem>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton
+                          data-active={isGroupActive(location, ESG_MANAGEMENT_ROUTES) && !mgmtOpen}
+                          data-testid="nav-group-esg-management"
+                        >
+                          <Shield className="w-4 h-4 shrink-0" />
+                          <span>ESG Management</span>
+                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${mgmtOpen ? "rotate-180" : ""}`} />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">Manage materiality, policies, targets and risks</TooltipContent>
+                  </Tooltip>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/materiality")}>
+                          <Link href="/materiality" data-testid="nav-materiality">
+                            <Star className="w-3.5 h-3.5 shrink-0" />
+                            <span>Materiality</span>
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-policy-register")}>
+                          <Link href="/esg-policy-register" data-testid="nav-esg-policy-register">
+                            <FileText className="w-3.5 h-3.5 shrink-0" />
+                            <span>Policy Register</span>
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-targets")}>
+                          <Link href="/esg-targets" data-testid="nav-esg-targets">
+                            <Target className="w-3.5 h-3.5 shrink-0" />
+                            <span>Targets & Actions</span>
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-risks")}>
+                          <Link href="/esg-risks" data-testid="nav-esg-risks">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            <span>Risk Register</span>
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </SidebarMenuItem>

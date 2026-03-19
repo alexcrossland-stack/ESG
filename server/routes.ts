@@ -7479,6 +7479,304 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  // ============================================================
+  // ESG PHASE 3: MATERIALITY
+  // ============================================================
+
+  app.get("/api/materiality/topics", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.seedDefaultMaterialTopics(companyId);
+      const topics = await storage.getMaterialTopics(companyId);
+      res.json(topics);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/materiality/topics/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { id } = req.params;
+      const { selected, financialMateriality, impactMateriality, rationale } = req.body;
+      const updated = await storage.upsertMaterialTopicScores(id, companyId, {
+        ...(selected !== undefined && { selected }),
+        ...(financialMateriality !== undefined && { financialMateriality }),
+        ...(impactMateriality !== undefined && { impactMateriality }),
+        ...(rationale !== undefined && { rationale }),
+      });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/materiality/assessments", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const assessments = await storage.getMaterialityAssessments(companyId);
+      res.json(assessments);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/materiality/assessments", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const a = await storage.createMaterialityAssessment({ ...req.body, companyId });
+      res.json(a);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/materiality/assessments/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const a = await storage.updateMaterialityAssessment(req.params.id, companyId, req.body);
+      res.json(a);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 3: POLICY RECORDS
+  // ============================================================
+
+  app.get("/api/policy-records", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const records = await storage.getPolicyRecords(companyId);
+      res.json(records);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/policy-records", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const r = await storage.createPolicyRecord({ ...req.body, companyId });
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/policy-records/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const r = await storage.updatePolicyRecord(req.params.id, companyId, req.body);
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/policy-records/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deletePolicyRecord(req.params.id, companyId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 3: GOVERNANCE ASSIGNMENTS
+  // ============================================================
+
+  app.get("/api/governance-assignments", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const assignments = await storage.getGovernanceAssignments(companyId);
+      res.json(assignments);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/governance-assignments/:area", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const r = await storage.upsertGovernanceAssignment(companyId, req.params.area, req.body);
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/governance-assignments/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteGovernanceAssignment(req.params.id, companyId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 3: ESG TARGETS
+  // ============================================================
+
+  app.get("/api/esg-targets", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const targets = await storage.getEsgTargets(companyId);
+      res.json(targets);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/esg-targets", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const t = await storage.createEsgTarget({ ...req.body, companyId });
+      res.json(t);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/esg-targets/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const t = await storage.updateEsgTarget(req.params.id, companyId, req.body);
+      res.json(t);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/esg-targets/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteEsgTarget(req.params.id, companyId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 3: ESG ACTIONS
+  // ============================================================
+
+  app.get("/api/esg-actions", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { targetId, riskId } = req.query;
+      const actions = await storage.getEsgActions(companyId, targetId as string, riskId as string);
+      res.json(actions);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/esg-actions", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const a = await storage.createEsgAction({ ...req.body, companyId });
+      res.json(a);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/esg-actions/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const a = await storage.updateEsgAction(req.params.id, companyId, req.body);
+      res.json(a);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/esg-actions/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteEsgAction(req.params.id, companyId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // ESG PHASE 3: ESG RISKS
+  // ============================================================
+
+  app.get("/api/esg-risks", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const { pillar, riskType } = req.query;
+      const risks = await storage.getEsgRisks(companyId, pillar as string, riskType as string);
+      res.json(risks);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/esg-risks", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const r = await storage.createEsgRisk({ ...req.body, companyId });
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/esg-risks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const r = await storage.updateEsgRisk(req.params.id, companyId, req.body);
+      res.json(r);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/esg-risks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      await storage.deleteEsgRisk(req.params.id, companyId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return httpServer;
 }
 

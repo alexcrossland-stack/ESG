@@ -11,10 +11,12 @@ import {
   backgroundJobs, platformHealthEvents, generatedFiles, userActivity,
   authTokens, superAdminActions, organisationSites,
   metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
+  businessMaterialityAssessments, policyRecords, governanceAssignments,
+  esgTargets, esgActions, esgRisks,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
-  type MaterialTopic, type Metric, type InsertMetric,
+  type MaterialTopic, type InsertMaterialTopic, type Metric, type InsertMetric,
   type MetricTarget, type MetricValue, type InsertMetricValue,
   type EvidenceFile, type ActionPlan, type InsertActionPlan,
   type ReportRun, type AuditLog,
@@ -56,6 +58,12 @@ import {
   type FrameworkRequirement, type InsertFrameworkRequirement,
   type MetricFrameworkMapping, type InsertMetricFrameworkMapping,
   type BusinessFrameworkSelection, type InsertBusinessFrameworkSelection,
+  type BusinessMaterialityAssessment, type InsertBusinessMaterialityAssessment,
+  type PolicyRecord, type InsertPolicyRecord,
+  type GovernanceAssignment, type InsertGovernanceAssignment,
+  type EsgTarget, type InsertEsgTarget,
+  type EsgAction, type InsertEsgAction,
+  type EsgRisk, type InsertEsgRisk,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -340,6 +348,47 @@ export interface IStorage {
   createMetricCalculationRun(data: InsertMetricCalculationRun): Promise<MetricCalculationRun>;
   updateMetricCalculationRun(id: string, data: Partial<MetricCalculationRun>): Promise<MetricCalculationRun | undefined>;
   getMetricCalculationRuns(businessId: string, metricDefinitionId?: string): Promise<MetricCalculationRun[]>;
+
+  // Materiality Assessments
+  getMaterialTopic(id: string): Promise<MaterialTopic | undefined>;
+  upsertMaterialTopicScores(id: string, companyId: string, data: Partial<MaterialTopic>): Promise<MaterialTopic | undefined>;
+  seedDefaultMaterialTopics(companyId: string): Promise<void>;
+  getMaterialityAssessments(companyId: string): Promise<BusinessMaterialityAssessment[]>;
+  createMaterialityAssessment(data: InsertBusinessMaterialityAssessment): Promise<BusinessMaterialityAssessment>;
+  updateMaterialityAssessment(id: string, companyId: string, data: Partial<BusinessMaterialityAssessment>): Promise<BusinessMaterialityAssessment | undefined>;
+
+  // Policy Records
+  getPolicyRecords(companyId: string): Promise<PolicyRecord[]>;
+  getPolicyRecord(id: string, companyId: string): Promise<PolicyRecord | undefined>;
+  createPolicyRecord(data: InsertPolicyRecord): Promise<PolicyRecord>;
+  updatePolicyRecord(id: string, companyId: string, data: Partial<PolicyRecord>): Promise<PolicyRecord | undefined>;
+  deletePolicyRecord(id: string, companyId: string): Promise<void>;
+
+  // Governance Assignments
+  getGovernanceAssignments(companyId: string): Promise<GovernanceAssignment[]>;
+  upsertGovernanceAssignment(companyId: string, area: string, data: Partial<InsertGovernanceAssignment>): Promise<GovernanceAssignment>;
+  deleteGovernanceAssignment(id: string, companyId: string): Promise<void>;
+
+  // ESG Targets
+  getEsgTargets(companyId: string): Promise<EsgTarget[]>;
+  getEsgTarget(id: string, companyId: string): Promise<EsgTarget | undefined>;
+  createEsgTarget(data: InsertEsgTarget): Promise<EsgTarget>;
+  updateEsgTarget(id: string, companyId: string, data: Partial<EsgTarget>): Promise<EsgTarget | undefined>;
+  deleteEsgTarget(id: string, companyId: string): Promise<void>;
+
+  // ESG Actions
+  getEsgActions(companyId: string, targetId?: string, riskId?: string): Promise<EsgAction[]>;
+  getEsgAction(id: string, companyId: string): Promise<EsgAction | undefined>;
+  createEsgAction(data: InsertEsgAction): Promise<EsgAction>;
+  updateEsgAction(id: string, companyId: string, data: Partial<EsgAction>): Promise<EsgAction | undefined>;
+  deleteEsgAction(id: string, companyId: string): Promise<void>;
+
+  // ESG Risks
+  getEsgRisks(companyId: string, pillar?: string, riskType?: string): Promise<EsgRisk[]>;
+  getEsgRisk(id: string, companyId: string): Promise<EsgRisk | undefined>;
+  createEsgRisk(data: InsertEsgRisk): Promise<EsgRisk>;
+  updateEsgRisk(id: string, companyId: string, data: Partial<EsgRisk>): Promise<EsgRisk | undefined>;
+  deleteEsgRisk(id: string, companyId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2428,6 +2477,250 @@ export class DatabaseStorage implements IStorage {
       metricDefinitionId,
       frameworks: Object.values(frameworkGroups),
     };
+  }
+
+  // ============================================================
+  // MATERIALITY
+  // ============================================================
+
+  async getMaterialTopic(id: string): Promise<MaterialTopic | undefined> {
+    const [t] = await db.select().from(materialTopics).where(eq(materialTopics.id, id));
+    return t;
+  }
+
+  async upsertMaterialTopicScores(id: string, companyId: string, data: Partial<MaterialTopic>): Promise<MaterialTopic | undefined> {
+    const [t] = await db.update(materialTopics)
+      .set(data)
+      .where(and(eq(materialTopics.id, id), eq(materialTopics.companyId, companyId)))
+      .returning();
+    return t;
+  }
+
+  async seedDefaultMaterialTopics(companyId: string): Promise<void> {
+    const existing = await db.select().from(materialTopics).where(eq(materialTopics.companyId, companyId));
+    if (existing.length > 0) return;
+
+    const DEFAULT_TOPICS = [
+      // Environmental
+      { topic: "Climate Change & GHG Emissions", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["climate", "environmental"] },
+      { topic: "Energy Efficiency", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["environmental"] },
+      { topic: "Water Stewardship", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["environmental"] },
+      { topic: "Waste & Circular Economy", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["environmental"] },
+      { topic: "Biodiversity & Land Use", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["environmental"] },
+      { topic: "Air Quality & Pollution", category: "environmental" as const, isDefault: true, recommendedPolicySlugs: ["environmental"] },
+      // Social
+      { topic: "Health & Safety", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["health_safety"] },
+      { topic: "Diversity, Equity & Inclusion", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Employee Wellbeing & Engagement", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Fair Pay & Living Wage", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Training & Skills Development", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Human Rights & Labour Standards", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Community Impact", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["social"] },
+      { topic: "Supply Chain Responsibility", category: "social" as const, isDefault: true, recommendedPolicySlugs: ["supplier"] },
+      // Governance
+      { topic: "Business Ethics & Anti-Bribery", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["anti_bribery"] },
+      { topic: "Data Privacy & Cybersecurity", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["data_privacy", "cybersecurity"] },
+      { topic: "Whistleblowing & Speak-Up Culture", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["whistleblowing"] },
+      { topic: "Board Oversight & Governance", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["governance"] },
+      { topic: "Regulatory Compliance", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["governance"] },
+      { topic: "Transparency & Disclosure", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["governance"] },
+      { topic: "ESG Strategy & Target-Setting", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["governance"] },
+      { topic: "Tax Responsibility", category: "governance" as const, isDefault: true, recommendedPolicySlugs: ["governance"] },
+    ];
+
+    for (const topic of DEFAULT_TOPICS) {
+      await db.insert(materialTopics).values({ companyId, ...topic, selected: false }).onConflictDoNothing();
+    }
+  }
+
+  async getMaterialityAssessments(companyId: string): Promise<BusinessMaterialityAssessment[]> {
+    return db.select().from(businessMaterialityAssessments)
+      .where(eq(businessMaterialityAssessments.companyId, companyId))
+      .orderBy(desc(businessMaterialityAssessments.assessmentYear));
+  }
+
+  async createMaterialityAssessment(data: InsertBusinessMaterialityAssessment): Promise<BusinessMaterialityAssessment> {
+    const [a] = await db.insert(businessMaterialityAssessments).values(data).returning();
+    return a;
+  }
+
+  async updateMaterialityAssessment(id: string, companyId: string, data: Partial<BusinessMaterialityAssessment>): Promise<BusinessMaterialityAssessment | undefined> {
+    const [a] = await db.update(businessMaterialityAssessments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(businessMaterialityAssessments.id, id), eq(businessMaterialityAssessments.companyId, companyId)))
+      .returning();
+    return a;
+  }
+
+  // ============================================================
+  // POLICY RECORDS
+  // ============================================================
+
+  async getPolicyRecords(companyId: string): Promise<PolicyRecord[]> {
+    return db.select().from(policyRecords)
+      .where(eq(policyRecords.companyId, companyId))
+      .orderBy(policyRecords.title);
+  }
+
+  async getPolicyRecord(id: string, companyId: string): Promise<PolicyRecord | undefined> {
+    const [r] = await db.select().from(policyRecords)
+      .where(and(eq(policyRecords.id, id), eq(policyRecords.companyId, companyId)));
+    return r;
+  }
+
+  async createPolicyRecord(data: InsertPolicyRecord): Promise<PolicyRecord> {
+    const [r] = await db.insert(policyRecords).values(data).returning();
+    return r;
+  }
+
+  async updatePolicyRecord(id: string, companyId: string, data: Partial<PolicyRecord>): Promise<PolicyRecord | undefined> {
+    const [r] = await db.update(policyRecords)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(policyRecords.id, id), eq(policyRecords.companyId, companyId)))
+      .returning();
+    return r;
+  }
+
+  async deletePolicyRecord(id: string, companyId: string): Promise<void> {
+    await db.delete(policyRecords)
+      .where(and(eq(policyRecords.id, id), eq(policyRecords.companyId, companyId)));
+  }
+
+  // ============================================================
+  // GOVERNANCE ASSIGNMENTS
+  // ============================================================
+
+  async getGovernanceAssignments(companyId: string): Promise<GovernanceAssignment[]> {
+    return db.select().from(governanceAssignments)
+      .where(eq(governanceAssignments.companyId, companyId))
+      .orderBy(governanceAssignments.area);
+  }
+
+  async upsertGovernanceAssignment(companyId: string, area: string, data: Partial<InsertGovernanceAssignment>): Promise<GovernanceAssignment> {
+    const existing = await db.select().from(governanceAssignments)
+      .where(and(eq(governanceAssignments.companyId, companyId), eq(governanceAssignments.area, area as any)));
+    if (existing.length > 0) {
+      const [r] = await db.update(governanceAssignments)
+        .set({ ...data, updatedAt: new Date() })
+        .where(and(eq(governanceAssignments.companyId, companyId), eq(governanceAssignments.area, area as any)))
+        .returning();
+      return r;
+    } else {
+      const [r] = await db.insert(governanceAssignments)
+        .values({ companyId, area: area as any, ...data } as any)
+        .returning();
+      return r;
+    }
+  }
+
+  async deleteGovernanceAssignment(id: string, companyId: string): Promise<void> {
+    await db.delete(governanceAssignments)
+      .where(and(eq(governanceAssignments.id, id), eq(governanceAssignments.companyId, companyId)));
+  }
+
+  // ============================================================
+  // ESG TARGETS
+  // ============================================================
+
+  async getEsgTargets(companyId: string): Promise<EsgTarget[]> {
+    return db.select().from(esgTargets)
+      .where(eq(esgTargets.companyId, companyId))
+      .orderBy(desc(esgTargets.targetYear), esgTargets.pillar);
+  }
+
+  async getEsgTarget(id: string, companyId: string): Promise<EsgTarget | undefined> {
+    const [t] = await db.select().from(esgTargets)
+      .where(and(eq(esgTargets.id, id), eq(esgTargets.companyId, companyId)));
+    return t;
+  }
+
+  async createEsgTarget(data: InsertEsgTarget): Promise<EsgTarget> {
+    const [t] = await db.insert(esgTargets).values(data).returning();
+    return t;
+  }
+
+  async updateEsgTarget(id: string, companyId: string, data: Partial<EsgTarget>): Promise<EsgTarget | undefined> {
+    const [t] = await db.update(esgTargets)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(esgTargets.id, id), eq(esgTargets.companyId, companyId)))
+      .returning();
+    return t;
+  }
+
+  async deleteEsgTarget(id: string, companyId: string): Promise<void> {
+    await db.delete(esgTargets)
+      .where(and(eq(esgTargets.id, id), eq(esgTargets.companyId, companyId)));
+  }
+
+  // ============================================================
+  // ESG ACTIONS
+  // ============================================================
+
+  async getEsgActions(companyId: string, targetId?: string, riskId?: string): Promise<EsgAction[]> {
+    let whereClause: any = eq(esgActions.companyId, companyId);
+    if (targetId) whereClause = and(whereClause, eq(esgActions.targetId, targetId));
+    if (riskId) whereClause = and(whereClause, eq(esgActions.riskId, riskId));
+    return db.select().from(esgActions).where(whereClause).orderBy(desc(esgActions.dueDate));
+  }
+
+  async getEsgAction(id: string, companyId: string): Promise<EsgAction | undefined> {
+    const [a] = await db.select().from(esgActions)
+      .where(and(eq(esgActions.id, id), eq(esgActions.companyId, companyId)));
+    return a;
+  }
+
+  async createEsgAction(data: InsertEsgAction): Promise<EsgAction> {
+    const [a] = await db.insert(esgActions).values(data).returning();
+    return a;
+  }
+
+  async updateEsgAction(id: string, companyId: string, data: Partial<EsgAction>): Promise<EsgAction | undefined> {
+    const [a] = await db.update(esgActions)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(esgActions.id, id), eq(esgActions.companyId, companyId)))
+      .returning();
+    return a;
+  }
+
+  async deleteEsgAction(id: string, companyId: string): Promise<void> {
+    await db.delete(esgActions)
+      .where(and(eq(esgActions.id, id), eq(esgActions.companyId, companyId)));
+  }
+
+  // ============================================================
+  // ESG RISKS
+  // ============================================================
+
+  async getEsgRisks(companyId: string, pillar?: string, riskType?: string): Promise<EsgRisk[]> {
+    let whereClause: any = eq(esgRisks.companyId, companyId);
+    if (pillar) whereClause = and(whereClause, eq(esgRisks.pillar, pillar as any));
+    if (riskType) whereClause = and(whereClause, eq(esgRisks.riskType, riskType as any));
+    return db.select().from(esgRisks).where(whereClause)
+      .orderBy(desc(esgRisks.riskScore), esgRisks.title);
+  }
+
+  async getEsgRisk(id: string, companyId: string): Promise<EsgRisk | undefined> {
+    const [r] = await db.select().from(esgRisks)
+      .where(and(eq(esgRisks.id, id), eq(esgRisks.companyId, companyId)));
+    return r;
+  }
+
+  async createEsgRisk(data: InsertEsgRisk): Promise<EsgRisk> {
+    const [r] = await db.insert(esgRisks).values(data).returning();
+    return r;
+  }
+
+  async updateEsgRisk(id: string, companyId: string, data: Partial<EsgRisk>): Promise<EsgRisk | undefined> {
+    const [r] = await db.update(esgRisks)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(eq(esgRisks.id, id), eq(esgRisks.companyId, companyId)))
+      .returning();
+    return r;
+  }
+
+  async deleteEsgRisk(id: string, companyId: string): Promise<void> {
+    await db.delete(esgRisks)
+      .where(and(eq(esgRisks.id, id), eq(esgRisks.companyId, companyId)));
   }
 }
 

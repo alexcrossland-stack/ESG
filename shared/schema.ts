@@ -152,6 +152,125 @@ export const materialTopics = pgTable("material_topics", {
   topic: text("topic").notNull(),
   category: metricCategoryEnum("category").notNull(),
   selected: boolean("selected").default(false),
+  isDefault: boolean("is_default").default(true),
+  financialMateriality: integer("financial_materiality"),
+  impactMateriality: integer("impact_materiality"),
+  rationale: text("rationale"),
+  recommendedMetricIds: text("recommended_metric_ids").array(),
+  recommendedPolicySlugs: text("recommended_policy_slugs").array(),
+});
+
+export const businessMaterialityAssessments = pgTable("business_materiality_assessments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  assessmentYear: integer("assessment_year").notNull(),
+  status: text("status").default("draft"),
+  notes: text("notes"),
+  completedAt: timestamp("completed_at"),
+  completedBy: varchar("completed_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const policyRecordStatusEnum = pgEnum("policy_record_status", ["draft", "active", "under_review", "retired"]);
+export const policyRecordTypeEnum = pgEnum("policy_record_type", ["environmental", "social", "governance", "health_safety", "data_privacy", "anti_bribery", "whistleblowing", "cybersecurity", "supplier", "climate", "other"]);
+export const governanceAreaEnum = pgEnum("governance_area", ["environment", "social", "governance", "climate", "privacy_cyber"]);
+
+export const policyRecords = pgTable("policy_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  title: text("title").notNull(),
+  policyType: policyRecordTypeEnum("policy_type").notNull().default("other"),
+  owner: text("owner"),
+  ownerUserId: varchar("owner_user_id"),
+  status: policyRecordStatusEnum("status").notNull().default("draft"),
+  effectiveDate: timestamp("effective_date"),
+  reviewDate: timestamp("review_date"),
+  documentLink: text("document_link"),
+  notes: text("notes"),
+  linkedMaterialTopicIds: text("linked_material_topic_ids").array(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const governanceAssignments = pgTable("governance_assignments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  area: governanceAreaEnum("area").notNull(),
+  ownerName: text("owner_name"),
+  ownerUserId: varchar("owner_user_id"),
+  ownerTitle: text("owner_title"),
+  responsibilities: text("responsibilities"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const esgTargetStatusEnum = pgEnum("esg_target_status", ["not_started", "in_progress", "achieved", "missed", "cancelled"]);
+
+export const esgTargets = pgTable("esg_targets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  pillar: metricCategoryEnum("pillar").notNull(),
+  linkedMetricId: varchar("linked_metric_id"),
+  linkedMetricDefinitionId: varchar("linked_metric_definition_id"),
+  baselineValue: decimal("baseline_value", { precision: 15, scale: 4 }),
+  baselineYear: integer("baseline_year"),
+  targetValue: decimal("target_value", { precision: 15, scale: 4 }),
+  targetYear: integer("target_year"),
+  owner: text("owner"),
+  ownerUserId: varchar("owner_user_id"),
+  status: esgTargetStatusEnum("status").notNull().default("not_started"),
+  progressPercent: integer("progress_percent").default(0),
+  notes: text("notes"),
+  linkedMaterialTopicIds: text("linked_material_topic_ids").array(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const esgActionStatusEnum = pgEnum("esg_action_status", ["not_started", "in_progress", "complete", "overdue", "cancelled"]);
+
+export const esgActions = pgTable("esg_actions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  targetId: varchar("target_id"),
+  riskId: varchar("risk_id"),
+  title: text("title").notNull(),
+  description: text("description"),
+  owner: text("owner"),
+  ownerUserId: varchar("owner_user_id"),
+  dueDate: timestamp("due_date"),
+  status: esgActionStatusEnum("status").notNull().default("not_started"),
+  progressPercent: integer("progress_percent").default(0),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const esgRiskLikelihoodEnum = pgEnum("esg_risk_likelihood", ["very_low", "low", "medium", "high", "very_high"]);
+export const esgRiskImpactEnum = pgEnum("esg_risk_impact", ["very_low", "low", "medium", "high", "very_high"]);
+export const esgRiskStatusEnum = pgEnum("esg_risk_status", ["open", "mitigated", "accepted", "closed"]);
+export const esgRiskTypeEnum = pgEnum("esg_risk_type", ["physical", "transition", "regulatory", "reputational", "supply_chain", "operational", "financial", "social", "governance", "other"]);
+
+export const esgRisks = pgTable("esg_risks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  pillar: metricCategoryEnum("pillar").notNull(),
+  riskType: esgRiskTypeEnum("risk_type").notNull().default("other"),
+  title: text("title").notNull(),
+  description: text("description"),
+  likelihood: esgRiskLikelihoodEnum("likelihood").notNull().default("medium"),
+  impact: esgRiskImpactEnum("impact").notNull().default("medium"),
+  riskScore: integer("risk_score"),
+  mitigationPlan: text("mitigation_plan"),
+  owner: text("owner"),
+  ownerUserId: varchar("owner_user_id"),
+  reviewDate: timestamp("review_date"),
+  status: esgRiskStatusEnum("status").notNull().default("open"),
+  linkedMaterialTopicIds: text("linked_material_topic_ids").array(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const metrics = pgTable("metrics", {
@@ -590,6 +709,12 @@ export const insertActionPlanSchema = createInsertSchema(actionPlans).omit({ id:
 export const insertEsgPolicySchema = createInsertSchema(esgPolicies).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPolicyVersionSchema = createInsertSchema(policyVersions).omit({ id: true, createdAt: true });
 export const insertMaterialTopicSchema = createInsertSchema(materialTopics).omit({ id: true });
+export const insertBusinessMaterialityAssessmentSchema = createInsertSchema(businessMaterialityAssessments).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPolicyRecordSchema = createInsertSchema(policyRecords).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertGovernanceAssignmentSchema = createInsertSchema(governanceAssignments).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertEsgTargetSchema = createInsertSchema(esgTargets).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertEsgActionSchema = createInsertSchema(esgActions).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertEsgRiskSchema = createInsertSchema(esgRisks).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertMetricTargetSchema = createInsertSchema(metricTargets).omit({ id: true });
 export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({ id: true, uploadedAt: true, reviewedBy: true, reviewedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
@@ -615,6 +740,19 @@ export type EsgPolicy = typeof esgPolicies.$inferSelect;
 export type PolicyVersion = typeof policyVersions.$inferSelect;
 export type InsertPolicyVersion = z.infer<typeof insertPolicyVersionSchema>;
 export type MaterialTopic = typeof materialTopics.$inferSelect;
+export type InsertMaterialTopic = z.infer<typeof insertMaterialTopicSchema>;
+export type BusinessMaterialityAssessment = typeof businessMaterialityAssessments.$inferSelect;
+export type InsertBusinessMaterialityAssessment = z.infer<typeof insertBusinessMaterialityAssessmentSchema>;
+export type PolicyRecord = typeof policyRecords.$inferSelect;
+export type InsertPolicyRecord = z.infer<typeof insertPolicyRecordSchema>;
+export type GovernanceAssignment = typeof governanceAssignments.$inferSelect;
+export type InsertGovernanceAssignment = z.infer<typeof insertGovernanceAssignmentSchema>;
+export type EsgTarget = typeof esgTargets.$inferSelect;
+export type InsertEsgTarget = z.infer<typeof insertEsgTargetSchema>;
+export type EsgAction = typeof esgActions.$inferSelect;
+export type InsertEsgAction = z.infer<typeof insertEsgActionSchema>;
+export type EsgRisk = typeof esgRisks.$inferSelect;
+export type InsertEsgRisk = z.infer<typeof insertEsgRiskSchema>;
 export type Metric = typeof metrics.$inferSelect;
 export type InsertMetric = z.infer<typeof insertMetricSchema>;
 export type MetricTarget = typeof metricTargets.$inferSelect;
