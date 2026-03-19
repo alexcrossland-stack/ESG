@@ -13,6 +13,7 @@ import {
   metricDefinitions, metricDefinitionValues, metricEvidence, metricCalculationRuns,
   businessMaterialityAssessments, policyRecords, governanceAssignments,
   esgTargets, esgActions, esgRisks,
+  identityProviders, dataExportJobs, dataDeletionRequests,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
   type CompanySettings, type EsgPolicy, type PolicyVersion, type InsertPolicyVersion,
@@ -64,6 +65,9 @@ import {
   type EsgTarget, type InsertEsgTarget,
   type EsgAction, type InsertEsgAction,
   type EsgRisk, type InsertEsgRisk,
+  type IdentityProvider, type InsertIdentityProvider,
+  type DataExportJob, type InsertDataExportJob,
+  type DataDeletionRequest, type InsertDataDeletionRequest,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -392,6 +396,30 @@ export interface IStorage {
   createEsgRisk(data: InsertEsgRisk): Promise<EsgRisk>;
   updateEsgRisk(id: string, companyId: string, data: Partial<EsgRisk>): Promise<EsgRisk | undefined>;
   deleteEsgRisk(id: string, companyId: string): Promise<void>;
+
+  // Identity Providers
+  getIdentityProviders(companyId: string): Promise<IdentityProvider[]>;
+  getIdentityProvider(id: string): Promise<IdentityProvider | undefined>;
+  createIdentityProvider(data: InsertIdentityProvider): Promise<IdentityProvider>;
+  updateIdentityProvider(id: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined>;
+  deleteIdentityProvider(id: string): Promise<void>;
+
+  // Data Export Jobs
+  createDataExportJob(data: InsertDataExportJob): Promise<DataExportJob>;
+  getDataExportJob(id: string): Promise<DataExportJob | undefined>;
+  getDataExportJobByToken(token: string): Promise<DataExportJob | undefined>;
+  updateDataExportJob(id: string, data: Partial<DataExportJob>): Promise<DataExportJob | undefined>;
+  getDataExportJobs(companyId: string): Promise<DataExportJob[]>;
+  getPendingDataExportJobs(limit?: number): Promise<DataExportJob[]>;
+  cleanupExpiredExportJobs(): Promise<number>;
+
+  // Data Deletion Requests
+  createDataDeletionRequest(data: InsertDataDeletionRequest): Promise<DataDeletionRequest>;
+  getDataDeletionRequest(id: string): Promise<DataDeletionRequest | undefined>;
+  getDataDeletionRequests(companyId: string): Promise<DataDeletionRequest[]>;
+  updateDataDeletionRequest(id: string, data: Partial<DataDeletionRequest>): Promise<DataDeletionRequest | undefined>;
+  anonymiseUser(userId: string): Promise<void>;
+  deleteCompanyData(companyId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2742,6 +2770,127 @@ export class DatabaseStorage implements IStorage {
   async deleteEsgRisk(id: string, companyId: string): Promise<void> {
     await db.delete(esgRisks)
       .where(and(eq(esgRisks.id, id), eq(esgRisks.companyId, companyId)));
+  }
+
+  async getIdentityProviders(companyId: string): Promise<IdentityProvider[]> {
+    return db.select().from(identityProviders)
+      .where(eq(identityProviders.companyId, companyId))
+      .orderBy(identityProviders.name);
+  }
+
+  async getIdentityProvider(id: string): Promise<IdentityProvider | undefined> {
+    const [p] = await db.select().from(identityProviders).where(eq(identityProviders.id, id));
+    return p;
+  }
+
+  async createIdentityProvider(data: InsertIdentityProvider): Promise<IdentityProvider> {
+    const [p] = await db.insert(identityProviders).values(data).returning();
+    return p;
+  }
+
+  async updateIdentityProvider(id: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined> {
+    const [p] = await db.update(identityProviders)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(identityProviders.id, id))
+      .returning();
+    return p;
+  }
+
+  async deleteIdentityProvider(id: string): Promise<void> {
+    await db.delete(identityProviders).where(eq(identityProviders.id, id));
+  }
+
+  async createDataExportJob(data: InsertDataExportJob): Promise<DataExportJob> {
+    const [j] = await db.insert(dataExportJobs).values(data).returning();
+    return j;
+  }
+
+  async getDataExportJob(id: string): Promise<DataExportJob | undefined> {
+    const [j] = await db.select().from(dataExportJobs).where(eq(dataExportJobs.id, id));
+    return j;
+  }
+
+  async getDataExportJobByToken(token: string): Promise<DataExportJob | undefined> {
+    const [j] = await db.select().from(dataExportJobs).where(eq(dataExportJobs.downloadToken, token));
+    return j;
+  }
+
+  async updateDataExportJob(id: string, data: Partial<DataExportJob>): Promise<DataExportJob | undefined> {
+    const [j] = await db.update(dataExportJobs).set(data).where(eq(dataExportJobs.id, id)).returning();
+    return j;
+  }
+
+  async getDataExportJobs(companyId: string): Promise<DataExportJob[]> {
+    return db.select().from(dataExportJobs)
+      .where(eq(dataExportJobs.companyId, companyId))
+      .orderBy(desc(dataExportJobs.createdAt));
+  }
+
+  async getPendingDataExportJobs(limit = 10): Promise<DataExportJob[]> {
+    return db.select().from(dataExportJobs)
+      .where(eq(dataExportJobs.status, "pending"))
+      .orderBy(dataExportJobs.createdAt)
+      .limit(limit);
+  }
+
+  async cleanupExpiredExportJobs(): Promise<number> {
+    const now = new Date();
+    const expired = await db.select({ id: dataExportJobs.id }).from(dataExportJobs)
+      .where(and(lt(dataExportJobs.expiresAt, now), eq(dataExportJobs.status, "completed")));
+    if (expired.length > 0) {
+      await db.update(dataExportJobs)
+        .set({ fileData: null, status: "expired" })
+        .where(lt(dataExportJobs.expiresAt, now));
+    }
+    return expired.length;
+  }
+
+  async createDataDeletionRequest(data: InsertDataDeletionRequest): Promise<DataDeletionRequest> {
+    const [r] = await db.insert(dataDeletionRequests).values(data).returning();
+    return r;
+  }
+
+  async getDataDeletionRequest(id: string): Promise<DataDeletionRequest | undefined> {
+    const [r] = await db.select().from(dataDeletionRequests).where(eq(dataDeletionRequests.id, id));
+    return r;
+  }
+
+  async getDataDeletionRequests(companyId: string): Promise<DataDeletionRequest[]> {
+    return db.select().from(dataDeletionRequests)
+      .where(eq(dataDeletionRequests.companyId, companyId))
+      .orderBy(desc(dataDeletionRequests.createdAt));
+  }
+
+  async updateDataDeletionRequest(id: string, data: Partial<DataDeletionRequest>): Promise<DataDeletionRequest | undefined> {
+    const [r] = await db.update(dataDeletionRequests).set(data).where(eq(dataDeletionRequests.id, id)).returning();
+    return r;
+  }
+
+  async anonymiseUser(userId: string): Promise<void> {
+    const anonEmail = `deleted-${userId}@anonymised.local`;
+    const anonUsername = `deleted_${userId}`;
+    await db.update(users).set({
+      email: anonEmail,
+      username: anonUsername,
+      password: "ANONYMISED",
+      mfaSecretEncrypted: null,
+      mfaBackupCodesHash: null,
+      mfaEnabled: false,
+      externalId: null,
+      anonymisedAt: new Date(),
+    }).where(eq(users.id, userId));
+  }
+
+  async deleteCompanyData(companyId: string): Promise<void> {
+    const companyUsers = await db.select({ id: users.id }).from(users).where(eq(users.companyId, companyId));
+    for (const u of companyUsers) {
+      await this.anonymiseUser(u.id);
+    }
+    await db.update(companies).set({
+      status: "deleted",
+      name: `deleted_${companyId}`,
+      deletionScheduledAt: new Date(),
+    }).where(eq(companies.id, companyId));
   }
 }
 

@@ -28,10 +28,17 @@ import { generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { registerAgentRoutes } from "./agent-routes";
+
+const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
 import { dispatchCriticalHealthEvent } from "./webhooks";
 import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
+import {
+  generateTotpSecret, encryptSecret, decryptSecret,
+  generateTotpToken, verifyTotpToken, generateTotpUri,
+  generateBackupCodes, hashBackupCodes, verifyBackupCode,
+} from "./mfa";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -138,8 +145,15 @@ async function requireAuth(req: Request, res: Response, next: Function) {
         return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
       }
     }
+    const consentExemptPaths = ["/api/auth/accept-terms", "/api/auth/logout", "/api/auth/me", "/api/auth/mfa/"];
+    const isConsentExempt = consentExemptPaths.some(p => req.path.startsWith(p));
+    if (!isConsentExempt && user && user.role !== "super_admin") {
+      if (user.termsVersionAccepted !== CURRENT_LEGAL_VERSION || user.privacyVersionAccepted !== CURRENT_LEGAL_VERSION) {
+        return res.status(451).json({ error: "You must accept the updated terms and privacy policy before continuing.", code: "CONSENT_REQUIRED" });
+      }
+    }
   } catch (e) {
-    console.error("[requireAuth] Company status check failed:", e);
+    console.error("[requireAuth] Auth check failed:", e);
     return res.status(503).json({ error: "Service temporarily unavailable" });
   }
 
@@ -719,6 +733,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  function establishSession(req: any, res: any, user: any, company: any, auditDetails: { ipAddress?: string | null; userAgent?: string | null } = {}) {
+    const token = generateToken();
+    tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+    (req.session as any).userId = user.id;
+    (req.session as any).companyId = user.companyId;
+    storage.createAuditLog({
+      companyId: user.companyId || undefined,
+      userId: user.id,
+      actorType: "user",
+      action: "login_success",
+      entityType: "auth",
+      ipAddress: auditDetails.ipAddress || null,
+      userAgent: auditDetails.userAgent || null,
+      details: { email: user.email },
+    } as any).catch(() => {});
+    req.session.save((err: Error | null) => {
+      if (err) return res.status(500).json({ error: "Session error" });
+      res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
+    });
+  }
+
   app.post("/api/auth/login", loginLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -778,27 +813,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         try { await seedDatabase(user.companyId, user.id); } catch (e) { console.error("Seed error:", e); }
       }
 
-      storage.createAuditLog({
-        companyId: user.companyId || undefined,
-        userId: user.id,
-        actorType: "user",
-        action: "login_success",
-        entityType: "auth",
-        ipAddress: clientIp,
-        userAgent: clientUa,
-        details: { email: user.email },
-      } as any).catch(() => {});
+      if (user.mfaEnabled) {
+        (req.session as any).mfaPendingUserId = user.id;
+        req.session.save((err) => {
+          if (err) return res.status(500).json({ error: "Session error" });
+          res.json({ mfaRequired: true, userId: user.id });
+        });
+        return;
+      }
 
-      const token = generateToken();
-      tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-      (req.session as any).userId = user.id;
-      (req.session as any).companyId = user.companyId;
-      req.session.save((err) => {
-        if (err) return res.status(500).json({ error: "Session error" });
-        res.json({ user: { ...user, password: undefined }, company, token });
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      const mfaPolicy = company?.mfaPolicy ?? "optional";
+      if (mfaPolicy === "all_required" || (mfaPolicy === "admin_required" && (user.role === "admin" || user.role === "super_admin"))) {
+        (req.session as any).mfaPendingUserId = user.id;
+        req.session.save((err) => {
+          if (err) return res.status(500).json({ error: "Session error" });
+          res.json({ mfaRequired: true, mfaSetupRequired: true, userId: user.id });
+        });
+        return;
+      }
+
+      establishSession(req, res, user, company, { ipAddress: clientIp, userAgent: clientUa });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: message });
     }
   });
 
@@ -920,7 +957,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     const company = user.companyId ? await storage.getCompany(user.companyId) : null;
-    res.json({ user: { ...user, password: undefined }, company });
+    const consentOutdated = user.termsVersionAccepted !== CURRENT_LEGAL_VERSION || user.privacyVersionAccepted !== CURRENT_LEGAL_VERSION;
+    res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, consentOutdated, currentLegalVersion: CURRENT_LEGAL_VERSION });
+  });
+
+  app.post("/api/auth/accept-terms", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = resolveAuth(req)!;
+      const now = new Date();
+      await storage.updateUser(userId, {
+        termsAcceptedAt: now,
+        privacyAcceptedAt: now,
+        termsVersionAccepted: CURRENT_LEGAL_VERSION,
+        privacyVersionAccepted: CURRENT_LEGAL_VERSION,
+      });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "legal_acceptance",
+        entityType: "user",
+        entityId: userId,
+        details: { termsVersion: CURRENT_LEGAL_VERSION, privacyVersion: CURRENT_LEGAL_VERSION, acceptedAt: now.toISOString(), reacceptance: true },
+      });
+      res.json({ success: true });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: message });
+    }
   });
 
   // Company routes
@@ -4043,7 +4106,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const users = await storage.getUsersByCompany(companyId);
-      const sanitized = users.map(({ password, ...rest }) => rest);
+      const sanitized = users.map(({ password, mfaSecretEncrypted, mfaBackupCodesHash, ...rest }) => rest);
       res.json(sanitized);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -8854,6 +8917,46 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  const mfaLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { error: "Too many MFA attempts. Please try again in 15 minutes." },
+  });
+
+  function requireAuthOrMfaPending(req: Request, res: Response, next: Function) {
+    const auth = resolveAuth(req);
+    if (auth) {
+      (req as any)._auth = auth;
+      return next();
+    }
+    const pendingUserId = (req.session as any)?.mfaPendingUserId;
+    if (pendingUserId) {
+      (req as any)._auth = { userId: pendingUserId, companyId: null };
+      (req as any)._mfaPending = true;
+      return next();
+    }
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  app.post("/api/auth/mfa/setup", requireAuthOrMfaPending, mfaLimiter, async (req, res) => {
+    try {
+      const userId = (req as any)._auth.userId;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.mfaEnabled) return res.status(400).json({ error: "MFA is already enabled" });
+      const secret = generateTotpSecret();
+      const encrypted = encryptSecret(secret);
+      const uri = generateTotpUri(secret, user.email);
+      await storage.updateUser(userId, { mfaSecretEncrypted: encrypted });
+      const QRCode = require("qrcode");
+      const qrDataUrl: string = await QRCode.toDataURL(uri);
+      res.json({ secret, uri, qrDataUrl });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: message });
+    }
+  });
+
   // Update dimension weights (completeness/performance/maturity/readiness split)
   app.patch("/api/admin/scoring-config/dimension-weights", requireSuperAdmin, async (req, res) => {
     try {
@@ -8909,6 +9012,57 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.post("/api/auth/mfa/verify-setup", requireAuthOrMfaPending, mfaLimiter, async (req, res) => {
+    try {
+      const userId = (req as any)._auth.userId;
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ error: "Token required" });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.mfaEnabled) return res.status(400).json({ error: "MFA already enabled" });
+      if (!user.mfaSecretEncrypted) return res.status(400).json({ error: "No MFA setup in progress" });
+      const secret = decryptSecret(user.mfaSecretEncrypted);
+      const valid = await verifyTotpToken(token, secret);
+      if (!valid) return res.status(400).json({ error: "Invalid token" });
+      const backupCodes = generateBackupCodes();
+      const hashed = await hashBackupCodes(backupCodes);
+      await storage.updateUser(userId, {
+        mfaEnabled: true,
+        mfaEnabledAt: new Date(),
+        mfaBackupCodesHash: hashed,
+      });
+      await storage.createAuditLog({
+        companyId: user.companyId || undefined,
+        userId,
+        action: "mfa_enabled",
+        entityType: "user",
+        entityId: userId,
+        details: { method: "totp" },
+      });
+      if ((req as any)._mfaPending && user.companyId) {
+        delete (req.session as any).mfaPendingUserId;
+        (req.session as any).userId = userId;
+        (req.session as any).companyId = user.companyId;
+        const sessionToken = generateToken();
+        tokenSessions.set(sessionToken, { userId, companyId: user.companyId, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+        const company = await storage.getCompany(user.companyId);
+        return req.session.save((err) => {
+          if (err) return res.status(500).json({ error: "Session error" });
+          res.json({
+            backupCodes,
+            loggedIn: true,
+            user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined },
+            company,
+            token: sessionToken,
+          });
+        });
+      }
+      res.json({ backupCodes });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Seed a new global material topic into all companies
   app.post("/api/admin/material-topics-seed", requireSuperAdmin, async (req, res) => {
     try {
@@ -8953,6 +9107,600 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  app.post("/api/auth/mfa/disable", requireAuth, mfaLimiter, async (req, res) => {
+    try {
+      const userId = (req as any)._auth.userId;
+      const { password, token } = req.body;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (!user.mfaEnabled) return res.status(400).json({ error: "MFA is not enabled" });
+      const pwValid = await verifyPassword(password, user.password);
+      if (!pwValid) return res.status(401).json({ error: "Invalid password" });
+      if (user.mfaSecretEncrypted) {
+        const secret = decryptSecret(user.mfaSecretEncrypted);
+        const tokenValid = await verifyTotpToken(token, secret);
+        if (!tokenValid) return res.status(400).json({ error: "Invalid MFA token" });
+      }
+      await storage.updateUser(userId, {
+        mfaEnabled: false,
+        mfaSecretEncrypted: null,
+        mfaBackupCodesHash: null,
+        mfaEnabledAt: null,
+      });
+      await storage.createAuditLog({
+        companyId: user.companyId || undefined,
+        userId,
+        action: "mfa_disabled",
+        entityType: "user",
+        entityId: userId,
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/auth/mfa/regenerate-codes", requireAuth, mfaLimiter, async (req, res) => {
+    try {
+      const userId = (req as any)._auth.userId;
+      const { token } = req.body;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (!user.mfaEnabled || !user.mfaSecretEncrypted) return res.status(400).json({ error: "MFA not enabled" });
+      const secret = decryptSecret(user.mfaSecretEncrypted);
+      const valid = await verifyTotpToken(token, secret);
+      if (!valid) return res.status(400).json({ error: "Invalid token" });
+      const backupCodes = generateBackupCodes();
+      const hashed = await hashBackupCodes(backupCodes);
+      await storage.updateUser(userId, { mfaBackupCodesHash: hashed });
+      await storage.createAuditLog({
+        companyId: user.companyId || undefined,
+        userId,
+        action: "mfa_backup_codes_regenerated",
+        entityType: "user",
+        entityId: userId,
+      });
+      res.json({ backupCodes });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/auth/mfa/verify", mfaLimiter, async (req, res) => {
+    try {
+      const pendingUserId = (req.session as any).mfaPendingUserId;
+      if (!pendingUserId) return res.status(401).json({ error: "No MFA session pending" });
+      const { token, backupCode } = req.body;
+      const user = await storage.getUser(pendingUserId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (!user.mfaEnabled) return res.status(400).json({ error: "MFA is not enabled on this account. Please complete MFA setup first." });
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const clientUa = req.headers["user-agent"] || null;
+
+      let verified = false;
+      let usedBackupCode = false;
+
+      if (backupCode && user.mfaBackupCodesHash && user.mfaBackupCodesHash.length > 0) {
+        let matchIdx = -1;
+        for (let i = 0; i < user.mfaBackupCodesHash.length; i++) {
+          const match = await verifyBackupCode(backupCode, user.mfaBackupCodesHash[i]);
+          if (match) { matchIdx = i; break; }
+        }
+        if (matchIdx >= 0) {
+          const remaining = user.mfaBackupCodesHash.filter((_, i) => i !== matchIdx);
+          await storage.updateUser(pendingUserId, { mfaBackupCodesHash: remaining });
+          verified = true;
+          usedBackupCode = true;
+          await storage.createAuditLog({
+            companyId: user.companyId || undefined,
+            userId: pendingUserId,
+            action: "mfa_backup_code_used",
+            entityType: "auth",
+            ipAddress: clientIp,
+            userAgent: clientUa,
+            details: { codesRemaining: remaining.length },
+          });
+        }
+      } else if (token && user.mfaSecretEncrypted) {
+        const secret = decryptSecret(user.mfaSecretEncrypted);
+        verified = await verifyTotpToken(token, secret);
+      }
+
+      if (!verified) {
+        await storage.createAuditLog({
+          companyId: user.companyId || undefined,
+          userId: pendingUserId,
+          action: "mfa_verify_failed",
+          entityType: "auth",
+          ipAddress: clientIp,
+          userAgent: clientUa,
+          details: { usedBackupCode },
+        });
+        return res.status(401).json({ error: "Invalid MFA token" });
+      }
+
+      const company = user.companyId ? await storage.getCompany(user.companyId) : null;
+      delete (req.session as any).mfaPendingUserId;
+      establishSession(req, res, user, company, { ipAddress: clientIp, userAgent: clientUa });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get("/api/auth/mfa/status", requireAuth, async (req, res) => {
+    try {
+      const userId = (req as any)._auth.userId;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const company = user.companyId ? await storage.getCompany(user.companyId) : null;
+      res.json({
+        mfaEnabled: user.mfaEnabled ?? false,
+        mfaEnabledAt: user.mfaEnabledAt,
+        backupCodesCount: user.mfaBackupCodesHash?.length ?? 0,
+        mfaPolicy: company?.mfaPolicy ?? "optional",
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/mfa-policy", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const userId = (req as any)._auth.userId;
+      const mfaPolicy = req.body.mfaPolicy || req.body.policy;
+      if (!["optional", "admin_required", "all_required"].includes(mfaPolicy)) {
+        return res.status(400).json({ error: "Invalid MFA policy. Must be optional, admin_required, or all_required." });
+      }
+      await storage.updateCompany(companyId, { mfaPolicy });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "mfa_policy_changed",
+        entityType: "company",
+        entityId: companyId,
+        details: { mfaPolicy },
+      });
+      res.json({ ok: true, mfaPolicy });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/users/mfa-status", requireAuth, requirePermission("user_management"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const companyUsers = await storage.getUsersByCompany(companyId);
+      const result = companyUsers.map(u => ({
+        id: u.id,
+        email: u.email,
+        username: u.username,
+        role: u.role,
+        mfaEnabled: u.mfaEnabled ?? false,
+        mfaEnabledAt: u.mfaEnabledAt,
+      }));
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/auth/sso/:providerId/initiate", async (req, res) => {
+    try {
+      const { providerId } = req.params;
+      const provider = await storage.getIdentityProvider(providerId);
+      if (!provider || !provider.isEnabled) {
+        return res.status(404).json({ error: "SSO provider not found or disabled" });
+      }
+      res.json({ message: "SSO initiation stub", providerId, providerType: provider.providerType });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/auth/sso/:providerId/callback", async (req, res) => {
+    try {
+      const { providerId } = req.params;
+      const provider = await storage.getIdentityProvider(providerId);
+      if (!provider || !provider.isEnabled) {
+        return res.status(404).json({ error: "SSO provider not found or disabled" });
+      }
+      res.json({ message: "SSO callback stub - not yet implemented", providerId });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/identity-providers", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const providers = await storage.getIdentityProviders(companyId);
+      res.json(providers);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/identity-providers", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const userId = (req as any)._auth.userId;
+      const { name, providerType, domain, config } = req.body;
+      if (!name || !providerType) return res.status(400).json({ error: "Name and providerType required" });
+      const provider = await storage.createIdentityProvider({ companyId, name, providerType, domain, config, createdBy: userId });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "identity_provider_created",
+        entityType: "identity_provider",
+        entityId: provider.id,
+        details: { name, providerType },
+      });
+      res.json(provider);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.patch("/api/admin/identity-providers/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const userId = (req as any)._auth.userId;
+      const { id } = req.params;
+      const provider = await storage.getIdentityProvider(id);
+      if (!provider || provider.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      const updated = await storage.updateIdentityProvider(id, req.body);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "identity_provider_updated",
+        entityType: "identity_provider",
+        entityId: id,
+        details: req.body,
+      });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/identity-providers/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth.companyId;
+      const userId = (req as any)._auth.userId;
+      const { id } = req.params;
+      const provider = await storage.getIdentityProvider(id);
+      if (!provider || provider.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      await storage.deleteIdentityProvider(id);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "identity_provider_deleted",
+        entityType: "identity_provider",
+        entityId: id,
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gdpr/export", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { scope } = req.body;
+      const exportScope = scope === "company" ? "company" : "personal";
+      if (exportScope === "company") {
+        const user = await storage.getUser(userId);
+        if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
+          return res.status(403).json({ error: "Only admins can request company-wide exports" });
+        }
+      }
+      const job = await storage.createDataExportJob({
+        companyId,
+        requestedBy: userId,
+        exportScope,
+        status: "pending",
+        attempts: 0,
+      });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "data_export_requested",
+        entityType: "data_export_job",
+        entityId: job.id,
+        details: { exportScope },
+      });
+      enqueueJob("gdpr_export", { jobId: job.id, requestedBy: userId, exportScope }, companyId, `export-${job.id}`).catch(console.error);
+      res.json({ jobId: job.id, status: "pending", message: "Export job queued. Download link will be available shortly." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/gdpr/export/:jobId", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { jobId } = req.params;
+      const job = await storage.getDataExportJob(jobId);
+      if (!job) return res.status(404).json({ error: "Export job not found" });
+      if (job.companyId !== companyId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const requester = await storage.getUser(userId);
+      if (job.requestedBy !== userId && requester?.role !== "admin" && requester?.role !== "super_admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      res.json({
+        id: job.id,
+        status: job.status,
+        exportScope: job.exportScope,
+        createdAt: job.createdAt,
+        completedAt: job.completedAt,
+        expiresAt: job.expiresAt,
+        downloadToken: job.status === "completed" && !job.downloadTokenUsed ? job.downloadToken : undefined,
+        fileSize: job.fileSize,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/gdpr/download/:token", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { token } = req.params;
+      const job = await storage.getDataExportJobByToken(token);
+      if (!job) return res.status(404).json({ error: "Download link not found or expired" });
+      if (job.companyId !== companyId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const user = await storage.getUser(userId);
+      if (job.requestedBy !== userId && user?.role !== "admin" && user?.role !== "super_admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (job.status !== "completed" || job.downloadTokenUsed) {
+        return res.status(410).json({ error: "Download link has already been used or is no longer valid" });
+      }
+      if (job.expiresAt && new Date(job.expiresAt) < new Date()) {
+        return res.status(410).json({ error: "Download link has expired" });
+      }
+      await storage.updateDataExportJob(job.id, { downloadTokenUsed: true });
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="data-export-${job.id}.json"`);
+      res.send(job.fileData || "{}");
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/gdpr/exports", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const user = await storage.getUser(userId);
+      const jobs = await storage.getDataExportJobs(companyId);
+      const filtered = (user?.role === "admin" || user?.role === "super_admin")
+        ? jobs
+        : jobs.filter(j => j.requestedBy === userId);
+      res.json(filtered.map(j => ({
+        id: j.id,
+        status: j.status,
+        exportScope: j.exportScope,
+        createdAt: j.createdAt,
+        completedAt: j.completedAt,
+        expiresAt: j.expiresAt,
+        downloadToken: j.status === "completed" && !j.downloadTokenUsed ? j.downloadToken : undefined,
+        fileSize: j.fileSize,
+      })));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gdpr/delete-account", requireAuth, async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { confirmationText } = req.body;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (confirmationText !== "delete my account") {
+        return res.status(400).json({ error: 'You must type "delete my account" to confirm' });
+      }
+      const existingResult = await db.execute(sql`SELECT id FROM data_deletion_requests WHERE target_user_id = ${userId} AND deletion_scope = 'user' AND status IN ('pending', 'completed') LIMIT 1`);
+      const existingRows = (existingResult as { rows: Array<Record<string, unknown>> }).rows ?? [];
+      if (existingRows.length > 0) {
+        return res.json({ ok: true, message: "Your account has already been anonymised." });
+      }
+      const request = await storage.createDataDeletionRequest({
+        companyId,
+        requestedBy: userId,
+        deletionScope: "user",
+        targetUserId: userId,
+        status: "pending",
+        confirmationText,
+      });
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "account_deletion_requested",
+        entityType: "user",
+        entityId: userId,
+      });
+      await storage.anonymiseUser(userId);
+      await storage.updateDataDeletionRequest(request.id, { status: "completed", processedAt: new Date() });
+      await storage.createAuditLog({
+        companyId,
+        action: "account_deletion_completed",
+        entityType: "user",
+        entityId: userId,
+        details: { anonymised: true },
+      });
+      req.session.destroy(() => {});
+      res.json({ ok: true, message: "Your account has been anonymised. You have been logged out." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/gdpr/delete-company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const { userId, companyId } = (req as any)._auth;
+      const { confirmationText, password } = req.body;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (confirmationText !== company.name) {
+        return res.status(400).json({ error: `You must type the company name "${company.name}" to confirm` });
+      }
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const passwordValid = await bcrypt.compare(password || "", user.password);
+      if (!passwordValid) {
+        return res.status(403).json({ error: "Incorrect password" });
+      }
+      const existingResult = await db.execute(sql`SELECT id FROM data_deletion_requests WHERE company_id = ${companyId} AND deletion_scope = 'company' AND status = 'pending' LIMIT 1`);
+      const existingRows = (existingResult as { rows: Array<Record<string, unknown>> }).rows ?? [];
+      if (existingRows.length > 0) {
+        return res.json({ ok: true, requestId: existingRows[0].id, message: "A company deletion is already scheduled. Contact support to cancel." });
+      }
+      const request = await storage.createDataDeletionRequest({
+        companyId,
+        requestedBy: userId,
+        deletionScope: "company",
+        status: "pending",
+        confirmationText,
+        scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+      await db.execute(sql`UPDATE companies SET deletion_pending_at = NOW(), deletion_scheduled_at = ${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}, deletion_requested_by = ${userId} WHERE id = ${companyId}`);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "company_deletion_requested",
+        entityType: "company",
+        entityId: companyId,
+        details: { scheduledIn: "7 days" },
+      });
+      res.json({ ok: true, requestId: request.id, message: "Company deletion scheduled. This will take effect in 7 days. Contact support to cancel." });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get("/api/gdpr/deletion-requests", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const { companyId } = (req as any)._auth;
+      const requests = await storage.getDataDeletionRequests(companyId);
+      res.json(requests);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  async function processExportJob(jobId: string, requestedBy: string, companyId: string, scope: string): Promise<void> {
+    try {
+      await storage.updateDataExportJob(jobId, { status: "processing", attempts: 1 });
+      const company = await storage.getCompany(companyId);
+      const companyUsers = await storage.getUsersByCompany(companyId);
+      const metrics = await storage.getMetrics(companyId);
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const reportRuns = await storage.getReportRuns(companyId);
+      const auditLogs = await storage.getAuditLogs(companyId, 500);
+      const metricValuesResult = await db.execute(
+        sql`SELECT mv.metric_id, mv.period, mv.value, mv.notes, mv.workflow_status, mv.data_source_type, mv.created_at
+            FROM metric_values mv JOIN metrics m ON mv.metric_id = m.id
+            WHERE m.company_id = ${companyId}
+            ORDER BY mv.created_at DESC LIMIT 5000`
+      );
+      const metricValues = (metricValuesResult as { rows: Array<Record<string, unknown>> }).rows ?? [];
+      let exportData: Record<string, unknown> = {};
+      if (scope === "company") {
+        exportData = {
+          exportedAt: new Date().toISOString(),
+          exportScope: "company",
+          company: {
+            id: company?.id,
+            name: company?.name,
+            industry: company?.industry,
+            country: company?.country,
+            employeeCount: company?.employeeCount,
+            revenueBand: company?.revenueBand,
+            createdAt: company?.createdAt,
+          },
+          users: companyUsers.map(u => ({
+            id: u.id,
+            email: u.email,
+            username: u.username,
+            role: u.role,
+            createdAt: u.createdAt,
+            mfaEnabled: u.mfaEnabled,
+          })),
+          metrics: metrics.map(m => ({ id: m.id, name: m.name, category: m.category, unit: m.unit, enabled: m.enabled })),
+          metricValues: metricValues.map((mv: Record<string, unknown>) => ({
+            metricId: mv.metric_id,
+            period: mv.period,
+            value: mv.value,
+            notes: mv.notes,
+            workflowStatus: mv.workflow_status,
+            dataSourceType: mv.data_source_type,
+            createdAt: mv.created_at,
+          })),
+          evidenceFiles: evidenceFiles.map(e => ({ id: e.id, filename: e.filename, uploadedAt: e.uploadedAt, evidenceStatus: e.evidenceStatus, module: e.module })),
+          reportRuns: reportRuns.map(r => ({ id: r.id, period: r.period, reportType: r.reportType, generatedAt: r.generatedAt, status: r.status })),
+          auditLogs: auditLogs.map(l => ({ id: l.id, action: l.action, userId: l.userId, createdAt: l.createdAt })),
+        };
+      } else {
+        const requester = companyUsers.find(u => u.id === requestedBy);
+        const userAuditLogs = auditLogs.filter(l => l.userId === requestedBy);
+        exportData = {
+          exportedAt: new Date().toISOString(),
+          exportScope: "personal",
+          user: requester ? {
+            id: requester.id,
+            email: requester.email,
+            username: requester.username,
+            role: requester.role,
+            createdAt: requester.createdAt,
+            termsAcceptedAt: requester.termsAcceptedAt,
+            privacyAcceptedAt: requester.privacyAcceptedAt,
+            termsVersionAccepted: requester.termsVersionAccepted,
+            privacyVersionAccepted: requester.privacyVersionAccepted,
+            mfaEnabled: requester.mfaEnabled,
+            mfaEnabledAt: requester.mfaEnabledAt,
+          } : null,
+          auditLogs: userAuditLogs.map(l => ({ id: l.id, action: l.action, createdAt: l.createdAt, details: l.details })),
+        };
+      }
+      const fileData = JSON.stringify(exportData, null, 2);
+      const downloadToken = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await storage.updateDataExportJob(jobId, {
+        status: "completed",
+        fileData,
+        fileSize: fileData.length,
+        downloadToken,
+        expiresAt,
+        completedAt: new Date(),
+      });
+      await storage.createAuditLog({
+        companyId,
+        userId: requestedBy,
+        action: "data_export_completed",
+        entityType: "data_export_job",
+        entityId: jobId,
+        details: { scope, fileSize: fileData.length },
+      });
+    } catch (e: any) {
+      await storage.updateDataExportJob(jobId, { status: "failed", error: e.message });
+    }
+  }
+
+  registerJobHandler("gdpr_export", async (payload: any, companyId: string | null) => {
+    if (!payload?.jobId || !companyId) return { error: "Missing jobId or companyId" };
+    await processExportJob(payload.jobId, payload.requestedBy, companyId, payload.exportScope);
+    return { jobId: payload.jobId, status: "completed" };
   });
 
   return httpServer;

@@ -29,6 +29,8 @@ const recurringJobs: RecurringJobDef[] = [
   { jobType: "activity_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "job_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "health_event_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "gdpr_export_cleanup", intervalMs: 6 * 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "gdpr_deletion_processor", intervalMs: 60 * 60 * 1000, lastRun: 0 },
 ];
 
 export function registerJobHandler(jobType: string, handler: JobHandler) {
@@ -364,6 +366,92 @@ async function activityCleanupHandler() {
   return { deleted };
 }
 
+async function gdprExportCleanupHandler() {
+  try {
+    const result = await db.execute(sql`
+      UPDATE data_export_jobs
+      SET file_data = NULL, status = 'expired'
+      WHERE status = 'completed'
+        AND expires_at IS NOT NULL
+        AND expires_at < NOW()
+        AND file_data IS NOT NULL
+    `);
+    const cleaned = (result as any).rowCount ?? 0;
+    if (cleaned > 0) console.log(`[GDPR] Cleaned ${cleaned} expired export(s)`);
+    return { cleaned };
+  } catch (e) {
+    console.error("[GDPR] Export cleanup error:", e);
+    return { error: String(e) };
+  }
+}
+
+async function gdprDeletionProcessorHandler() {
+  try {
+    const result = await db.execute(sql`
+      SELECT id, company_id, requested_by, deletion_scope
+      FROM data_deletion_requests
+      WHERE status = 'pending'
+        AND scheduled_at IS NOT NULL
+        AND scheduled_at <= NOW()
+      ORDER BY scheduled_at ASC
+      LIMIT 5
+    `);
+    const rows = (result as { rows: Array<Record<string, unknown>> }).rows ?? [];
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        if (row.deletion_scope === "company") {
+          await db.execute(sql`DELETE FROM metric_values WHERE metric_id IN (SELECT id FROM metrics WHERE company_id = ${row.company_id})`);
+          await db.execute(sql`DELETE FROM raw_data_inputs WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM carbon_calculations WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM action_plans WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM evidence_files WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM report_runs WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM metrics WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`DELETE FROM data_export_jobs WHERE company_id = ${row.company_id}`);
+          await db.execute(sql`UPDATE audit_logs SET details = NULL WHERE company_id = ${row.company_id} AND action NOT IN ('company_deletion_requested', 'data_export_completed', 'legal_acceptance', 'mfa_backup_code_used')`);
+          const users = await storage.getUsersByCompany(row.company_id);
+          for (const u of users) {
+            await storage.updateUser(u.id, {
+              username: `deleted-user-${u.id.slice(0, 8)}`,
+              email: `deleted-${u.id.slice(0, 8)}@removed.local`,
+              password: "DELETED",
+              mfaEnabled: false,
+              mfaSecretEncrypted: null,
+              mfaBackupCodesHash: null,
+              mfaEnabledAt: null,
+            });
+          }
+          await db.execute(sql`UPDATE companies SET name = ${"Deleted Company " + row.company_id.slice(0, 8)}, status = 'deleted' WHERE id = ${row.company_id}`);
+          await db.execute(sql`
+            UPDATE data_deletion_requests SET status = 'completed', processed_at = NOW()
+            WHERE id = ${row.id}
+          `);
+          await storage.createAuditLog({
+            companyId: row.company_id,
+            userId: row.requested_by,
+            action: "company_deletion_executed",
+            entityType: "company",
+            entityId: row.company_id,
+          });
+          processed++;
+        }
+      } catch (err) {
+        console.error(`[GDPR] Deletion processing error for request ${row.id}:`, err);
+        await db.execute(sql`
+          UPDATE data_deletion_requests SET status = 'failed', error = ${String(err)}
+          WHERE id = ${row.id}
+        `);
+      }
+    }
+    if (processed > 0) console.log(`[GDPR] Processed ${processed} deletion request(s)`);
+    return { processed };
+  } catch (e) {
+    console.error("[GDPR] Deletion processor error:", e);
+    return { error: String(e) };
+  }
+}
+
 export function getSchedulerStatus() {
   return {
     workerId: WORKER_ID,
@@ -384,6 +472,8 @@ export function startScheduler() {
   registerJobHandler("activity_cleanup", activityCleanupHandler);
   registerJobHandler("job_cleanup", jobCleanupHandler);
   registerJobHandler("health_event_cleanup", healthEventCleanupHandler);
+  registerJobHandler("gdpr_export_cleanup", gdprExportCleanupHandler);
+  registerJobHandler("gdpr_deletion_processor", gdprDeletionProcessorHandler);
 
   tickTimer = setInterval(runRecurringTick, TICK_INTERVAL);
   queueTimer = setInterval(processQueue, QUEUE_POLL_INTERVAL);

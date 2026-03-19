@@ -219,6 +219,8 @@ export default function Settings() {
 
           <PasswordChangeCard />
 
+          <MfaCard />
+
           <ActivityLogCard />
         </TabsContent>
 
@@ -236,14 +238,210 @@ export default function Settings() {
   );
 }
 
+function MfaCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState<"idle" | "setup" | "backup">("idle");
+  const [setupData, setSetupData] = useState<{ secret: string; uri: string; qrDataUrl?: string } | null>(null);
+  const [verifyToken, setVerifyToken] = useState("");
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  const [disablePassword, setDisablePassword] = useState("");
+  const [disableToken, setDisableToken] = useState("");
+  const [regenToken, setRegenToken] = useState("");
+  const [showDisable, setShowDisable] = useState(false);
+  const [showRegen, setShowRegen] = useState(false);
+
+  const { data: mfaStatus, isLoading } = useQuery<any>({ queryKey: ["/api/auth/mfa/status"] });
+
+  const setupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/setup");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setSetupData(data);
+      setStep("setup");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const verifySetupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/verify-setup", { token: verifyToken });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setBackupCodes(data.backupCodes || []);
+      setStep("backup");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
+      toast({ title: "MFA enabled", description: "Two-factor authentication is now active on your account." });
+    },
+    onError: (e: any) => toast({ title: "Invalid token", description: e.message, variant: "destructive" }),
+  });
+
+  const disableMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/disable", { password: disablePassword, token: disableToken });
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowDisable(false);
+      setDisablePassword(""); setDisableToken("");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
+      toast({ title: "MFA disabled", description: "Two-factor authentication has been removed." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const regenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/regenerate-codes", { token: regenToken });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setBackupCodes(data.backupCodes || []);
+      setShowRegen(false); setRegenToken("");
+      setStep("backup");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
+      toast({ title: "Backup codes regenerated", description: "Save these codes somewhere safe." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (isLoading) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Shield className="w-4 h-4 text-primary" />
+          Two-Factor Authentication (MFA)
+        </CardTitle>
+        <CardDescription className="text-xs">
+          {mfaStatus?.mfaEnabled
+            ? "MFA is active on your account. Use your authenticator app to sign in."
+            : "Add an extra layer of security to your account with an authenticator app."}
+          {mfaStatus?.mfaPolicy && mfaStatus.mfaPolicy !== "optional" && (
+            <span className="ml-1 text-amber-600 font-medium">
+              (Required by company policy)
+            </span>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {step === "idle" && !mfaStatus?.mfaEnabled && (
+          <Button size="sm" onClick={() => setupMutation.mutate()} disabled={setupMutation.isPending} data-testid="button-setup-mfa">
+            <Shield className="w-3.5 h-3.5 mr-1.5" />
+            {setupMutation.isPending ? "Setting up..." : "Enable MFA"}
+          </Button>
+        )}
+
+        {step === "setup" && setupData && (
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-medium mb-2">1. Scan this QR code with your authenticator app</p>
+              <div className="bg-white inline-block p-2 rounded border" data-testid="div-mfa-qr-code">
+                {setupData.qrDataUrl ? (
+                  <img src={setupData.qrDataUrl} alt="Scan this QR code with your authenticator app" className="w-48 h-48" data-testid="img-mfa-qr" />
+                ) : (
+                  <p className="text-xs font-mono break-all text-muted-foreground max-w-xs">Setup URI: {setupData.uri}</p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">Or enter this code manually: <span className="font-mono font-medium" data-testid="text-mfa-secret">{setupData.secret}</span></p>
+            </div>
+            <div>
+              <p className="text-sm font-medium mb-2">2. Enter the 6-digit code from your app to confirm</p>
+              <div className="flex gap-2">
+                <Input
+                  value={verifyToken}
+                  onChange={e => setVerifyToken(e.target.value)}
+                  placeholder="000000"
+                  maxLength={6}
+                  className="w-32 font-mono"
+                  data-testid="input-mfa-verify-token"
+                />
+                <Button size="sm" onClick={() => verifySetupMutation.mutate()} disabled={verifySetupMutation.isPending || verifyToken.length !== 6} data-testid="button-verify-mfa-setup">
+                  {verifySetupMutation.isPending ? "Verifying..." : "Verify & Enable"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setStep("idle"); setSetupData(null); setVerifyToken(""); }}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === "backup" && backupCodes.length > 0 && (
+          <div className="space-y-3">
+            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200 mb-2">Save your backup codes</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mb-3">These codes can be used to access your account if you lose your authenticator device. Each code can only be used once.</p>
+              <div className="grid grid-cols-2 gap-1 font-mono text-sm" data-testid="div-backup-codes">
+                {backupCodes.map((code, i) => <span key={i} className="text-amber-900 dark:text-amber-100">{code}</span>)}
+              </div>
+            </div>
+            <Button size="sm" onClick={() => { setStep("idle"); setBackupCodes([]); }} data-testid="button-mfa-done">Done — I've saved my codes</Button>
+          </div>
+        )}
+
+        {mfaStatus?.mfaEnabled && step === "idle" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400" data-testid="status-mfa-enabled">
+              <CheckCircle className="w-4 h-4" />
+              MFA enabled{mfaStatus.mfaEnabledAt ? ` since ${format(new Date(mfaStatus.mfaEnabledAt), "d MMM yyyy")}` : ""}
+            </div>
+            <p className="text-xs text-muted-foreground">Backup codes remaining: <span data-testid="text-backup-codes-count">{mfaStatus.backupCodesCount}</span></p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setShowRegen(!showRegen)} data-testid="button-regen-backup">Regenerate backup codes</Button>
+              <Button size="sm" variant="destructive" onClick={() => setShowDisable(!showDisable)} data-testid="button-disable-mfa">Disable MFA</Button>
+            </div>
+            {showRegen && (
+              <div className="flex gap-2 items-center">
+                <Input value={regenToken} onChange={e => setRegenToken(e.target.value)} placeholder="Enter current MFA token" maxLength={6} className="w-48 font-mono" data-testid="input-regen-token" />
+                <Button size="sm" onClick={() => regenMutation.mutate()} disabled={regenMutation.isPending || regenToken.length !== 6} data-testid="button-confirm-regen">
+                  {regenMutation.isPending ? "..." : "Confirm"}
+                </Button>
+              </div>
+            )}
+            {showDisable && (
+              <div className="space-y-2 bg-muted/40 p-3 rounded-lg">
+                <Input type="password" value={disablePassword} onChange={e => setDisablePassword(e.target.value)} placeholder="Current password" data-testid="input-disable-password" />
+                <Input value={disableToken} onChange={e => setDisableToken(e.target.value)} placeholder="Current MFA token" maxLength={6} className="font-mono" data-testid="input-disable-token" />
+                <div className="flex gap-2">
+                  <Button size="sm" variant="destructive" onClick={() => disableMutation.mutate()} disabled={disableMutation.isPending} data-testid="button-confirm-disable-mfa">
+                    {disableMutation.isPending ? "Disabling..." : "Confirm Disable MFA"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setShowDisable(false); setDisablePassword(""); setDisableToken(""); }}>Cancel</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PrivacyDataTab() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const user = authData?.user;
   const company = authData?.company;
+  const consentOutdated = authData?.consentOutdated === true;
 
   const [requestType, setRequestType] = useState<string | null>(null);
   const [requestNote, setRequestNote] = useState("");
+
+  const reacceptMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/accept-terms", {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Terms accepted", description: "You have accepted the latest terms and privacy policy." });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
 
   const submitRightsMutation = useMutation({
     mutationFn: async (data: { subject: string; message: string }) => {
@@ -287,6 +485,21 @@ function PrivacyDataTab() {
 
   return (
     <div className="space-y-5">
+      {consentOutdated && (
+        <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-950">
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Updated Terms & Privacy Policy</p>
+                <p className="text-xs text-muted-foreground">Our terms or privacy policy have been updated since you last accepted. Please review and accept the latest versions to continue.</p>
+              </div>
+              <Button size="sm" onClick={() => reacceptMutation.mutate()} disabled={reacceptMutation.isPending} data-testid="button-reaccept-terms">
+                {reacceptMutation.isPending ? "Accepting..." : "Accept Updated Terms"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
@@ -388,6 +601,10 @@ function PrivacyDataTab() {
         </CardContent>
       </Card>
 
+      <DataExportCard />
+
+      <AccountDeletionCard companyName={company?.name} />
+
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
@@ -411,11 +628,136 @@ function PrivacyDataTab() {
   );
 }
 
+function DataExportCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showHistory, setShowHistory] = useState(false);
+  const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = authData?.user?.role === "admin" || authData?.user?.role === "super_admin";
+
+  const { data: exports } = useQuery<any[]>({ queryKey: ["/api/gdpr/exports"] });
+
+  const requestExportMutation = useMutation({
+    mutationFn: async (scope: string) => {
+      const res = await apiRequest("POST", "/api/gdpr/export", { scope });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/gdpr/exports"] });
+      toast({ title: "Export requested", description: "Your data export is being prepared. Check below for the download link once ready." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Key className="w-4 h-4 text-primary" />
+          Data Export
+        </CardTitle>
+        <CardDescription className="text-xs">Download a copy of your data stored in the platform</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => requestExportMutation.mutate("personal")} disabled={requestExportMutation.isPending} data-testid="button-request-personal-export">
+            {requestExportMutation.isPending ? "Requesting..." : "Export my personal data"}
+          </Button>
+          {isAdmin && (
+            <Button size="sm" variant="outline" onClick={() => requestExportMutation.mutate("company")} disabled={requestExportMutation.isPending} data-testid="button-request-company-export">
+              {requestExportMutation.isPending ? "Requesting..." : "Export all company data"}
+            </Button>
+          )}
+        </div>
+        {exports && exports.length > 0 && (
+          <div className="space-y-2">
+            <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowHistory(!showHistory)} data-testid="button-toggle-export-history">
+              {showHistory ? "Hide" : "Show"} export history ({exports.length})
+            </button>
+            {showHistory && (
+              <div className="space-y-2">
+                {exports.slice(0, 5).map((j: any) => (
+                  <div key={j.id} className="flex items-center justify-between text-sm py-1.5 border-b last:border-0" data-testid={`row-export-${j.id}`}>
+                    <div>
+                      <span className="font-medium capitalize">{j.exportScope}</span>
+                      <span className="text-muted-foreground ml-2 text-xs">{j.createdAt ? format(new Date(j.createdAt), "d MMM yyyy HH:mm") : ""}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={j.status === "completed" ? "default" : j.status === "failed" ? "destructive" : "secondary"} className="text-xs">{j.status}</Badge>
+                      {j.downloadToken && (
+                        <a href={`/api/gdpr/download/${j.downloadToken}`} download className="text-xs text-primary underline" data-testid={`link-download-export-${j.id}`}>Download</a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AccountDeletionCard({ companyName }: { companyName?: string }) {
+  const { toast } = useToast();
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/gdpr/delete-account", { confirmationText: confirmText });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Account deleted", description: "Your account has been anonymised. You will be logged out." });
+      setTimeout(() => window.location.href = "/auth", 2000);
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-destructive/30">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+          <Trash2 className="w-4 h-4" />
+          Delete Account
+        </CardTitle>
+        <CardDescription className="text-xs">Permanently anonymise your account. This action cannot be undone.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!showConfirm ? (
+          <Button size="sm" variant="destructive" onClick={() => setShowConfirm(true)} data-testid="button-delete-account">
+            Delete my account
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-destructive font-medium">Are you sure? Type <strong>delete my account</strong> to confirm:</p>
+            <Input
+              value={confirmText}
+              onChange={e => setConfirmText(e.target.value)}
+              placeholder="delete my account"
+              data-testid="input-delete-account-confirm"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending || confirmText !== "delete my account"} data-testid="button-confirm-delete-account">
+                {deleteMutation.isPending ? "Deleting..." : "Confirm Delete"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setShowConfirm(false); setConfirmText(""); }}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function AdminPanel() {
   const [section, setSection] = useState("users");
 
   const sections = [
     { key: "users", label: "Users & Roles", icon: Users },
+    { key: "mfa", label: "MFA Policy", icon: Shield },
     { key: "modules", label: "Module Configuration", icon: ToggleLeft },
     { key: "scoring", label: "Scoring Weights", icon: Scale },
     { key: "metrics", label: "Metric Settings", icon: BarChart3 },
@@ -427,6 +769,7 @@ function AdminPanel() {
     { key: "periods", label: "Reporting Periods", icon: Calendar },
     { key: "audit", label: "Audit Log", icon: Search },
     { key: "security", label: "Security & API Keys", icon: Shield },
+    { key: "gdpr", label: "Company Data", icon: Trash2 },
   ];
 
   return (
@@ -448,6 +791,7 @@ function AdminPanel() {
       </div>
 
       {section === "users" && <UserManagement />}
+      {section === "mfa" && <MfaPolicyAdmin />}
       {section === "modules" && <ModuleConfiguration />}
       {section === "scoring" && <ScoringWeights />}
       {section === "metrics" && <MetricsAdmin />}
@@ -459,6 +803,7 @@ function AdminPanel() {
       {section === "periods" && <ReportingPeriodsAdmin />}
       {section === "audit" && <AuditLogAdmin />}
       {section === "security" && <SecurityAdmin />}
+      {section === "gdpr" && <CompanyGdprAdmin />}
     </div>
   );
 }
@@ -2270,5 +2615,146 @@ function SecurityAdmin() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function MfaPolicyAdmin() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const { data: users } = useQuery<any[]>({ queryKey: ["/api/users"] });
+  const currentPolicy = authData?.company?.mfaPolicy || "optional";
+
+  const setPolicyMutation = useMutation({
+    mutationFn: async (policy: string) => {
+      const res = await apiRequest("PATCH", "/api/admin/mfa-policy", { policy });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "MFA policy updated", description: "The company-wide MFA policy has been saved." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const mfaUsers = users?.filter((u: any) => u.mfaEnabled) || [];
+  const totalUsers = users?.length || 0;
+  const mfaPercent = totalUsers > 0 ? Math.round((mfaUsers.length / totalUsers) * 100) : 0;
+
+  return (
+    <Card data-testid="card-mfa-policy">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Shield className="w-4 h-4 text-primary" />
+          Company MFA Policy
+        </CardTitle>
+        <CardDescription className="text-xs">Control whether two-factor authentication is required for users in your organisation</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          {[
+            { value: "optional", label: "Optional", desc: "Users can choose whether to enable MFA" },
+            { value: "admin_required", label: "Required for Admins", desc: "Admins must have MFA enabled to sign in" },
+            { value: "all_required", label: "Required for All", desc: "All users must have MFA enabled to sign in" },
+          ].map(opt => (
+            <div
+              key={opt.value}
+              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${currentPolicy === opt.value ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"}`}
+              onClick={() => { if (currentPolicy !== opt.value) setPolicyMutation.mutate(opt.value); }}
+              data-testid={`option-mfa-policy-${opt.value}`}
+            >
+              <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center ${currentPolicy === opt.value ? "border-primary" : "border-muted-foreground"}`}>
+                {currentPolicy === opt.value && <div className="w-2 h-2 rounded-full bg-primary" />}
+              </div>
+              <div>
+                <p className="text-sm font-medium">{opt.label}</p>
+                <p className="text-xs text-muted-foreground">{opt.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="pt-2 border-t">
+          <p className="text-xs text-muted-foreground mb-2">MFA adoption across your organisation</p>
+          <div className="flex items-center gap-3">
+            <div className="flex-1 bg-muted rounded-full h-2">
+              <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${mfaPercent}%` }} />
+            </div>
+            <span className="text-sm font-medium" data-testid="text-mfa-adoption">{mfaUsers.length}/{totalUsers} users ({mfaPercent}%)</span>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">User MFA Status</p>
+          {users?.slice(0, 10).map((u: any) => (
+            <div key={u.id} className="flex items-center justify-between text-sm py-1" data-testid={`row-user-mfa-${u.id}`}>
+              <span className="text-muted-foreground">{u.username} <span className="text-xs">({u.role})</span></span>
+              {u.mfaEnabled
+                ? <Badge variant="default" className="text-xs"><CheckCircle className="w-3 h-3 mr-1" />MFA On</Badge>
+                : <Badge variant="secondary" className="text-xs"><XCircle className="w-3 h-3 mr-1" />MFA Off</Badge>}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CompanyGdprAdmin() {
+  const { toast } = useToast();
+  const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const companyName = authData?.company?.name || "";
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/gdpr/delete-company", { confirmationText: confirmText, password: deletePassword });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Company deletion scheduled", description: data.message || "Your company account will be deleted in 7 days. Contact support to cancel." });
+      setShowDeleteConfirm(false); setConfirmText(""); setDeletePassword("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-destructive/30" data-testid="card-company-gdpr">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+          <Trash2 className="w-4 h-4" />
+          Company Account Deletion
+        </CardTitle>
+        <CardDescription className="text-xs">Schedule permanent deletion of your company and all associated data. This action has a 7-day cancellation window.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs text-amber-800 dark:text-amber-200">
+          <p className="font-medium mb-1">Before deleting your company account:</p>
+          <ul className="space-y-0.5 list-disc list-inside text-amber-700 dark:text-amber-300">
+            <li>Export all your ESG data from the Privacy tab</li>
+            <li>Inform all team members — their accounts will be removed</li>
+            <li>All reports, metrics, and evidence will be permanently deleted</li>
+          </ul>
+        </div>
+        {!showDeleteConfirm ? (
+          <Button size="sm" variant="destructive" onClick={() => setShowDeleteConfirm(true)} data-testid="button-delete-company">
+            Schedule Company Deletion
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-destructive font-medium">Type your company name <strong>{companyName}</strong> to confirm:</p>
+            <Input value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder={companyName} data-testid="input-delete-company-confirm" />
+            <Input type="password" value={deletePassword} onChange={e => setDeletePassword(e.target.value)} placeholder="Your password" data-testid="input-delete-company-password" />
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending || confirmText !== companyName || !deletePassword} data-testid="button-confirm-delete-company">
+                {deleteMutation.isPending ? "Scheduling..." : "Confirm Schedule Deletion"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setShowDeleteConfirm(false); setConfirmText(""); setDeletePassword(""); }}>Cancel</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

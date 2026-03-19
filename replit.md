@@ -54,6 +54,7 @@ The application is a full-stack SaaS web application.
     - **PDF/DOCX Report Engine:** Generates branded reports.
     - **Carbon Data Import:** Two-step import with column auto-mapping.
     - **Security Hardening (Task #12):** Helmet.js with full header suite (HSTS, referrer-policy, X-Content-Type-Options, X-Frame-Options), CORS, body size limits. Comprehensive rate limiting: login (10/15min), register (5/hr), password change (5/15min), AI/agents (20/min), uploads (60/15min), reports (30/15min), CSV import (20/15min), invites (20/hr). File upload validation with blocked extensions and allowlisted MIME types. Production error sanitization. Extended audit log schema (ip_address, user_agent, actor_type, actor_agent_id). Audit events with IP/UA enrichment for login, evidence, role changes, API key operations, and billing lifecycle events. Company API key management UI (settings page). Super-admin Security & Audit tab (admin panel) with platform-wide event log and stats. Operational documentation: `docs/deployment-checklist.md`, `docs/backup-restore.md`, `docs/security-isolation-audit.md`, `.env.example`.
+    - **Identity Hardening & GDPR (Task #44):** TOTP-based MFA with AES-256-GCM encrypted secrets (`server/mfa.ts`), backup codes (scrypt-hashed, single-use), MFA enforcement policies (optional/admin_required/all_required on `companies.mfa_policy`). SSO/SAML readiness stubs (`identity_providers` table, initiate/callback routes). GDPR data export (async job with single-use download tokens, 24h expiry), account anonymisation, company deletion scheduling (7-day cancellation window). Admin UI: MFA policy management with adoption dashboard, user MFA status. User UI: MFA setup/disable/backup code regeneration card, data export card, account deletion with confirmation. Login flow supports MFA challenge and forced MFA enrollment for policy-required users. New tables: `identity_providers`, `data_export_jobs`, `data_deletion_requests`. New MFA fields on `users`, new deletion/policy fields on `companies`.
 - **AI Agent Integration Layer:**
     - **Agent Authentication:** API key-based authentication.
     - **Webhook Dispatch:** Critical health events to optional agent webhook.
@@ -76,6 +77,7 @@ The application is a full-stack SaaS web application.
 - **UI Frameworks:** React, Tailwind CSS, Shadcn UI.
 - **Data Visualization:** Recharts.
 - **Security:** Helmet.js.
+- **MFA:** otplib (TOTP generation/verification).
 - **Email:** Resend (optional).
 - **Billing:** Stripe (optional).
 - **Data Fetching:** TanStack Query.

@@ -37,6 +37,13 @@ export const users = pgTable("users", {
   privacyAcceptedAt: timestamp("privacy_accepted_at"),
   termsVersionAccepted: text("terms_version_accepted"),
   privacyVersionAccepted: text("privacy_version_accepted"),
+  mfaEnabled: boolean("mfa_enabled").default(false),
+  mfaSecretEncrypted: text("mfa_secret_encrypted"),
+  mfaBackupCodesHash: text("mfa_backup_codes_hash").array(),
+  mfaEnabledAt: timestamp("mfa_enabled_at"),
+  externalId: text("external_id"),
+  identityProviderId: varchar("identity_provider_id"),
+  anonymisedAt: timestamp("anonymised_at"),
 });
 
 export const companies = pgTable("companies", {
@@ -82,6 +89,54 @@ export const companies = pgTable("companies", {
   betaGrantedBy: text("beta_granted_by"),
   betaReason: text("beta_reason"),
   status: text("status").default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  mfaPolicy: text("mfa_policy").default("optional"),
+  deletionPendingAt: timestamp("deletion_pending_at"),
+  deletionScheduledAt: timestamp("deletion_scheduled_at"),
+  deletionRequestedBy: varchar("deletion_requested_by"),
+});
+
+export const identityProviders = pgTable("identity_providers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  providerType: text("provider_type").notNull().default("saml"),
+  name: text("name").notNull(),
+  domain: text("domain"),
+  config: jsonb("config"),
+  isEnabled: boolean("is_enabled").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  createdBy: varchar("created_by"),
+});
+
+export const dataExportJobs = pgTable("data_export_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  requestedBy: varchar("requested_by").notNull(),
+  exportScope: text("export_scope").notNull().default("personal"),
+  status: text("status").notNull().default("pending"),
+  downloadToken: varchar("download_token"),
+  downloadTokenUsed: boolean("download_token_used").default(false),
+  fileData: text("file_data"),
+  fileSize: integer("file_size"),
+  expiresAt: timestamp("expires_at"),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+  attempts: integer("attempts").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const dataDeletionRequests = pgTable("data_deletion_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  requestedBy: varchar("requested_by").notNull(),
+  deletionScope: text("deletion_scope").notNull().default("user"),
+  targetUserId: varchar("target_user_id"),
+  status: text("status").notNull().default("pending"),
+  confirmationText: text("confirmation_text"),
+  processedAt: timestamp("processed_at"),
+  scheduledAt: timestamp("scheduled_at"),
+  error: text("error"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1287,3 +1342,15 @@ export type InsertMetricFrameworkMapping = z.infer<typeof insertMetricFrameworkM
 export const insertBusinessFrameworkSelectionSchema = createInsertSchema(businessFrameworkSelections).omit({ id: true, createdAt: true, updatedAt: true });
 export type BusinessFrameworkSelection = typeof businessFrameworkSelections.$inferSelect;
 export type InsertBusinessFrameworkSelection = z.infer<typeof insertBusinessFrameworkSelectionSchema>;
+
+export const insertIdentityProviderSchema = createInsertSchema(identityProviders).omit({ id: true, createdAt: true, updatedAt: true });
+export type IdentityProvider = typeof identityProviders.$inferSelect;
+export type InsertIdentityProvider = z.infer<typeof insertIdentityProviderSchema>;
+
+export const insertDataExportJobSchema = createInsertSchema(dataExportJobs).omit({ id: true, createdAt: true });
+export type DataExportJob = typeof dataExportJobs.$inferSelect;
+export type InsertDataExportJob = z.infer<typeof insertDataExportJobSchema>;
+
+export const insertDataDeletionRequestSchema = createInsertSchema(dataDeletionRequests).omit({ id: true, createdAt: true });
+export type DataDeletionRequest = typeof dataDeletionRequests.$inferSelect;
+export type InsertDataDeletionRequest = z.infer<typeof insertDataDeletionRequestSchema>;

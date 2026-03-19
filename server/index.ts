@@ -238,6 +238,70 @@ app.use((req, res, next) => {
     console.warn("[Startup] WARN: Framework seeding failed:", e.message ?? e);
   }
 
+  // MFA & GDPR schema migrations
+  const mfaMigrations = [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled boolean DEFAULT false`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret_encrypted text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_backup_codes_hash text[]`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled_at timestamp`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id text`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_provider_id varchar`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS anonymised_at timestamp`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS mfa_policy text DEFAULT 'optional'`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS deletion_pending_at timestamp`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS deletion_scheduled_at timestamp`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS deletion_requested_by varchar`,
+    `CREATE TABLE IF NOT EXISTS identity_providers (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id varchar NOT NULL,
+      provider_type text NOT NULL DEFAULT 'saml',
+      name text NOT NULL,
+      domain text,
+      config jsonb,
+      is_enabled boolean DEFAULT false,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now(),
+      created_by varchar
+    )`,
+    `CREATE TABLE IF NOT EXISTS data_export_jobs (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id varchar NOT NULL,
+      requested_by varchar NOT NULL,
+      export_scope text NOT NULL DEFAULT 'personal',
+      status text NOT NULL DEFAULT 'pending',
+      download_token varchar,
+      download_token_used boolean DEFAULT false,
+      file_data text,
+      file_size integer,
+      expires_at timestamp,
+      completed_at timestamp,
+      error text,
+      attempts integer DEFAULT 0,
+      created_at timestamp DEFAULT now()
+    )`,
+    `CREATE TABLE IF NOT EXISTS data_deletion_requests (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id varchar NOT NULL,
+      requested_by varchar NOT NULL,
+      deletion_scope text NOT NULL DEFAULT 'user',
+      target_user_id varchar,
+      status text NOT NULL DEFAULT 'pending',
+      confirmation_text text,
+      processed_at timestamp,
+      scheduled_at timestamp,
+      error text,
+      created_at timestamp DEFAULT now()
+    )`,
+  ];
+  for (const migration of mfaMigrations) {
+    try {
+      await db.execute(sql.raw(migration));
+    } catch (e: any) {
+      console.warn(`[Startup] Migration warning: ${e.message?.substring(0, 100)}`);
+    }
+  }
+  console.log("[Startup] MFA & GDPR schema migrations applied");
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

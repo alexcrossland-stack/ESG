@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Leaf, CheckCircle2 } from "lucide-react";
+import { Leaf, CheckCircle2, Shield } from "lucide-react";
 import { LEGAL_VERSION } from "@/lib/legal-content";
 
 const loginSchema = z.object({
@@ -45,9 +45,16 @@ export default function Auth() {
 
   const params = new URLSearchParams(window.location.search);
   const resetToken = params.get("reset");
-  const [view, setView] = useState<"tabs" | "forgot" | "reset" | "forgot-sent" | "reset-done">(
+  const [view, setView] = useState<"tabs" | "forgot" | "reset" | "forgot-sent" | "reset-done" | "mfa-verify" | "mfa-setup">(
     resetToken ? "reset" : "tabs"
   );
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaBackupCode, setMfaBackupCode] = useState("");
+  const [mfaUseBackup, setMfaUseBackup] = useState(false);
+  const [mfaSetupData, setMfaSetupData] = useState<{ secret: string; uri: string; qrDataUrl?: string } | null>(null);
+  const [mfaSetupToken, setMfaSetupToken] = useState("");
+  const [mfaBackupCodes, setMfaBackupCodes] = useState<string[]>([]);
+  const [mfaSetupStep, setMfaSetupStep] = useState<"scan" | "verify" | "backup">("scan");
 
   const loginForm = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -75,6 +82,18 @@ export default function Auth() {
       return res.json();
     },
     onSuccess: async (data) => {
+      if (data.mfaRequired && data.mfaSetupRequired) {
+        setView("mfa-setup");
+        setMfaSetupStep("scan");
+        const setupRes = await apiRequest("POST", "/api/auth/mfa/setup");
+        const setupData = await setupRes.json();
+        setMfaSetupData(setupData);
+        return;
+      }
+      if (data.mfaRequired) {
+        setView("mfa-verify");
+        return;
+      }
       if (data.token) setAuthToken(data.token);
       queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
@@ -82,6 +101,44 @@ export default function Auth() {
     },
     onError: (e: any) => {
       toast({ title: "Login failed", description: e.message || "Invalid credentials", variant: "destructive" });
+    },
+  });
+
+  const mfaVerifyMutation = useMutation({
+    mutationFn: async () => {
+      const body = mfaUseBackup ? { backupCode: mfaBackupCode } : { token: mfaToken };
+      const res = await apiRequest("POST", "/api/auth/mfa/verify", body);
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (data.token) setAuthToken(data.token);
+      queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
+      setLocation("/");
+    },
+    onError: (e: any) => {
+      toast({ title: "Verification failed", description: e.message || "Invalid code", variant: "destructive" });
+    },
+  });
+
+  const mfaSetupVerifyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/verify-setup", { token: mfaSetupToken });
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (data.backupCodes) {
+        setMfaBackupCodes(data.backupCodes);
+        setMfaSetupStep("backup");
+      }
+      if (data.loggedIn && data.token) {
+        setAuthToken(data.token);
+        queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
+        await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
+      }
+    },
+    onError: (e: any) => {
+      toast({ title: "Invalid token", description: e.message, variant: "destructive" });
     },
   });
 
@@ -228,6 +285,149 @@ export default function Auth() {
               <p className="font-semibold">Password updated</p>
               <p className="text-sm text-muted-foreground">Your password has been changed. You can now sign in with your new credentials.</p>
               <Button className="w-full" onClick={() => { setView("tabs"); setLocation("/auth"); }}>Sign in</Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {view === "mfa-verify" && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-primary" />
+                <p className="font-semibold text-base">Two-Factor Authentication</p>
+              </div>
+              <p className="text-sm text-muted-foreground">Enter the 6-digit code from your authenticator app to continue.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!mfaUseBackup ? (
+                <>
+                  <Input
+                    value={mfaToken}
+                    onChange={e => setMfaToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="000000"
+                    maxLength={6}
+                    className="text-center text-2xl tracking-widest font-mono"
+                    autoFocus
+                    data-testid="input-mfa-token"
+                  />
+                  <Button
+                    className="w-full"
+                    onClick={() => mfaVerifyMutation.mutate()}
+                    disabled={mfaVerifyMutation.isPending || mfaToken.length !== 6}
+                    data-testid="button-mfa-verify"
+                  >
+                    {mfaVerifyMutation.isPending ? "Verifying..." : "Verify"}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground w-full text-center"
+                    onClick={() => setMfaUseBackup(true)}
+                    data-testid="link-use-backup-code"
+                  >
+                    Use a backup code instead
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Input
+                    value={mfaBackupCode}
+                    onChange={e => setMfaBackupCode(e.target.value)}
+                    placeholder="XXXXX-XXXXX"
+                    className="text-center font-mono"
+                    autoFocus
+                    data-testid="input-mfa-backup-code"
+                  />
+                  <Button
+                    className="w-full"
+                    onClick={() => mfaVerifyMutation.mutate()}
+                    disabled={mfaVerifyMutation.isPending || !mfaBackupCode.trim()}
+                    data-testid="button-mfa-verify-backup"
+                  >
+                    {mfaVerifyMutation.isPending ? "Verifying..." : "Verify Backup Code"}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground w-full text-center"
+                    onClick={() => setMfaUseBackup(false)}
+                    data-testid="link-use-authenticator"
+                  >
+                    Use authenticator app instead
+                  </button>
+                </>
+              )}
+              <Button variant="ghost" className="w-full" onClick={() => { setView("tabs"); setMfaToken(""); setMfaBackupCode(""); setMfaUseBackup(false); }}>
+                Back to sign in
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {view === "mfa-setup" && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-primary" />
+                <p className="font-semibold text-base">Set Up Two-Factor Authentication</p>
+              </div>
+              <p className="text-sm text-muted-foreground">Your organisation requires MFA. Set it up now to continue signing in.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {mfaSetupStep === "scan" && mfaSetupData && (
+                <>
+                  <div>
+                    <p className="text-sm font-medium mb-2">1. Scan this QR code with your authenticator app</p>
+                    <div className="flex justify-center my-3">
+                      {mfaSetupData.qrDataUrl ? (
+                        <div className="bg-white inline-block p-2 rounded border">
+                          <img src={mfaSetupData.qrDataUrl} alt="Scan this QR code with your authenticator app" className="w-48 h-48" data-testid="img-mfa-setup-qr" />
+                        </div>
+                      ) : null}
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-1">Or enter this code manually:</p>
+                    <code className="block bg-muted p-2 rounded text-sm font-mono break-all" data-testid="text-mfa-setup-secret">{mfaSetupData.secret}</code>
+                  </div>
+                  <Button className="w-full" onClick={() => setMfaSetupStep("verify")} data-testid="button-mfa-setup-next">
+                    Next — Enter verification code
+                  </Button>
+                </>
+              )}
+              {mfaSetupStep === "verify" && (
+                <>
+                  <p className="text-sm font-medium">2. Enter the 6-digit code from your app</p>
+                  <Input
+                    value={mfaSetupToken}
+                    onChange={e => setMfaSetupToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="000000"
+                    maxLength={6}
+                    className="text-center text-2xl tracking-widest font-mono"
+                    autoFocus
+                    data-testid="input-mfa-setup-verify-token"
+                  />
+                  <Button
+                    className="w-full"
+                    onClick={() => mfaSetupVerifyMutation.mutate()}
+                    disabled={mfaSetupVerifyMutation.isPending || mfaSetupToken.length !== 6}
+                    data-testid="button-mfa-setup-verify"
+                  >
+                    {mfaSetupVerifyMutation.isPending ? "Verifying..." : "Verify & Enable MFA"}
+                  </Button>
+                  <Button variant="ghost" className="w-full" onClick={() => setMfaSetupStep("scan")}>Back</Button>
+                </>
+              )}
+              {mfaSetupStep === "backup" && mfaBackupCodes.length > 0 && (
+                <>
+                  <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                    <p className="text-sm font-medium text-amber-800 dark:text-amber-200 mb-2">Save your backup codes</p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300 mb-3">These codes let you access your account if you lose your authenticator device. Each code works once.</p>
+                    <div className="grid grid-cols-2 gap-1 font-mono text-sm" data-testid="div-mfa-setup-backup-codes">
+                      {mfaBackupCodes.map((code, i) => <span key={i} className="text-amber-900 dark:text-amber-100">{code}</span>)}
+                    </div>
+                  </div>
+                  <Button className="w-full" onClick={() => setLocation("/")} data-testid="button-mfa-setup-done">
+                    Done — Continue to dashboard
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         )}
