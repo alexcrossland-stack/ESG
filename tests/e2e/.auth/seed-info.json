@@ -1,0 +1,12 @@
+{
+  "tenantA": {
+    "adminToken": "Q8Yz4IlYAPYTSmfiwDkIijRuBDjqxA5zQn775uuj8pUutIolJ2BWDlQEap03wu6P",
+    "viewerToken": "fSRFsdGn6osyx1VArE4BUjWcX8ShfAzmCJxAn5ABC9zfLL7sqiDQn4lmHtLV1pms",
+    "companyId": "3543affd-b4f0-4f18-a2e2-bac339cf8ce7"
+  },
+  "tenantB": {
+    "adminToken": "ibIdM3kHAL8YSwBWnzPCEoAhxq87P2i8Kn68K3K0xh5xpfBILVIYHckc4ALbt1RH",
+    "companyId": "5fec1b51-3153-4b08-89f7-f1f1b46d0522",
+    "metricId": "9ede3be2-4653-40cd-b72c-cf1183fda54c"
+  }
+}

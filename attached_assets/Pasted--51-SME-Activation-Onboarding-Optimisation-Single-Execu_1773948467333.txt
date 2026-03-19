@@ -1,0 +1,327 @@
+#51 — SME Activation & Onboarding Optimisation (Single Execution Plan)
+
+## Objective
+
+Transform the onboarding and first-use experience into a best-in-class SME journey that enables a non-technical business user to:
+
+- Sign up
+- Complete onboarding
+- Add their first ESG data point
+- Understand what they’ve done
+- Generate a first report
+
+All in one session (10–15 minutes), without help.
+
+This phase focuses on activation, clarity, and usability — not new feature development.
+
+---
+
+## Core principle
+
+Reduce cognitive load at every step.
+
+Every screen must answer:
+1. What is this?
+2. Why does it matter?
+3. What should I do next?
+
+---
+
+## Success criteria
+
+- Time to first data entry: < 5 minutes
+- Time to first report: < 15 minutes
+- No blank states without guidance
+- No ESG knowledge required to progress
+- All core flows complete without confusion or dead ends
+
+---
+
+## Implementation (execute in order)
+
+---
+
+# 1. Dashboard becomes the control centre
+
+## 1.1 Activation checklist
+
+Add a persistent checklist on the dashboard:
+
+Get started in 3 steps:
+[ ] Add your first data point  
+[ ] Upload supporting evidence  
+[ ] Generate your first report  
+
+Requirements:
+- Each item links to the correct page
+- Completion updates immediately
+- Show progress (0% → 100%)
+- Completed state clearly shown
+
+---
+
+## 1.2 Smart next-step guidance
+
+Add dynamic guidance at top of dashboard:
+
+Examples:
+- No data → “Next step: add your first data point”
+- Data added → “Next step: upload supporting evidence”
+- Evidence added → “Next step: generate your first report”
+
+---
+
+## 1.3 Fix empty dashboard states
+
+Replace all “0” or blank visuals with:
+
+“No data yet — add your first entry to calculate this”
+
+Add CTA button:
+→ Add data
+
+---
+
+# 2. Onboarding simplification
+
+## 2.1 Rewrite all onboarding steps
+
+Each step must include:
+- Plain-English title
+- One-line explanation of why it matters
+
+Example:
+
+Before:
+“Select framework”
+
+After:
+“Choose how you want to report your data  
+This decides the format of your ESG report (you can change this later)”
+
+---
+
+## 2.2 Remove unnecessary decisions
+
+Set defaults:
+- Pre-select reporting framework
+- Pre-select reporting period
+- Enable core metrics by default
+- Auto-create first site if needed
+
+User can change later.
+
+---
+
+## 2.3 Quick Start path
+
+Ensure Quick Start:
+- Creates a valid, usable state
+- Does not introduce fake/confusing data
+- Lands user on a working dashboard
+
+---
+
+## 2.4 Clear onboarding completion
+
+End state must show:
+
+“You’re set up — now add your first data point to start tracking your ESG progress”
+
+CTA:
+→ Add your first metric
+
+---
+
+# 3. First data entry experience
+
+## 3.1 Metrics empty state
+
+Replace with:
+
+“Start tracking your ESG data  
+Add your first data point to begin measuring your performance”
+
+CTA:
+→ Add your first metric
+
+---
+
+## 3.2 Input clarity
+
+For all inputs:
+- Show units (kWh, tonnes, etc.)
+- Provide example values
+- Inline validation (no post-submit errors)
+
+---
+
+## 3.3 Simplify categories
+
+Rename:
+- “Metric category” → “Type of data”
+
+Add short descriptions for each category.
+
+---
+
+## 3.4 Save feedback
+
+After saving:
+- Show clear success message
+- Show saved value immediately
+- Confirm action visually (no silent save)
+
+---
+
+# 4. ESG language simplification
+
+## 4.1 Inline helper text
+
+Add helper text for:
+- framework
+- evidence
+- maturity
+- scope 1/2/3
+- metric category
+
+---
+
+## 4.2 Tooltip system
+
+Add “?” icons next to complex terms.
+
+On hover/click:
+- 1 sentence explanation in plain English
+
+---
+
+## 4.3 Replace jargon where possible
+
+Avoid ESG terms in headings where simpler language works.
+
+---
+
+# 5. Reports first-run experience
+
+## 5.1 Reports empty state
+
+“Create your first ESG report  
+Generate a report based on your data”
+
+CTA:
+→ Generate report
+
+---
+
+## 5.2 Framework explanation
+
+Add simple explanation:
+
+“Choose a reporting format (the standard your report follows)”
+
+---
+
+## 5.3 First-run guidance
+
+If insufficient data:
+- Explain what’s missing
+- Link directly to required action
+
+---
+
+# 6. Error handling
+
+## 6.1 Replace generic errors
+
+Every error must:
+- Explain what went wrong
+- Explain how to fix it
+
+---
+
+## 6.2 Field-level validation
+
+- Errors appear next to inputs
+- No generic “something went wrong” for known issues
+
+---
+
+## 6.3 No silent failures
+
+Every action must produce:
+- success feedback OR
+- clear error
+
+---
+
+# 7. Micro UX improvements
+
+## 7.1 Button clarity
+
+Replace:
+- Submit → Save data
+- Continue → Next step
+
+---
+
+## 7.2 Loading states
+
+All async actions must show:
+- spinner or loading message
+
+---
+
+## 7.3 Navigation reliability
+
+- All CTAs route correctly
+- No dead links
+- No broken back navigation
+
+---
+
+# 8. Behaviour tracking
+
+Track:
+- onboarding completion rate
+- time to first metric
+- time to first report
+- drop-off points
+- error frequency
+
+Keep lightweight:
+- use existing tracking endpoint if available
+
+---
+
+## Deliverables
+
+1. Updated onboarding (copy + defaults)
+2. Dashboard activation checklist
+3. Improved empty states across:
+   - dashboard
+   - metrics
+   - reports
+   - evidence
+   - policies
+4. Simplified ESG terminology (helper text + tooltips)
+5. Improved first data entry UX
+6. Improved first report experience
+7. Improved error handling across flows
+8. Basic activation analytics tracking
+
+---
+
+## Final validation
+
+A non-technical SME user must be able to:
+
+- sign up
+- complete onboarding
+- add one data point
+- understand what they did
+- generate a report
+
+All within 10–15 minutes, without assistance.
+
+If they hesitate, get confused, or stop — the implementation is not complete.

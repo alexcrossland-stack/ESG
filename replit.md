@@ -69,6 +69,14 @@ The application is a full-stack SaaS web application.
 - **ESG Metric Definitions Engine:** 58 metric definitions across Environmental, Social, and Governance pillars, with core and advanced metrics.
 - **AI Advisor Upgrade:** `/api/chat/assist` now pulls live company context (missing submissions, overdue actions, policy status, framework readiness) before building the OpenAI prompt for more precise responses.
 
+## Test Infrastructure
+
+- **API Security Tests** (`tests/api-security.test.ts`): 40-test suite covering 8 suites — input validation, unauthenticated tenant isolation, auth endpoints, dashboard endpoints, cross-tenant isolation (authenticated), RBAC enforcement, session lifecycle (revocation, fabricated tokens), and malformed payloads. Run via `npx tsx tests/api-security.test.ts` or the `test:api` workflow.
+- **Playwright E2E Tests** (`tests/e2e/`): 16 API-mode tests covering auth flow, onboarding, metric entry, dashboard endpoints, report generation, and viewer restrictions. Run via `npx playwright test` or the `test:e2e` workflow.
+- **Shared Fixture** (`tests/fixtures/seed.ts`): Provisions two isolated tenants with admin + viewer users via direct SQL (no rate limiter exposure). Used by both API tests and Playwright global-setup.
+- **Coverage Doc** (`tests/COVERAGE.md`): Table of covered suites/routes and explicit out-of-scope gaps (MFA, step-up auth, email, rate-limiter enforcement, CI).
+- **Server-side fix (Task #51)**: `PUT /api/metrics/:id/target` now validates `targetValue` is numeric (returns 400 instead of 500 on string input).
+
 ## External Dependencies
 
 - **AI Services:** OpenAI (via Replit AI Integrations).
