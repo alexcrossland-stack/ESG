@@ -427,7 +427,7 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   siteIdIdx: index("idx_raw_data_site_id").on(table.siteId),
 }));
 
-export const evidenceStatusEnum = pgEnum("evidence_status", ["uploaded", "reviewed", "approved", "expired"]);
+export const evidenceStatusEnum = pgEnum("evidence_status", ["pending", "available", "quarantined", "rejected", "deleted", "uploaded", "reviewed", "approved", "expired"]);
 
 export const evidenceFiles = pgTable("evidence_files", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -439,7 +439,7 @@ export const evidenceFiles = pgTable("evidence_files", {
   linkedModule: text("linked_module"),
   linkedEntityId: varchar("linked_entity_id"),
   linkedPeriod: text("linked_period"),
-  evidenceStatus: evidenceStatusEnum("evidence_status").default("uploaded"),
+  evidenceStatus: evidenceStatusEnum("evidence_status").default("pending"),
   reviewDate: timestamp("review_date"),
   expiryDate: timestamp("expiry_date"),
   uploadedBy: varchar("uploaded_by"),
@@ -448,6 +448,8 @@ export const evidenceFiles = pgTable("evidence_files", {
   reviewedAt: timestamp("reviewed_at"),
   assignedUserId: varchar("assigned_user_id"),
   siteId: varchar("site_id"),
+  fileStatusChangedAt: timestamp("file_status_changed_at"),
+  scanResult: text("scan_result"),
 }, (table) => ({
   siteIdIdx: index("idx_evidence_files_site_id").on(table.siteId),
 }));

@@ -31,6 +31,7 @@ const recurringJobs: RecurringJobDef[] = [
   { jobType: "health_event_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "gdpr_export_cleanup", intervalMs: 6 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "gdpr_deletion_processor", intervalMs: 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "generated_files_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
 ];
 
 export function registerJobHandler(jobType: string, handler: JobHandler) {
@@ -385,6 +386,24 @@ async function gdprExportCleanupHandler() {
   }
 }
 
+const GENERATED_FILES_RETENTION_DAYS = 90;
+
+async function generatedFilesCleanupHandler() {
+  try {
+    const cutoff = new Date(Date.now() - GENERATED_FILES_RETENTION_DAYS * 86400000);
+    const result = await db.execute(sql`
+      DELETE FROM generated_files
+      WHERE generated_at < ${cutoff}
+    `);
+    const deleted = (result as any).rowCount ?? 0;
+    if (deleted > 0) console.log(`[Cleanup] Removed ${deleted} generated file record(s) older than ${GENERATED_FILES_RETENTION_DAYS} days`);
+    return { deleted, retentionDays: GENERATED_FILES_RETENTION_DAYS };
+  } catch (e) {
+    console.error("[Cleanup] Generated files cleanup error:", e);
+    return { error: String(e) };
+  }
+}
+
 async function gdprDeletionProcessorHandler() {
   try {
     const result = await db.execute(sql`
@@ -474,6 +493,7 @@ export function startScheduler() {
   registerJobHandler("health_event_cleanup", healthEventCleanupHandler);
   registerJobHandler("gdpr_export_cleanup", gdprExportCleanupHandler);
   registerJobHandler("gdpr_deletion_processor", gdprDeletionProcessorHandler);
+  registerJobHandler("generated_files_cleanup", generatedFilesCleanupHandler);
 
   tickTimer = setInterval(runRecurringTick, TICK_INTERVAL);
   queueTimer = setInterval(processQueue, QUEUE_POLL_INTERVAL);

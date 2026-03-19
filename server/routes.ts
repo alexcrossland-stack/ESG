@@ -4699,11 +4699,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (BLOCKED_EXTENSIONS.test(filename)) {
         return res.status(400).json({ error: "File type not allowed. Executable and script files cannot be uploaded." });
       }
-      if (fileType) {
-        const normalizedType = fileType.toLowerCase().replace(/^\./, "");
-        if (!ALLOWED_FILE_TYPES.includes(normalizedType)) {
-          return res.status(400).json({ error: `File type '${fileType}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}` });
-        }
+      const resolvedFileType = fileType || filename.split(".").pop() || "";
+      const normalizedType = resolvedFileType.toLowerCase().replace(/^\./, "");
+      if (!normalizedType || !ALLOWED_FILE_TYPES.includes(normalizedType)) {
+        return res.status(400).json({ error: `File type '${resolvedFileType || "unknown"}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}` });
       }
       const validModules = ["metric_value", "raw_data", "policy", "questionnaire_answer", "report"];
       if (linkedModule && !validModules.includes(linkedModule)) {
@@ -4718,11 +4717,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         linkedModule: linkedModule || null,
         linkedEntityId: linkedEntityId || null,
         linkedPeriod: linkedPeriod || null,
-        evidenceStatus: "uploaded",
+        evidenceStatus: "pending",
         reviewDate: null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
         uploadedBy: userId,
         siteId: bodySiteId || null,
+        fileStatusChangedAt: new Date(),
       } as any);
 
       if (linkedModule === "metric_value" && linkedEntityId) {
@@ -4765,15 +4765,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (expiryDate !== undefined) updates.expiryDate = expiryDate ? new Date(expiryDate) : null;
       if (reviewDate !== undefined) updates.reviewDate = reviewDate ? new Date(reviewDate) : null;
       if (evidenceStatus) {
-        const validStatuses = ["uploaded", "reviewed", "approved", "expired"];
+        const validStatuses = ["pending", "available", "quarantined", "rejected", "deleted", "uploaded", "reviewed", "approved", "expired"];
         if (!validStatuses.includes(evidenceStatus)) {
           return res.status(400).json({ error: "Invalid evidence status" });
         }
+        const previousStatus = owned.evidenceStatus;
         updates.evidenceStatus = evidenceStatus;
-        if (evidenceStatus === "reviewed" || evidenceStatus === "approved") {
+        updates.fileStatusChangedAt = new Date();
+        if (evidenceStatus === "reviewed" || evidenceStatus === "approved" || evidenceStatus === "available") {
           updates.reviewedBy = userId;
           updates.reviewedAt = new Date();
         }
+        storage.createAuditLog({
+          companyId,
+          userId,
+          actorType: "user",
+          action: "evidence_status_changed",
+          entityType: "evidence_file",
+          entityId: req.params.id,
+          ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+          userAgent: req.headers["user-agent"] || null,
+          details: { filename: owned.filename, previousStatus, newStatus: evidenceStatus },
+        } as any).catch(() => {});
       }
       const file = await storage.updateEvidenceFile(req.params.id, updates);
       if (!file) return res.status(404).json({ error: "Evidence not found" });
@@ -5794,8 +5807,21 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
   app.get("/api/reports/:id/download/:fileId", requireAuth, async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       const file = await storage.getGeneratedFile(req.params.fileId);
-      if (!file || file.companyId !== (req.session as any).companyId) { res.status(404).json({ error: "File not found" }); return; }
+      if (!file || file.companyId !== companyId) { res.status(404).json({ error: "File not found" }); return; }
+      storage.createAuditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "generated_file_downloaded",
+        entityType: "generated_file",
+        entityId: file.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { filename: file.filename, fileType: file.fileType, reportRunId: req.params.id },
+      } as any).catch(() => {});
       const buffer = Buffer.from(file.fileData || "", "base64");
       const contentType = file.fileType === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
       res.setHeader("Content-Type", contentType);
@@ -9466,9 +9492,31 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(410).json({ error: "Download link has already been used or is no longer valid" });
       }
       if (job.expiresAt && new Date(job.expiresAt) < new Date()) {
+        storage.createAuditLog({
+          companyId,
+          userId,
+          actorType: "user",
+          action: "data_export_download_rejected_expired",
+          entityType: "data_export_job",
+          entityId: job.id,
+          ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+          userAgent: req.headers["user-agent"] || null,
+          details: { exportScope: job.exportScope, expiresAt: job.expiresAt },
+        } as any).catch(() => {});
         return res.status(410).json({ error: "Download link has expired" });
       }
       await storage.updateDataExportJob(job.id, { downloadTokenUsed: true });
+      storage.createAuditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "data_export_downloaded",
+        entityType: "data_export_job",
+        entityId: job.id,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
+        userAgent: req.headers["user-agent"] || null,
+        details: { exportScope: job.exportScope, fileSize: job.fileSize },
+      } as any).catch(() => {});
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="data-export-${job.id}.json"`);
       res.send(job.fileData || "{}");
