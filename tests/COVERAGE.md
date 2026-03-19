@@ -12,7 +12,7 @@ All tests use bearer-token authentication.
 Run: `npx tsx tests/api-security.test.ts`  
 (Also available as the `test:api` workflow.)
 
-**47 tests across 8 suites — all passing.**
+**49 tests across 8 suites — all passing.**
 
 | Suite | Description | Count |
 |-------|-------------|-------|
@@ -23,21 +23,30 @@ Run: `npx tsx tests/api-security.test.ts`
 | 5 | Cross-tenant isolation (authenticated) | 9 |
 | 6 | RBAC enforcement (viewer, contributor, admin, super-admin) | 11 |
 | 7 | Session lifecycle (logout, revoked token, fabricated token) | 8 |
-| 8 | Malformed payloads (authenticated, strict 400 + error field) | 5 |
+| 8 | Malformed payloads (authenticated, strict 400 + error field) | 7 |
 
-### Suite 5 — Cross-tenant endpoints covered
+### Suite 5 — Two assertion strategies
 
-| Endpoint | Tenant B resource used |
-|----------|------------------------|
-| `PUT /api/metrics/:id/target` | Tenant B metricId |
-| `GET /api/metrics/:id/values` | Tenant B metricId |
-| `GET /api/metrics/:id/history` | Tenant B metricId |
-| `POST /api/data-entry` (Tenant B metricId) | Tenant B metricId |
-| `PUT /api/topics/:id` | Tenant B topicId |
-| `GET /api/reports` (scoped response check) | Tenant B companyId |
-| `GET /api/policy` (scoped response check) | Tenant B companyId |
-| `GET /api/actions` (scoped response check) | Tenant B companyId |
-| `GET /api/questionnaires` (scoped / plan-gated) | Tenant B companyId |
+**Targeted cross-tenant operations** use real Tenant B IDs and must return **exactly 403 or 404**
+with a non-empty `error` field. Any 200 is a FAIL.
+
+| Endpoint | Tenant B resource used | Required response |
+|----------|------------------------|-------------------|
+| `PUT /api/metrics/:id/target` | Tenant B metricId | 403 or 404 + error |
+| `GET /api/metrics/:id/values` | Tenant B metricId | 403 or 404 + error |
+| `GET /api/metrics/:id/history` | Tenant B metricId | 403 or 404 + error |
+| `POST /api/data-entry` (Tenant B metricId) | Tenant B metricId | 403 or 404 + error |
+| `PUT /api/topics/:id` | Tenant B topicId | 403 or 404 + error |
+
+**Company-scoped list endpoints** return 200 for Tenant A's data. The test verifies Tenant B's
+companyId does not appear anywhere in the response body.
+
+| Endpoint | Assertion |
+|----------|-----------|
+| `GET /api/reports` | Tenant B companyId absent from response |
+| `GET /api/policy` | Tenant B companyId absent from response |
+| `GET /api/actions` | Tenant B companyId absent from response |
+| `GET /api/questionnaires` | Tenant B companyId absent from response (or non-200 for plan-gated) |
 
 ### Suite 6 — RBAC roles and routes covered
 
@@ -58,13 +67,16 @@ Run: `npx tsx tests/api-security.test.ts`
 ### Suite 8 — Malformed payload contracts (strict)
 
 All tests assert **exactly HTTP 400** with a JSON body containing a non-empty `error` field.
-A 500 response is an explicit `FAIL`.
+A 500 response or any non-400 is an explicit `FAIL` (except the missing-targetValue case which
+asserts no 500 — the route silently ignores a missing optional field, which is valid behaviour).
 
 | Endpoint | Malformed input | Required response |
 |----------|-----------------|-------------------|
 | `POST /api/data-entry` | missing `period` | 400 + `error` |
 | `POST /api/data-entry` | `metricId: null` | 400 + `error` |
+| `POST /api/data-entry` | `value: "not-a-number"` (string) | 400 + `error` |
 | `PUT /api/metrics/:id/target` | `targetValue: "not-a-number"` | 400 + `error` |
+| `PUT /api/metrics/:id/target` | missing `targetValue` | not 500 |
 | `POST /api/reports/generate` | missing `reportType` | 400 + `error` |
 | `POST /api/reports/generate` | invalid `period` format | 400 + `error` |
 
@@ -75,7 +87,7 @@ A 500 response is an explicit `FAIL`.
 Run: `npx playwright test`  
 (Also available as the `test:e2e` workflow.)
 
-**25 tests passing, 3 skipped (register rate limiter), 0 failed.**
+**25 tests passing, 3 skipped (register rate-limiter active), 0 failed.**
 
 Two Playwright projects run in sequence:
 
@@ -83,48 +95,47 @@ Two Playwright projects run in sequence:
 
 | Spec | Description | Tests |
 |------|-------------|-------|
-| `auth.spec.ts` | Register, login, logout; bad credentials; missing fields | 3 (up to 1 skipped when rate-limited) |
-| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT | 2 (may skip when rate-limited) |
+| `auth.spec.ts` | Register, login, logout; bad credentials; missing fields | 3 (1 may skip) |
+| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT | 2 (may skip) |
 | `metric-entry.spec.ts` | Submit metric value, retrieve; missing period → 400 | 2 |
 | `dashboard.spec.ts` | Dashboard/enhanced, metrics, topics; unauthenticated 401 | 4 |
 | `reports.spec.ts` | Generate report (no 500); list reports; viewer blocked (403) | 3 |
 | `viewer-restrictions.spec.ts` | Viewer blocked from 4 write endpoints; read 200 OK | 2 |
 
-### `chromium` project — Browser UI specs
+### `chromium` project — Browser UI specs (full headless Chromium)
 
 | Spec | Description | Tests |
 |------|-------------|-------|
-| `browser/login-ui.spec.ts` | Login form → dashboard loads; bad creds stay on /auth; storageState admin sees dashboard | 3 |
-| `browser/viewer-ui.spec.ts` | Viewer: save buttons absent on data-entry; Admin: save buttons present; Viewer lands on dashboard (not /auth) | 3 |
+| `browser/login-ui.spec.ts` | Login form → dashboard; bad creds stay on /auth; storageState admin sees dashboard | 3 |
+| `browser/viewer-ui.spec.ts` | Viewer: save buttons absent on data-entry + read-only badge visible; Admin: save buttons present; Viewer lands on dashboard (not /auth) | 3 |
 
 ---
 
 ## Seed Utility (`tests/fixtures/seed.ts`)
 
-The shared seed utility provisions two fully isolated tenants:
+Provisions two fully isolated tenants. All seeded companies are marked `onboarding_complete = true`
+so browser tests navigate to the dashboard directly instead of the onboarding wizard.
 
-- **Tenant A admin**: Registered via `POST /api/auth/register` (with SQL fallback on 429).
-- **Tenant A viewer**: Inserted directly via SQL.
-- **Tenant A contributor**: Inserted directly via SQL.
-- **Tenant B admin**: Inserted directly via SQL.
-- **Both companies**: Marked `onboarding_complete = true` so browser tests navigate to the dashboard directly.
+| User | Provisioned via | Role |
+|------|-----------------|------|
+| Tenant A admin | `POST /api/auth/register` (SQL fallback on 429) | admin |
+| Tenant A viewer | Direct SQL | viewer |
+| Tenant A contributor | Direct SQL | contributor |
+| Tenant B admin | Direct SQL | admin |
 
-Bearer tokens always obtained via `POST /api/auth/login`.  
-First admin login triggers `seedDatabase()`, populating default metrics and topics.
+Bearer tokens obtained via `POST /api/auth/login`. First admin login triggers `seedDatabase()`.
 
-Global setup writes two Playwright `storageState` files:
+Global setup also writes two Playwright `storageState` files for browser specs:
 
-- `tests/e2e/.auth/admin.json` — admin bearer token in localStorage (`auth_token`)
-- `tests/e2e/.auth/viewer.json` — viewer bearer token in localStorage (`auth_token`)
-
-Browser specs use these to skip login UI and start pre-authenticated.
+- `tests/e2e/.auth/admin.json` — admin bearer token as localStorage `auth_token`
+- `tests/e2e/.auth/viewer.json` — viewer bearer token as localStorage `auth_token`
 
 ---
 
 ## Running Tests
 
 ```bash
-# API security suite (47 tests)
+# API security suite (49 tests)
 npx tsx tests/api-security.test.ts
 
 # All Playwright tests (API-mode + browser-mode)
@@ -137,9 +148,8 @@ npx playwright test --project=chromium
 npx playwright test --project=api
 ```
 
-> **Note on `package.json` scripts**: The Replit environment prevents editing `package.json`
-> directly. Use `npx tsx` / `npx playwright test` directly, or the `test:api` / `test:e2e`
-> workflow tabs in Replit.
+> **Note on `package.json` scripts**: The Replit environment prevents editing `package.json`.
+> Use `npx tsx` / `npx playwright test` directly, or the `test:api` / `test:e2e` workflow tabs.
 
 ---
 

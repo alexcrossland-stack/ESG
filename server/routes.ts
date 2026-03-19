@@ -1906,6 +1906,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { metricId, period, value, notes, dataSourceType, siteId: bodySiteId } = req.body;
       if (!metricId) return res.status(400).json({ error: "metricId is required" });
       if (!period) return res.status(400).json({ error: "period is required" });
+      if (value !== undefined && value !== null && isNaN(Number(value))) {
+        return res.status(400).json({ error: "value must be a number" });
+      }
       // Validate metric exists and belongs to this company
       const metric = await storage.getMetric(metricId);
       if (!metric || metric.companyId !== companyId) {

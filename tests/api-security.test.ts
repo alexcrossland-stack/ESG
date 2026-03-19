@@ -221,135 +221,105 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
   const tbTopicId = tenantB.topicId;
   const tbCompanyId = tenantB.companyId;
 
-  function assertCrossTenantBlocked(
-    label: string,
-    status: number,
-    body: string
-  ): void {
-    if (status !== 403 && status !== 404) {
-      if (status === 200 && isJsonApiResponse(body)) {
-        const parsed = JSON.parse(body) as Record<string, unknown>;
-        if (parsed.companyId === tbCompanyId) {
-          fail(`${label} — Tenant B data leaked to Tenant A!`, `status=200, body=${body.slice(0, 120)}`);
-        } else {
-          // 200 but the data returned is the SPA (HTML) or belongs to Tenant A — not a leak
-          pass(`${label} — returned 200 but no Tenant B data leaked`, `status=200`);
-        }
-      } else if (status === 200 && !isJsonApiResponse(body)) {
-        pass(`${label} — SPA fallback (no data leak)`, `status=200 HTML`);
-      } else {
-        fail(`${label} — unexpected response`, `status=${status}`);
-      }
-    } else {
-      // 403 or 404 — correct blocking behavior
+  /**
+   * For targeted cross-tenant operations (accessing a specific Tenant B resource by ID),
+   * the ONLY acceptable responses are 403 (forbidden) or 404 (not found/scoped out).
+   * A 200 response for a targeted write/read on another tenant's resource is always a FAIL.
+   */
+  function assertTargetedBlocked(label: string, status: number, body: string): void {
+    if (status === 403 || status === 404) {
       try {
         const parsed = JSON.parse(body) as { error?: string };
         if (typeof parsed.error === "string" && parsed.error.length > 0) {
-          pass(`${label}`, `status=${status}, error="${parsed.error.slice(0, 60)}"`);
+          pass(label, `status=${status}, error="${parsed.error.slice(0, 60)}"`);
         } else {
-          fail(`${label} — blocked but error field missing from JSON`, `status=${status}, body=${body.slice(0, 80)}`);
+          fail(`${label} — blocked (${status}) but error field missing or empty`, `body=${body.slice(0, 80)}`);
         }
       } catch {
-        fail(`${label} — blocked but response is not valid JSON`, `status=${status}, body=${body.slice(0, 80)}`);
+        fail(`${label} — blocked (${status}) but response is not valid JSON`, `body=${body.slice(0, 80)}`);
       }
+    } else {
+      // Any other status (including 200) is a failure for targeted cross-tenant access
+      fail(
+        `${label} — expected 403/404, got ${status}`,
+        `body=${body.slice(0, 120)}`
+      );
     }
   }
 
-  // Metrics
+  /**
+   * For company-scoped list endpoints (GET /api/reports, GET /api/actions, etc.),
+   * a 200 response is expected but must NOT contain any Tenant B data.
+   * Non-200 (plan-gated, etc.) is also acceptable as long as it's not a 500.
+   */
+  function assertNoDataLeak(
+    label: string,
+    status: number,
+    body: string,
+    tbId: string
+  ): void {
+    if (status === 500) {
+      fail(`${label} — returned 500`, `body=${body.slice(0, 120)}`);
+      return;
+    }
+    if (status === 200 && isJsonApiResponse(body)) {
+      // Could be object or array — check recursively for Tenant B companyId
+      const bodyStr = body.toLowerCase();
+      const tbIdLower = tbId.toLowerCase();
+      if (bodyStr.includes(tbIdLower)) {
+        fail(`${label} — Tenant B companyId found in response!`, `body=${body.slice(0, 200)}`);
+      } else {
+        pass(label, `status=200, no Tenant B data found`);
+      }
+    } else {
+      pass(label, `status=${status} (non-200 or non-JSON — no data leak possible)`);
+    }
+  }
+
+  // ── Targeted cross-tenant operations — must return 403 or 404 only ──
+
   {
     const res = await request("PUT", `/api/metrics/${tbMetricId}/target`, { targetValue: 999, targetYear: 2030 }, tenantA.adminToken);
-    assertCrossTenantBlocked("Tenant A cannot PUT Tenant B metric target", res.status, res.body);
+    assertTargetedBlocked("Tenant A PUT Tenant B metric target blocked (403/404)", res.status, res.body);
   }
   {
     const res = await request("GET", `/api/metrics/${tbMetricId}/values`, undefined, tenantA.adminToken);
-    assertCrossTenantBlocked("Tenant A cannot GET Tenant B metric values", res.status, res.body);
+    assertTargetedBlocked("Tenant A GET Tenant B metric values blocked (403/404)", res.status, res.body);
   }
   {
     const res = await request("GET", `/api/metrics/${tbMetricId}/history`, undefined, tenantA.adminToken);
-    assertCrossTenantBlocked("Tenant A cannot GET Tenant B metric history", res.status, res.body);
+    assertTargetedBlocked("Tenant A GET Tenant B metric history blocked (403/404)", res.status, res.body);
   }
-
-  // Data entry for Tenant B metric
   {
     const res = await request("POST", "/api/data-entry", {
       metricId: tbMetricId,
       period: "2024-Q1",
       value: 42,
     }, tenantA.adminToken);
-    assertCrossTenantBlocked("Tenant A cannot POST data-entry for Tenant B metric", res.status, res.body);
+    assertTargetedBlocked("Tenant A POST data-entry for Tenant B metric blocked (403/404)", res.status, res.body);
   }
-
-  // Topics
   {
     const res = await request("PUT", `/api/topics/${tbTopicId}`, { selected: true }, tenantA.adminToken);
-    assertCrossTenantBlocked("Tenant A cannot PUT Tenant B topic", res.status, res.body);
+    assertTargetedBlocked("Tenant A PUT Tenant B topic blocked (403/404)", res.status, res.body);
   }
 
-  // Reports — GET /api/reports is company-scoped (returns Tenant A's reports, not Tenant B's)
-  // We verify Tenant A's reports response does not contain Tenant B's companyId
+  // ── Company-scoped list endpoints — 200 is OK, but no Tenant B data must appear ──
+
   {
     const res = await request("GET", "/api/reports", undefined, tenantA.adminToken);
-    if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const reports = JSON.parse(res.body) as Array<{ companyId?: string }>;
-      const tbLeak = reports.some((r) => r.companyId === tbCompanyId);
-      if (tbLeak) {
-        fail("GET /api/reports returns Tenant B reports to Tenant A", `body=${res.body.slice(0, 120)}`);
-      } else {
-        pass("GET /api/reports does not expose Tenant B data to Tenant A", `status=200, reports=${reports.length}`);
-      }
-    } else if (res.status === 401) {
-      pass("GET /api/reports returns 401 (unexpected — Tenant A token may be revoked)", `status=401`);
-    } else {
-      pass("GET /api/reports responded without 500", `status=${res.status}`);
-    }
+    assertNoDataLeak("GET /api/reports — no Tenant B data in Tenant A response", res.status, res.body, tbCompanyId);
   }
-
-  // Policy — GET /api/policy is company-scoped; should only return Tenant A's policy
   {
     const res = await request("GET", "/api/policy", undefined, tenantA.adminToken);
-    if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const policy = JSON.parse(res.body) as { companyId?: string };
-      if (policy.companyId === tbCompanyId) {
-        fail("GET /api/policy returns Tenant B policy to Tenant A", `body=${res.body.slice(0, 120)}`);
-      } else {
-        pass("GET /api/policy does not expose Tenant B data", `status=200, companyId=${policy.companyId}`);
-      }
-    } else {
-      pass("GET /api/policy responded without 500 or data leak", `status=${res.status}`);
-    }
+    assertNoDataLeak("GET /api/policy — no Tenant B data in Tenant A response", res.status, res.body, tbCompanyId);
   }
-
-  // Actions — GET /api/actions is company-scoped
   {
     const res = await request("GET", "/api/actions", undefined, tenantA.adminToken);
-    if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const actions = JSON.parse(res.body) as Array<{ companyId?: string }>;
-      const tbLeak = actions.some((a) => a.companyId === tbCompanyId);
-      if (tbLeak) {
-        fail("GET /api/actions returns Tenant B actions to Tenant A", `body=${res.body.slice(0, 120)}`);
-      } else {
-        pass("GET /api/actions does not expose Tenant B data", `status=200, count=${actions.length}`);
-      }
-    } else {
-      pass("GET /api/actions responded without data leak", `status=${res.status}`);
-    }
+    assertNoDataLeak("GET /api/actions — no Tenant B data in Tenant A response", res.status, res.body, tbCompanyId);
   }
-
-  // Questionnaires — GET /api/questionnaires is company-scoped (may require pro plan)
   {
     const res = await request("GET", "/api/questionnaires", undefined, tenantA.adminToken);
-    if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const qs = JSON.parse(res.body) as Array<{ companyId?: string }>;
-      const tbLeak = qs.some((q) => q.companyId === tbCompanyId);
-      if (tbLeak) {
-        fail("GET /api/questionnaires returns Tenant B questionnaires to Tenant A", `body=${res.body.slice(0, 120)}`);
-      } else {
-        pass("GET /api/questionnaires does not expose Tenant B data", `status=200, count=${qs.length}`);
-      }
-    } else {
-      // 402/402 upgrade required or 401 — still not a data leak
-      pass("GET /api/questionnaires responded without data leak (non-200 expected for free plan)", `status=${res.status}`);
-    }
+    assertNoDataLeak("GET /api/questionnaires — no Tenant B data in Tenant A response", res.status, res.body, tbCompanyId);
   }
 }
 
@@ -657,22 +627,30 @@ async function testMalformedPayloads(tenants: SeededTenants) {
       reportType: "management",
       period: "INVALID_PERIOD_FORMAT!!!",
     }, adminToken);
-    if (res.status === 400) {
-      try {
-        const parsed = JSON.parse(res.body) as { error?: string };
-        if (typeof parsed.error === "string" && parsed.error.length > 0) {
-          pass("POST /api/reports/generate invalid period returns 400 with error field", `error="${parsed.error.slice(0, 60)}"`);
-        } else {
-          fail("POST /api/reports/generate invalid period returns 400 but error field missing", res.body.slice(0, 80));
-        }
-      } catch {
-        fail("POST /api/reports/generate invalid period returns 400 but not valid JSON", res.body.slice(0, 80));
-      }
-    } else if (res.status === 500) {
-      fail("POST /api/reports/generate invalid period returns 500 — must not 500 on invalid input", res.body.slice(0, 100));
+    assertBadRequest("POST /api/reports/generate invalid period returns 400 with error field", res.status, res.body);
+  }
+
+  // POST /api/data-entry — non-numeric value (string)
+  {
+    const res = await request("POST", "/api/data-entry", {
+      metricId: tenantAMetricId,
+      period: "2024-Q1",
+      value: "not-a-number",
+    }, adminToken);
+    assertBadRequest("POST /api/data-entry non-numeric value returns 400 with error field", res.status, res.body);
+  }
+
+  // PUT /api/metrics/:id/target — missing targetValue entirely
+  {
+    const res = await request("PUT", `/api/metrics/${tenantAMetricId}/target`, {
+      targetYear: 2030,
+    }, adminToken);
+    // Missing targetValue is either accepted (null/undefined skipped) or rejected (400)
+    // It must never cause a 500
+    if (res.status === 500) {
+      fail("PUT /api/metrics/:id/target missing targetValue must not return 500", `body=${res.body.slice(0, 100)}`);
     } else {
-      // 200 is acceptable if the backend processes invalid period gracefully
-      pass("POST /api/reports/generate invalid period does not 500", `status=${res.status}`);
+      pass("PUT /api/metrics/:id/target missing targetValue does not return 500", `status=${res.status}`);
     }
   }
 }
