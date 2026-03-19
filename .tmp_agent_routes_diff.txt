@@ -1,0 +1,87 @@
+diff --git a/server/agent-routes.ts b/server/agent-routes.ts
+index 57e7e27..aa35972 100644
+--- a/server/agent-routes.ts
++++ b/server/agent-routes.ts
+@@ -472,6 +472,7 @@ export function registerAgentRoutes(app: Express) {
+     status: z.string().default("running"),
+     companyId: z.string().optional(),
+     userId: z.string().optional(),
++    siteId: z.string().optional(),
+   });
+ 
+   const updateRunSchema = z.object({
+@@ -490,6 +491,18 @@ export function registerAgentRoutes(app: Express) {
+     error: z.string().optional(),
+   });
+ 
++  app.get("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
++    try {
++      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
++      const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
++      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
++      const runs = await storage.getAgentRuns({ companyId, siteId, limit });
++      return res.json(runs);
++    } catch (e: any) {
++      return res.status(500).json({ error: e.message });
++    }
++  });
++
+   app.post("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
+     try {
+       const body = createRunSchema.parse(req.body);
+@@ -501,7 +514,17 @@ export function registerAgentRoutes(app: Express) {
+         status: body.status,
+         companyId: body.companyId || null,
+         userId: body.userId || null,
++        siteId: body.siteId || null,
+       } as any);
++      if (body.siteId && body.companyId) {
++        storage.createUserActivity({
++          userId: body.userId || null,
++          companyId: body.companyId,
++          action: "ai_analysis_run_for_site",
++          page: "/sites",
++          details: { siteId: body.siteId, agentType: body.agentType, runId: run.id },
++        }).catch(() => {});
++      }
+       return res.status(201).json(run);
+     } catch (e: any) {
+       return res.status(400).json({ error: e.message });
+@@ -545,6 +568,7 @@ export function registerAgentRoutes(app: Express) {
+     userId: z.string().optional(),
+     agentType: z.enum(["technical_agent", "customer_success_agent", "esg_specialist_agent", "marketing_agent", "master_orchestrator"]).optional(),
+     title: z.string().optional(),
++    siteId: z.string().optional(),
+   });
+ 
+   app.post("/api/internal/chat/sessions", requireAgentAuth, requireAgentScope("internal:chat"), async (req: Request, res: Response) => {
+@@ -556,7 +580,17 @@ export function registerAgentRoutes(app: Express) {
+         agentType: body.agentType || null,
+         title: body.title || null,
+         status: "open",
++        siteId: body.siteId || null,
+       } as any);
++      if (body.siteId && body.companyId) {
++        storage.createUserActivity({
++          userId: body.userId || null,
++          companyId: body.companyId,
++          action: "ai_analysis_run_for_site",
++          page: "/sites",
++          details: { siteId: body.siteId, agentType: body.agentType || "chat", runId: session.id },
++        }).catch(() => {});
++      }
+       return res.status(201).json(session);
+     } catch (e: any) {
+       return res.status(400).json({ error: e.message });
+@@ -567,8 +601,10 @@ export function registerAgentRoutes(app: Express) {
+     try {
+       const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
+       const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
++      const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
+       const sessions = await storage.listChatSessions({ userId, companyId });
+-      return res.json(sessions);
++      const filtered = siteId ? sessions.filter((s: any) => s.siteId === siteId) : sessions;
++      return res.json(filtered);
+     } catch (e: any) {
+       return res.status(500).json({ error: e.message });
+     }

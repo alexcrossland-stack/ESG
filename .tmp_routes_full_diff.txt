@@ -1,0 +1,1209 @@
+diff --git a/server/routes.ts b/server/routes.ts
+index dbedd34..75c9f12 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -9,7 +9,7 @@ import {
+   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
+   hasPermission, type PermissionModule,
+   emissionFactors as emissionFactorsTable,
+-  users,
++  users, type InsertMetricDefinition,
+ } from "@shared/schema";
+ import { eq, and, sql } from "drizzle-orm";
+ import { z } from "zod";
+@@ -1489,10 +1489,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+     try {
+       const userId = (req.session as any).userId;
+       const companyId = (req.session as any).companyId;
+-      const { metricId, period, value, notes, dataSourceType } = req.body;
++      const { metricId, period, value, notes, dataSourceType, siteId: bodySiteId } = req.body;
++      // Validate siteId if provided (write: true blocks archived sites centrally)
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+ 
+       const existing = await storage.getMetricValues(metricId);
+-      const existingForPeriod = existing.find(v => v.period === period);
++      const resolvedSiteId = bodySiteId || null;
++      const existingForPeriod = existing.find(v =>
++        v.period === period &&
++        (resolvedSiteId ? v.siteId === resolvedSiteId : !v.siteId)
++      );
+ 
+       let result;
+       if (existingForPeriod) {
+@@ -1501,9 +1510,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         }
+         const updateData: any = { value, notes, submittedBy: userId };
+         if (dataSourceType) updateData.dataSourceType = dataSourceType;
++        if (bodySiteId !== undefined) updateData.siteId = bodySiteId || null;
+         result = await storage.updateMetricValue(existingForPeriod.id, updateData);
+       } else {
+-        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false };
++        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false, siteId: bodySiteId || null };
+         if (dataSourceType) createData.dataSourceType = dataSourceType;
+         result = await storage.createMetricValue(createData);
+       }
+@@ -1543,24 +1553,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+ 
+   // Raw Data Inputs
+   app.get("/api/raw-data/:period", requireAuth, async (req, res) => {
+-    const companyId = (req.session as any).companyId;
+-    const data = await storage.getRawDataByPeriod(companyId, req.params.period);
+-    res.json(data);
++    try {
++      const companyId = (req.session as any).companyId;
++      const siteIdParam = req.query.siteId as string | undefined;
++      const siteId = siteIdParam === "null" ? null : siteIdParam;
++      if (siteId) {
++        const own = await validateSiteOwnership(siteId, companyId);
++        if (!own.valid) return res.status(own.status).json({ error: own.message });
++      }
++      const data = await storage.getRawDataByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
++      res.json(data);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
+   });
+ 
+   app.post("/api/raw-data", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+     try {
+       const companyId = (req.session as any).companyId;
+       const userId = (req.session as any).userId;
+-      const { inputs, period } = req.body;
++      const { inputs, period, siteId: bodySiteId } = req.body;
++      // Validate siteId if provided (write: true blocks archived sites centrally)
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+ 
+       const results: any[] = [];
+       for (const [inputName, value] of Object.entries(inputs)) {
+         if (value === null || value === undefined || value === "") continue;
+         const cat = classifyRawDataCategory(inputName);
+         const r = await storage.upsertRawDataInput(companyId, inputName, period, {
+-          inputCategory: cat, value: String(value), unit: "", enteredBy: userId,
+-        });
++          inputCategory: cat, value: String(value), unit: "", enteredBy: userId, siteId: bodySiteId || null,
++        } as any);
+         results.push(r);
+       }
+ 
+@@ -1902,6 +1927,219 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+     }
+   });
+ 
++  // ── ESG PHASE 1: METRIC DEFINITIONS ──────────────────────────────────
++
++  // GET /api/metric-definitions — list all (optionally filtered)
++  app.get("/api/metric-definitions", requireAuth, async (req, res) => {
++    try {
++      const { pillar, search, isCore, isActive } = req.query as Record<string, string>;
++      const filter: Record<string, any> = {};
++      if (pillar) filter.pillar = pillar;
++      if (search) filter.search = search;
++      if (isCore !== undefined) filter.isCore = isCore === "true";
++      if (isActive !== undefined) filter.isActive = isActive === "true";
++      const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
++      res.json(defs);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/metric-definitions/:id — single definition
++  app.get("/api/metric-definitions/:id", requireAuth, async (req, res) => {
++    try {
++      const def = await storage.getMetricDefinition(req.params.id);
++      if (!def) return res.status(404).json({ error: "Not found" });
++      res.json(def);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // PATCH /api/metric-definitions/:id/active — enable/disable advanced metrics
++  app.patch("/api/metric-definitions/:id/active", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
++    try {
++      const { isActive } = req.body;
++      if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive must be boolean" });
++
++      const def = await storage.getMetricDefinition(req.params.id);
++      if (!def) return res.status(404).json({ error: "Not found" });
++      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
++
++      const updated = await storage.updateMetricDefinition(req.params.id, { isActive });
++      res.json(updated);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/metric-definitions/:id/calculation-runs — recent runs
++  app.get("/api/metric-definitions/:id/calculation-runs", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const runs = await storage.getMetricCalculationRuns(companyId, 20);
++      const filtered = runs.filter(r => r.metricDefinitionId === req.params.id);
++      res.json(filtered);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/metric-evidence/:metricValueId — evidence for a value
++  app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
++    try {
++      const evidence = await storage.getMetricEvidence(req.params.metricValueId);
++      res.json(evidence);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // POST /api/metric-evidence — attach evidence to a metric value
++  app.post("/api/metric-evidence", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
++    try {
++      const userId = (req.session as any).userId;
++      const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = req.body;
++      if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
++      const evidence = await storage.createMetricEvidence({
++        metricValueId,
++        fileName,
++        fileUrl: fileUrl || null,
++        storageKey: storageKey || null,
++        fileType: fileType || null,
++        uploadedByUserId: userId,
++        notes: notes || null,
++      });
++      res.status(201).json(evidence);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // DELETE /api/metric-evidence/:id — remove an evidence attachment
++  app.delete("/api/metric-evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
++    try {
++      await storage.deleteMetricEvidence(req.params.id);
++      res.json({ success: true });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // ============================================================
++  // ESG PHASE 2: FRAMEWORK MAPPING & READINESS
++  // ============================================================
++
++  // GET /api/frameworks — list all frameworks
++  app.get("/api/frameworks", requireAuth, async (req, res) => {
++    try {
++      const frameworks = await storage.getFrameworks(true);
++      res.json(frameworks);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/frameworks/:id/requirements — requirements for a framework
++  app.get("/api/frameworks/:id/requirements", requireAuth, async (req, res) => {
++    try {
++      const reqs = await storage.getFrameworkRequirements(req.params.id);
++      res.json(reqs);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/framework-selections — get company's framework selections
++  app.get("/api/framework-selections", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const selections = await storage.getBusinessFrameworkSelections(companyId);
++      const frameworks = await storage.getFrameworks(true);
++      const result = frameworks.map(f => {
++        const sel = selections.find(s => s.frameworkId === f.id);
++        return { ...f, isEnabled: sel ? sel.isEnabled : false, selectionId: sel?.id ?? null };
++      });
++      res.json(result);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // PUT /api/framework-selections/:frameworkId — enable/disable a framework
++  app.put("/api/framework-selections/:frameworkId", requireAuth, requirePermission("settings_admin"), async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const { frameworkId } = req.params;
++      const { isEnabled } = req.body;
++      if (typeof isEnabled !== "boolean") return res.status(400).json({ error: "isEnabled (boolean) required" });
++      const sel = await storage.upsertBusinessFrameworkSelection(companyId, frameworkId, isEnabled);
++      res.json(sel);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // PUT /api/framework-selections — bulk update all framework selections
++  app.put("/api/framework-selections", requireAuth, requirePermission("settings_admin"), async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const { selections } = req.body;
++      if (!Array.isArray(selections)) return res.status(400).json({ error: "selections array required" });
++      for (const s of selections) {
++        if (!s.frameworkId || typeof s.isEnabled !== "boolean") continue;
++        await storage.upsertBusinessFrameworkSelection(companyId, s.frameworkId, s.isEnabled);
++      }
++      res.json({ success: true });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/framework-readiness — readiness view for selected frameworks
++  app.get("/api/framework-readiness", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const readiness = await storage.getFrameworkReadiness(companyId);
++      res.json(readiness);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/metric-definitions/:id/framework-alignment — alignment for a metric definition
++  app.get("/api/metric-definitions/:id/framework-alignment", requireAuth, async (req, res) => {
++    try {
++      const alignment = await storage.getMetricDefinitionFrameworkAlignment(req.params.id);
++      res.json(alignment);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // POST /api/metric-values/:id/calculate — trigger derived calculations for a value
++  app.post("/api/metric-values/:id/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
++    try {
++      const companyId = (req.session as any).companyId;
++      const { metricCode, periodStart, periodEnd, siteId } = req.body;
++      if (!metricCode || !periodStart || !periodEnd) {
++        return res.status(400).json({ error: "metricCode, periodStart, and periodEnd are required" });
++      }
++      const { triggerDerivedCalculationsForMetric } = await import("./metric-engine");
++      await triggerDerivedCalculationsForMetric(
++        companyId,
++        metricCode,
++        new Date(periodStart),
++        new Date(periodEnd),
++        siteId || null,
++        req.params.id
++      );
++      res.json({ success: true });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   // Enhanced dashboard
+   app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {
+     try {
+@@ -1911,11 +2149,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+       const settings = await storage.getCompanySettings(companyId);
+       const materialTopics = await storage.getMaterialTopics(companyId);
+ 
+-      let latestPeriod = "";
+-      for (const metric of enabledMetrics) {
+-        const vals = await storage.getMetricValues(metric.id);
+-        for (const v of vals) {
+-          if (v.period > latestPeriod) latestPeriod = v.period;
++      // Resolve period: if reportingPeriodId passed, look up its name (the period label)
++      let forcedPeriod: string | null = null;
++      if (req.query.reportingPeriodId && typeof req.query.reportingPeriodId === "string") {
++        const periods = await storage.getReportingPeriods(companyId);
++        const rp = periods.find(p => p.id === req.query.reportingPeriodId);
++        if (rp) forcedPeriod = rp.name;
++      }
++
++      // Fetch active sites for archive exclusion (used in period scan and value aggregation)
++      const _dashboardSites = await storage.getSites(companyId);
++      const _activeSiteIdsForPeriod = new Set(_dashboardSites.filter(s => s.status === "active").map(s => s.id));
++
++      let latestPeriod = forcedPeriod || "";
++      if (!forcedPeriod) {
++        for (const metric of enabledMetrics) {
++          const vals = await storage.getMetricValues(metric.id);
++          for (const v of vals) {
++            // Only consider active-site or org-level values when determining latest period
++            if ((v.siteId === null || _activeSiteIdsForPeriod.has(v.siteId)) && v.period > latestPeriod) {
++              latestPeriod = v.period;
++            }
++          }
+         }
+       }
+       if (!latestPeriod) latestPeriod = new Date().toISOString().slice(0, 7);
+@@ -1930,9 +2185,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+       const scoredMetricInputs: ScoredMetric[] = [];
+       const missingDataAlerts: { metricName: string; category: string; period: string }[] = [];
+ 
++      // Reuse the active site IDs already fetched above for archive exclusion
++      const activeSiteIds = _activeSiteIdsForPeriod;
++
++      // Build siteId → headcount map from carbon calculations for the selected period
++      // Used for headcount-weighted averaging of rate/% metrics
++      const _carbonCalcsForPeriod = latestPeriod
++        ? await storage.getCarbonCalculations(companyId, undefined, latestPeriod)
++        : [];
++      const _siteHeadcount = new Map<string | null, number>();
++      for (const cc of _carbonCalcsForPeriod) {
++        if (cc.employeeCount && cc.employeeCount > 0) {
++          const key = cc.siteId ?? null;
++          // Keep the largest headcount if multiple calcs exist for same site+period
++          if (!_siteHeadcount.has(key) || (_siteHeadcount.get(key) ?? 0) < cc.employeeCount) {
++            _siteHeadcount.set(key, cc.employeeCount);
++          }
++        }
++      }
++      // If no per-site headcount available, try company-level employeeCount as fallback weight
++      const _companyForHC = await storage.getCompany(companyId);
++      const _fallbackHeadcount = _companyForHC?.employeeCount ?? 0;
++
+       for (const metric of enabledMetrics) {
+         const values = await storage.getMetricValues(metric.id);
+-        const latestVal = values.find(v => v.period === latestPeriod);
++        // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
++        const periodValues = values.filter(v =>
++          v.period === latestPeriod &&
++          (v.siteId === null || activeSiteIds.has(v.siteId))
++        );
++        // Aggregate ALL period values (active-site + unassigned) for org-level totals
++        let latestVal: typeof periodValues[0] | null = null;
++        if (periodValues.length === 1) {
++          latestVal = periodValues[0];
++        } else if (periodValues.length > 1) {
++          const numericVals = periodValues
++            .map(v => ({ siteId: v.siteId ?? null, value: v.value !== null ? Number(v.value) : null }))
++            .filter(e => e.value !== null) as { siteId: string | null; value: number }[];
++          if (numericVals.length > 0) {
++            const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
++            let aggregated: number;
++            if (isRateMetric) {
++              // Headcount-weighted average: use per-site employeeCount weights if available
++              const weights = numericVals.map(e => _siteHeadcount.get(e.siteId) ?? _fallbackHeadcount);
++              const totalWeight = weights.reduce((a, b) => a + b, 0);
++              if (totalWeight > 0) {
++                aggregated = numericVals.reduce((sum, e, i) => sum + e.value * weights[i], 0) / totalWeight;
++              } else {
++                // Fallback: simple average when no headcount data is available
++                aggregated = numericVals.reduce((a, e) => a + e.value, 0) / numericVals.length;
++              }
++            } else {
++              // Additive metrics: sum across all sites
++              aggregated = numericVals.reduce((a, e) => a + e.value, 0);
++            }
++            latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
++          } else {
++            latestVal = periodValues[0];
++          }
++        }
+         const cat = metric.category;
+         categorySummary[cat].total++;
+ 
+@@ -2019,6 +2330,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+       const calculatedMetrics = metricSummaries.filter(m => m.metricType === "calculated" || m.metricType === "derived").length;
+       const manualMetrics = metricSummaries.filter(m => m.metricType === "manual").length;
+ 
++      // Site breakdown: active sites with data counts for the selected period
++      const _rpIdForBreakdown = typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : undefined;
++      const siteBreakdown = await storage.getSitesSummary(companyId, latestPeriod, _rpIdForBreakdown);
++
+       res.json({
+         totalMetrics: enabledMetrics.length,
+         statusCounts,
+@@ -2034,6 +2349,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         submissionRate,
+         calculatedMetrics,
+         manualMetrics,
++        siteBreakdown,
+       });
+ 
+       generateReminders(companyId).catch(() => {});
+@@ -2107,9 +2423,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+ 
+   // Reports
+   app.get("/api/reports", requireAuth, async (req, res) => {
+-    const companyId = (req.session as any).companyId;
+-    const reports = await storage.getReportRuns(companyId);
+-    res.json(reports);
++    try {
++      const companyId = (req.session as any).companyId;
++      const rawSiteId = req.query.siteId as string | undefined;
++      const siteId = rawSiteId === "null" ? null : rawSiteId;
++      if (siteId) {
++        const own = await validateSiteOwnership(siteId, companyId);
++        if (!own.valid) return res.status(own.status).json({ error: own.message });
++      }
++      const reports = await storage.getReportRuns(companyId, siteId);
++      res.json(reports);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
+   });
+ 
+   app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), async (req, res) => {
+@@ -2120,8 +2446,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         period, reportType, reportTemplate,
+         includePolicy, includeTopics, includeMetrics, includeActions,
+         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
++        siteId: bodySiteId,
+       } = req.body;
+ 
++      if (bodySiteId) {
++        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!rptOwnership.valid) return res.status(rptOwnership.status).json({ error: rptOwnership.message });
++      }
++
+       const company = await storage.getCompany(companyId);
+       const { tier: _rptTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+       if (_rptTier !== "pro" && reportTemplate && reportTemplate !== "management") {
+@@ -2132,7 +2464,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+       const topics = await storage.getMaterialTopics(companyId);
+       const allMetrics = await storage.getMetrics(companyId);
+       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+-      const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
++      const allPeriodValues = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
++
++      // Apply aggregation scope rules:
++      // - Site-scoped: only records with site_id = bodySiteId (archived sites allowed for historical)
++      // - Org-wide: active sites + unassigned (null), exclude archived-site records
++      let values: typeof allPeriodValues;
++      if (bodySiteId) {
++        // Site-scoped: exact site match only
++        values = allPeriodValues.filter((v: any) => v.siteId === bodySiteId);
++      } else {
++        // Org-wide: get active site IDs to exclude archived-site records
++        const activeSitesList = await storage.getSites(companyId, false);
++        const activeSiteIds = new Set(activeSitesList.map(s => s.id));
++        values = allPeriodValues.filter((v: any) => v.siteId === null || activeSiteIds.has(v.siteId));
++      }
++
+       const actions = await storage.getActionPlans(companyId);
+       const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
+       const allEvidence = await storage.getEvidenceFiles(companyId);
+@@ -2366,6 +2713,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         includeMethodology: includeMethodology ?? true,
+         includeSignoff: includeSignoff ?? true,
+         reportData,
++        siteId: bodySiteId || null,
+       });
+ 
+       await storage.createAuditLog({
+@@ -2376,6 +2724,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         details: { period, reportType, reportTemplate },
+       });
+ 
++      if (bodySiteId) {
++        storage.createUserActivity({
++          userId: userId || null,
++          companyId,
++          action: "report_generated_for_site",
++          page: "/reports",
++          details: { siteId: bodySiteId, reportId: report.id, reportType: reportType || "esg_summary" },
++        }).catch(() => {});
++      }
++
+       res.json({ report, data: reportData });
+     } catch (e: any) {
+       res.status(500).json({ error: e.message });
+@@ -2900,16 +3258,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+   });
+ 
+   app.get("/api/carbon/calculations", requireAuth, async (req, res) => {
+-    const companyId = (req.session as any).companyId;
+-    const calcs = await storage.getCarbonCalculations(companyId);
+-    res.json(calcs);
++    try {
++      const companyId = (req.session as any).companyId;
++      const siteIdParam = req.query.siteId as string | undefined;
++      const siteId = siteIdParam === "null" ? null : siteIdParam;
++      if (siteId) {
++        const own = await validateSiteOwnership(siteId, companyId);
++        if (!own.valid) return res.status(own.status).json({ error: own.message });
++      }
++      const period = req.query.period as string | undefined;
++      const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined, period);
++      res.json(calcs);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
+   });
+ 
+   app.post("/api/carbon/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+     try {
+       const companyId = (req.session as any).companyId;
+       const userId = (req.session as any).userId;
+-      const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap } = req.body;
++      const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap, siteId: bodySiteId } = req.body;
++      // Optional siteId — validate ownership if provided (write: true blocks archived sites)
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+ 
+       const country = inputs.country || "UK";
+       const factors = await storage.getEmissionFactors(country);
+@@ -2931,7 +3305,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         dataQuality: results.dataQuality,
+         methodologyNotes: results.lineItems,
+         assumptions: results.assumptions,
+-      });
++        siteId: bodySiteId || null,
++      } as any);
+ 
+       await storage.createAuditLog({
+         companyId, userId,
+@@ -2962,13 +3337,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+ 
+   // ===== QUESTIONNAIRE AUTOFILL =====
+   app.get("/api/questionnaires", requireAuth, async (req, res) => {
+-    const companyId = (req.session as any).companyId;
+-    const company = await storage.getCompany(companyId);
+-    if (!company) return res.status(404).json({ error: "Company not found" });
+-    const { tier } = getEffectivePlanTier(company);
+-    if (tier !== "pro") return upgradeRequired(req, res);
+-    const qs = await storage.getQuestionnaires(companyId);
+-    res.json(qs);
++    try {
++      const companyId = (req.session as any).companyId;
++      const company = await storage.getCompany(companyId);
++      if (!company) return res.status(404).json({ error: "Company not found" });
++      const { tier } = getEffectivePlanTier(company);
++      if (tier !== "pro") return upgradeRequired(req, res);
++      const siteIdParam = req.query.siteId as string | undefined;
++      const siteId = siteIdParam === "null" ? null : siteIdParam;
++      if (siteId) {
++        const own = await validateSiteOwnership(siteId, companyId);
++        if (!own.valid) return res.status(own.status).json({ error: own.message });
++      }
++      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
++      const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined, reportingPeriodId);
++      res.json(qs);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
+   });
+ 
+   app.get("/api/questionnaires/:id", requireAuth, async (req, res) => {
+@@ -2987,13 +3373,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+     try {
+       const companyId = (req.session as any).companyId;
+       const userId = (req.session as any).userId;
+-      const { title, source, questions } = req.body;
++      const { title, source, questions, siteId: bodySiteId, reportingPeriodId: bodyRpId } = req.body;
+       const _company = await storage.getCompany(companyId);
+       if (!_company) return res.status(404).json({ error: "Company not found" });
+       const { tier: _tier } = getEffectivePlanTier(_company);
+       if (_tier !== "pro") return upgradeRequired(req, res);
++      // Enforce siteId when company has any active sites
++      if (!bodySiteId) {
++        const _qSites = await storage.getSites(companyId);
++        const _qActiveSites = _qSites.filter(s => s.status === "active");
++        if (_qActiveSites.length >= 1) {
++          return res.status(400).json({ error: "Please select a site. Questionnaires must be assigned to a specific site." });
++        }
++      }
++      // Validate siteId ownership if provided (write: true blocks archived sites)
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+ 
+-      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft" });
++      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null, reportingPeriodId: bodyRpId || null } as any);
+ 
+       if (questions && Array.isArray(questions)) {
+         for (let i = 0; i < questions.length; i++) {
+@@ -3849,7 +4248,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+   app.get("/api/evidence", requireAuth, async (req, res) => {
+     try {
+       const companyId = (req.session as any).companyId;
+-      const files = await storage.getEvidenceFiles(companyId);
++      // Optional siteId filter — "null" string means unassigned only; omitted means all
++      const siteIdParam = req.query.siteId as string | undefined;
++      const siteId = siteIdParam === "null" ? null : siteIdParam;
++      if (siteId) {
++        const own = await validateSiteOwnership(siteId, companyId);
++        if (!own.valid) return res.status(own.status).json({ error: own.message });
++      }
++      const period = req.query.period as string | undefined;
++      const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, period);
+       res.json(files);
+     } catch (e: any) {
+       res.status(500).json({ error: e.message });
+@@ -3881,7 +4288,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+     try {
+       const companyId = (req.session as any).companyId;
+       const userId = (req.session as any).userId;
+-      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate } = req.body;
++      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: bodySiteId } = req.body;
++      // Enforce siteId when company has any active sites
++      if (!bodySiteId) {
++        const _evSites = await storage.getSites(companyId);
++        const _evActiveSites = _evSites.filter(s => s.status === "active");
++        if (_evActiveSites.length >= 1) {
++          return res.status(400).json({ error: "Please select a site. Evidence must be assigned to a specific site." });
++        }
++      }
++      // Validate siteId ownership if provided (write: true blocks archived sites)
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+       const _evCo = await storage.getCompany(companyId);
+       if (!_evCo) return res.status(404).json({ error: "Company not found" });
+       const { tier: _evTier } = getEffectivePlanTier(_evCo);
+@@ -3911,7 +4331,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+         reviewDate: null,
+         expiryDate: expiryDate ? new Date(expiryDate) : null,
+         uploadedBy: userId,
+-      });
++        siteId: bodySiteId || null,
++      } as any);
+ 
+       if (linkedModule === "metric_value" && linkedEntityId) {
+         await storage.updateMetricValue(linkedEntityId, { dataSourceType: "evidenced" } as any);
+@@ -4478,7 +4899,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+   app.post("/api/chat/assist", requireAuth, async (req, res) => {
+     try {
+       const companyId = (req.session as any).companyId;
+-      const { message, pageContext, companyContext } = req.body;
++      const { message, pageContext, companyContext, siteId: chatSiteId } = req.body;
+ 
+       if (!message?.trim()) return res.status(400).json({ error: "Message is required" });
+ 
+@@ -4488,6 +4909,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
+       const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
+         : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
+ 
++      let siteContext = "";
++      if (chatSiteId) {
++        const site = await storage.getSite(chatSiteId, companyId);
++        if (site) siteContext = `\n- Currently viewing site: ${site.name}`;
++      }
+       const systemPrompt = `You are an ESG implementation coach for small and medium-sized businesses (SMEs). Your role is to help business owners and managers understand ESG (Environmental, Social, and Governance) practices and take practical action.
+ 
+ Respond in plain, simple English. Be concise — 2-4 sentences maximum. Focus on what the user should do next. Avoid jargon. Be encouraging and practical.
+@@ -4498,7 +4924,7 @@ Company context:
+ - ESG maturity level: ${companyContext?.maturityLevel ? maturityLabel : "Unknown"}
+ - Policies adopted: ${companyContext?.policiesAdopted ?? "Unknown"}
+ - Metrics with data entered: ${companyContext?.metricsWithData ?? "Unknown"}
+-- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}
++- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}${siteContext}
+ 
+ Answer the user's question based on this context. If you're asked about something outside ESG, gently redirect to ESG topics.`;
+ 
+@@ -5134,11 +5560,22 @@ Answer the user's question based on this context. If you're asked about somethin
+ 
+   app.post("/api/raw-data/import/parse", requireAuth, async (req, res) => {
+     try {
+-      const _parseCo = await storage.getCompany((req.session as any).companyId);
++      const companyId = (req.session as any).companyId;
++      const _parseCo = await storage.getCompany(companyId);
+       if (!_parseCo) return res.status(404).json({ error: "Company not found" });
+       const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
+       if (_parseTier !== "pro") return upgradeRequired(req, res);
+-      const { format, content } = req.body;
++      // Enforce siteId when company has any active sites
++      const { format, content, siteId: parseSiteId } = req.body;
++      const _parseSites = await storage.getSites(companyId);
++      const _parseActiveSites = _parseSites.filter(s => s.status === "active");
++      if (_parseActiveSites.length >= 1 && !parseSiteId) {
++        return res.status(400).json({ error: "siteId is required when company has active sites" });
++      }
++      if (parseSiteId) {
++        const parseOwnership = await validateSiteOwnership(parseSiteId, companyId, { write: true });
++        if (!parseOwnership.valid) return res.status(parseOwnership.status).json({ error: parseOwnership.message });
++      }
+       if (!content) { res.status(400).json({ error: "Content is required" }); return; }
+       const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+       if (typeof content === "string" && content.length > MAX_IMPORT_BYTES) { res.status(400).json({ error: "File exceeds 5MB limit" }); return; }
+@@ -5172,7 +5609,7 @@ Answer the user's question based on this context. If you're asked about somethin
+     try {
+       const companyId = (req.session as any).companyId;
+       const userId = (req.session as any).userId;
+-      const { mappings, rows, period } = req.body;
++      const { mappings, rows, period, siteId: bodySiteId } = req.body;
+       const _confCo = await storage.getCompany(companyId);
+       if (!_confCo) return res.status(404).json({ error: "Company not found" });
+       const { tier: _confTier } = getEffectivePlanTier(_confCo);
+@@ -5180,6 +5617,18 @@ Answer the user's question based on this context. If you're asked about somethin
+       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
+       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
+       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
++      // Enforce siteId when company has any active sites
++      if (!bodySiteId) {
++        const _impSites = await storage.getSites(companyId);
++        const _impActiveSites = _impSites.filter(s => s.status === "active");
++        if (_impActiveSites.length >= 1) {
++          return res.status(400).json({ error: "Please select a site. Imported data must be assigned to a specific site." });
++        }
++      }
++      if (bodySiteId) {
++        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
++        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      }
+ 
+       let imported = 0;
+       let skipped = 0;
+@@ -5202,6 +5651,7 @@ Answer the user's question based on this context. If you're asked about somethin
+               period,
+               source: "csv_import",
+               enteredBy: userId,
++              siteId: bodySiteId || null,
+             });
+             imported++;
+           } catch { skipped++; }
+@@ -5215,6 +5665,16 @@ Answer the user's question based on this context. If you're asked about somethin
+         await storage.createAuditLog({ companyId, userId, action: "carbon_data_import", entityType: "raw_data", details: { period, imported, skipped, unmatched } });
+       } catch {}
+ 
++      if (bodySiteId && imported > 0) {
++        storage.createUserActivity({
++          userId: userId || null,
++          companyId,
++          action: "csv_uploaded_to_site",
++          page: "/data-entry",
++          details: { siteId: bodySiteId, rowCount: imported, period },
++        }).catch(() => {});
++      }
++
+       res.json({ imported, skipped, unmatched, period });
+     } catch (e: any) {
+       res.status(500).json({ error: e.message });
+@@ -6240,6 +6700,79 @@ Include all 12 months. Make the progression realistic: start with quick wins and
+     }
+   });
+ 
++  app.post("/api/admin/migrate-sites", requireSuperAdmin, async (req, res) => {
++    try {
++      const adminUser = (req as any)._superAdmin;
++      const bodySchema = z.object({
++        companyId: z.string().min(1),
++        dryRun: z.boolean().default(false),
++      });
++      const parsed = bodySchema.safeParse(req.body);
++      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
++      const { companyId, dryRun } = parsed.data;
++
++      const company = await storage.getCompany(companyId);
++      if (!company) return res.status(404).json({ error: "Company not found" });
++
++      if (dryRun) {
++        const estimatedRows = await storage.getUnassignedCounts(companyId);
++        const totalRows = Object.values(estimatedRows).reduce((a, b) => a + b, 0);
++        const tablesWithData = Object.values(estimatedRows).filter(n => n > 0).length;
++        await storage.createAuditLog({
++          companyId,
++          userId: adminUser.id,
++          action: "legacy_site_migration",
++          entityType: "site",
++          entityId: companyId,
++          details: { dryRun: true, triggeredBy: adminUser.id, estimatedRows },
++        });
++        await storage.createSuperAdminAction({
++          adminUserId: adminUser.id,
++          action: "migrate_sites_dry_run",
++          targetCompanyId: companyId,
++          metadata: { estimatedRows, totalRows, tablesWithData },
++        } as any);
++        return res.json({ dryRun: true, estimatedRows, totalRows, tablesWithData });
++      }
++
++      // Find or create idempotent "Primary Site"
++      const existingSites = await storage.getSites(companyId, false);
++      let primarySite = existingSites.find(s => s.name === "Primary Site");
++      if (!primarySite) {
++        primarySite = await storage.createSite({
++          companyId,
++          name: "Primary Site",
++          type: "operational",
++          status: "active",
++          country: null,
++          city: null,
++          address: null,
++        } as any);
++      }
++      const siteId = primarySite.id;
++      const siteName = primarySite.name;
++
++      const tablesUpdated = await storage.migrateLegacyData(companyId, siteId);
++      await storage.createAuditLog({
++        companyId,
++        userId: adminUser.id,
++        action: "legacy_site_migration",
++        entityType: "site",
++        entityId: siteId,
++        details: { dryRun: false, triggeredBy: adminUser.id, siteId, siteName, tablesUpdated },
++      });
++      await storage.createSuperAdminAction({
++        adminUserId: adminUser.id,
++        action: "migrate_sites_execute",
++        targetCompanyId: companyId,
++        metadata: { siteId, siteName, tablesUpdated },
++      } as any);
++      res.json({ dryRun: false, siteId, siteName, tablesUpdated });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   app.get("/api/admin/revenue", requireAuth, requireSuperAdmin, async (_req, res) => {
+     try {
+       const now = new Date();
+@@ -6516,6 +7049,343 @@ Include all 12 months. Make the progression realistic: start with quick wins and
+     }
+   });
+ 
++  // ============================================================
++  // SITES API
++  // ============================================================
++
++  async function generateSlug(name: string, companyId: string, excludeId?: string): Promise<string> {
++    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
++    let slug = base;
++    let suffix = 2;
++    while (true) {
++      const existing = await storage.getSites(companyId, true);
++      const conflict = existing.find(s => s.slug === slug && s.id !== excludeId);
++      if (!conflict) return slug;
++      slug = `${base}-${suffix++}`;
++    }
++  }
++
++  async function validateSiteOwnership(
++    siteId: string | null | undefined,
++    companyId: string,
++    options: { write?: boolean } = {},
++  ): Promise<{ valid: true; site?: any } | { valid: false; status: number; message: string }> {
++    if (!siteId) return { valid: true };
++    const site = await storage.getSite(siteId, companyId);
++    if (!site) return { valid: false, status: 404, message: "Site not found or does not belong to your organisation" };
++    if (options.write && site.status === "archived") {
++      return { valid: false, status: 400, message: "Site is archived and cannot accept new data." };
++    }
++    return { valid: true, site };
++  }
++
++  // GET /api/sites — list active sites (pass ?includeArchived=true for all)
++  app.get("/api/sites", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const includeArchived = req.query.includeArchived === "true";
++      const sites = await storage.getSites(companyId, includeArchived);
++      res.json(sites);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/sites/summary — per-site data counts (optional ?period=) — MUST be before /:id
++  app.get("/api/sites/summary", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const period = req.query.period as string | undefined;
++      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
++      const summary = await storage.getSitesSummary(companyId, period, reportingPeriodId);
++      res.json(summary);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/sites/unassigned-counts — count of null-siteId records per entity type — MUST be before /:id
++  app.get("/api/sites/unassigned-counts", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const counts = await storage.getUnassignedCounts(companyId);
++      res.json(counts);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // POST /api/sites/migrate — bulk-assign null-siteId records to a site — MUST be before /:id
++  app.post("/api/sites/migrate", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const { siteId } = req.body;
++      if (!siteId) {
++        return res.status(400).json({ error: "siteId is required" });
++      }
++      const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
++      if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
++      const result = await storage.migrateLegacyData(companyId, siteId);
++      res.json(result);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/sites/:id — get single site
++  app.get("/api/sites/:id", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const site = await storage.getSite(req.params.id, companyId);
++      if (!site) return res.status(404).json({ error: "Site not found" });
++      res.json(site);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // POST /api/sites — create site
++  app.post("/api/sites", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const bodySchema = z.object({
++        name: z.string().min(1).max(200),
++        type: z.enum(["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]).optional(),
++        country: z.string().optional(),
++        city: z.string().optional(),
++        address: z.string().optional(),
++      });
++      const parsed = bodySchema.safeParse(req.body);
++      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
++      const { name, type, country, city, address } = parsed.data;
++      const slug = await generateSlug(name, companyId);
++      const site = await storage.createSite({
++        companyId,
++        name,
++        slug,
++        type: type ?? "other",
++        status: "active",
++        country: country ?? null,
++        city: city ?? null,
++        address: address ?? null,
++      });
++      const _userId = (req as any)._auth?.userId;
++      storage.createUserActivity({
++        userId: _userId || null,
++        companyId,
++        action: "site_created",
++        page: "/settings/sites",
++        details: { siteId: site.id, siteName: site.name, siteType: site.type },
++      }).catch(() => {});
++      res.status(201).json(site);
++    } catch (e: any) {
++      if (e.code === "23505") return res.status(409).json({ error: "A site with this name already exists" });
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // PATCH /api/sites/:id — update site metadata (allowed even for archived)
++  app.patch("/api/sites/:id", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const existing = await storage.getSite(req.params.id, companyId);
++      if (!existing) return res.status(404).json({ error: "Site not found" });
++      const bodySchema = z.object({
++        name: z.string().min(1).max(200).optional(),
++        type: z.enum(["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]).optional(),
++        country: z.string().optional(),
++        city: z.string().optional(),
++        address: z.string().optional(),
++      });
++      const parsed = bodySchema.safeParse(req.body);
++      if (!parsed.success) return res.status(400).json({ error: "Invalid input", details: parsed.error.errors });
++      const updates: Record<string, any> = { ...parsed.data };
++      if (parsed.data.name && parsed.data.name !== existing.name) {
++        updates.slug = await generateSlug(parsed.data.name, companyId, req.params.id);
++      }
++      const site = await storage.updateSite(req.params.id, companyId, updates);
++      res.json(site);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // DELETE /api/sites/:id — archive site (soft delete)
++  app.delete("/api/sites/:id", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const existing = await storage.getSite(req.params.id, companyId);
++      if (!existing) return res.status(404).json({ error: "Site not found" });
++      if (existing.status === "archived") return res.status(400).json({ error: "Site is already archived" });
++      const site = await storage.archiveSite(req.params.id, companyId);
++      const _archUserId = (req as any)._auth?.userId;
++      storage.createUserActivity({
++        userId: _archUserId || null,
++        companyId,
++        action: "site_archived",
++        page: "/settings/sites",
++        details: { siteId: existing.id, siteName: existing.name },
++      }).catch(() => {});
++      res.json(site);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // GET /api/sites/:id/dashboard — site-level dashboard data
++  app.get("/api/sites/:id/dashboard", requireAuth, async (req, res) => {
++    try {
++      const companyId = req.session?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const period = req.query.period as string | undefined;
++      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
++      const dashboard = await storage.getSiteDashboard(req.params.id, companyId, period, reportingPeriodId);
++      if (!dashboard) return res.status(404).json({ error: "Site not found" });
++      res.json(dashboard);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // ============================================================
++  // METRIC DEFINITIONS API
++  // ============================================================
++
++  app.patch("/api/metric-definitions/:id/toggle", requireAuth, async (req, res) => {
++    try {
++      const def = await storage.getMetricDefinition(req.params.id);
++      if (!def) return res.status(404).json({ error: "Metric definition not found" });
++      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
++      const updated = await storage.updateMetricDefinition(req.params.id, { isActive: !def.isActive });
++      res.json(updated);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  app.post("/api/metric-definitions/seed", requireAuth, async (req, res) => {
++    try {
++      const { ALL_METRIC_DEFINITIONS } = await import("./metric-definitions-seed");
++      const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
++      res.json({ seeded: count, message: `Seeded ${count} new metric definitions` });
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  // ============================================================
++  // METRIC DEFINITION VALUES API
++  // ============================================================
++
++  app.get("/api/metric-definition-values", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req as any)._auth?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const { metricDefinitionId, siteId, periodStart, periodEnd } = req.query;
++      const filters: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date } = {};
++      if (metricDefinitionId) filters.metricDefinitionId = metricDefinitionId as string;
++      if (siteId !== undefined) filters.siteId = siteId === "null" ? null : siteId as string;
++      if (periodStart) filters.periodStart = new Date(periodStart as string);
++      if (periodEnd) filters.periodEnd = new Date(periodEnd as string);
++      const values = await storage.getMetricDefinitionValues(companyId, filters);
++      res.json(values);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  app.post("/api/metric-definition-values", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req as any)._auth?.companyId;
++      const userId = (req as any)._auth?.userId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++
++      const { metricDefinitionId, siteId, reportingPeriodStart, reportingPeriodEnd, valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes } = req.body;
++      if (!metricDefinitionId || !reportingPeriodStart || !reportingPeriodEnd) {
++        return res.status(400).json({ error: "metricDefinitionId, reportingPeriodStart, and reportingPeriodEnd are required" });
++      }
++
++      const def = await storage.getMetricDefinition(metricDefinitionId);
++      if (!def) return res.status(404).json({ error: "Metric definition not found" });
++      if (def.isDerived) return res.status(400).json({ error: "Derived metrics cannot be entered manually" });
++
++      const periodStart = new Date(reportingPeriodStart);
++      const periodEnd = new Date(reportingPeriodEnd);
++      const resolvedSiteId = siteId ?? null;
++
++      if (resolvedSiteId) {
++        const siteOwnership = await validateSiteOwnership(resolvedSiteId, companyId, { write: true });
++        if (!siteOwnership.valid) return res.status(siteOwnership.status).json({ error: siteOwnership.message });
++      }
++
++      const value = await storage.upsertMetricDefinitionValue(
++        companyId, metricDefinitionId, resolvedSiteId, periodStart, periodEnd,
++        { valueNumeric, valueText, valueBoolean: valueBoolean, valueJson, sourceType: sourceType ?? "manual", notes, enteredByUserId: userId }
++      );
++
++      const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
++      await triggerCalculationsForMetricValue(value.id, companyId, resolvedSiteId, periodStart, periodEnd).catch(err => {
++        console.error("[MetricEngine] Calculation trigger failed:", err);
++      });
++
++      res.json(value);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++  app.patch("/api/metric-definition-values/:id", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req as any)._auth?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++
++      const existing = await storage.getMetricDefinitionValueById(req.params.id, companyId);
++      if (!existing) return res.status(404).json({ error: "Not found" });
++
++      const def = await storage.getMetricDefinition(existing.metricDefinitionId);
++      if (def?.isDerived) return res.status(400).json({ error: "Derived metric values cannot be edited directly" });
++
++      const updated = await storage.updateMetricDefinitionValue(req.params.id, companyId, req.body);
++      if (!updated) return res.status(404).json({ error: "Not found" });
++
++      const periodStart = updated.reportingPeriodStart ?? (req.body.reportingPeriodStart ? new Date(req.body.reportingPeriodStart) : null);
++      const periodEnd = updated.reportingPeriodEnd ?? (req.body.reportingPeriodEnd ? new Date(req.body.reportingPeriodEnd) : null);
++      if (periodStart && periodEnd) {
++        const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
++        await triggerCalculationsForMetricValue(updated.id, companyId, updated.siteId ?? null, periodStart, periodEnd).catch(() => {});
++      }
++
++      res.json(updated);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
++
++  // ============================================================
++  // METRIC CALCULATION RUNS API
++  // ============================================================
++
++  app.get("/api/metric-calculation-runs", requireAuth, async (req, res) => {
++    try {
++      const companyId = (req as any)._auth?.companyId;
++      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
++      const { metricDefinitionId } = req.query;
++      const runs = await storage.getMetricCalculationRuns(companyId, metricDefinitionId as string | undefined);
++      res.json(runs);
++    } catch (e: any) {
++      res.status(500).json({ error: e.message });
++    }
++  });
++
+   return httpServer;
+ }
+ 

@@ -2450,7 +2450,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } = req.body;
 
       if (bodySiteId) {
-        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
+        // Reports can be generated for archived sites (historical reporting) — read-only ownership check (no write restriction)
+        const rptOwnership = await validateSiteOwnership(bodySiteId, companyId);
         if (!rptOwnership.valid) return res.status(rptOwnership.status).json({ error: rptOwnership.message });
       }
 
@@ -6735,15 +6736,23 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.json({ dryRun: true, estimatedRows, totalRows, tablesWithData });
       }
 
-      // Find or create idempotent "Primary Site"
-      const existingSites = await storage.getSites(companyId, false);
-      let primarySite = existingSites.find(s => s.name === "Primary Site");
+      // Find or create idempotent "Primary Site" — check active+archived to ensure true idempotency
+      const allExistingSites = await storage.getSites(companyId, true);
+      let primarySite = allExistingSites.find(s => s.name === "Primary Site");
       if (!primarySite) {
+        // Generate unique slug for "Primary Site"
+        const baseSlug = "primary-site";
+        let slug = baseSlug;
+        let suffix = 2;
+        while (allExistingSites.find(s => s.slug === slug)) {
+          slug = `${baseSlug}-${suffix++}`;
+        }
         primarySite = await storage.createSite({
           companyId,
           name: "Primary Site",
           type: "operational",
           status: "active",
+          slug,
           country: null,
           city: null,
           address: null,

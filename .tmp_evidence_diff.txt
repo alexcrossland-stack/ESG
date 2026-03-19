@@ -1,0 +1,166 @@
+diff --git a/client/src/pages/evidence.tsx b/client/src/pages/evidence.tsx
+index efa0e04..928cc4e 100644
+--- a/client/src/pages/evidence.tsx
++++ b/client/src/pages/evidence.tsx
+@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
+ import { useToast } from "@/hooks/use-toast";
+ import { apiRequest, queryClient } from "@/lib/queryClient";
+ import { usePermissions } from "@/lib/permissions";
++import { useSiteContext } from "@/hooks/use-site-context";
++import { EmptyState } from "@/components/empty-state";
+ import {
+   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
+   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
+@@ -71,9 +73,13 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
+   const [expiryDate, setExpiryDate] = useState("");
+   const [fileType, setFileType] = useState("");
+   const { toast } = useToast();
++  const { activeSiteId, activeSites } = useSiteContext();
++  const isMultiSite = activeSites.length >= 1;
++  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
+ 
+   const uploadMutation = useMutation({
+     mutationFn: async () => {
++      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : null;
+       const res = await apiRequest("POST", "/api/evidence", {
+         filename,
+         fileType: fileType || null,
+@@ -81,6 +87,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
+         linkedModule: linkedModule || null,
+         linkedPeriod: linkedPeriod || null,
+         expiryDate: expiryDate || null,
++        siteId: resolvedSiteId,
+       });
+       return res.json();
+     },
+@@ -115,6 +122,21 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
+           <DialogTitle>Upload Evidence</DialogTitle>
+         </DialogHeader>
+         <div className="space-y-4">
++          {isMultiSite && (
++            <div>
++              <Label>Site *</Label>
++              <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
++                <SelectTrigger data-testid="select-evidence-site">
++                  <SelectValue placeholder="Select a site" />
++                </SelectTrigger>
++                <SelectContent>
++                  {activeSites.map(s => (
++                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
++                  ))}
++                </SelectContent>
++              </Select>
++            </div>
++          )}
+           <div>
+             <Label>Filename *</Label>
+             <Input value={filename} onChange={e => setFilename(e.target.value)} placeholder="e.g. electricity-bill-jan-2025.pdf" data-testid="input-evidence-filename" />
+@@ -161,7 +183,7 @@ function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
+             <Label>Expiry / Review Date</Label>
+             <Input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} data-testid="input-evidence-expiry" />
+           </div>
+-          <Button onClick={() => uploadMutation.mutate()} disabled={!filename || uploadMutation.isPending} className="w-full" data-testid="button-submit-evidence">
++          <Button onClick={() => uploadMutation.mutate()} disabled={!filename || uploadMutation.isPending || (isMultiSite && !selectedSiteId)} className="w-full" data-testid="button-submit-evidence">
+             {uploadMutation.isPending ? "Uploading..." : "Upload Evidence"}
+           </Button>
+         </div>
+@@ -288,8 +310,19 @@ function MetricCoverageTable() {
+ }
+ 
+ function EvidenceList() {
++  const { activeSiteId, activeSite, sites } = useSiteContext();
++  // Allow overriding the active site for historical viewing (includes archived)
++  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
++  const hasMultipleSites = sites.length >= 1;
++  const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId;
+   const { data: files = [], isLoading } = useQuery<any[]>({
+-    queryKey: ["/api/evidence"],
++    queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
++    queryFn: async () => {
++      const url = resolvedSiteId ? `/api/evidence?siteId=${resolvedSiteId}` : "/api/evidence";
++      const res = await fetch(url, { credentials: "include" });
++      if (!res.ok) throw new Error("Failed to load evidence");
++      return res.json();
++    },
+   });
+   const { can } = usePermissions();
+   const { toast } = useToast();
+@@ -320,27 +353,18 @@ function EvidenceList() {
+   if (isLoading) return <div className="text-sm text-muted-foreground">Loading evidence...</div>;
+ 
+   if (!files.length) {
++    const viewedSite = resolvedSiteId ? sites.find(s => s.id === resolvedSiteId) : null;
+     return (
+-      <Card>
+-        <CardContent className="pt-6">
+-          <div className="text-center py-8 space-y-3" data-testid="evidence-empty-state">
+-            <FileCheck className="w-12 h-12 mx-auto text-muted-foreground/30" />
+-            <div>
+-              <p className="text-sm font-medium">No evidence files yet</p>
+-              <p className="text-xs text-muted-foreground mt-1">Start by uploading documents that support your ESG data</p>
+-            </div>
+-            <div className="text-xs text-muted-foreground space-y-1 max-w-xs mx-auto text-left">
+-              <p>Examples to upload:</p>
+-              <ul className="list-disc list-inside space-y-0.5 text-muted-foreground/80">
+-                <li>Energy invoices (electricity, gas)</li>
+-                <li>Payroll or HR records</li>
+-                <li>Training completion certificates</li>
+-                <li>Board meeting minutes</li>
+-              </ul>
+-            </div>
+-          </div>
+-        </CardContent>
+-      </Card>
++      <EmptyState
++        icon={FileCheck}
++        title={viewedSite ? "No evidence for this site" : "No evidence files yet"}
++        description={viewedSite
++          ? `Upload documents that support the ESG data for ${viewedSite.name}`
++          : "Start by uploading documents that support your ESG data"}
++        helpText="Examples: energy invoices, HR records, training certificates, board minutes"
++        actionLabel="Upload evidence"
++        actionHref={viewedSite ? `/evidence?siteId=${viewedSite.id}` : undefined}
++      />
+     );
+   }
+ 
+@@ -348,6 +372,23 @@ function EvidenceList() {
+ 
+   return (
+     <div className="space-y-2">
++      {hasMultipleSites && (
++        <div className="flex items-center gap-2 pb-1">
++          <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-evidence-site-filter">
++            <SelectTrigger className="w-48" data-testid="trigger-evidence-site-filter">
++              <SelectValue placeholder="All sites" />
++            </SelectTrigger>
++            <SelectContent>
++              <SelectItem value="__all__">All sites</SelectItem>
++              {sites.map(s => (
++                <SelectItem key={s.id} value={s.id} data-testid={`option-evidence-site-${s.id}`}>
++                  {s.name}{s.status === "archived" ? " (Archived)" : ""}
++                </SelectItem>
++              ))}
++            </SelectContent>
++          </Select>
++        </div>
++      )}
+       {files.map((f: any) => (
+         <Card key={f.id} className={isExpired(f) ? "border-red-300 dark:border-red-800" : ""} data-testid={`card-evidence-${f.id}`}>
+           <CardContent className="py-3 px-4">
+@@ -357,6 +398,15 @@ function EvidenceList() {
+                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                   <span className="font-medium text-sm truncate" data-testid={`text-evidence-filename-${f.id}`}>{f.filename}</span>
+                   <EvidenceStatusBadge status={isExpired(f) ? "expired" : (f.evidenceStatus || "uploaded")} />
++                  {f.siteId && (() => {
++                    const evSite = sites.find(s => s.id === f.siteId);
++                    return (
++                      <Badge variant="secondary" className="text-xs" data-testid={`badge-site-evidence-${f.id}`}>
++                        {evSite ? evSite.name : f.siteId}
++                        {evSite?.status === "archived" && " (Archived)"}
++                      </Badge>
++                    );
++                  })()}
+                   {f.linkedModule && (
+                     <Badge variant="outline" className="text-xs">{MODULE_LABELS[f.linkedModule] || f.linkedModule}</Badge>
+                   )}

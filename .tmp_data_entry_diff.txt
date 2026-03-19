@@ -1,0 +1,172 @@
+diff --git a/client/src/pages/data-entry.tsx b/client/src/pages/data-entry.tsx
+index a7ce5d4..33b4001 100644
+--- a/client/src/pages/data-entry.tsx
++++ b/client/src/pages/data-entry.tsx
+@@ -1,4 +1,5 @@
+ import { useState, useEffect, useRef } from "react";
++import { EmptyState } from "@/components/empty-state";
+ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+ import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
+ import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
+@@ -23,6 +24,7 @@ import { format, subMonths } from "date-fns";
+ import * as XLSX from "xlsx";
+ import { usePermissions } from "@/lib/permissions";
+ import { WorkflowBadge } from "@/components/workflow-badge";
++import { useSiteContext } from "@/hooks/use-site-context";
+ import { DataSourceBadge } from "@/pages/evidence";
+ import { SourceBadge } from "@/components/source-badge";
+ import { EvidenceSuggestions } from "@/components/evidence-suggestions";
+@@ -99,6 +101,7 @@ export default function DataEntry() {
+   const queryClient = useQueryClient();
+   const { can, isApprover } = usePermissions();
+   const { isPro } = useBillingStatus();
++  const { activeSiteId } = useSiteContext();
+   const canApprove = can("report_generation");
+   const canEdit = can("metrics_data_entry");
+   const periods = generatePeriods();
+@@ -164,7 +167,7 @@ export default function DataEntry() {
+   }, [entryData]);
+ 
+   const saveRawMutation = useMutation({
+-    mutationFn: (data: { inputs: Record<string, string>; period: string }) =>
++    mutationFn: (data: { inputs: Record<string, string>; period: string; siteId?: string | null }) =>
+       apiRequest("POST", "/api/raw-data", data),
+     onSuccess: () => {
+       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
+@@ -185,7 +188,7 @@ export default function DataEntry() {
+   });
+ 
+   const saveManualMutation = useMutation({
+-    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string }) =>
++    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string; siteId?: string | null }) =>
+       apiRequest("POST", "/api/data-entry", data),
+     onSuccess: () => {
+       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+@@ -248,7 +251,7 @@ export default function DataEntry() {
+     for (const [k, v] of Object.entries(rawInputs)) {
+       if (v !== undefined && v !== null && v.trim() !== "") nonEmpty[k] = v;
+     }
+-    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod });
++    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: activeSiteId || null });
+     await recalcMutation.mutateAsync();
+   };
+ 
+@@ -256,7 +259,7 @@ export default function DataEntry() {
+     const val = manualValues[metricId];
+     if (!val?.value) return;
+     const dataSourceType = manualDataSourceTypes[metricId] || "manual";
+-    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType });
++    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null });
+     toast({ title: "Saved" });
+   };
+ 
+@@ -681,10 +684,20 @@ export default function DataEntry() {
+           })}
+ 
+           {manualMetrics.length === 0 && (
+-            <div className="text-center py-12">
+-              <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+-              <p className="text-sm text-muted-foreground">No manual metrics to enter.</p>
+-            </div>
++            <EmptyState
++              icon={ClipboardList}
++              title="No manual metrics configured"
++              description="Your company hasn't set up any manual entry metrics yet. Contact your admin to add metrics."
++            />
++          )}
++
++          {manualMetrics.length > 0 && !canEdit && activeSiteId && existingValues.filter((v: any) => v.siteId === activeSiteId).length === 0 && (
++            <EmptyState
++              icon={ClipboardList}
++              title="No data entered for this site"
++              description="No metric values have been recorded for this site in the selected period."
++              helpText="Ask an admin or data entry user to add data for this site"
++            />
+           )}
+ 
+         </TabsContent>
+@@ -712,6 +725,9 @@ const TEMPLATE_OPTIONS = [
+ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
+   const { toast } = useToast();
+   const qc = useQueryClient();
++  const { activeSiteId, activeSites } = useSiteContext();
++  const isMultiSite = activeSites.length >= 1;
++  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
+   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
+   const [parsedResult, setParsedResult] = useState<any>(null);
+   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
+@@ -720,7 +736,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
+   const fileRef = useRef<HTMLInputElement>(null);
+ 
+   const parseMutation = useMutation({
+-    mutationFn: async (data: { format: string; content: string }) => {
++    mutationFn: async (data: { format: string; content: string; siteId?: string | null }) => {
+       const res = await apiRequest("POST", "/api/raw-data/import/parse", data);
+       return res.json();
+     },
+@@ -734,10 +750,12 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
+ 
+   const confirmMutation = useMutation({
+     mutationFn: async () => {
++      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
+       const res = await apiRequest("POST", "/api/raw-data/import/confirm", {
+         mappings,
+         rows: parsedResult?.rows || [],
+         period,
++        siteId: resolvedSiteId,
+       });
+       return res.json();
+     },
+@@ -759,7 +777,8 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
+     reader.onload = (evt) => {
+       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
+       const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
+-      parseMutation.mutate({ format, content: base64 });
++      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
++      parseMutation.mutate({ format, content: base64, siteId: resolvedSiteId });
+     };
+     reader.readAsArrayBuffer(file);
+     if (fileRef.current) fileRef.current.value = "";
+@@ -835,13 +854,31 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
+             <div className="border-2 border-dashed rounded-lg p-8 text-center">
+               <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+               <p className="text-sm text-muted-foreground mb-3">Drop a CSV or Excel file here</p>
+-              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending} data-testid="button-import-choose-file">
++              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending || (isMultiSite && !selectedSiteId)} data-testid="button-import-choose-file">
+                 {parseMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                 {parseMutation.isPending ? "Parsing..." : "Choose File"}
+               </Button>
+               <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
+             </div>
+-            <p className="text-xs text-muted-foreground">Period: {period}</p>
++            <div className="flex items-center justify-between text-xs text-muted-foreground">
++              <span>Period: {period}</span>
++              {!isMultiSite && activeSiteId && <span>Site: {activeSites.find(s => s.id === activeSiteId)?.name}</span>}
++            </div>
++            {isMultiSite && (
++              <div>
++                <Label className="text-xs">Site * <span className="text-muted-foreground font-normal">(required for import)</span></Label>
++                <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
++                  <SelectTrigger className="mt-1 h-8 text-sm" data-testid="select-import-site">
++                    <SelectValue placeholder="Select a site" />
++                  </SelectTrigger>
++                  <SelectContent>
++                    {activeSites.map(s => (
++                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
++                    ))}
++                  </SelectContent>
++                </Select>
++              </div>
++            )}
+           </div>
+         )}
+ 
+@@ -903,7 +940,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
+               <Button variant="outline" onClick={() => setStep("upload")}>Back</Button>
+               <Button
+                 onClick={() => confirmMutation.mutate()}
+-                disabled={confirmMutation.isPending || mappings.every(m => !m.inputKey)}
++                disabled={confirmMutation.isPending || mappings.every(m => !m.inputKey) || (isMultiSite && !selectedSiteId)}
+                 data-testid="button-confirm-import"
+               >
+                 {confirmMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}

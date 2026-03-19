@@ -1,0 +1,146 @@
+diff --git a/client/src/pages/admin-company.tsx b/client/src/pages/admin-company.tsx
+index 7c423b4..8c3c417 100644
+--- a/client/src/pages/admin-company.tsx
++++ b/client/src/pages/admin-company.tsx
+@@ -1,13 +1,17 @@
+-import { useQuery } from "@tanstack/react-query";
++import { useState } from "react";
++import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+ import { useParams, useLocation } from "wouter";
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+ import { Badge } from "@/components/ui/badge";
+ import { Button } from "@/components/ui/button";
+ import { Skeleton } from "@/components/ui/skeleton";
++import { useToast } from "@/hooks/use-toast";
++import { apiRequest } from "@/lib/queryClient";
+ import {
+   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
+   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
+   ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
++  ArrowRightLeft, PlayCircle, Eye,
+ } from "lucide-react";
+ import { formatDistanceToNow, format } from "date-fns";
+ 
+@@ -80,6 +84,98 @@ function HealthFlag({ ok, label }: { ok: boolean; label: string }) {
+   );
+ }
+ 
++function AdminMigrationPanel({ companyId }: { companyId: string }) {
++  const { toast } = useToast();
++  const queryClient = useQueryClient();
++  const [dryRunResult, setDryRunResult] = useState<any>(null);
++  const [executeResult, setExecuteResult] = useState<any>(null);
++
++  const dryRunMutation = useMutation({
++    mutationFn: async () => {
++      const res = await apiRequest("POST", "/api/admin/migrate-sites", { companyId, dryRun: true });
++      return res.json();
++    },
++    onSuccess: (data: any) => {
++      setDryRunResult(data);
++      setExecuteResult(null);
++      toast({ title: "Preview complete", description: "Review the row counts below, then execute to apply." });
++    },
++    onError: (e: any) => toast({ title: "Preview failed", description: e.message, variant: "destructive" }),
++  });
++
++  const executeMutation = useMutation({
++    mutationFn: async () => {
++      const res = await apiRequest("POST", "/api/admin/migrate-sites", { companyId, dryRun: false });
++      return res.json();
++    },
++    onSuccess: (data: any) => {
++      setExecuteResult(data);
++      setDryRunResult(null);
++      queryClient.invalidateQueries({ queryKey: ["/api/admin/company", companyId, "diagnostics"] });
++      toast({ title: "Migration complete", description: `Legacy data assigned to "${data.siteName}".` });
++    },
++    onError: (e: any) => toast({ title: "Migration failed", description: e.message, variant: "destructive" }),
++  });
++
++  return (
++    <div className="space-y-3" data-testid="admin-migration-panel">
++      <p className="text-xs text-muted-foreground">
++        Assigns all untagged (legacy) records across 10 tables to an idempotent "Primary Site" for this company.
++        Run Preview first, then Execute Migration. <strong className="text-destructive">This cannot be reversed through the UI.</strong>
++      </p>
++      <div className="flex items-center gap-2">
++        <Button
++          variant="outline"
++          size="sm"
++          onClick={() => dryRunMutation.mutate()}
++          disabled={dryRunMutation.isPending || executeMutation.isPending}
++          data-testid="button-dry-run-migration"
++        >
++          <Eye className="w-3.5 h-3.5 mr-1.5" />
++          {dryRunMutation.isPending ? "Checking..." : "Preview"}
++        </Button>
++        <Button
++          size="sm"
++          variant="destructive"
++          onClick={() => executeMutation.mutate()}
++          disabled={executeMutation.isPending || dryRunMutation.isPending || !dryRunResult}
++          data-testid="button-execute-migration"
++        >
++          <PlayCircle className="w-3.5 h-3.5 mr-1.5" />
++          {executeMutation.isPending ? "Migrating..." : "Execute Migration"}
++        </Button>
++      </div>
++      {dryRunResult && (
++        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3 text-xs space-y-1.5" data-testid="dry-run-result">
++          <p className="font-semibold text-amber-800 dark:text-amber-300">
++            This migration would assign {dryRunResult.totalRows} total records across {dryRunResult.tablesWithData} tables to a new Primary Site.
++          </p>
++          {Object.entries(dryRunResult.estimatedRows || {}).filter(([, count]: [string, any]) => count > 0).map(([key, count]: [string, any]) => (
++            <div key={key} className="flex justify-between text-muted-foreground">
++              <span className="capitalize">{key.replace(/_/g, " ")}</span>
++              <span className="font-medium text-foreground">{count}</span>
++            </div>
++          ))}
++          <p className="text-amber-700 dark:text-amber-400 pt-1 font-medium">Click Execute Migration to apply — this cannot be undone.</p>
++        </div>
++      )}
++      {executeResult && (
++        <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md p-3 text-xs space-y-1.5" data-testid="execute-result">
++          <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
++            <CheckCircle2 className="w-3.5 h-3.5" /> Migration complete — records assigned to "{executeResult.siteName}"
++          </p>
++          {Object.entries(executeResult.tablesUpdated || {}).map(([key, count]: [string, any]) => (
++            <div key={key} className="flex justify-between text-muted-foreground">
++              <span className="capitalize">{key.replace(/_/g, " ")}</span>
++              <span className="font-medium text-foreground">{count} migrated</span>
++            </div>
++          ))}
++        </div>
++      )}
++    </div>
++  );
++}
++
+ export default function AdminCompanyPage() {
+   const { companyId } = useParams<{ companyId: string }>();
+   const [, navigate] = useLocation();
+@@ -298,6 +394,23 @@ export default function AdminCompanyPage() {
+           </CardContent>
+         </Card>
+       </div>
++
++      {diag.sites && diag.sites.length >= 0 && (
++        <Card>
++          <CardHeader className="pb-2">
++            <CardTitle className="text-sm flex items-center gap-2">
++              <ArrowRightLeft className="w-4 h-4" />
++              Legacy Data Migration
++            </CardTitle>
++          </CardHeader>
++          <CardContent data-testid="admin-migration-section">
++            <p className="text-xs text-muted-foreground mb-3">
++              Assign untagged (legacy) records to a specific site. Use Preview first, then Execute to commit.
++            </p>
++            <AdminMigrationPanel companyId={companyId!} />
++          </CardContent>
++        </Card>
++      )}
+     </div>
+   );
+ }

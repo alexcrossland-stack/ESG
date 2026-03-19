@@ -1755,6 +1755,15 @@ export class DatabaseStorage implements IStorage {
 
     const companySites = await this.getSites(companyId, true);
 
+    const migrationHistoryR = await db.execute(sql`
+      SELECT id, user_id, action, entity_id, details, created_at
+      FROM audit_logs
+      WHERE company_id = ${companyId} AND action = 'legacy_site_migration'
+      ORDER BY created_at DESC LIMIT 20
+    `);
+
+    const migrationHistory = (migrationHistoryR as any).rows ?? [];
+
     return {
       id: company.id,
       name: company.name,
@@ -1781,6 +1790,7 @@ export class DatabaseStorage implements IStorage {
       lastLogin: r(lastLoginR)[0]?.created_at ?? null,
       users: companyUsers.map(u => ({ id: u.id, username: u.username, email: u.email, role: u.role })),
       sites: companySites.map(s => ({ id: s.id, name: s.name, status: s.status, type: s.type })),
+      migrationHistory,
       recentErrors: r(errorsR),
       activityTimeline: r(activityR),
     };

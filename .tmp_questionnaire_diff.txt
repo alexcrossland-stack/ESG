@@ -1,0 +1,160 @@
+diff --git a/client/src/pages/questionnaire.tsx b/client/src/pages/questionnaire.tsx
+index da22fd6..bf2e7c2 100644
+--- a/client/src/pages/questionnaire.tsx
++++ b/client/src/pages/questionnaire.tsx
+@@ -9,7 +9,9 @@ import { Input } from "@/components/ui/input";
+ import { Label } from "@/components/ui/label";
+ import { Textarea } from "@/components/ui/textarea";
+ import { Badge } from "@/components/ui/badge";
++import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
++import { useSiteContext } from "@/hooks/use-site-context";
+ import { OwnerAssignment } from "@/components/owner-assignment";
+ import { Skeleton } from "@/components/ui/skeleton";
+ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+@@ -43,6 +45,7 @@ import {
+ } from "lucide-react";
+ import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
+ import { usePermissions } from "@/lib/permissions";
++import { EmptyState } from "@/components/empty-state";
+ import { WorkflowBadge, AiDraftBadge, ConfidenceBadge } from "@/components/workflow-badge";
+ import { DataSourceBadge } from "@/pages/evidence";
+ 
+@@ -282,6 +285,9 @@ function QuestionCard({
+ 
+ function NewQuestionnaireTab() {
+   const { toast } = useToast();
++  const { activeSiteId, activeSites } = useSiteContext();
++  const isMultiSite = activeSites.length >= 1;
++  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
+   const [title, setTitle] = useState("");
+   const [pasteMode, setPasteMode] = useState(true);
+   const [pastedQuestions, setPastedQuestions] = useState("");
+@@ -296,10 +302,12 @@ function NewQuestionnaireTab() {
+ 
+   const createMutation = useMutation({
+     mutationFn: async (questions: string[]) => {
++      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
+       const res = await apiRequest("POST", "/api/questionnaires", {
+         title,
+         source: "manual",
+         questions,
++        siteId: resolvedSiteId,
+       });
+       return res.json();
+     },
+@@ -476,6 +484,21 @@ function NewQuestionnaireTab() {
+   return (
+     <div className="space-y-4">
+       <div className="space-y-3">
++        {isMultiSite && (
++          <div>
++            <Label>Site *</Label>
++            <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
++              <SelectTrigger className="mt-1.5" data-testid="select-questionnaire-site">
++                <SelectValue placeholder="Select a site" />
++              </SelectTrigger>
++              <SelectContent>
++                {activeSites.map(s => (
++                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
++                ))}
++              </SelectContent>
++            </Select>
++          </div>
++        )}
+         <div>
+           <Label htmlFor="questionnaire-title">Questionnaire Title</Label>
+           <Input
+@@ -574,7 +597,7 @@ function NewQuestionnaireTab() {
+ 
+       <Button
+         onClick={handleSubmit}
+-        disabled={isProcessing}
++        disabled={isProcessing || (isMultiSite && !selectedSiteId)}
+         data-testid="button-create-autofill"
+       >
+         <ClipboardList className="w-4 h-4 mr-1.5" />
+@@ -589,6 +612,10 @@ function PreviousQuestionnairesTab() {
+   const { can } = usePermissions();
+   const canDelete = can("questionnaire_access");
+   const [selectedId, setSelectedId] = useState<string | null>(null);
++  const { activeSiteId, sites } = useSiteContext();
++  // Allow filtering by any site including archived for historical viewing
++  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
++  const hasMultipleSites = sites.length >= 1;
+ 
+   const { data: questionnaires = [], isLoading } = useQuery<Questionnaire[]>({
+     queryKey: ["/api/questionnaires"],
+@@ -713,18 +740,50 @@ function PreviousQuestionnairesTab() {
+ 
+   if (questionnaires.length === 0) {
+     return (
+-      <div className="text-center py-12 space-y-2">
+-        <ClipboardList className="w-8 h-8 text-muted-foreground mx-auto" />
+-        <p className="text-sm text-muted-foreground">
+-          No questionnaires yet. Create your first one in the "New Questionnaire" tab.
+-        </p>
+-      </div>
++      <EmptyState
++        icon={ClipboardList}
++        title="No questionnaires yet"
++        description="Create your first questionnaire to collect structured ESG data from your team or supply chain."
++        helpText="Use the &quot;New Questionnaire&quot; tab to get started"
++      />
++    );
++  }
++
++  const filteredQuestionnaires = viewSiteId === "__all__"
++    ? questionnaires
++    : questionnaires.filter(q => q.siteId === viewSiteId);
++
++  if (filteredQuestionnaires.length === 0 && viewSiteId !== "__all__") {
++    return (
++      <EmptyState
++        icon={ClipboardList}
++        title="No questionnaires for this site"
++        description="There are no questionnaires assigned to this site yet."
++        helpText="Switch to the &quot;New Questionnaire&quot; tab and assign it to this site"
++      />
+     );
+   }
+ 
+   return (
+     <div className="space-y-3">
+-      {questionnaires.map((q) => (
++      {hasMultipleSites && (
++        <div className="flex items-center gap-2 pb-1">
++          <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-questionnaire-site-filter">
++            <SelectTrigger className="w-48" data-testid="trigger-questionnaire-site-filter">
++              <SelectValue placeholder="All sites" />
++            </SelectTrigger>
++            <SelectContent>
++              <SelectItem value="__all__">All sites</SelectItem>
++              {sites.map(s => (
++                <SelectItem key={s.id} value={s.id} data-testid={`option-questionnaire-site-${s.id}`}>
++                  {s.name}{s.status === "archived" ? " (Archived)" : ""}
++                </SelectItem>
++              ))}
++            </SelectContent>
++          </Select>
++        </div>
++      )}
++      {filteredQuestionnaires.map((q) => (
+         <Card key={q.id} data-testid={`questionnaire-card-${q.id}`}>
+           <CardContent className="p-4">
+             <div className="flex items-center gap-3">
+@@ -738,6 +797,14 @@ function PreviousQuestionnairesTab() {
+                       {q.status}
+                     </Badge>
+                   )}
++                  {q.siteId && (() => {
++                    const qqSite = sites.find(s => s.id === q.siteId);
++                    return qqSite ? (
++                      <Badge variant="secondary" className="text-xs" data-testid={`badge-site-${q.id}`}>
++                        {qqSite.name}{qqSite.status === "archived" ? " (Archived)" : ""}
++                      </Badge>
++                    ) : null;
++                  })()}
+                   {q.createdAt && (
+                     <span className="text-xs text-muted-foreground">
+                       {new Date(q.createdAt).toLocaleDateString()}

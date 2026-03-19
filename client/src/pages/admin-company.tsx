@@ -395,22 +395,48 @@ export default function AdminCompanyPage() {
         </Card>
       </div>
 
-      {diag.sites && diag.sites.length >= 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4" />
-              Legacy Data Migration
-            </CardTitle>
-          </CardHeader>
-          <CardContent data-testid="admin-migration-section">
-            <p className="text-xs text-muted-foreground mb-3">
-              Assign untagged (legacy) records to a specific site. Use Preview first, then Execute to commit.
-            </p>
-            <AdminMigrationPanel companyId={companyId!} />
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <ArrowRightLeft className="w-4 h-4" />
+            Legacy Data Migration
+          </CardTitle>
+        </CardHeader>
+        <CardContent data-testid="admin-migration-section" className="space-y-4">
+          <AdminMigrationPanel companyId={companyId!} />
+          {diag.migrationHistory && diag.migrationHistory.length > 0 && (
+            <div data-testid="migration-history">
+              <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">Migration History</p>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {diag.migrationHistory.map((entry: any, i: number) => (
+                  <div key={entry.id ?? i} className="flex items-start gap-2 p-2 rounded border text-xs" data-testid={`migration-entry-${i}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant={entry.details?.dryRun ? "secondary" : "outline"} className="text-[10px]">
+                          {entry.details?.dryRun ? "Dry run" : "Executed"}
+                        </Badge>
+                        <span className="text-muted-foreground">
+                          {entry.created_at ? formatDistanceToNow(new Date(entry.created_at), { addSuffix: true }) : ""}
+                        </span>
+                      </div>
+                      {!entry.details?.dryRun && entry.details?.tablesUpdated && (
+                        <p className="text-muted-foreground mt-1">
+                          {Object.values(entry.details.tablesUpdated as Record<string, number>).reduce((a, b) => a + b, 0)} records migrated to "{entry.details.siteName}"
+                        </p>
+                      )}
+                      {entry.details?.dryRun && entry.details?.estimatedRows && (
+                        <p className="text-muted-foreground mt-1">
+                          Preview: {Object.values(entry.details.estimatedRows as Record<string, number>).reduce((a, b) => a + b, 0)} records estimated
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
