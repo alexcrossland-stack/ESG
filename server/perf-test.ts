@@ -116,7 +116,7 @@ export async function runPerformanceTests(authToken?: string) {
   let token = authToken;
   if (!token) {
     try {
-      token = await login("demo@example.com", "password123");
+      token = await login("demo@example.com", "test1234!");
       console.log("Authenticated as demo user\n");
     } catch {
       console.log("Could not authenticate with demo user, testing unauthenticated endpoints only\n");
