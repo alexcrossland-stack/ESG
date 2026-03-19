@@ -64,8 +64,10 @@ export function DataSourceBadge({ type }: { type?: string | null }) {
   );
 }
 
-function UploadEvidenceDialog({ onUploaded }: { onUploaded?: () => void }) {
-  const [open, setOpen] = useState(false);
+function UploadEvidenceDialog({ onUploaded, forceOpen, onOpenChange }: { onUploaded?: () => void; forceOpen?: boolean; onOpenChange?: (v: boolean) => void }) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = forceOpen !== undefined ? forceOpen : internalOpen;
+  const setOpen = (v: boolean) => { setInternalOpen(v); onOpenChange?.(v); };
   const [filename, setFilename] = useState("");
   const [description, setDescription] = useState("");
   const [linkedModule, setLinkedModule] = useState("");
@@ -309,12 +311,14 @@ function MetricCoverageTable() {
   );
 }
 
-function EvidenceList() {
-  const { activeSiteId, activeSite, sites } = useSiteContext();
-  // Allow overriding the active site for historical viewing (includes archived)
-  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
+function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId: string; setViewSiteId: (v: string) => void; onUploadClick?: () => void }) {
+  const { sites } = useSiteContext();
   const hasMultipleSites = sites.length >= 1;
   const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId;
+  const viewedSite = resolvedSiteId ? sites.find((s: any) => s.id === resolvedSiteId) : null;
+  const isArchivedSiteSelected = viewedSite?.status === "archived";
+  const { can } = usePermissions();
+
   const { data: files = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
     queryFn: async () => {
@@ -324,7 +328,6 @@ function EvidenceList() {
       return res.json();
     },
   });
-  const { can } = usePermissions();
   const { toast } = useToast();
 
   const updateMutation = useMutation({
@@ -353,7 +356,6 @@ function EvidenceList() {
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading evidence...</div>;
 
   if (!files.length) {
-    const viewedSite = resolvedSiteId ? sites.find(s => s.id === resolvedSiteId) : null;
     return (
       <EmptyState
         icon={FileCheck}
@@ -361,9 +363,11 @@ function EvidenceList() {
         description={viewedSite
           ? `Upload documents that support the ESG data for ${viewedSite.name}`
           : "Start by uploading documents that support your ESG data"}
-        helpText="Examples: energy invoices, HR records, training certificates, board minutes"
-        actionLabel="Upload evidence"
-        actionHref={viewedSite ? `/evidence?siteId=${viewedSite.id}` : undefined}
+        helpText={isArchivedSiteSelected
+          ? "This site is archived. Historical records are available but new uploads are disabled."
+          : "Examples: energy invoices, HR records, training certificates, board minutes"}
+        actionLabel={(!isArchivedSiteSelected && can("metrics_data_entry")) ? "Upload evidence" : undefined}
+        onAction={(!isArchivedSiteSelected && can("metrics_data_entry")) ? onUploadClick : undefined}
       />
     );
   }
@@ -460,9 +464,17 @@ function EvidenceList() {
 export default function Evidence() {
   const { can } = usePermissions();
   const { isPro } = useBillingStatus();
+  const { activeSiteId, sites } = useSiteContext();
   const { data: coverage } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
   const fileCount = coverage?.totalEvidence ?? 0;
   const atLimit = !isPro && fileCount >= 10;
+
+  // Lifted site-view state so upload button and list are in sync
+  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const resolvedViewSite = viewSiteId === "__all__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
+  const isArchivedView = resolvedViewSite?.status === "archived";
+  const canUpload = can("metrics_data_entry") && !atLimit && !isArchivedView;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -483,7 +495,14 @@ export default function Evidence() {
           <h1 className="text-2xl font-bold" data-testid="text-evidence-title">Evidence Management</h1>
           <p className="text-sm text-muted-foreground mt-1">Upload, track, and review supporting evidence for your ESG data</p>
         </div>
-        {can("metrics_data_entry") && !atLimit && <UploadEvidenceDialog />}
+        {canUpload && (
+          <UploadEvidenceDialog forceOpen={uploadOpen} onOpenChange={setUploadOpen} />
+        )}
+        {isArchivedView && (
+          <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 dark:border-amber-700">
+            Archived site — uploads disabled
+          </Badge>
+        )}
       </div>
 
       {!isPro && can("metrics_data_entry") && (
@@ -509,7 +528,11 @@ export default function Evidence() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="files" className="mt-4">
-          <EvidenceList />
+          <EvidenceList
+            viewSiteId={viewSiteId}
+            setViewSiteId={setViewSiteId}
+            onUploadClick={canUpload ? () => setUploadOpen(true) : undefined}
+          />
         </TabsContent>
         <TabsContent value="coverage" className="mt-4">
           <MetricCoverageTable />

@@ -691,12 +691,14 @@ export default function DataEntry() {
             />
           )}
 
-          {manualMetrics.length > 0 && !canEdit && activeSiteId && existingValues.filter((v: any) => v.siteId === activeSiteId).length === 0 && (
+          {manualMetrics.length > 0 && activeSiteId && existingValues.filter((v: any) => v.siteId === activeSiteId).length === 0 && (
             <EmptyState
               icon={ClipboardList}
               title="No data entered for this site"
               description="No metric values have been recorded for this site in the selected period."
-              helpText="Ask an admin or data entry user to add data for this site"
+              helpText={canEdit
+                ? "Use the metric cards above to add values for this site."
+                : "Ask an admin or data entry user to add data for this site"}
             />
           )}
 

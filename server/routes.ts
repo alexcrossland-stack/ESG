@@ -2613,28 +2613,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const selectedTopics = topics.filter((t: any) => t.selected);
       const weightedScore = calculateWeightedEsgScore(scoredMetrics, selectedTopics);
 
-      // Period filter first — strict period match only, no cross-period fallback
-      const matchedCarbon = period
-        ? (allCarbonCalcs.find((c: any) => c.reportingPeriod === period) ?? null)
-        : (allCarbonCalcs[0] ?? null);
-      const carbonPeriodMismatch = false; // strict match only; no mismatch possible
-      const carbonSummary = matchedCarbon ? {
-        scope1: parseFloat(matchedCarbon.scope1Total as string) || 0,
-        scope2: parseFloat(matchedCarbon.scope2Total as string) || 0,
-        scope3: parseFloat(matchedCarbon.scope3Total as string) || 0,
-        total: parseFloat(matchedCarbon.totalEmissions as string) || 0,
-        period: matchedCarbon.reportingPeriod,
-        factorYear: matchedCarbon.factorYear || 2024,
-        employeeCount: matchedCarbon.employeeCount,
-        perEmployee: matchedCarbon.employeeCount
-          ? Math.round((parseFloat(matchedCarbon.totalEmissions as string) || 0) / matchedCarbon.employeeCount * 100) / 100
-          : null,
-        dataQuality: matchedCarbon.dataQuality || {},
-        assumptions: matchedCarbon.assumptions || [],
-        methodologyNotes: matchedCarbon.methodologyNotes || [],
-        lineItems: (matchedCarbon.results as any)?.lineItems || [],
-        periodMismatch: carbonPeriodMismatch ? `Carbon data from ${matchedCarbon.reportingPeriod}, not current period ${period}` : null,
-      } : null;
+      // Carbon: period filter first (strict match only), then aggregate all scoped rows for that period
+      const periodCarbonRows = period
+        ? allCarbonCalcs.filter((c: any) => c.reportingPeriod === period)
+        : allCarbonCalcs;
+      const carbonSummary = periodCarbonRows.length > 0 ? (() => {
+        // Sum scope1/2/3/total across all matched rows
+        const scope1 = periodCarbonRows.reduce((s: number, c: any) => s + (parseFloat(c.scope1Total as string) || 0), 0);
+        const scope2 = periodCarbonRows.reduce((s: number, c: any) => s + (parseFloat(c.scope2Total as string) || 0), 0);
+        const scope3 = periodCarbonRows.reduce((s: number, c: any) => s + (parseFloat(c.scope3Total as string) || 0), 0);
+        const total = scope1 + scope2 + scope3;
+        const totalEmployees = periodCarbonRows.reduce((s: number, c: any) => s + (c.employeeCount || 0), 0);
+        // Collect line items from all rows
+        const lineItems = periodCarbonRows.flatMap((c: any) => (c.results as any)?.lineItems || []);
+        const firstRow = periodCarbonRows[0]!;
+        return {
+          scope1, scope2, scope3, total,
+          period: firstRow.reportingPeriod,
+          factorYear: firstRow.factorYear || 2024,
+          employeeCount: totalEmployees || null,
+          perEmployee: totalEmployees > 0 ? Math.round(total / totalEmployees * 100) / 100 : null,
+          dataQuality: firstRow.dataQuality || {},
+          assumptions: periodCarbonRows.flatMap((c: any) => c.assumptions || []),
+          methodologyNotes: periodCarbonRows.flatMap((c: any) => c.methodologyNotes || []),
+          lineItems,
+          periodMismatch: null,
+        };
+      })() : null;
 
       const totalValues = valuesWithLabels.length;
       const approvedCount = valuesWithLabels.filter((v: any) => v.workflowStatus === "approved").length;
