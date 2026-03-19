@@ -579,6 +579,18 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               )}
 
+              {isSuperAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild data-active={isActive(location, "/admin/security")}>
+                    <Link href="/admin/security" data-testid="nav-admin-security">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>Security</span>
+                      {isActive(location, "/admin/security") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

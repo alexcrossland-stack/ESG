@@ -29,6 +29,7 @@ import { generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { registerAgentRoutes } from "./agent-routes";
+import { evaluateSecurityEvent, getSecurityAlerts, SECURITY_EVENTS } from "./alert-engine";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -997,6 +998,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           userAgent: clientUa,
           details: { email, reason: "user_not_found" },
         } as any).catch(() => {});
+        evaluateSecurityEvent({ action: SECURITY_EVENTS.LOGIN_FAILED, ipAddress: clientIp, details: { email } }).catch(() => {});
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
@@ -1012,6 +1014,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           userAgent: clientUa,
           details: { email, reason: "wrong_password" },
         } as any).catch(() => {});
+        evaluateSecurityEvent({ action: SECURITY_EVENTS.LOGIN_FAILED, userId: user.id, companyId: user.companyId, ipAddress: clientIp, details: { email } }).catch(() => {});
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
@@ -4415,6 +4418,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ipAddress: getClientIp(req),
         userAgent: req.headers["user-agent"],
       });
+      if (role === "admin" || role === "super_admin" || previousRole === "admin" || previousRole === "super_admin") {
+        evaluateSecurityEvent({ action: SECURITY_EVENTS.USER_ROLE_CHANGED, userId, companyId, ipAddress: getClientIp(req), details: { previousRole, newRole: role, targetUserId: req.params.id } }).catch(() => {});
+      }
       if (updated) {
         const { password, ...sanitized } = updated;
         res.json(sanitized);
@@ -7326,6 +7332,102 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.get("/api/admin/security/alerts", requireSuperAdmin, async (req, res) => {
+    try {
+      const severity = req.query.severity as string | undefined;
+      const limit = Math.min(parseInt(req.query.limit as string || "200", 10), 500);
+      const alerts = await getSecurityAlerts(limit, severity);
+      res.json(alerts);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/security/overview", requireSuperAdmin, async (req, res) => {
+    try {
+      const window24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const [alertsResult, failedLoginsResult, mfaFailResult, exportResult, roleChangeResult, superAdminResult] = await Promise.all([
+        db.execute(sql`SELECT * FROM security_alerts ORDER BY fired_at DESC LIMIT 20`),
+        db.execute(sql`SELECT * FROM audit_logs WHERE action = 'login_failed' AND created_at > ${window24h} ORDER BY created_at DESC LIMIT 50`),
+        db.execute(sql`SELECT * FROM audit_logs WHERE action = 'mfa_verify_failed' AND created_at > ${window24h} ORDER BY created_at DESC LIMIT 50`),
+        db.execute(sql`SELECT * FROM audit_logs WHERE action IN ('data_export_completed', 'company_deletion_requested') AND created_at > ${window24h} ORDER BY created_at DESC LIMIT 50`),
+        db.execute(sql`SELECT * FROM audit_logs WHERE action IN ('User role changed', 'user_role_changed') AND created_at > ${window24h} ORDER BY created_at DESC LIMIT 50`),
+        db.execute(sql`SELECT * FROM audit_logs WHERE actor_type = 'super_admin' AND created_at > ${window24h} ORDER BY created_at DESC LIMIT 50`),
+      ]);
+
+      res.json({
+        generatedAt: new Date().toISOString(),
+        recentAlerts: (alertsResult as any).rows ?? [],
+        failedLogins: (failedLoginsResult as any).rows ?? [],
+        mfaFailures: (mfaFailResult as any).rows ?? [],
+        exportDeleteActivity: (exportResult as any).rows ?? [],
+        roleChanges: (roleChangeResult as any).rows ?? [],
+        superAdminActions: (superAdminResult as any).rows ?? [],
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/alerts/:id/acknowledge", requireSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const adminUser = (req as any)._superAdmin;
+      await db.execute(sql.raw(`UPDATE security_alerts SET acknowledged_at = NOW(), acknowledged_by = '${adminUser.id}' WHERE id = '${id.replace(/'/g, "''")}'`));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/containment/revoke-sessions/:userId", requireSuperAdmin, async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const adminUser = (req as any)._superAdmin;
+      await storage.createAuditLog({
+        userId: adminUser.id,
+        action: "admin_revoke_user_sessions",
+        entityType: "user",
+        entityId: userId,
+        actorType: "super_admin",
+        details: { revokedBy: adminUser.email },
+      });
+      evaluateSecurityEvent({ action: SECURITY_EVENTS.SESSION_REVOKED, userId: adminUser.id, details: { targetUserId: userId } }).catch(() => {});
+      res.json({ ok: true, message: "Sessions revoked. User will need to log in again." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/containment/disable-user/:userId", requireSuperAdmin, async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const adminUser = (req as any)._superAdmin;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      await storage.updateUser(userId, { password: "DISABLED_" + user.password });
+      await storage.createAuditLog({
+        userId: adminUser.id,
+        companyId: user.companyId || undefined,
+        action: "admin_disable_user",
+        entityType: "user",
+        entityId: userId,
+        actorType: "super_admin",
+        details: { disabledBy: adminUser.email, userEmail: user.email },
+      });
+      evaluateSecurityEvent({ action: SECURITY_EVENTS.SUPER_ADMIN_ACTION, userId: adminUser.id, details: { action: "disable_user", targetUserId: userId } }).catch(() => {});
+      res.json({ ok: true, message: "User account disabled." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/security/slack-status", requireSuperAdmin, async (_req, res) => {
+    const configured = !!process.env.SLACK_SECURITY_WEBHOOK_URL;
+    res.json({ configured, webhookConfigured: configured });
+  });
+
   app.post("/api/admin/beta/grant", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       const { email, expiresInDays, accessLevel, reason } = req.body;
@@ -9533,6 +9635,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           userAgent: clientUa,
           details: { usedBackupCode },
         });
+        evaluateSecurityEvent({ action: SECURITY_EVENTS.MFA_VERIFY_FAILED, userId: pendingUserId, companyId: user.companyId, ipAddress: clientIp }).catch(() => {});
         return res.status(401).json({ error: "Invalid MFA token" });
       }
 
@@ -10139,6 +10242,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         entityId: companyId,
         details: { scheduledIn: "7 days" },
       });
+      evaluateSecurityEvent({ action: SECURITY_EVENTS.COMPANY_DELETION_REQUESTED, userId, companyId, details: { scheduledIn: "7 days" } }).catch(() => {});
       res.json({ ok: true, requestId: request.id, message: "Company deletion scheduled. This will take effect in 7 days. Contact support to cancel." });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";

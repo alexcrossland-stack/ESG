@@ -1382,3 +1382,30 @@ export const userSessions = pgTable("user_sessions_ext", {
 export const insertUserSessionSchema = createInsertSchema(userSessions).omit({ id: true, createdAt: true });
 export type UserSession = typeof userSessions.$inferSelect;
 export type InsertUserSession = z.infer<typeof insertUserSessionSchema>;
+
+// ============================================================
+// SECURITY ALERTS
+// ============================================================
+
+export const securityAlerts = pgTable("security_alerts", {
+  id: varchar("id").primaryKey(),
+  ruleId: text("rule_id").notNull(),
+  ruleName: text("rule_name").notNull(),
+  severity: text("severity").notNull().default("medium"),
+  action: text("action").notNull(),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  ipAddress: text("ip_address"),
+  details: jsonb("details"),
+  firedAt: timestamp("fired_at").defaultNow(),
+  notificationSentAt: timestamp("notification_sent_at"),
+  notificationChannel: text("notification_channel"),
+  notificationFailure: text("notification_failure"),
+  acknowledgedAt: timestamp("acknowledged_at"),
+  acknowledgedBy: varchar("acknowledged_by"),
+}, (table) => ({
+  firedAtIdx: index("idx_security_alerts_fired_at").on(table.firedAt),
+  severityIdx: index("idx_security_alerts_severity").on(table.severity),
+}));
+
+export type SecurityAlert = typeof securityAlerts.$inferSelect;
