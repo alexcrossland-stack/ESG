@@ -27,7 +27,12 @@ export function SiteProvider({ children }: { children: ReactNode }) {
     try { return localStorage.getItem(STORAGE_KEY) || null; } catch { return null; }
   });
 
-  const { data: sites = [], isLoading } = useQuery<OrganisationSite[]>({
+  const { data: activeSites = [], isLoading: isLoadingActive } = useQuery<OrganisationSite[]>({
+    queryKey: ["/api/sites"],
+    staleTime: 30000,
+  });
+
+  const { data: allSites = [], isLoading: isLoadingAll } = useQuery<OrganisationSite[]>({
     queryKey: ["/api/sites", "includeArchived"],
     queryFn: async () => {
       const res = await fetch("/api/sites?includeArchived=true", { credentials: "include" });
@@ -37,7 +42,7 @@ export function SiteProvider({ children }: { children: ReactNode }) {
     staleTime: 30000,
   });
 
-  const activeSites = sites.filter(s => s.status === "active");
+  const isLoading = isLoadingActive || isLoadingAll;
 
   useEffect(() => {
     if (!isLoading && activeSiteId) {
@@ -47,7 +52,7 @@ export function SiteProvider({ children }: { children: ReactNode }) {
         try { localStorage.removeItem(STORAGE_KEY); } catch {}
       }
     }
-  }, [sites, isLoading, activeSiteId]);
+  }, [activeSites, isLoading, activeSiteId]);
 
   const setActiveSiteId = (id: string | null) => {
     setActiveSiteIdState(id);
@@ -60,7 +65,7 @@ export function SiteProvider({ children }: { children: ReactNode }) {
   const activeSite = activeSiteId ? (activeSites.find(s => s.id === activeSiteId) ?? null) : null;
 
   return (
-    <SiteContext.Provider value={{ sites, activeSites, activeSiteId, activeSite, setActiveSiteId, isLoading }}>
+    <SiteContext.Provider value={{ sites: allSites, activeSites, activeSiteId, activeSite, setActiveSiteId, isLoading }}>
       {children}
     </SiteContext.Provider>
   );

@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, lt, isNull, or, count } from "drizzle-orm";
+import { eq, and, desc, sql, lt, isNull, or, count, gte, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -110,7 +110,7 @@ export interface IStorage {
   upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>): Promise<RawDataInput>;
 
   // Evidence Files
-  getEvidenceFiles(companyId: string, siteId?: string | null): Promise<EvidenceFile[]>;
+  getEvidenceFiles(companyId: string, siteId?: string | null, period?: string): Promise<EvidenceFile[]>;
   getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string): Promise<EvidenceFile[]>;
   getEvidenceCoverage(companyId: string, period?: string): Promise<any>;
   createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
@@ -158,14 +158,14 @@ export interface IStorage {
   updateEmissionFactor(id: string, data: Partial<EmissionFactor>): Promise<EmissionFactor | undefined>;
 
   // Carbon Calculations
-  getCarbonCalculations(companyId: string, siteId?: string | null): Promise<CarbonCalculation[]>;
+  getCarbonCalculations(companyId: string, siteId?: string | null, period?: string): Promise<CarbonCalculation[]>;
   getCarbonCalculation(id: string): Promise<CarbonCalculation | undefined>;
   createCarbonCalculation(calc: InsertCarbonCalculation): Promise<CarbonCalculation>;
   updateCarbonCalculation(id: string, data: Partial<CarbonCalculation>): Promise<CarbonCalculation | undefined>;
   deleteCarbonCalculation(id: string): Promise<void>;
 
   // Questionnaires
-  getQuestionnaires(companyId: string, siteId?: string | null): Promise<Questionnaire[]>;
+  getQuestionnaires(companyId: string, siteId?: string | null, reportingPeriodId?: string): Promise<Questionnaire[]>;
   getQuestionnaire(id: string): Promise<Questionnaire | undefined>;
   createQuestionnaire(q: InsertQuestionnaire): Promise<Questionnaire>;
   updateQuestionnaire(id: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
@@ -551,11 +551,12 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getEvidenceFiles(companyId: string, siteId?: string | null) {
-    const conditions = [eq(evidenceFiles.companyId, companyId)];
+  async getEvidenceFiles(companyId: string, siteId?: string | null, period?: string) {
+    const conditions: any[] = [eq(evidenceFiles.companyId, companyId)];
     if (siteId !== undefined) {
       conditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
     }
+    if (period) conditions.push(eq(evidenceFiles.linkedPeriod, period));
     return db.select().from(evidenceFiles).where(and(...conditions)).orderBy(desc(evidenceFiles.uploadedAt));
   }
 
@@ -866,11 +867,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Carbon Calculations
-  async getCarbonCalculations(companyId: string, siteId?: string | null) {
-    const conditions = [eq(carbonCalculations.companyId, companyId)];
+  async getCarbonCalculations(companyId: string, siteId?: string | null, period?: string) {
+    const conditions: any[] = [eq(carbonCalculations.companyId, companyId)];
     if (siteId !== undefined) {
       conditions.push(siteId === null ? isNull(carbonCalculations.siteId) : eq(carbonCalculations.siteId, siteId));
     }
+    if (period) conditions.push(eq(carbonCalculations.reportingPeriod, period));
     return db.select().from(carbonCalculations).where(and(...conditions)).orderBy(desc(carbonCalculations.createdAt));
   }
 
@@ -894,10 +896,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Questionnaires
-  async getQuestionnaires(companyId: string, siteId?: string | null) {
-    const conditions = [eq(questionnaires.companyId, companyId)];
+  async getQuestionnaires(companyId: string, siteId?: string | null, reportingPeriodId?: string) {
+    const conditions: any[] = [eq(questionnaires.companyId, companyId)];
     if (siteId !== undefined) {
       conditions.push(siteId === null ? isNull(questionnaires.siteId) : eq(questionnaires.siteId, siteId));
+    }
+    if (reportingPeriodId) {
+      const rp = await db.select().from(reportingPeriods).where(eq(reportingPeriods.id, reportingPeriodId)).limit(1);
+      if (rp[0]?.startDate && rp[0]?.endDate) {
+        conditions.push(gte(questionnaires.createdAt, rp[0].startDate));
+        conditions.push(lte(questionnaires.createdAt, rp[0].endDate));
+      }
     }
     return db.select().from(questionnaires).where(and(...conditions)).orderBy(desc(questionnaires.createdAt));
   }
@@ -1799,7 +1808,6 @@ export class DatabaseStorage implements IStorage {
       const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
 
       const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
-      if (period) qqConditions.push(eq(questionnaires.period, period));
       const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
 
       rows.push({
@@ -1824,7 +1832,6 @@ export class DatabaseStorage implements IStorage {
     if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
     const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
     const uQqConds: any[] = [eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)];
-    if (period) uQqConds.push(eq(questionnaires.period, period));
     const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...uQqConds));
 
     if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {

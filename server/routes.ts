@@ -3113,7 +3113,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const own = await validateSiteOwnership(siteId, companyId);
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
-      const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined);
+      const period = req.query.period as string | undefined;
+      const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined, period);
       res.json(calcs);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -3195,7 +3196,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const own = await validateSiteOwnership(siteId, companyId);
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
-      const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined);
+      const reportingPeriodId = req.query.reportingPeriodId as string | undefined;
+      const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined, reportingPeriodId);
       res.json(qs);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -4100,7 +4102,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const own = await validateSiteOwnership(siteId, companyId);
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
-      const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined);
+      const period = req.query.period as string | undefined;
+      const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, period);
       res.json(files);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
