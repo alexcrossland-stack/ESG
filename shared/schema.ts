@@ -1065,3 +1065,83 @@ export type MetricEvidence = typeof metricEvidence.$inferSelect;
 export const insertMetricCalculationRunSchema = createInsertSchema(metricCalculationRuns).omit({ id: true, createdAt: true });
 export type InsertMetricCalculationRun = z.infer<typeof insertMetricCalculationRunSchema>;
 export type MetricCalculationRun = typeof metricCalculationRuns.$inferSelect;
+
+// ============================================================
+// ESG PHASE 2: FRAMEWORK MAPPING & READINESS
+// ============================================================
+
+export const frameworkRequirementTypeEnum = pgEnum("framework_requirement_type", [
+  "metric", "narrative", "policy", "target", "risk", "evidence",
+]);
+export const mandatoryLevelEnum = pgEnum("mandatory_level", ["core", "conditional", "advanced"]);
+export const mappingStrengthEnum = pgEnum("mapping_strength", ["direct", "partial", "supporting"]);
+
+export const frameworks = pgTable("frameworks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  fullName: text("full_name"),
+  description: text("description"),
+  version: text("version"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  codeIdx: uniqueIndex("idx_frameworks_code").on(table.code),
+}));
+
+export const frameworkRequirements = pgTable("framework_requirements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  frameworkId: varchar("framework_id").notNull(),
+  code: text("code").notNull().unique(),
+  title: text("title").notNull(),
+  description: text("description"),
+  requirementType: frameworkRequirementTypeEnum("requirement_type").notNull().default("metric"),
+  pillar: text("pillar"),
+  mandatoryLevel: mandatoryLevelEnum("mandatory_level").notNull().default("core"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  frameworkIdIdx: index("idx_fw_reqs_framework_id").on(table.frameworkId),
+  codeIdx: uniqueIndex("idx_fw_reqs_code").on(table.code),
+}));
+
+export const metricFrameworkMappings = pgTable("metric_framework_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  metricDefinitionId: varchar("metric_definition_id").notNull(),
+  frameworkRequirementId: varchar("framework_requirement_id").notNull(),
+  mappingStrength: mappingStrengthEnum("mapping_strength").notNull().default("direct"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  metricDefIdx: index("idx_mfm_metric_def").on(table.metricDefinitionId),
+  reqIdx: index("idx_mfm_req").on(table.frameworkRequirementId),
+  uniqueMapping: uniqueIndex("idx_mfm_unique").on(table.metricDefinitionId, table.frameworkRequirementId),
+}));
+
+export const businessFrameworkSelections = pgTable("business_framework_selections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessId: varchar("business_id").notNull(),
+  frameworkId: varchar("framework_id").notNull(),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  businessIdx: index("idx_bfs_business").on(table.businessId),
+  uniqueSelection: uniqueIndex("idx_bfs_unique").on(table.businessId, table.frameworkId),
+}));
+
+export const insertFrameworkSchema = createInsertSchema(frameworks).omit({ id: true, createdAt: true });
+export type Framework = typeof frameworks.$inferSelect;
+export type InsertFramework = z.infer<typeof insertFrameworkSchema>;
+
+export const insertFrameworkRequirementSchema = createInsertSchema(frameworkRequirements).omit({ id: true, createdAt: true });
+export type FrameworkRequirement = typeof frameworkRequirements.$inferSelect;
+export type InsertFrameworkRequirement = z.infer<typeof insertFrameworkRequirementSchema>;
+
+export const insertMetricFrameworkMappingSchema = createInsertSchema(metricFrameworkMappings).omit({ id: true, createdAt: true });
+export type MetricFrameworkMapping = typeof metricFrameworkMappings.$inferSelect;
+export type InsertMetricFrameworkMapping = z.infer<typeof insertMetricFrameworkMappingSchema>;
+
+export const insertBusinessFrameworkSelectionSchema = createInsertSchema(businessFrameworkSelections).omit({ id: true, createdAt: true, updatedAt: true });
+export type BusinessFrameworkSelection = typeof businessFrameworkSelections.$inferSelect;
+export type InsertBusinessFrameworkSelection = z.infer<typeof insertBusinessFrameworkSelectionSchema>;

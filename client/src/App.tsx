@@ -50,6 +50,8 @@ import SiteDashboardPage from "@/pages/site-dashboard";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
 import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
+import FrameworkSettingsPage from "@/pages/framework-settings";
+import FrameworkReadinessPage from "@/pages/framework-readiness";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -239,6 +241,8 @@ function ProtectedApp() {
                 <Route path="/sites" component={SitesPage} />
                 <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
                 <Route path="/help" component={HelpPage} />
+                <Route path="/framework-settings" component={FrameworkSettingsPage} />
+                <Route path="/framework-readiness" component={FrameworkReadinessPage} />
                 <Route component={NotFound} />
               </Switch>
             </AppErrorBoundary>

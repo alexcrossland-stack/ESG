@@ -9,11 +9,86 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, PencilLine, CheckCircle2, Loader2 } from "lucide-react";
+import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, PencilLine, CheckCircle2, Loader2, Globe } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MetricEvidenceAttachment } from "@/components/metric-evidence-attachment";
 import { subMonths } from "date-fns";
+
+const STRENGTH_COLORS: Record<string, string> = {
+  direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+  partial: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+  supporting: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+};
+
+function FrameworkAlignmentPanel({ metricDefinitionId }: { metricDefinitionId: string }) {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["/api/metric-definitions", metricDefinitionId, "framework-alignment"],
+    queryFn: async () => {
+      const res = await fetch(`/api/metric-definitions/${metricDefinitionId}/framework-alignment`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch alignment");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 mt-3 pt-3 border-t border-border/50">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-16 w-full" />
+      </div>
+    );
+  }
+
+  const frameworks: any[] = data?.frameworks ?? [];
+
+  if (frameworks.length === 0) {
+    return (
+      <div className="mt-3 pt-3 border-t border-border/50">
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Globe className="w-3.5 h-3.5" />
+          No framework alignments mapped for this metric.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border/50 space-y-3">
+      {frameworks.map((fwGroup: any) => (
+        <div key={fwGroup.framework.id} className="rounded-md border border-border p-3 space-y-2" data-testid={`alignment-fw-${fwGroup.framework.code}`}>
+          <div className="flex items-center gap-2">
+            <Globe className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className="text-sm font-medium text-foreground">{fwGroup.framework.name}</span>
+            {fwGroup.framework.version && <Badge variant="outline" className="text-[10px] h-4">{fwGroup.framework.version}</Badge>}
+          </div>
+          {fwGroup.alignments.map((alignment: any) => (
+            <div key={alignment.mappingId} className="pl-5 space-y-1" data-testid={`alignment-req-${alignment.requirement?.code}`}>
+              <div className="flex items-start gap-2 flex-wrap">
+                <span className="text-xs font-mono text-muted-foreground">{alignment.requirement?.code}</span>
+                <span className="text-xs text-foreground">{alignment.requirement?.title}</span>
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] h-4 border-0 ${STRENGTH_COLORS[alignment.mappingStrength] ?? ""}`}
+                  data-testid={`badge-strength-${alignment.requirement?.code}`}
+                >
+                  {alignment.mappingStrength.charAt(0).toUpperCase() + alignment.mappingStrength.slice(1)}
+                </Badge>
+              </div>
+              {alignment.additionalNeeded.length > 0 && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 pl-1">
+                  Also needed: {alignment.additionalNeeded.join("; ")}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 type MetricDefinition = {
   id: string;
@@ -220,6 +295,7 @@ function MetricValueEntry({ metric, period }: { metric: MetricDefinition; period
 
 function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: MetricDefinition; onToggle: (id: string) => void; isToggling: boolean; selectedPeriod: typeof PERIODS[0] }) {
   const [showEntry, setShowEntry] = useState(false);
+  const [showAlignment, setShowAlignment] = useState(false);
   const pillar = PILLAR_CONFIG[metric.pillar];
 
   return (
@@ -267,6 +343,16 @@ function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: 
           </div>
         </div>
         <div className="flex-shrink-0 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 text-xs px-2"
+            onClick={() => setShowAlignment(v => !v)}
+            data-testid={`button-framework-alignment-${metric.id}`}
+          >
+            <Globe className="w-3 h-3 mr-1" />
+            {showAlignment ? "Hide" : "Alignment"}
+          </Button>
           {metric.isActive && (
             <Button
               size="sm"
@@ -293,6 +379,7 @@ function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: 
         </div>
       </div>
       {showEntry && <MetricValueEntry metric={metric} period={selectedPeriod} />}
+      {showAlignment && <FrameworkAlignmentPanel metricDefinitionId={metric.id} />}
     </div>
   );
 }

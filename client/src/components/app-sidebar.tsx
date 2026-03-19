@@ -56,6 +56,7 @@ function useGroupState(groupKey: string, defaultOpen: boolean) {
 
 const ESG_SETUP_ROUTES = ["/policy", "/topics", "/esg-profile", "/team"];
 const DATA_EVIDENCE_ROUTES = ["/metrics", "/metrics-library", "/data-entry", "/evidence"];
+const FRAMEWORK_ROUTES = ["/framework-readiness", "/framework-settings"];
 const SETTINGS_ROUTES = [
   "/settings", "/billing", "/settings/sites", "/sites",
   "/compliance", "/benchmarks", "/recommendations",
@@ -143,17 +144,20 @@ export function AppSidebar() {
 
   const esgGroupDefault = isGroupActive(location, ESG_SETUP_ROUTES);
   const dataGroupDefault = isGroupActive(location, DATA_EVIDENCE_ROUTES);
+  const frameworkGroupDefault = isGroupActive(location, FRAMEWORK_ROUTES);
   const settingsGroupDefault = isGroupActive(location, SETTINGS_ROUTES);
   const advancedGroupDefault = isGroupActive(location, ADVANCED_ROUTES);
 
   const [esgOpen, setEsgOpen] = useGroupState("esg_setup", esgGroupDefault);
   const [dataOpen, setDataOpen] = useGroupState("data_evidence", dataGroupDefault);
+  const [frameworkOpen, setFrameworkOpen] = useGroupState("frameworks", frameworkGroupDefault);
   const [settingsOpen, setSettingsOpen] = useGroupState("settings", settingsGroupDefault);
   const [advancedOpen, setAdvancedOpen] = useGroupState("advanced", advancedGroupDefault);
 
   useEffect(() => {
     if (isGroupActive(location, ESG_SETUP_ROUTES)) setEsgOpen(true);
     if (isGroupActive(location, DATA_EVIDENCE_ROUTES)) setDataOpen(true);
+    if (isGroupActive(location, FRAMEWORK_ROUTES)) setFrameworkOpen(true);
     if (isGroupActive(location, SETTINGS_ROUTES)) setSettingsOpen(true);
     if (isGroupActive(location, ADVANCED_ROUTES)) setAdvancedOpen(true);
   }, [location]);
@@ -345,6 +349,49 @@ export function AppSidebar() {
                   <TooltipContent side="right">Generate ESG reports for stakeholders</TooltipContent>
                 </Tooltip>
               </SidebarMenuItem>
+
+              {/* Frameworks */}
+              <Collapsible open={frameworkOpen} onOpenChange={setFrameworkOpen} asChild>
+                <SidebarMenuItem>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton
+                          data-active={isGroupActive(location, FRAMEWORK_ROUTES) && !frameworkOpen}
+                          data-testid="nav-group-frameworks"
+                        >
+                          <Globe className="w-4 h-4 shrink-0" />
+                          <span>Frameworks</span>
+                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${frameworkOpen ? "rotate-180" : ""}`} />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">ESG framework readiness and alignment</TooltipContent>
+                  </Tooltip>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild data-active={isActive(location, "/framework-readiness")}>
+                          <Link href="/framework-readiness" data-testid="nav-framework-readiness">
+                            <Activity className="w-3.5 h-3.5 shrink-0" />
+                            <span>Readiness</span>
+                          </Link>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      {can("settings_admin") && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild data-active={isActive(location, "/framework-settings")}>
+                            <Link href="/framework-settings" data-testid="nav-framework-settings">
+                              <Settings className="w-3.5 h-3.5 shrink-0" />
+                              <span>Framework Settings</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
 
               {/* Help */}
               <SidebarMenuItem>

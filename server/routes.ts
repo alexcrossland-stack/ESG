@@ -2026,6 +2026,97 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ============================================================
+  // ESG PHASE 2: FRAMEWORK MAPPING & READINESS
+  // ============================================================
+
+  // GET /api/frameworks — list all frameworks
+  app.get("/api/frameworks", requireAuth, async (req, res) => {
+    try {
+      const frameworks = await storage.getFrameworks(true);
+      res.json(frameworks);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/frameworks/:id/requirements — requirements for a framework
+  app.get("/api/frameworks/:id/requirements", requireAuth, async (req, res) => {
+    try {
+      const reqs = await storage.getFrameworkRequirements(req.params.id);
+      res.json(reqs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/framework-selections — get company's framework selections
+  app.get("/api/framework-selections", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const selections = await storage.getBusinessFrameworkSelections(companyId);
+      const frameworks = await storage.getFrameworks(true);
+      const result = frameworks.map(f => {
+        const sel = selections.find(s => s.frameworkId === f.id);
+        return { ...f, isEnabled: sel ? sel.isEnabled : false, selectionId: sel?.id ?? null };
+      });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PUT /api/framework-selections/:frameworkId — enable/disable a framework
+  app.put("/api/framework-selections/:frameworkId", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { frameworkId } = req.params;
+      const { isEnabled } = req.body;
+      if (typeof isEnabled !== "boolean") return res.status(400).json({ error: "isEnabled (boolean) required" });
+      const sel = await storage.upsertBusinessFrameworkSelection(companyId, frameworkId, isEnabled);
+      res.json(sel);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PUT /api/framework-selections — bulk update all framework selections
+  app.put("/api/framework-selections", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { selections } = req.body;
+      if (!Array.isArray(selections)) return res.status(400).json({ error: "selections array required" });
+      for (const s of selections) {
+        if (!s.frameworkId || typeof s.isEnabled !== "boolean") continue;
+        await storage.upsertBusinessFrameworkSelection(companyId, s.frameworkId, s.isEnabled);
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/framework-readiness — readiness view for selected frameworks
+  app.get("/api/framework-readiness", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const readiness = await storage.getFrameworkReadiness(companyId);
+      res.json(readiness);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/metric-definitions/:id/framework-alignment — alignment for a metric definition
+  app.get("/api/metric-definitions/:id/framework-alignment", requireAuth, async (req, res) => {
+    try {
+      const alignment = await storage.getMetricDefinitionFrameworkAlignment(req.params.id);
+      res.json(alignment);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // POST /api/metric-values/:id/calculate — trigger derived calculations for a value
   app.post("/api/metric-values/:id/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {

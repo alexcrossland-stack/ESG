@@ -51,6 +51,11 @@ import {
   type MetricDefinitionValue, type InsertMetricDefinitionValue,
   type MetricEvidence, type InsertMetricEvidence,
   type MetricCalculationRun, type InsertMetricCalculationRun,
+  frameworks, frameworkRequirements, metricFrameworkMappings, businessFrameworkSelections,
+  type Framework, type InsertFramework,
+  type FrameworkRequirement, type InsertFrameworkRequirement,
+  type MetricFrameworkMapping, type InsertMetricFrameworkMapping,
+  type BusinessFrameworkSelection, type InsertBusinessFrameworkSelection,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -131,6 +136,20 @@ export interface IStorage {
   // Legacy migration
   getUnassignedCounts(companyId: string): Promise<Record<string, number>>;
   migrateLegacyData(companyId: string, siteId: string, entityTypes: string[]): Promise<Record<string, number>>;
+
+  // ESG Phase 2: Framework Mapping & Readiness
+  getFrameworks(activeOnly?: boolean): Promise<Framework[]>;
+  getFramework(id: string): Promise<Framework | undefined>;
+  getFrameworkByCode(code: string): Promise<Framework | undefined>;
+  getFrameworkRequirements(frameworkId: string): Promise<FrameworkRequirement[]>;
+  getAllFrameworkRequirements(): Promise<FrameworkRequirement[]>;
+  getMetricFrameworkMappings(metricDefinitionId: string): Promise<MetricFrameworkMapping[]>;
+  getMappingsForRequirement(frameworkRequirementId: string): Promise<MetricFrameworkMapping[]>;
+  getAllMappings(): Promise<MetricFrameworkMapping[]>;
+  getBusinessFrameworkSelections(businessId: string): Promise<BusinessFrameworkSelection[]>;
+  upsertBusinessFrameworkSelection(businessId: string, frameworkId: string, isEnabled: boolean): Promise<BusinessFrameworkSelection>;
+  getFrameworkReadiness(businessId: string): Promise<any>;
+  getMetricDefinitionFrameworkAlignment(metricDefinitionId: string): Promise<any>;
 
   // Audit Logs
   getNotifications(companyId: string): Promise<Notification[]>;
@@ -2174,6 +2193,212 @@ export class DatabaseStorage implements IStorage {
       ? and(baseCondition, eq(metricCalculationRuns.metricDefinitionId, metricDefinitionId))
       : baseCondition;
     return db.select().from(metricCalculationRuns).where(whereClause).orderBy(desc(metricCalculationRuns.createdAt)).limit(100);
+  }
+
+  // ESG Phase 2: Framework Mapping & Readiness
+  async getFrameworks(activeOnly = false): Promise<Framework[]> {
+    if (activeOnly) {
+      return db.select().from(frameworks).where(eq(frameworks.isActive, true)).orderBy(frameworks.name);
+    }
+    return db.select().from(frameworks).orderBy(frameworks.name);
+  }
+
+  async getFramework(id: string): Promise<Framework | undefined> {
+    const [row] = await db.select().from(frameworks).where(eq(frameworks.id, id)).limit(1);
+    return row;
+  }
+
+  async getFrameworkByCode(code: string): Promise<Framework | undefined> {
+    const [row] = await db.select().from(frameworks).where(eq(frameworks.code, code)).limit(1);
+    return row;
+  }
+
+  async getFrameworkRequirements(frameworkId: string): Promise<FrameworkRequirement[]> {
+    return db.select().from(frameworkRequirements)
+      .where(eq(frameworkRequirements.frameworkId, frameworkId))
+      .orderBy(frameworkRequirements.sortOrder, frameworkRequirements.code);
+  }
+
+  async getAllFrameworkRequirements(): Promise<FrameworkRequirement[]> {
+    return db.select().from(frameworkRequirements)
+      .orderBy(frameworkRequirements.frameworkId, frameworkRequirements.sortOrder);
+  }
+
+  async getMetricFrameworkMappings(metricDefinitionId: string): Promise<MetricFrameworkMapping[]> {
+    return db.select().from(metricFrameworkMappings)
+      .where(eq(metricFrameworkMappings.metricDefinitionId, metricDefinitionId));
+  }
+
+  async getMappingsForRequirement(frameworkRequirementId: string): Promise<MetricFrameworkMapping[]> {
+    return db.select().from(metricFrameworkMappings)
+      .where(eq(metricFrameworkMappings.frameworkRequirementId, frameworkRequirementId));
+  }
+
+  async getAllMappings(): Promise<MetricFrameworkMapping[]> {
+    return db.select().from(metricFrameworkMappings);
+  }
+
+  async getBusinessFrameworkSelections(businessId: string): Promise<BusinessFrameworkSelection[]> {
+    return db.select().from(businessFrameworkSelections)
+      .where(eq(businessFrameworkSelections.businessId, businessId));
+  }
+
+  async upsertBusinessFrameworkSelection(businessId: string, frameworkId: string, isEnabled: boolean): Promise<BusinessFrameworkSelection> {
+    const existing = await db.select().from(businessFrameworkSelections)
+      .where(and(eq(businessFrameworkSelections.businessId, businessId), eq(businessFrameworkSelections.frameworkId, frameworkId)))
+      .limit(1);
+    if (existing.length > 0) {
+      const [row] = await db.update(businessFrameworkSelections)
+        .set({ isEnabled, updatedAt: new Date() })
+        .where(and(eq(businessFrameworkSelections.businessId, businessId), eq(businessFrameworkSelections.frameworkId, frameworkId)))
+        .returning();
+      return row;
+    } else {
+      const [row] = await db.insert(businessFrameworkSelections)
+        .values({ businessId, frameworkId, isEnabled })
+        .returning();
+      return row;
+    }
+  }
+
+  async getFrameworkReadiness(businessId: string): Promise<any> {
+    const selections = await this.getBusinessFrameworkSelections(businessId);
+    const enabledFrameworkIds = selections.filter(s => s.isEnabled).map(s => s.frameworkId);
+    if (enabledFrameworkIds.length === 0) return [];
+
+    const allFrameworks = await this.getFrameworks(true);
+    const selectedFrameworks = allFrameworks.filter(f => enabledFrameworkIds.includes(f.id));
+
+    const allReqs = await this.getAllFrameworkRequirements();
+    const allMappings = await this.getAllMappings();
+
+    const metricDefs = await this.getMetricDefinitions({ isActive: true });
+    const activeMetricDefIds = new Set(metricDefs.map(m => m.id));
+
+    const result = [];
+
+    for (const framework of selectedFrameworks) {
+      const reqs = allReqs.filter(r => r.frameworkId === framework.id);
+
+      const reqReadiness = reqs.map(req => {
+        const mappings = allMappings.filter(m => m.frameworkRequirementId === req.id);
+        const activeMappings = mappings.filter(m => activeMetricDefIds.has(m.metricDefinitionId));
+
+        let status: "covered" | "partial" | "missing";
+        let mappedMetrics: string[] = [];
+
+        if (activeMappings.length === 0) {
+          status = "missing";
+        } else {
+          const hasDirect = activeMappings.some(m => m.mappingStrength === "direct");
+          const hasPartial = activeMappings.some(m => m.mappingStrength === "partial");
+          if (hasDirect) {
+            status = req.requirementType === "metric" ? "covered" : "partial";
+          } else if (hasPartial) {
+            status = "partial";
+          } else {
+            status = "partial";
+          }
+          mappedMetrics = activeMappings.map(m => m.metricDefinitionId);
+        }
+
+        const additionalNeeded: string[] = [];
+        if (req.requirementType !== "metric" && status === "partial") {
+          additionalNeeded.push(`${req.requirementType} documentation required`);
+        }
+        if (req.requirementType === "narrative") additionalNeeded.push("narrative statement needed");
+        if (req.requirementType === "policy") additionalNeeded.push("formal policy document needed");
+        if (req.requirementType === "evidence") additionalNeeded.push("supporting evidence needed");
+        if (req.requirementType === "target") additionalNeeded.push("quantified target needed");
+        if (req.requirementType === "risk") additionalNeeded.push("risk assessment needed");
+
+        return {
+          ...req,
+          status,
+          mappedMetricIds: mappedMetrics,
+          mappedMetricCount: mappedMetrics.length,
+          additionalNeeded,
+        };
+      });
+
+      const covered = reqReadiness.filter(r => r.status === "covered").length;
+      const partial = reqReadiness.filter(r => r.status === "partial").length;
+      const missing = reqReadiness.filter(r => r.status === "missing").length;
+      const total = reqs.length;
+
+      const missingCoreReqs = reqReadiness.filter(r => r.status === "missing" && r.mandatoryLevel === "core");
+      const nextBestActions = missingCoreReqs.slice(0, 3).map(r => ({
+        requirementCode: r.code,
+        title: r.title,
+        action: r.requirementType === "metric"
+          ? "Add and enter data for this metric in the Metrics Library"
+          : r.requirementType === "policy"
+          ? "Create a formal policy document for this area"
+          : r.requirementType === "narrative"
+          ? "Add a narrative statement for this disclosure"
+          : r.requirementType === "target"
+          ? "Set a quantified target for this area"
+          : r.requirementType === "evidence"
+          ? "Upload supporting evidence documentation"
+          : "Complete this requirement",
+      }));
+
+      result.push({
+        framework,
+        requirements: reqReadiness,
+        summary: { covered, partial, missing, total },
+        nextBestActions,
+      });
+    }
+
+    return result;
+  }
+
+  async getMetricDefinitionFrameworkAlignment(metricDefinitionId: string): Promise<any> {
+    const mappings = await this.getMetricFrameworkMappings(metricDefinitionId);
+    if (mappings.length === 0) return { mappings: [], frameworks: [] };
+
+    const allReqs = await this.getAllFrameworkRequirements();
+    const allFrameworks = await this.getFrameworks(true);
+
+    const enriched = mappings.map(m => {
+      const req = allReqs.find(r => r.id === m.frameworkRequirementId);
+      const fw = req ? allFrameworks.find(f => f.id === req.frameworkId) : undefined;
+      const additionalNeeded: string[] = [];
+      if (req) {
+        if (req.requirementType !== "metric") {
+          additionalNeeded.push(`${req.requirementType} documentation also required`);
+        }
+        if (req.requirementType === "narrative") additionalNeeded.push("Narrative disclosure statement");
+        if (req.requirementType === "policy") additionalNeeded.push("Formal policy document");
+        if (req.requirementType === "evidence") additionalNeeded.push("Supporting evidence files");
+        if (req.requirementType === "target") additionalNeeded.push("Quantified target value");
+        if (req.requirementType === "risk") additionalNeeded.push("Risk assessment documentation");
+      }
+      return {
+        mappingId: m.id,
+        mappingStrength: m.mappingStrength,
+        notes: m.notes,
+        requirement: req,
+        framework: fw,
+        additionalNeeded,
+      };
+    });
+
+    const frameworkGroups: Record<string, any> = {};
+    for (const e of enriched) {
+      if (!e.framework) continue;
+      const fwId = e.framework.id;
+      if (!frameworkGroups[fwId]) {
+        frameworkGroups[fwId] = { framework: e.framework, alignments: [] };
+      }
+      frameworkGroups[fwId].alignments.push(e);
+    }
+
+    return {
+      metricDefinitionId,
+      frameworks: Object.values(frameworkGroups),
+    };
   }
 }
 

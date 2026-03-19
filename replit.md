@@ -48,6 +48,7 @@ The application is a full-stack SaaS web application.
     - **Questionnaire AI Response Generator:** AI-powered Q&A generation from questionnaire text.
     - **ESG Company Profile:** Professional, public-shareable ESG profile page.
     - **ESG Benchmarking:** Comparison against 7 SME reference benchmarks.
+    - **ESG Framework Mapping & Readiness Dashboard (Phase 2):** 4 new DB tables (`frameworks`, `framework_requirements`, `metric_framework_mappings`, `business_framework_selections`). Seed data: 6 frameworks (GRI, ISSB, TCFD, ESRS, CDP, UNGC), 60 requirements, 72 metric-metric mappings. Routes: GET/PUT /api/framework-selections, GET /api/framework-readiness, GET /api/metric-definitions/:id/framework-alignment. Pages: `/framework-settings` (toggle frameworks on/off), `/framework-readiness` (per-framework alignment dashboard with covered/partial/missing counts, filter buttons, next-best-actions, expandable requirements). Metric detail dialog (metrics-library) includes a "Framework Alignment" panel. Language rule: always "readiness"/"alignment"/"supported by" — never "compliant" or "certified". Sidebar "Frameworks" group added between Reports and Help.
 - **Performance & Reliability:**
     - **Background Job Scheduler:** Recurring and on-demand jobs with retry logic and idempotency.
     - **Platform Health Monitoring:** Super-admin dashboard for scheduler status, API errors, health events, and background job history.

@@ -6,6 +6,7 @@ import { createServer } from "http";
 import { ensureIndexes } from "./ensure-indexes";
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
+import { seedFrameworks } from "./seed-frameworks";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -228,6 +229,12 @@ app.use((req, res, next) => {
     console.error("[Startup] FATAL: Could not validate multi-site schema:", e.message ?? e);
     process.exit(1);
   }
+  try {
+    await seedFrameworks();
+  } catch (e: any) {
+    console.warn("[Startup] WARN: Framework seeding failed:", e.message ?? e);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
