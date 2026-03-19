@@ -106,7 +106,8 @@ A 500 response or unexpected non-400 status is an explicit FAIL.
 
 ## Suite 2: Playwright E2E Tests (`tests/e2e/`)
 
-**29 tests total: 26 passed, 3 skipped.**
+**33 tests total: 29 passed, 4 skipped** (3 activation journey tests skip when registration
+is rate-limited; 1 admin save-button test is an intentional skip).
 
 ### `api` project — API-mode specs (16 tests)
 
@@ -115,23 +116,39 @@ Specs at `tests/e2e/*.spec.ts` (excluding `*.browser.spec.ts`). All use pre-seed
 
 | Spec | Description | Tests |
 |------|-------------|-------|
-| `auth.spec.ts` | Register → login → logout; bad credentials; missing fields (1 may skip on rate-limit) | 3 |
-| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT (may skip) | 2 |
+| `auth.spec.ts` | Login → logout; bad credentials; missing fields (1 may skip on rate-limit) | 3 |
+| `onboarding.spec.ts` | New user triggers seedDatabase; onboarding step PUT does not return 500 | 2 |
 | `metric-entry.spec.ts` | Submit metric value + retrieve; missing period → 400 | 2 |
 | `dashboard.spec.ts` | Dashboard/enhanced, metrics, topics list; unauthenticated → 401 | 4 |
 | `reports.spec.ts` | Generate report (no 500); list reports; viewer blocked (403) | 3 |
 | `viewer-restrictions.spec.ts` | Viewer blocked from 4 write endpoints; GET metrics → 200 | 2 |
 
-### `chromium` project — Browser UI specs (13 tests, full headless Chromium)
+### `chromium` project — Browser UI specs (17 tests, full headless Chromium)
 
 Specs at `tests/e2e/*.browser.spec.ts`. Selected via `testMatch` suffix pattern.
 
 | Spec | Description | Tests |
 |------|-------------|-------|
-| `admin-journeys.browser.spec.ts` | Dashboard loads (not /auth); CTA navigates to data-entry; metric value entry; report export | 4 |
-| `login-ui.browser.spec.ts` | Login form → dashboard; bad credentials stay on /auth; storageState admin sees dashboard | 3 |
-| `viewer-fetch.browser.spec.ts` | Viewer in-browser fetch: POST /api/data-entry → 403; PUT metric target → 403; POST report → 403 | 3 |
-| `viewer-ui.browser.spec.ts` | Viewer: save buttons absent; Admin: save buttons present; Viewer on dashboard (not /auth) | 3 |
+| `activation-journey.browser.spec.ts` | Signup via form → onboarding; Quick Start → dashboard; logout → /auth | 3* |
+| `admin-journeys.browser.spec.ts` | Dashboard loads; CTA → data-entry; metric value entry; report export | 4 |
+| `login-ui.browser.spec.ts` | Login form → dashboard; bad credentials stay on /auth; storageState; logout | 4 |
+| `viewer-fetch.browser.spec.ts` | Viewer in-browser fetch: POST data-entry → 403; PUT target → 403; POST report → 403 | 3 |
+| `viewer-ui.browser.spec.ts` | Viewer: save buttons absent; Admin: save buttons present†; Viewer on dashboard | 3 |
+
+> \* Activation journey tests skip gracefully when the registration rate-limiter returns 429.
+> Logout via sidebar is also covered independently in `login-ui.browser.spec.ts` using pre-seeded state.
+> † Admin save-button test is an intentional skip (flaky in headless).
+
+### First-time Activation Journey — browser assertion strategy
+
+`activation-journey.browser.spec.ts` registers a fresh user (not via global-setup) so the
+company has `onboarding_complete = false` and the wizard is shown. If registration returns 429
+the test suite skips; the logout sub-journey is always covered by `login-ui.browser.spec.ts`.
+
+- **Signup**: Fill registration form, submit, assert land on onboarding or dashboard
+- **Quick Start**: Set fresh token in localStorage → navigate → assert wizard visible → click
+  `button-quick-start` → assert dashboard title (`text-dashboard-title`)
+- **Logout**: Click `button-logout` in sidebar → assert redirect to `/auth`
 
 ### Admin journeys — browser assertion strategy
 
@@ -148,7 +165,9 @@ Since the seeded company has `onboarding_complete = true`:
 ## Seed Utility (`tests/fixtures/seed.ts`)
 
 Provisions two fully isolated tenants via API registration (SQL fallback on 429 rate-limit).
-All seeded companies are marked `onboarding_complete = true`.
+Tenant A and B are marked `onboarding_complete = true` so dashboard-based tests run directly.
+The first-time activation journey test registers its own fresh user (not in global-setup) so
+`onboarding_complete = false` and the wizard can be observed and dismissed.
 
 | User | Provisioned via | Role |
 |------|-----------------|------|
@@ -167,7 +186,7 @@ Tenant B resources created by seed for cross-tenant isolation tests:
 | `actionId` | `POST /api/actions` | Suite 5 targeted checks |
 | `questionnaireId` | Direct SQL INSERT into `questionnaires` | Suite 5 targeted checks |
 
-Global setup also writes two Playwright `storageState` files and `seed-info.json` for specs:
+Global setup writes auth state files for browser specs:
 
 - `tests/e2e/.auth/admin.json` — admin bearer token as `localStorage["auth_token"]`
 - `tests/e2e/.auth/viewer.json` — viewer bearer token as `localStorage["auth_token"]`

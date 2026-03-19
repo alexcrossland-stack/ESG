@@ -1,8 +1,8 @@
 /**
- * Browser E2E: Login → Dashboard UI flow
+ * Browser E2E: Login → Dashboard UI flow (and logout)
  *
- * Tests that a user can log in through the browser UI and land on the dashboard.
- * Uses the admin credentials seeded by global-setup.
+ * Tests login through the browser UI, bad credential handling, and logout.
+ * Uses admin credentials seeded by global-setup.
  */
 import { test, expect } from "@playwright/test";
 import { ADMIN_STATE_FILE } from "./global-setup.js";
@@ -64,6 +64,24 @@ test.describe("Login UI", () => {
     ]).catch(() => null);
 
     expect(titleVisible).not.toBeNull();
+    await context.close();
+  });
+
+  test("logout via sidebar → redirected to /auth", async ({ browser }) => {
+    const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
+    const page = await context.newPage();
+
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 15000 });
+
+    const logoutBtn = page.getByTestId("button-logout");
+    await logoutBtn.waitFor({ timeout: 10000 });
+    await logoutBtn.click();
+
+    await page.waitForURL((url) => url.pathname.startsWith("/auth"), { timeout: 10000 });
+    expect(page.url()).toContain("/auth");
+
     await context.close();
   });
 });
