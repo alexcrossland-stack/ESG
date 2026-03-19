@@ -126,8 +126,9 @@ const FREQUENCY_LABELS: Record<string, string> = {
 function generatePeriods() {
   const periods: { label: string; start: string; end: string }[] = [];
   const now = new Date();
-  for (let i = 0; i < 8; i++) {
-    const d = subMonths(now, i);
+  const startDate = new Date(2020, 0, 1);
+  let d = new Date(now.getFullYear(), now.getMonth(), 1);
+  while (d >= startDate) {
     const year = d.getFullYear();
     const month = d.getMonth();
     const quarterStart = new Date(year, Math.floor(month / 3) * 3, 1);
@@ -137,6 +138,7 @@ function generatePeriods() {
     if (!existing) {
       periods.push({ label, start: quarterStart.toISOString(), end: quarterEnd.toISOString() });
     }
+    d = subMonths(d, 1);
   }
   return periods;
 }

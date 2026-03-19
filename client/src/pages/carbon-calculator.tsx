@@ -93,9 +93,11 @@ function formatEmissions(value: number): string {
 function generatePeriodOptions() {
   const now = new Date();
   const options: string[] = [];
-  for (let i = 0; i < 24; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const start = new Date(2020, 0, 1);
+  let d = new Date(now.getFullYear(), now.getMonth(), 1);
+  while (d >= start) {
     options.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    d = new Date(d.getFullYear(), d.getMonth() - 1, 1);
   }
   return options;
 }

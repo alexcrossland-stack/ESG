@@ -73,9 +73,11 @@ const AUTO_CALC_METRICS = [
 function generatePeriods() {
   const periods = [];
   const now = new Date();
-  for (let i = 0; i < 24; i++) {
-    const d = subMonths(now, i);
+  const start = new Date(2020, 0, 1);
+  let d = new Date(now.getFullYear(), now.getMonth(), 1);
+  while (d >= start) {
     periods.push(format(d, "yyyy-MM"));
+    d = subMonths(d, 1);
   }
   return periods;
 }
