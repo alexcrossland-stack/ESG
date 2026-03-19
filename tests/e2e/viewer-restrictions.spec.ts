@@ -1,13 +1,13 @@
 /**
  * E2E: Viewer restrictions — write UI absent/disabled, API returns 403
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, APIRequestContext } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 
 const SUFFIX = `${Date.now()}vr`;
 
-async function createAdminAndViewer(request: any) {
+async function createAdminAndViewer(request: APIRequestContext): Promise<{ adminToken: string; viewerToken: string; companyId: string }> {
   const adminEmail = `e2e-vr-admin-${SUFFIX}@test-esg.example`;
   const viewerEmail = `e2e-vr-viewer-${SUFFIX}@test-esg.example`;
   const password = "Test1234!";

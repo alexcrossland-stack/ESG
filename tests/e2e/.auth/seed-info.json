@@ -1,12 +1,18 @@
 {
   "tenantA": {
-    "adminToken": "Q8Yz4IlYAPYTSmfiwDkIijRuBDjqxA5zQn775uuj8pUutIolJ2BWDlQEap03wu6P",
-    "viewerToken": "fSRFsdGn6osyx1VArE4BUjWcX8ShfAzmCJxAn5ABC9zfLL7sqiDQn4lmHtLV1pms",
-    "companyId": "3543affd-b4f0-4f18-a2e2-bac339cf8ce7"
+    "adminToken": "0GSchYaS9KENvoB2J5sl261sAnWzBFCKUefpAZd25r92sCjZjw1ShZYV2De2EXeo",
+    "viewerToken": "yDxPw1EExxEc5LIuR0GKtZcA2SEVAftxmtMqFnubh51UYccXoVVUv0r319djRDLE",
+    "contributorToken": "w8hD8Lpz9a0gPFHEU6SrhxYlCjd03wgN87xk7DBowUi0gQ391rOgXaw29yCraf48",
+    "companyId": "8d9bdec0-6fa0-4c4a-8380-9cebda1bebb7",
+    "adminEmail": "ta-admin-1773949363105@test-esg.example",
+    "viewerEmail": "ta-viewer-1773949363105@test-esg.example",
+    "contributorEmail": "ta-contributor-1773949363105@test-esg.example"
   },
   "tenantB": {
-    "adminToken": "ibIdM3kHAL8YSwBWnzPCEoAhxq87P2i8Kn68K3K0xh5xpfBILVIYHckc4ALbt1RH",
-    "companyId": "5fec1b51-3153-4b08-89f7-f1f1b46d0522",
-    "metricId": "9ede3be2-4653-40cd-b72c-cf1183fda54c"
+    "adminToken": "ddi0GzYXD4iVlIGSwXxefRf0fnH78a7DRpcB201VkLc1TM9heK4L43gI3CRBsRoe",
+    "companyId": "2944fd74-1fbf-472e-9cb5-a9708af257b8",
+    "metricId": "7b08b3b4-c9af-4b6b-a5b9-5b05fbb4c940",
+    "topicId": "7d435a1f-ac67-4ed4-949d-48f5f55f6c17",
+    "adminEmail": "tb-admin-1773949363105@test-esg.example"
   }
 }

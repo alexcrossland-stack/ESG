@@ -1,19 +1,17 @@
 /**
  * Seed utility for API and E2E tests.
  *
- * Provisions two isolated tenants (Tenant A and Tenant B).
+ * Tenant A:
+ *   - Admin: registered via /api/auth/register (may be skipped if rate-limited,
+ *     falling back to direct SQL).
+ *   - Viewer: inserted directly via SQL.
+ *   - Contributor: inserted directly via SQL.
  *
- * Strategy:
- * - All users are created directly via SQL to avoid the API rate limiter on /api/auth/register.
- *   Companies are created via SQL as well (companyId is a UUID).
- * - Bearer tokens are obtained via /api/auth/login (no rate limiter).
- * - First login triggers seedDatabase() which inserts default metrics/topics.
+ * Tenant B:
+ *   - Admin: inserted directly via SQL (avoids consuming 2 of 5/hr register slots).
  *
- * Returns bearer tokens and company IDs for use in test suites.
- *
- * Usage:
- *   import { seedTestTenants } from "./fixtures/seed.js";
- *   const { tenantA, tenantB } = await seedTestTenants();
+ * Bearer tokens are always obtained via /api/auth/login (no rate limiter on login).
+ * First login triggers seedDatabase(), populating default metrics and topics.
  */
 
 import http from "http";
@@ -26,13 +24,19 @@ const TEST_PASSWORD = "Test1234!";
 export interface TenantA {
   adminToken: string;
   viewerToken: string;
+  contributorToken: string;
   companyId: string;
+  adminEmail: string;
+  viewerEmail: string;
+  contributorEmail: string;
 }
 
 export interface TenantB {
   adminToken: string;
   companyId: string;
   metricId: string;
+  topicId: string;
+  adminEmail: string;
 }
 
 export interface SeededTenants {
@@ -40,7 +44,7 @@ export interface SeededTenants {
   tenantB: TenantB;
 }
 
-function apiRequest(
+export function apiRequest(
   method: string,
   path: string,
   body?: object,
@@ -74,73 +78,70 @@ function apiRequest(
   });
 }
 
-async function loginAndGetToken(
-  email: string,
-  password: string
-): Promise<string> {
+export async function loginAndGetToken(email: string, password: string): Promise<string> {
   const res = await apiRequest("POST", "/api/auth/login", { email, password });
   if (res.status !== 200) {
     throw new Error(
       `Login failed for ${email}: status=${res.status} body=${res.body.slice(0, 200)}`
     );
   }
-  const parsed = JSON.parse(res.body);
-  const token = parsed.token;
-  if (!token) {
-    throw new Error(
-      `Login response missing token for ${email}: ${res.body.slice(0, 200)}`
-    );
+  const parsed = JSON.parse(res.body) as { token?: string };
+  if (!parsed.token) {
+    throw new Error(`Login response missing token for ${email}: ${res.body.slice(0, 200)}`);
   }
-  return token;
+  return parsed.token;
 }
 
 async function getMetricId(token: string): Promise<string> {
   const res = await apiRequest("GET", "/api/metrics", undefined, token);
   if (res.status !== 200) {
-    throw new Error(
-      `GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`
-    );
+    throw new Error(`GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
   }
-  const metrics = JSON.parse(res.body);
+  const metrics = JSON.parse(res.body) as Array<{ id: string }>;
   if (!Array.isArray(metrics) || metrics.length === 0) {
-    throw new Error(
-      `No metrics found after seedDatabase: ${res.body.slice(0, 200)}`
-    );
+    throw new Error(`No metrics found after seedDatabase: ${res.body.slice(0, 200)}`);
   }
   return metrics[0].id;
 }
 
-/**
- * Create a company and admin user directly via SQL.
- * Returns { companyId, email }.
- * If the user already exists (by email), returns the existing record.
- */
-async function getOrCreateUserViaSql(
+async function getTopicId(token: string): Promise<string> {
+  const res = await apiRequest("GET", "/api/topics", undefined, token);
+  if (res.status !== 200) {
+    throw new Error(`GET /api/topics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
+  }
+  const topics = JSON.parse(res.body) as Array<{ id: string }>;
+  if (!Array.isArray(topics) || topics.length === 0) {
+    throw new Error(`No topics found after seedDatabase: ${res.body.slice(0, 200)}`);
+  }
+  return topics[0].id;
+}
+
+async function createUserViaSql(
   client: Client,
-  email: string,
-  username: string,
-  role: "admin" | "viewer",
-  companyId?: string
-): Promise<{ companyId: string; userId: string }> {
+  opts: {
+    email: string;
+    username: string;
+    role: "admin" | "viewer" | "contributor";
+    companyId?: string;
+    companyName?: string;
+  }
+): Promise<{ userId: string; companyId: string }> {
   const existing = await client.query<{ id: string; company_id: string }>(
     "SELECT id, company_id FROM users WHERE email = $1",
-    [email]
+    [opts.email]
   );
   if (existing.rows.length > 0) {
-    return {
-      userId: existing.rows[0].id,
-      companyId: existing.rows[0].company_id,
-    };
+    return { userId: existing.rows[0].id, companyId: existing.rows[0].company_id };
   }
 
-  let resolvedCompanyId = companyId;
-  if (!resolvedCompanyId) {
-    const companyName = `Test Company ${username}`;
-    const companyRes = await client.query<{ id: string }>(
-      `INSERT INTO companies (name) VALUES ($1) RETURNING id`,
+  let companyId = opts.companyId;
+  if (!companyId) {
+    const companyName = opts.companyName ?? `Test Company ${opts.username}`;
+    const compRes = await client.query<{ id: string }>(
+      "INSERT INTO companies (name) VALUES ($1) RETURNING id",
       [companyName]
     );
-    resolvedCompanyId = companyRes.rows[0].id;
+    companyId = compRes.rows[0].id;
   }
 
   const hash = await bcrypt.hash(TEST_PASSWORD, 10);
@@ -149,13 +150,56 @@ async function getOrCreateUserViaSql(
        terms_accepted_at, privacy_accepted_at, terms_version_accepted, privacy_version_accepted)
      VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), '1.0', '1.0')
      RETURNING id`,
-    [username, email, hash, role, resolvedCompanyId]
+    [opts.username, opts.email, hash, opts.role, companyId]
   );
 
-  return {
-    userId: userRes.rows[0].id,
-    companyId: resolvedCompanyId,
-  };
+  return { userId: userRes.rows[0].id, companyId };
+}
+
+/**
+ * Register Tenant A admin via the API if not already created.
+ * Falls back to direct SQL insert when the API rate limiter is active.
+ */
+async function getOrRegisterTenantAAdmin(
+  suffix: string,
+  client: Client
+): Promise<{ email: string; companyId: string; via: "api" | "sql" }> {
+  const email = `ta-admin-${suffix}@test-esg.example`;
+
+  const existingUser = await client.query<{ id: string; company_id: string }>(
+    "SELECT id, company_id FROM users WHERE email = $1",
+    [email]
+  );
+  if (existingUser.rows.length > 0) {
+    return { email, companyId: existingUser.rows[0].company_id, via: "sql" };
+  }
+
+  const res = await apiRequest("POST", "/api/auth/register", {
+    username: `taadmin${suffix}`,
+    email,
+    password: TEST_PASSWORD,
+    companyName: `Test Company TA ${suffix}`,
+    termsAccepted: true,
+    privacyAccepted: true,
+    termsVersion: "1.0",
+    privacyVersion: "1.0",
+  });
+
+  if (res.status === 200 || res.status === 201) {
+    const parsed = JSON.parse(res.body) as { token?: string; company?: { id: string } };
+    if (parsed.company?.id) {
+      return { email, companyId: parsed.company.id, via: "api" };
+    }
+  }
+
+  // Rate-limited or other error — fall back to SQL
+  const result = await createUserViaSql(client, {
+    email,
+    username: `taadmin${suffix}`,
+    role: "admin",
+    companyName: `Test Company TA ${suffix}`,
+  });
+  return { email, companyId: result.companyId, via: "sql" };
 }
 
 export async function seedTestTenants(): Promise<SeededTenants> {
@@ -168,33 +212,40 @@ export async function seedTestTenants(): Promise<SeededTenants> {
 
   let tenantACompanyId: string;
   let tenantBCompanyId: string;
+
   const tenantAAdminEmail = `ta-admin-${suffix}@test-esg.example`;
-  const tenantBAdminEmail = `tb-admin-${suffix}@test-esg.example`;
   const tenantAViewerEmail = `ta-viewer-${suffix}@test-esg.example`;
+  const tenantAContributorEmail = `ta-contributor-${suffix}@test-esg.example`;
+  const tenantBAdminEmail = `tb-admin-${suffix}@test-esg.example`;
 
   try {
-    const tenantAAdmin = await getOrCreateUserViaSql(
-      client,
-      tenantAAdminEmail,
-      `taadmin${suffix}`,
-      "admin"
-    );
+    // Tenant A admin — try API first, SQL fallback
+    const tenantAAdmin = await getOrRegisterTenantAAdmin(suffix, client);
     tenantACompanyId = tenantAAdmin.companyId;
 
-    const _tenantAViewer = await getOrCreateUserViaSql(
-      client,
-      tenantAViewerEmail,
-      `taviewer${suffix}`,
-      "viewer",
-      tenantACompanyId
-    );
+    // Tenant A viewer — direct SQL only
+    await createUserViaSql(client, {
+      email: tenantAViewerEmail,
+      username: `taviewer${suffix}`,
+      role: "viewer",
+      companyId: tenantACompanyId,
+    });
 
-    const tenantBAdmin = await getOrCreateUserViaSql(
-      client,
-      tenantBAdminEmail,
-      `tbadmin${suffix}`,
-      "admin"
-    );
+    // Tenant A contributor — direct SQL only
+    await createUserViaSql(client, {
+      email: tenantAContributorEmail,
+      username: `tacontrib${suffix}`,
+      role: "contributor",
+      companyId: tenantACompanyId,
+    });
+
+    // Tenant B admin — direct SQL (second API register would hit rate limit)
+    const tenantBAdmin = await createUserViaSql(client, {
+      email: tenantBAdminEmail,
+      username: `tbadmin${suffix}`,
+      role: "admin",
+      companyName: `Test Company TB ${suffix}`,
+    });
     tenantBCompanyId = tenantBAdmin.companyId;
   } finally {
     await client.end();
@@ -203,20 +254,28 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   // Login to trigger seedDatabase() for each tenant
   const tenantAAdminToken = await loginAndGetToken(tenantAAdminEmail, TEST_PASSWORD);
   const tenantAViewerToken = await loginAndGetToken(tenantAViewerEmail, TEST_PASSWORD);
+  const tenantAContributorToken = await loginAndGetToken(tenantAContributorEmail, TEST_PASSWORD);
   const tenantBAdminToken = await loginAndGetToken(tenantBAdminEmail, TEST_PASSWORD);
 
   const metricId = await getMetricId(tenantBAdminToken);
+  const topicId = await getTopicId(tenantBAdminToken);
 
   return {
     tenantA: {
       adminToken: tenantAAdminToken,
       viewerToken: tenantAViewerToken,
+      contributorToken: tenantAContributorToken,
       companyId: tenantACompanyId,
+      adminEmail: tenantAAdminEmail,
+      viewerEmail: tenantAViewerEmail,
+      contributorEmail: tenantAContributorEmail,
     },
     tenantB: {
       adminToken: tenantBAdminToken,
       companyId: tenantBCompanyId,
       metricId,
+      topicId,
+      adminEmail: tenantBAdminEmail,
     },
   };
 }

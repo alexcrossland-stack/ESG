@@ -1,13 +1,13 @@
 /**
  * E2E: Dashboard — empty states and CTA navigation
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, APIRequestContext } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 
 const SUFFIX = `${Date.now()}db`;
 
-async function createAdminAndGetToken(request: any, suffix: string) {
+async function createAdminAndGetToken(request: APIRequestContext, suffix: string): Promise<string> {
   const email = `e2e-dash-${suffix}@test-esg.example`;
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL not set");

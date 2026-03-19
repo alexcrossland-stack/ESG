@@ -1,0 +1,288 @@
+#51 — SME Activation & Onboarding Optimisation
+
+## Objective
+
+Transform the onboarding and first-use experience so a non-technical SME user can:
+
+- Sign up
+- Complete onboarding
+- Add their first ESG data point
+- Understand what they’ve done
+- Generate a first report
+
+All in one 10–15 minute session without assistance.
+
+This is a UX, copy, and usability pass. No new features or data models.
+
+Core principle:
+Every screen must answer:
+1. What is this?
+2. Why does it matter?
+3. What should I do next?
+
+This task supersedes #5, #6, #7, #19, and #24. Do not implement those separately.
+
+---
+
+## Required execution approach
+
+1. Audit first, then implement
+   - Review all listed pages and components
+   - Identify all empty states, unclear copy, missing CTAs, and jargon
+   - Do not start coding until gaps are identified
+
+2. Implement in this order:
+   1. Dashboard activation & guidance
+   2. Onboarding clarity & defaults
+   3. First data entry UX
+   4. Empty states across all pages
+   5. Reports first-run experience
+   6. Tooltip/helper system
+   7. Error handling & micro UX
+   8. Analytics tracking
+
+3. After implementation:
+   - Manually test full journey end-to-end
+   - Fix any friction or confusion before completion
+
+---
+
+## Done looks like
+
+### Activation
+
+- User can complete full journey in one session (10–15 minutes)
+- Time to first data entry < 5 minutes
+- Time to first report < 15 minutes
+
+---
+
+### Dashboard
+
+- Persistent 3-step checklist:
+  - Add data
+  - Upload evidence
+  - Generate report
+- Checklist updates live and shows % progress
+- Dynamic “Next step” guidance reflects real state
+- No “0” or blank states without explanation
+
+---
+
+### Onboarding
+
+- All steps rewritten in plain English
+- Each step includes “why this matters”
+- Defaults pre-selected:
+  - framework
+  - reporting period
+  - core metrics
+- First site auto-created
+- Quick Start produces a usable, non-confusing dashboard
+- Completion screen:
+  - clear success message
+  - CTA → “Add your first metric”
+
+---
+
+### Data entry
+
+- Units displayed on all inputs
+- Example values shown
+- Inline validation (field-level)
+- Visible success confirmation after save
+- “Metric category” renamed to “Type of data”
+- Each category has a short description
+
+---
+
+### Empty states
+
+Across:
+- dashboard
+- metrics
+- data entry
+- evidence
+- reports
+- policies
+
+Each must include:
+- what this section is
+- why it matters
+- what to do next
+- a primary CTA
+
+No blank tables or unexplained “0” values
+
+---
+
+### Reports
+
+- Empty state with CTA → “Generate report”
+- Framework selector includes plain-English explanation
+- If insufficient data:
+  - clear explanation
+  - direct link to fix (data entry)
+
+---
+
+### Language & comprehension
+
+- ESG jargon removed where possible
+- Remaining terms supported with:
+  - helper text OR
+  - tooltip
+
+Tooltip coverage required for:
+- framework
+- evidence
+- maturity
+- scope 1/2/3
+- type of data
+
+Each tooltip = one sentence, plain English
+
+---
+
+### Error handling
+
+- No generic “something went wrong”
+- Every error explains:
+  - what happened
+  - how to fix it
+- No silent failures
+- Every action shows success OR error
+
+---
+
+### Micro UX
+
+- Button labels updated:
+  - Submit → Save data
+  - Continue → Next step
+- All async actions show loading state
+- All CTAs route correctly (no dead links)
+
+---
+
+### Analytics
+
+Track:
+- onboarding step completion
+- onboarding completed
+- first metric added
+- first report generated
+- onboarding drop-off
+
+Use existing tracking endpoint or add:
+POST /api/analytics/events
+
+---
+
+## Tasks
+
+### 1. Dashboard activation & guidance
+
+- Add 3-step checklist with progress tracking
+- Add dynamic “Next step” banner
+- Replace all empty/zero dashboard states with guided states
+
+---
+
+### 2. Onboarding rewrite & defaults
+
+- Rewrite all step titles and descriptions
+- Add “why this matters” to each step
+- Apply defaults (framework, period, metrics, site)
+- Ensure Quick Start produces valid state
+- Replace completion screen with:
+  - clear success message
+  - CTA → Add first metric
+
+---
+
+### 3. First data entry UX
+
+- Add units + example values
+- Rename “Metric category” → “Type of data”
+- Add category descriptions
+- Implement inline validation
+- Add visible success feedback
+
+---
+
+### 4. Empty states (global pass)
+
+Audit and replace across all pages using EmptyState component.
+
+Each must include:
+- explanation
+- CTA
+
+---
+
+### 5. Reports first-run experience
+
+- Add reports empty state with CTA
+- Add framework explanation text
+- Add insufficient data handling with direct link to fix
+
+---
+
+### 6. Tooltip & helper system
+
+- Add tooltip icons to required terms
+- Use existing tooltip/PageGuidance system
+- Keep all explanations to one sentence
+
+---
+
+### 7. Error handling & UX polish
+
+- Replace generic errors everywhere
+- Ensure field-level validation
+- Add loading states
+- Fix all CTA routing issues
+
+---
+
+### 8. Activation analytics
+
+- Fire events at:
+  - onboarding steps
+  - onboarding completion
+  - first metric
+  - first report
+  - drop-off
+
+---
+
+## Relevant files
+
+- client/src/pages/onboarding.tsx
+- client/src/pages/dashboard.tsx
+- client/src/pages/data-entry.tsx
+- client/src/pages/metrics.tsx
+- client/src/pages/reports.tsx
+- client/src/pages/evidence.tsx
+- client/src/components/empty-state.tsx
+- client/src/components/page-guidance.tsx
+- client/src/components/ui/tooltip.tsx
+- client/src/components/ui/form.tsx
+
+---
+
+## Final validation (must pass)
+
+Test with a fresh user:
+
+User must be able to:
+- sign up
+- complete onboarding
+- add one data point
+- understand what they did
+- generate a report
+
+All in one session, without confusion or help.
+
+If the user hesitates, gets stuck, or asks “what do I do next?” — the task is not complete.

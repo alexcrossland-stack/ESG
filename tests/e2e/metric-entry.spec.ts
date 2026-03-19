@@ -79,7 +79,7 @@ test.describe("Metric entry flow", () => {
     });
     expect(valuesRes.status()).toBe(200);
     const values = await valuesRes.json();
-    const our = values.find((v: any) => v.period === "2024-Q1");
+    const our = (values as Array<{ period: string; value: number }>).find((v) => v.period === "2024-Q1");
     expect(our).toBeTruthy();
   });
 

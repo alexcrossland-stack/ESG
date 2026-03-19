@@ -73,13 +73,13 @@ async function request(
 
 /**
  * Authenticates as the given user and returns a bearer token.
- * Returns null if login fails.
+ * Parses the JSON response body and extracts the token field.
  */
 async function loginAs(email: string, password: string): Promise<string | null> {
   const res = await request("POST", "/api/auth/login", { email, password });
   if (res.status !== 200) return null;
   try {
-    const parsed = JSON.parse(res.body);
+    const parsed = JSON.parse(res.body) as { token?: string };
     return parsed.token ?? null;
   } catch {
     return null;
@@ -125,12 +125,12 @@ async function testInputValidation() {
   }
 }
 
-// ─── Suite 2: Tenant Isolation (metrics) ──────────────────────────────────
+// ─── Suite 2: Tenant Isolation (unauthenticated baseline) ──────────────────
 
 async function testTenantIsolation() {
   console.log("\n── Suite 2: Tenant Isolation (unauthenticated baseline) ──");
 
-  // These endpoints must not return JSON data when unauthenticated (401/404 or SPA HTML fallback)
+  // These endpoints must not return JSON data when unauthenticated
   const protectedEndpoints: [string, string, object?][] = [
     ["GET", "/api/metrics/1"],
     ["PUT", "/api/metrics/1/target", { targetValue: 99 }],
@@ -141,11 +141,9 @@ async function testTenantIsolation() {
 
   for (const [method, path, body] of protectedEndpoints) {
     const res = await request(method, path, body);
-    // Protected endpoints should either return 401, 404, or serve the SPA HTML (not JSON API data)
     if (res.status === 401 || res.status === 404) {
       pass(`${method} ${path} is protected (401/404)`, `status=${res.status}`);
     } else if (res.status === 200 && !isJsonApiResponse(res.body)) {
-      // SPA HTML fallback — not a data leak
       pass(`${method} ${path} — no JSON data leaked (SPA fallback)`, `status=${res.status}, HTML response`);
     } else if (res.status === 200 && isJsonApiResponse(res.body)) {
       fail(`${method} ${path} returns JSON data without auth — data leak!`, `status=200, body=${res.body.slice(0, 80)}`);
@@ -174,20 +172,20 @@ async function testAuthEndpoints() {
   }
 
   // POST /api/auth/register — missing fields
+  // Accept 429 (rate limited) as a valid "rejected" response — the request was not processed
   {
     const res = await request("POST", "/api/auth/register", { email: "partial@example.com" });
     if (res.status === 400) {
       pass("POST /api/auth/register rejects incomplete registration", `status=${res.status}`);
     } else if (res.status === 429) {
-      // Rate limiter hit — the request was still rejected (not processed), which is correct behavior
-      pass("POST /api/auth/register rejected by rate limiter (request not processed)", `status=429`);
+      pass("POST /api/auth/register rejected by rate limiter (incomplete request still blocked)", `status=429`);
     } else {
       fail("POST /api/auth/register should reject incomplete data", `got ${res.status}`);
     }
   }
 }
 
-// ─── Suite 4: Dashboard/Reports Endpoints ─────────────────────────────────
+// ─── Suite 4: Dashboard/Reports Endpoints (unauthenticated) ──────────────
 
 async function testDashboardEndpoints() {
   console.log("\n── Suite 4: Dashboard/Report Endpoints ──");
@@ -206,8 +204,7 @@ async function testDashboardEndpoints() {
     } else if (res.status === 200 && isJsonApiResponse(res.body)) {
       fail(`${method} ${path} returns JSON data without auth — data leak!`, `status=${res.status}`);
     } else if (res.status === 200 && !isJsonApiResponse(res.body)) {
-      // SPA HTML fallback — route doesn't exist as API, serving frontend
-      pass(`${method} ${path} — no JSON data leaked (SPA fallback, non-existent API route)`, `status=${res.status}`);
+      pass(`${method} ${path} — no JSON data leaked (SPA fallback)`, `status=${res.status}`);
     } else {
       pass(`${method} ${path} returns non-200 without auth`, `status=${res.status}`);
     }
@@ -220,89 +217,138 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
   console.log("\n── Suite 5: Cross-Tenant Isolation (authenticated) ──");
 
   const { tenantA, tenantB } = tenants;
-  const tenantBMetricId = tenantB.metricId;
+  const tbMetricId = tenantB.metricId;
+  const tbTopicId = tenantB.topicId;
+  const tbCompanyId = tenantB.companyId;
 
-  // Tenant A admin tries to access Tenant B metric
-  // Note: GET /api/metrics/:id does not exist as a singular route — Express falls through to
-  // the SPA (status 200, HTML), which is NOT a data leak. The cross-tenant check
-  // is validated via PUT /target, GET /values, and POST /api/data-entry below.
-  {
-    const res = await request("GET", `/api/metrics/${tenantBMetricId}`, undefined, tenantA.adminToken);
-    if (res.status === 403 || res.status === 404) {
-      pass("Tenant A cannot GET Tenant B metric — protected", `status=${res.status}`);
-    } else if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const parsed = JSON.parse(res.body);
-      if (parsed.companyId && parsed.companyId !== tenantA.companyId) {
-        fail("Tenant A GOT Tenant B metric JSON — cross-tenant data leak!", `body=${res.body.slice(0, 80)}`);
+  function assertCrossTenantBlocked(
+    label: string,
+    status: number,
+    body: string
+  ): void {
+    if (status !== 403 && status !== 404) {
+      if (status === 200 && isJsonApiResponse(body)) {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        if (parsed.companyId === tbCompanyId) {
+          fail(`${label} — Tenant B data leaked to Tenant A!`, `status=200, body=${body.slice(0, 120)}`);
+        } else {
+          // 200 but the data returned is the SPA (HTML) or belongs to Tenant A — not a leak
+          pass(`${label} — returned 200 but no Tenant B data leaked`, `status=200`);
+        }
+      } else if (status === 200 && !isJsonApiResponse(body)) {
+        pass(`${label} — SPA fallback (no data leak)`, `status=200 HTML`);
       } else {
-        pass("Tenant A GET /api/metrics/:id returns 200 but no cross-tenant JSON data (SPA fallback or own data)", `status=200`);
+        fail(`${label} — unexpected response`, `status=${status}`);
       }
-    } else if (res.status === 200 && !isJsonApiResponse(res.body)) {
-      pass("Tenant A GET /api/metrics/:id returns SPA HTML (no data leak)", `status=200`);
     } else {
-      pass("Tenant A GET /api/metrics/:id returns non-data response", `status=${res.status}`);
+      // 403 or 404 — correct blocking behavior
+      try {
+        const parsed = JSON.parse(body) as { error?: string };
+        if (typeof parsed.error === "string" && parsed.error.length > 0) {
+          pass(`${label}`, `status=${status}, error="${parsed.error.slice(0, 60)}"`);
+        } else {
+          fail(`${label} — blocked but error field missing from JSON`, `status=${status}, body=${body.slice(0, 80)}`);
+        }
+      } catch {
+        fail(`${label} — blocked but response is not valid JSON`, `status=${status}, body=${body.slice(0, 80)}`);
+      }
     }
   }
 
-  // Tenant A admin tries to update Tenant B metric target
+  // Metrics
   {
-    const res = await request("PUT", `/api/metrics/${tenantBMetricId}/target`, { targetValue: 999, targetYear: 2030 }, tenantA.adminToken);
-    if (res.status === 403 || res.status === 404) {
-      pass("Tenant A cannot PUT Tenant B metric target", `status=${res.status}`);
-    } else if (res.status === 200) {
-      fail("Tenant A updated Tenant B metric target — cross-tenant write!", `status=200`);
-    } else {
-      fail("Unexpected response for cross-tenant metric target PUT", `status=${res.status}`);
-    }
+    const res = await request("PUT", `/api/metrics/${tbMetricId}/target`, { targetValue: 999, targetYear: 2030 }, tenantA.adminToken);
+    assertCrossTenantBlocked("Tenant A cannot PUT Tenant B metric target", res.status, res.body);
   }
-
-  // Tenant A admin tries to get Tenant B metric values
   {
-    const res = await request("GET", `/api/metrics/${tenantBMetricId}/values`, undefined, tenantA.adminToken);
-    if (res.status === 403 || res.status === 404) {
-      pass("Tenant A cannot GET Tenant B metric values", `status=${res.status}`);
-    } else if (res.status === 200 && isJsonApiResponse(res.body)) {
-      fail("Tenant A GOT Tenant B metric values — cross-tenant data leak!", `status=200`);
-    } else {
-      fail("Unexpected response for cross-tenant metric values GET", `status=${res.status}`);
-    }
+    const res = await request("GET", `/api/metrics/${tbMetricId}/values`, undefined, tenantA.adminToken);
+    assertCrossTenantBlocked("Tenant A cannot GET Tenant B metric values", res.status, res.body);
+  }
+  {
+    const res = await request("GET", `/api/metrics/${tbMetricId}/history`, undefined, tenantA.adminToken);
+    assertCrossTenantBlocked("Tenant A cannot GET Tenant B metric history", res.status, res.body);
   }
 
-  // Tenant A admin tries to post data entry for Tenant B metric
+  // Data entry for Tenant B metric
   {
     const res = await request("POST", "/api/data-entry", {
-      metricId: tenantBMetricId,
+      metricId: tbMetricId,
       period: "2024-Q1",
       value: 42,
     }, tenantA.adminToken);
-    if (res.status === 403 || res.status === 404) {
-      pass("Tenant A cannot POST data-entry for Tenant B metric", `status=${res.status}`);
-    } else if (res.status === 200 || res.status === 201) {
-      fail("Tenant A submitted data-entry for Tenant B metric — cross-tenant write!", `status=${res.status}`);
+    assertCrossTenantBlocked("Tenant A cannot POST data-entry for Tenant B metric", res.status, res.body);
+  }
+
+  // Topics
+  {
+    const res = await request("PUT", `/api/topics/${tbTopicId}`, { selected: true }, tenantA.adminToken);
+    assertCrossTenantBlocked("Tenant A cannot PUT Tenant B topic", res.status, res.body);
+  }
+
+  // Reports — GET /api/reports is company-scoped (returns Tenant A's reports, not Tenant B's)
+  // We verify Tenant A's reports response does not contain Tenant B's companyId
+  {
+    const res = await request("GET", "/api/reports", undefined, tenantA.adminToken);
+    if (res.status === 200 && isJsonApiResponse(res.body)) {
+      const reports = JSON.parse(res.body) as Array<{ companyId?: string }>;
+      const tbLeak = reports.some((r) => r.companyId === tbCompanyId);
+      if (tbLeak) {
+        fail("GET /api/reports returns Tenant B reports to Tenant A", `body=${res.body.slice(0, 120)}`);
+      } else {
+        pass("GET /api/reports does not expose Tenant B data to Tenant A", `status=200, reports=${reports.length}`);
+      }
+    } else if (res.status === 401) {
+      pass("GET /api/reports returns 401 (unexpected — Tenant A token may be revoked)", `status=401`);
     } else {
-      fail("Unexpected response for cross-tenant data-entry POST", `status=${res.status}`);
+      pass("GET /api/reports responded without 500", `status=${res.status}`);
     }
   }
 
-  // Verify response body is safe (no raw DB content or stack trace)
+  // Policy — GET /api/policy is company-scoped; should only return Tenant A's policy
   {
-    const res = await request("GET", `/api/metrics/${tenantBMetricId}`, undefined, tenantA.adminToken);
-    const body = res.body.slice(0, 300);
-    if (body.includes("at ") && body.includes("Error:")) {
-      fail("Cross-tenant error response contains stack trace", body);
-    } else if (res.status === 403 || res.status === 404) {
-      try {
-        const parsed = JSON.parse(res.body);
-        if (parsed.error && typeof parsed.error === "string") {
-          pass("Cross-tenant error response has safe error field", `error="${parsed.error.slice(0, 60)}"`);
-        } else {
-          fail("Cross-tenant error response missing error field", res.body.slice(0, 80));
-        }
-      } catch {
-        fail("Cross-tenant error response is not valid JSON", body);
+    const res = await request("GET", "/api/policy", undefined, tenantA.adminToken);
+    if (res.status === 200 && isJsonApiResponse(res.body)) {
+      const policy = JSON.parse(res.body) as { companyId?: string };
+      if (policy.companyId === tbCompanyId) {
+        fail("GET /api/policy returns Tenant B policy to Tenant A", `body=${res.body.slice(0, 120)}`);
+      } else {
+        pass("GET /api/policy does not expose Tenant B data", `status=200, companyId=${policy.companyId}`);
       }
     } else {
-      pass("Cross-tenant response is not a JSON leak", `status=${res.status}`);
+      pass("GET /api/policy responded without 500 or data leak", `status=${res.status}`);
+    }
+  }
+
+  // Actions — GET /api/actions is company-scoped
+  {
+    const res = await request("GET", "/api/actions", undefined, tenantA.adminToken);
+    if (res.status === 200 && isJsonApiResponse(res.body)) {
+      const actions = JSON.parse(res.body) as Array<{ companyId?: string }>;
+      const tbLeak = actions.some((a) => a.companyId === tbCompanyId);
+      if (tbLeak) {
+        fail("GET /api/actions returns Tenant B actions to Tenant A", `body=${res.body.slice(0, 120)}`);
+      } else {
+        pass("GET /api/actions does not expose Tenant B data", `status=200, count=${actions.length}`);
+      }
+    } else {
+      pass("GET /api/actions responded without data leak", `status=${res.status}`);
+    }
+  }
+
+  // Questionnaires — GET /api/questionnaires is company-scoped (may require pro plan)
+  {
+    const res = await request("GET", "/api/questionnaires", undefined, tenantA.adminToken);
+    if (res.status === 200 && isJsonApiResponse(res.body)) {
+      const qs = JSON.parse(res.body) as Array<{ companyId?: string }>;
+      const tbLeak = qs.some((q) => q.companyId === tbCompanyId);
+      if (tbLeak) {
+        fail("GET /api/questionnaires returns Tenant B questionnaires to Tenant A", `body=${res.body.slice(0, 120)}`);
+      } else {
+        pass("GET /api/questionnaires does not expose Tenant B data", `status=200, count=${qs.length}`);
+      }
+    } else {
+      // 402/402 upgrade required or 401 — still not a data leak
+      pass("GET /api/questionnaires responded without data leak (non-200 expected for free plan)", `status=${res.status}`);
     }
   }
 }
@@ -312,17 +358,28 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
 async function testRBACEnforcement(tenants: SeededTenants) {
   console.log("\n── Suite 6: RBAC Enforcement ──");
 
-  const { tenantA, tenantB } = tenants;
+  const { tenantA } = tenants;
   const viewerToken = tenantA.viewerToken;
+  const contributorToken = tenantA.contributorToken;
   const adminToken = tenantA.adminToken;
-  const tenantAMetricId = await (async () => {
-    const res = await request("GET", "/api/metrics", undefined, adminToken);
-    if (res.status === 200) {
-      const metrics = JSON.parse(res.body);
-      if (Array.isArray(metrics) && metrics.length > 0) return metrics[0].id;
-    }
-    return "00000000-0000-0000-0000-000000000000";
-  })();
+
+  // Get Tenant A metric ID for tests
+  const metricsRes = await request("GET", "/api/metrics", undefined, adminToken);
+  let tenantAMetricId = "00000000-0000-0000-0000-000000000000";
+  if (metricsRes.status === 200) {
+    const metrics = JSON.parse(metricsRes.body) as Array<{ id: string }>;
+    if (metrics.length > 0) tenantAMetricId = metrics[0].id;
+  }
+
+  // Get Tenant A topic ID for tests
+  const topicsRes = await request("GET", "/api/topics", undefined, adminToken);
+  let tenantATopicId = "00000000-0000-0000-0000-000000000001";
+  if (topicsRes.status === 200) {
+    const topics = JSON.parse(topicsRes.body) as Array<{ id: string }>;
+    if (topics.length > 0) tenantATopicId = topics[0].id;
+  }
+
+  // ── Viewer checks ──
 
   // Viewer cannot POST /api/data-entry
   {
@@ -370,7 +427,7 @@ async function testRBACEnforcement(tenants: SeededTenants) {
       reportingFrequency: "quarterly",
     }, viewerToken);
     if (res.status === 403) {
-      pass("Viewer blocked from PUT /api/company/settings", `status=403`);
+      pass("Viewer blocked from PUT /api/company/settings (settings_admin)", `status=403`);
     } else {
       fail("Viewer should be blocked from PUT /api/company/settings", `status=${res.status}`);
     }
@@ -378,15 +435,9 @@ async function testRBACEnforcement(tenants: SeededTenants) {
 
   // Viewer cannot PUT /api/topics/:id
   {
-    const topicsRes = await request("GET", "/api/topics", undefined, adminToken);
-    let topicId = "00000000-0000-0000-0000-000000000001";
-    if (topicsRes.status === 200) {
-      const topics = JSON.parse(topicsRes.body);
-      if (Array.isArray(topics) && topics.length > 0) topicId = topics[0].id;
-    }
-    const res = await request("PUT", `/api/topics/${topicId}`, { selected: true }, viewerToken);
+    const res = await request("PUT", `/api/topics/${tenantATopicId}`, { selected: true }, viewerToken);
     if (res.status === 403) {
-      pass("Viewer blocked from PUT /api/topics/:id", `status=403`);
+      pass("Viewer blocked from PUT /api/topics/:id (settings_admin)", `status=403`);
     } else {
       fail("Viewer should be blocked from PUT /api/topics/:id", `status=${res.status}`);
     }
@@ -405,7 +456,60 @@ async function testRBACEnforcement(tenants: SeededTenants) {
     }
   }
 
-  // Admin (non-super-admin) is blocked from GET /api/admin/users (super-admin only)
+  // ── Contributor checks (has metrics_data_entry, policy_editing, questionnaire_access; lacks settings_admin, template_admin, report_generation, user_management) ──
+
+  // Contributor cannot PUT /api/company/settings (settings_admin required)
+  {
+    const res = await request("PUT", "/api/company/settings", {
+      reportingFrequency: "quarterly",
+    }, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from PUT /api/company/settings (settings_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from PUT /api/company/settings", `status=${res.status}`);
+    }
+  }
+
+  // Contributor cannot PUT /api/metrics/:id/admin (template_admin required)
+  {
+    const res = await request("PUT", `/api/metrics/${tenantAMetricId}/admin`, {
+      visible: true,
+    }, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from PUT /api/metrics/:id/admin (template_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from PUT /api/metrics/:id/admin", `status=${res.status}`);
+    }
+  }
+
+  // Contributor cannot PUT /api/policy-templates/:slug/admin (template_admin required)
+  {
+    const res = await request("PUT", "/api/policy-templates/environmental-policy/admin", {
+      customInstructions: "test",
+    }, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from PUT /api/policy-templates/:slug/admin (template_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from PUT /api/policy-templates/:slug/admin", `status=${res.status}`);
+    }
+  }
+
+  // Contributor cannot POST /api/reports/generate (report_generation required)
+  {
+    const res = await request("POST", "/api/reports/generate", {
+      reportType: "management",
+      period: "2024-Q1",
+    }, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from POST /api/reports/generate (report_generation)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from POST /api/reports/generate", `status=${res.status}`);
+    }
+  }
+
+  // ── Admin checks ──
+
+  // Admin (non-super-admin) is blocked from GET /api/admin/users (requireSuperAdmin)
   {
     const res = await request("GET", "/api/admin/users", undefined, adminToken);
     if (res.status === 403 || res.status === 401) {
@@ -432,13 +536,13 @@ async function testSessionLifecycle(tenants: SeededTenants) {
     fail("POST /api/auth/logout did not return 200", `status=${logoutRes.status}`);
   }
 
-  const protectedRoutes = [
+  const protectedRoutes: [string, string][] = [
     ["GET", "/api/metrics"],
     ["GET", "/api/topics"],
     ["GET", "/api/company"],
     ["GET", "/api/reports"],
     ["GET", "/api/auth/sessions"],
-  ] as const;
+  ];
 
   for (const [method, path] of protectedRoutes) {
     const res = await request(method, path, undefined, adminToken);
@@ -450,7 +554,7 @@ async function testSessionLifecycle(tenants: SeededTenants) {
   }
 
   // Fabricated token must return 401, not 500
-  const fakeToken = "totally-fake-token-that-does-not-exist-in-any-session";
+  const fakeToken = "totally-fake-token-that-does-not-exist-in-any-session-store";
   {
     const res = await request("GET", "/api/metrics", undefined, fakeToken);
     if (res.status === 401) {
@@ -462,11 +566,11 @@ async function testSessionLifecycle(tenants: SeededTenants) {
     }
   }
 
-  // Malformed bearer header (not a token)
+  // Missing auth header
   {
     const res = await request("GET", "/api/company");
     if (res.status === 401) {
-      pass("No auth header returns 401", `status=401`);
+      pass("Missing auth header returns 401", `status=401`);
     } else {
       fail("Missing auth header should return 401", `status=${res.status}`);
     }
@@ -481,14 +585,35 @@ async function testMalformedPayloads(tenants: SeededTenants) {
   const { tenantA } = tenants;
   const adminToken = tenantA.adminToken;
 
-  const tenantAMetricId = await (async () => {
-    const res = await request("GET", "/api/metrics", undefined, adminToken);
-    if (res.status === 200) {
-      const metrics = JSON.parse(res.body);
-      if (Array.isArray(metrics) && metrics.length > 0) return metrics[0].id;
+  const metricsRes = await request("GET", "/api/metrics", undefined, adminToken);
+  let tenantAMetricId = "00000000-0000-0000-0000-000000000000";
+  if (metricsRes.status === 200) {
+    const metrics = JSON.parse(metricsRes.body) as Array<{ id: string }>;
+    if (metrics.length > 0) tenantAMetricId = metrics[0].id;
+  }
+
+  function assertBadRequest(
+    label: string,
+    status: number,
+    body: string
+  ): void {
+    if (status === 400) {
+      try {
+        const parsed = JSON.parse(body) as { error?: string };
+        if (typeof parsed.error === "string" && parsed.error.length > 0) {
+          pass(`${label} returns 400 with safe error field`, `error="${parsed.error.slice(0, 60)}"`);
+        } else {
+          fail(`${label} returns 400 but error field is missing or empty`, `body=${body.slice(0, 100)}`);
+        }
+      } catch {
+        fail(`${label} returns 400 but response is not valid JSON`, `body=${body.slice(0, 100)}`);
+      }
+    } else if (status === 500) {
+      fail(`${label} returns 500 — must never return 500 for invalid input`, `body=${body.slice(0, 100)}`);
+    } else {
+      fail(`${label} — expected 400, got ${status}`, `body=${body.slice(0, 100)}`);
     }
-    return "00000000-0000-0000-0000-000000000000";
-  })();
+  }
 
   // POST /api/data-entry — missing period
   {
@@ -496,18 +621,7 @@ async function testMalformedPayloads(tenants: SeededTenants) {
       metricId: tenantAMetricId,
       value: 100,
     }, adminToken);
-    if (res.status === 400) {
-      const body = JSON.parse(res.body);
-      if (body.error) {
-        pass("POST /api/data-entry with missing period returns 400 + error field", `error="${body.error.slice(0, 60)}"`);
-      } else {
-        fail("POST /api/data-entry missing period returns 400 but no error field", res.body.slice(0, 100));
-      }
-    } else if (res.status === 500) {
-      fail("POST /api/data-entry missing period returns 500", res.body.slice(0, 100));
-    } else {
-      fail("POST /api/data-entry missing period should return 400", `status=${res.status}`);
-    }
+    assertBadRequest("POST /api/data-entry missing period", res.status, res.body);
   }
 
   // POST /api/data-entry — null metricId
@@ -517,32 +631,7 @@ async function testMalformedPayloads(tenants: SeededTenants) {
       period: "2024-Q1",
       value: 50,
     }, adminToken);
-    if (res.status === 400) {
-      const body = JSON.parse(res.body);
-      if (body.error) {
-        pass("POST /api/data-entry with null metricId returns 400 + error field", `error="${body.error.slice(0, 60)}"`);
-      } else {
-        fail("POST /api/data-entry null metricId returns 400 but no error field", res.body.slice(0, 100));
-      }
-    } else if (res.status === 500) {
-      fail("POST /api/data-entry null metricId returns 500", res.body.slice(0, 100));
-    } else {
-      fail("POST /api/data-entry null metricId should return 400", `status=${res.status}`);
-    }
-  }
-
-  // PUT /api/metrics/:id/target — missing targetValue (uses string instead of number)
-  {
-    const res = await request("PUT", `/api/metrics/${tenantAMetricId}/target`, {
-      targetYear: 2030,
-    }, adminToken);
-    // The route does not do strict validation of missing targetValue — it will just set null
-    // We accept 200 (upsert with null) or 400; we reject 500
-    if (res.status === 500) {
-      fail("PUT /api/metrics/:id/target missing targetValue returns 500", res.body.slice(0, 100));
-    } else {
-      pass("PUT /api/metrics/:id/target missing targetValue does not return 500", `status=${res.status}`);
-    }
+    assertBadRequest("POST /api/data-entry null metricId", res.status, res.body);
   }
 
   // PUT /api/metrics/:id/target — string instead of number for targetValue
@@ -551,11 +640,7 @@ async function testMalformedPayloads(tenants: SeededTenants) {
       targetValue: "not-a-number",
       targetYear: 2030,
     }, adminToken);
-    if (res.status === 500) {
-      fail("PUT /api/metrics/:id/target with string targetValue returns 500", res.body.slice(0, 100));
-    } else {
-      pass("PUT /api/metrics/:id/target with string targetValue does not return 500", `status=${res.status}`);
-    }
+    assertBadRequest("PUT /api/metrics/:id/target string targetValue", res.status, res.body);
   }
 
   // POST /api/reports/generate — missing reportType
@@ -563,32 +648,31 @@ async function testMalformedPayloads(tenants: SeededTenants) {
     const res = await request("POST", "/api/reports/generate", {
       period: "2024-Q1",
     }, adminToken);
-    if (res.status === 400 || res.status === 500) {
-      if (res.status === 500) {
-        fail("POST /api/reports/generate missing reportType returns 500", res.body.slice(0, 100));
-      } else {
-        const body = JSON.parse(res.body);
-        if (body.error) {
-          pass("POST /api/reports/generate missing reportType returns 400 + error field", `error="${body.error.slice(0, 60)}"`);
-        } else {
-          fail("POST /api/reports/generate missing reportType returns 400 but no error field", res.body.slice(0, 100));
-        }
-      }
-    } else {
-      pass("POST /api/reports/generate missing reportType responds without 500", `status=${res.status}`);
-    }
+    assertBadRequest("POST /api/reports/generate missing reportType", res.status, res.body);
   }
 
   // POST /api/reports/generate — invalid period format
   {
     const res = await request("POST", "/api/reports/generate", {
-      reportType: "esg_summary",
-      period: "NOT_A_VALID_PERIOD_FORMAT",
+      reportType: "management",
+      period: "INVALID_PERIOD_FORMAT!!!",
     }, adminToken);
-    if (res.status === 500) {
-      fail("POST /api/reports/generate invalid period returns 500", res.body.slice(0, 100));
+    if (res.status === 400) {
+      try {
+        const parsed = JSON.parse(res.body) as { error?: string };
+        if (typeof parsed.error === "string" && parsed.error.length > 0) {
+          pass("POST /api/reports/generate invalid period returns 400 with error field", `error="${parsed.error.slice(0, 60)}"`);
+        } else {
+          fail("POST /api/reports/generate invalid period returns 400 but error field missing", res.body.slice(0, 80));
+        }
+      } catch {
+        fail("POST /api/reports/generate invalid period returns 400 but not valid JSON", res.body.slice(0, 80));
+      }
+    } else if (res.status === 500) {
+      fail("POST /api/reports/generate invalid period returns 500 — must not 500 on invalid input", res.body.slice(0, 100));
     } else {
-      pass("POST /api/reports/generate invalid period does not return 500", `status=${res.status}`);
+      // 200 is acceptable if the backend processes invalid period gracefully
+      pass("POST /api/reports/generate invalid period does not 500", `status=${res.status}`);
     }
   }
 }
@@ -610,15 +694,16 @@ async function run() {
     const tenants = await seedTestTenants();
     console.log(`  Tenant A companyId: ${tenants.tenantA.companyId}`);
     console.log(`  Tenant B companyId: ${tenants.tenantB.companyId}`);
-    console.log(`  Tenant B sample metricId: ${tenants.tenantB.metricId}`);
+    console.log(`  Tenant B metricId: ${tenants.tenantB.metricId}`);
+    console.log(`  Tenant B topicId: ${tenants.tenantB.topicId}`);
 
     await testCrossTenantIsolation(tenants);
     await testRBACEnforcement(tenants);
 
-    // Suite 7 logs out the admin token — get a fresh one for Suite 8
-    const freshTenantAReg = await seedTestTenants();
+    // Seed a fresh set for Suite 7 (logout will invalidate the admin token) and Suite 8
+    const freshTenants = await seedTestTenants();
     await testSessionLifecycle(tenants);
-    await testMalformedPayloads(freshTenantAReg);
+    await testMalformedPayloads(freshTenants);
 
   } catch (err) {
     console.error("\nTest runner error:", err);

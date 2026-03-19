@@ -1,13 +1,13 @@
 /**
  * E2E: Report generation — success or loading state appears
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, APIRequestContext } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 
 const SUFFIX = `${Date.now()}rp`;
 
-async function createAdminAndGetToken(request: any, suffix: string) {
+async function createAdminAndGetToken(request: APIRequestContext, suffix: string): Promise<{ token: string; companyId: string }> {
   const email = `e2e-report-${suffix}@test-esg.example`;
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL not set");
