@@ -2482,7 +2482,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const actions = await storage.getActionPlans(companyId);
-      const evidenceCoverage = await storage.getEvidenceCoverage(companyId, period || undefined);
       // Evidence and carbon: apply same scope rules as metrics
       let allEvidence: Awaited<ReturnType<typeof storage.getEvidenceFiles>>;
       let allCarbonCalcs: Awaited<ReturnType<typeof storage.getCarbonCalculations>>;
@@ -2513,12 +2512,87 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return;
       }
 
-      const valuesWithLabels = values.map((v: any) => {
+      // Aggregate metric values per metric: for site-scoped reports each metric has at most 1 row;
+      // for org-wide reports, aggregate across sites (additive=sum, rate/%=average) to get 1 row per metric.
+      const aggregatedValues: any[] = [];
+      const metricGrouped = new Map<string, any[]>();
+      for (const v of values) {
+        const existing = metricGrouped.get(v.metricId) || [];
+        existing.push(v);
+        metricGrouped.set(v.metricId, existing);
+      }
+      for (const [metricId, rows] of metricGrouped) {
+        if (rows.length === 1) {
+          aggregatedValues.push(rows[0]);
+        } else {
+          // Multiple rows (org-wide, multi-site): aggregate
+          const metricDef = enabledMetrics.find((m: any) => m.id === metricId);
+          const numericRows = rows.filter((r: any) => r.value !== null && r.value !== "");
+          if (numericRows.length === 0) {
+            aggregatedValues.push(rows[0]);
+            continue;
+          }
+          const isRateMetric = metricDef?.unit?.includes("%") || metricDef?.direction === "compliance_yes_no";
+          let aggregatedValue: number;
+          if (isRateMetric) {
+            // Simple average for rates when no headcount weights available
+            aggregatedValue = numericRows.reduce((sum: number, r: any) => sum + parseFloat(r.value), 0) / numericRows.length;
+          } else {
+            // Sum for additive metrics
+            aggregatedValue = numericRows.reduce((sum: number, r: any) => sum + parseFloat(r.value), 0);
+          }
+          // Aggregate workflow status: use lowest approval level
+          const workflowPriority = (s: string) => s === "approved" ? 2 : s === "submitted" ? 1 : 0;
+          const minStatus = rows.reduce((worst: any, r: any) =>
+            workflowPriority(r.workflowStatus) < workflowPriority(worst.workflowStatus) ? r : worst, rows[0]);
+          // Data source: if any is manual/estimated, reflect that
+          const allEvidenced = rows.every((r: any) => r.dataSourceType === "evidenced");
+          const anyEstimated = rows.some((r: any) => r.dataSourceType === "estimated");
+          aggregatedValues.push({
+            ...rows[0],
+            siteId: null,
+            value: String(aggregatedValue),
+            workflowStatus: minStatus.workflowStatus,
+            dataSourceType: allEvidenced ? "evidenced" : anyEstimated ? "estimated" : "manual",
+          });
+        }
+      }
+
+      const valuesWithLabels = aggregatedValues.map((v: any) => {
         const hasEvidence = allEvidence.some((e: any) => e.linkedModule === "metric_value" && e.linkedEntityId === v.id);
         const dataSourceLabel = hasEvidence ? "Evidenced" : (v.dataSourceType === "estimated" ? "Estimated" : "Manual");
         const workflowLabel = v.workflowStatus === "approved" ? "Approved" : v.workflowStatus === "submitted" ? "Submitted" : "Draft";
         return { ...v, dataSourceLabel, workflowLabel };
       });
+
+      // Evidence coverage computed from scoped data (same site/org-wide scope as metrics)
+      const evidencedEntityIds = new Set(
+        allEvidence.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId)
+      );
+      const metricsWithEvidence = new Set<string>();
+      // For aggregated values (1 row per metric), check if original scoped rows had evidence
+      for (const v of values) {
+        if (evidencedEntityIds.has(v.id) || (v as any).dataSourceType === "evidenced") {
+          metricsWithEvidence.add((v as any).metricId);
+        }
+      }
+      const periodCoverage: Record<string, number> = {};
+      allEvidence.filter((e: any) => e.linkedPeriod).forEach((e: any) => {
+        periodCoverage[e.linkedPeriod] = (periodCoverage[e.linkedPeriod] || 0) + 1;
+      });
+      const evidenceCoverage = {
+        totalEvidence: allEvidence.length,
+        evidencedCount: metricsWithEvidence.size,
+        totalMetrics: enabledMetrics.length,
+        coveragePercent: enabledMetrics.length > 0
+          ? Math.round((metricsWithEvidence.size / enabledMetrics.length) * 100)
+          : 0,
+        periodCoverage,
+        metricCoverage: enabledMetrics.map((m: any) => ({
+          metricId: m.id, metricName: m.name, category: m.category,
+          hasEvidence: metricsWithEvidence.has(m.id),
+        })),
+      };
 
       const metricsByCategory: Record<string, any[]> = {};
       for (const v of valuesWithLabels) {
@@ -2539,13 +2613,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const selectedTopics = topics.filter((t: any) => t.selected);
       const weightedScore = calculateWeightedEsgScore(scoredMetrics, selectedTopics);
 
-      // Period filter first — no cross-period fallback (scope already applied above)
+      // Period filter first — strict period match only, no cross-period fallback
       const matchedCarbon = period
-        ? (allCarbonCalcs.find((c: any) => c.reportingPeriod === period) ??
-           allCarbonCalcs.find((c: any) => c.reportingPeriod?.startsWith(period.substring(0, 4))) ??
-           null)
+        ? (allCarbonCalcs.find((c: any) => c.reportingPeriod === period) ?? null)
         : (allCarbonCalcs[0] ?? null);
-      const carbonPeriodMismatch = matchedCarbon && period && matchedCarbon.reportingPeriod !== period;
+      const carbonPeriodMismatch = false; // strict match only; no mismatch possible
       const carbonSummary = matchedCarbon ? {
         scope1: parseFloat(matchedCarbon.scope1Total as string) || 0,
         scope2: parseFloat(matchedCarbon.scope2Total as string) || 0,
