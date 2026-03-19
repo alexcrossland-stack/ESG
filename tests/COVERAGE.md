@@ -8,7 +8,7 @@ All tests use bearer-token authentication where required.
 ### One-command run
 
 ```bash
-# API security suite (52 tests)
+# API security suite (53 tests)
 npx tsx tests/api-security.test.ts
 
 # All Playwright E2E tests (API-mode + browser-mode, 29 tests)

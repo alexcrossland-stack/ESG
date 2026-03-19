@@ -221,6 +221,7 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
   const tbTopicId = tenantB.topicId;
   const tbCompanyId = tenantB.companyId;
   const tbActionId = tenantB.actionId;
+  const tbQuestionnaireId = tenantB.questionnaireId;
 
   /**
    * For targeted cross-tenant operations (accessing a specific Tenant B resource by ID),
@@ -338,6 +339,15 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
     }
   } else {
     pass("Targeted action cross-tenant tests — Tenant B action not created; skip", "skipped");
+  }
+
+  // ── Targeted cross-tenant questionnaire access — must return 403 or 404 only ──
+
+  if (tbQuestionnaireId) {
+    const res = await request("GET", `/api/questionnaires/${tbQuestionnaireId}`, undefined, tenantA.adminToken);
+    assertTargetedBlocked("Tenant A GET Tenant B questionnaire blocked (403/404)", res.status, res.body);
+  } else {
+    pass("Targeted questionnaire cross-tenant test — Tenant B questionnaire not created; skip", "skipped");
   }
 
   // ── Company-scoped list endpoints — 200 is OK, but no Tenant B data must appear ──
@@ -677,28 +687,12 @@ async function testMalformedPayloads(tenants: SeededTenants) {
     assertBadRequest("POST /api/data-entry non-numeric value returns 400 with error field", res.status, res.body);
   }
 
-  // PUT /api/metrics/:id/target — missing targetValue entirely
-  // targetValue is optional in this route; server treats undefined as "clear target"
+  // PUT /api/metrics/:id/target — missing targetValue entirely (targetValue is required)
   {
     const res = await request("PUT", `/api/metrics/${tenantAMetricId}/target`, {
       targetYear: 2030,
     }, adminToken);
-    if (res.status === 200) {
-      pass("PUT /api/metrics/:id/target missing targetValue accepted as optional clear (200)", `status=200`);
-    } else if (res.status === 400) {
-      try {
-        const parsed = JSON.parse(res.body) as { error?: string };
-        if (typeof parsed.error === "string" && parsed.error.length > 0) {
-          pass("PUT /api/metrics/:id/target missing targetValue returns 400 with error", `error="${parsed.error.slice(0, 60)}"`);
-        } else {
-          fail("PUT /api/metrics/:id/target missing targetValue — 400 but no error field", `body=${res.body.slice(0, 100)}`);
-        }
-      } catch {
-        fail("PUT /api/metrics/:id/target missing targetValue — 400 but not valid JSON", `body=${res.body.slice(0, 100)}`);
-      }
-    } else {
-      fail("PUT /api/metrics/:id/target missing targetValue — expected 200 or 400, got " + res.status, `body=${res.body.slice(0, 100)}`);
-    }
+    assertBadRequest("PUT /api/metrics/:id/target missing targetValue returns 400 with error", res.status, res.body);
   }
 }
 
@@ -722,6 +716,7 @@ async function run() {
     console.log(`  Tenant B metricId: ${tenants.tenantB.metricId}`);
     console.log(`  Tenant B topicId: ${tenants.tenantB.topicId}`);
     console.log(`  Tenant B actionId: ${tenants.tenantB.actionId}`);
+    console.log(`  Tenant B questionnaireId: ${tenants.tenantB.questionnaireId}`);
 
     await testCrossTenantIsolation(tenants);
     await testRBACEnforcement(tenants);

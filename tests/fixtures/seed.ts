@@ -38,6 +38,7 @@ export interface TenantB {
   topicId: string;
   reportId: string | null;
   actionId: string | null;
+  questionnaireId: string | null;
   adminEmail: string;
 }
 
@@ -315,6 +316,23 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   // Create a Tenant B action so Suite 5 can test targeted cross-tenant action access
   const tenantBActionId = await createTenantAction(tenantBAdminToken);
 
+  // Insert a Tenant B questionnaire directly via SQL so Suite 5 can test
+  // cross-tenant questionnaire access without needing pro-tier plan gate
+  let tenantBQuestionnaireId: string | null = null;
+  {
+    const qClient = new Client({ connectionString: dbUrl });
+    await qClient.connect();
+    try {
+      const qRes = await qClient.query<{ id: string }>(
+        "INSERT INTO questionnaires (company_id, title) VALUES ($1, 'Seed cross-tenant test questionnaire') RETURNING id",
+        [tenantBCompanyId]
+      );
+      tenantBQuestionnaireId = qRes.rows[0]?.id ?? null;
+    } finally {
+      await qClient.end();
+    }
+  }
+
   return {
     tenantA: {
       adminToken: tenantAAdminToken,
@@ -332,6 +350,7 @@ export async function seedTestTenants(): Promise<SeededTenants> {
       topicId,
       reportId: tenantBReportId,
       actionId: tenantBActionId,
+      questionnaireId: tenantBQuestionnaireId,
       adminEmail: tenantBAdminEmail,
     },
   };

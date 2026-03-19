@@ -1830,10 +1830,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(404).json({ error: "Metric not found" });
       }
       const { targetValue, targetYear } = req.body;
-      if (targetValue !== undefined && targetValue !== null && isNaN(Number(targetValue))) {
+      if (targetValue === undefined || targetValue === null) {
+        return res.status(400).json({ error: "targetValue is required" });
+      }
+      if (isNaN(Number(targetValue))) {
         return res.status(400).json({ error: "targetValue must be a number" });
       }
-      const parsedTargetValue = targetValue !== undefined && targetValue !== null ? Number(targetValue) : targetValue;
+      const parsedTargetValue = Number(targetValue);
       const target = await storage.upsertMetricTarget(req.params.id, parsedTargetValue, targetYear);
       res.json(target);
     } catch (e: any) {
