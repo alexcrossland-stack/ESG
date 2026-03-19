@@ -220,6 +220,7 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
   const tbMetricId = tenantB.metricId;
   const tbTopicId = tenantB.topicId;
   const tbCompanyId = tenantB.companyId;
+  const tbReportId = tenantB.reportId;
   const tbActionId = tenantB.actionId;
   const tbQuestionnaireId = tenantB.questionnaireId;
 
@@ -305,25 +306,13 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
     assertTargetedBlocked("Tenant A PUT Tenant B topic blocked (403/404)", res.status, res.body);
   }
 
-  // ── Targeted report-by-ID cross-tenant access ──
-  // GET /api/reports/:id/files scopes by session companyId; Tenant A should see 0 files
-  // for a Tenant B report (data isolation via empty-result, not HTTP block).
-  if (tenantB.reportId) {
-    const res = await request("GET", `/api/reports/${tenantB.reportId}/files`, undefined, tenantA.adminToken);
-    if (res.status === 200 && isJsonApiResponse(res.body)) {
-      const files = JSON.parse(res.body) as unknown[];
-      if (Array.isArray(files) && files.length === 0) {
-        pass("GET /api/reports/:tbId/files returns empty array for Tenant A (data isolated)", `status=200, files=0`);
-      } else {
-        fail("GET /api/reports/:tbId/files returned Tenant B files to Tenant A!", `body=${res.body.slice(0, 200)}`);
-      }
-    } else if (res.status === 403 || res.status === 404) {
-      pass("GET /api/reports/:tbId/files blocked with 403/404 for Tenant A", `status=${res.status}`);
-    } else {
-      fail("GET /api/reports/:tbId/files unexpected response for Tenant A", `status=${res.status}, body=${res.body.slice(0, 100)}`);
-    }
+  // ── Targeted report-by-ID cross-tenant access — must return 403 or 404 only ──
+
+  if (tbReportId) {
+    const res = await request("GET", `/api/reports/${tbReportId}/files`, undefined, tenantA.adminToken);
+    assertTargetedBlocked("Tenant A GET Tenant B report files blocked (403/404)", res.status, res.body);
   } else {
-    pass("GET /api/reports/:tbId/files — Tenant B report not generated (rate-limited); skip targeted check", "skipped");
+    pass("Targeted report cross-tenant test — Tenant B report not created; skip", "skipped");
   }
 
   // ── Targeted cross-tenant action access — must return 403 or 404 only ──
@@ -715,6 +704,7 @@ async function run() {
     console.log(`  Tenant B companyId: ${tenants.tenantB.companyId}`);
     console.log(`  Tenant B metricId: ${tenants.tenantB.metricId}`);
     console.log(`  Tenant B topicId: ${tenants.tenantB.topicId}`);
+    console.log(`  Tenant B reportId: ${tenants.tenantB.reportId}`);
     console.log(`  Tenant B actionId: ${tenants.tenantB.actionId}`);
     console.log(`  Tenant B questionnaireId: ${tenants.tenantB.questionnaireId}`);
 

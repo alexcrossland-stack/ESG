@@ -310,8 +310,22 @@ export async function seedTestTenants(): Promise<SeededTenants> {
   const metricId = await getMetricId(tenantBAdminToken);
   const topicId = await getTopicId(tenantBAdminToken);
 
-  // Generate a Tenant B report so Suite 5 can test targeted cross-tenant report access
-  const tenantBReportId = await generateTenantReport(tenantBAdminToken);
+  // Insert a Tenant B report directly via SQL so Suite 5 can test targeted cross-tenant
+  // report access without hitting the rate-limited report generation endpoint
+  let tenantBReportId: string | null = null;
+  {
+    const rClient = new Client({ connectionString: dbUrl });
+    await rClient.connect();
+    try {
+      const rRes = await rClient.query<{ id: string }>(
+        "INSERT INTO report_runs (company_id, period, report_template) VALUES ($1, '2024-Q1', 'management') RETURNING id",
+        [tenantBCompanyId]
+      );
+      tenantBReportId = rRes.rows[0]?.id ?? null;
+    } finally {
+      await rClient.end();
+    }
+  }
 
   // Create a Tenant B action so Suite 5 can test targeted cross-tenant action access
   const tenantBActionId = await createTenantAction(tenantBAdminToken);

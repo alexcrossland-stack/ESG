@@ -7,7 +7,7 @@
  * applies when calls are made from within the browser (not just from curl).
  */
 import { test, expect } from "@playwright/test";
-import { VIEWER_STATE_FILE } from "../global-setup.js";
+import { VIEWER_STATE_FILE } from "./global-setup.js";
 
 test.describe("Viewer in-browser fetch restrictions", () => {
   test("viewer fetch POST /api/data-entry from browser returns 403", async ({ browser }) => {
@@ -24,9 +24,6 @@ test.describe("Viewer in-browser fetch restrictions", () => {
       return;
     }
 
-    // Use page.evaluate to make a fetch() call from within the browser context.
-    // The viewer's auth_token cookie / localStorage token will be sent automatically
-    // (via the fetch interceptor the app sets up, or we attach it explicitly).
     const token = await page.evaluate(() => localStorage.getItem("auth_token"));
 
     if (!token) {
@@ -47,7 +44,6 @@ test.describe("Viewer in-browser fetch restrictions", () => {
       return { status: res.status };
     }, token);
 
-    // Viewer must receive 403 Forbidden
     expect(result.status).toBe(403);
 
     await context.close();
@@ -87,7 +83,6 @@ test.describe("Viewer in-browser fetch restrictions", () => {
       return { status: res.status };
     }, token);
 
-    // Viewer must receive 403 Forbidden (RBAC) before any 404 (resource not found)
     expect(result.status).toBe(403);
 
     await context.close();
@@ -127,7 +122,6 @@ test.describe("Viewer in-browser fetch restrictions", () => {
       return { status: res.status };
     }, token);
 
-    // Viewer must receive 403 Forbidden
     expect(result.status).toBe(403);
 
     await context.close();

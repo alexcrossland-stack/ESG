@@ -17,14 +17,14 @@ export default defineConfig({
   projects: [
     {
       name: "api",
-      testMatch: /^(?!.*[/\\]browser[/\\]).*\.spec\.ts$/,
+      testMatch: /^(?!.*\.browser\.spec\.ts$).*\.spec\.ts$/,
       use: {
         extraHTTPHeaders: { "Content-Type": "application/json" },
       },
     },
     {
       name: "chromium",
-      testMatch: /[/\\]browser[/\\].*\.spec\.ts$/,
+      testMatch: /.*\.browser\.spec\.ts$/,
       use: {
         ...devices["Desktop Chrome"],
         headless: true,

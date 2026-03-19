@@ -11,7 +11,7 @@
  * without going through the login form.
  */
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
-import { ADMIN_STATE_FILE } from "../global-setup.js";
+import { ADMIN_STATE_FILE } from "./global-setup.js";
 
 async function makeAdminContext(browser: import("@playwright/test").Browser): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
@@ -26,19 +26,14 @@ test.describe("Admin journeys", () => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
-    // Admin must NOT be redirected to the auth page (auth state is persisted)
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 15000 });
 
-    // Since global-setup seeds companies with onboarding_complete=true, the
-    // admin always lands on the dashboard (not the onboarding wizard).
     const dashboardTitle = page.getByTestId("text-dashboard-title");
     await expect(dashboardTitle).toBeVisible({ timeout: 12000 });
 
-    // Quick Start / activation card may appear; assert it or its absence is coherent
     const activationCard = page.getByTestId("card-activation-checklist");
     const cardVisible = await activationCard.isVisible().catch(() => false);
     if (cardVisible) {
-      // Dismiss the card to exercise that journey
       const dismissBtn = page.getByTestId("button-dismiss-activation-card");
       const canDismiss = await dismissBtn.isVisible().catch(() => false);
       if (canDismiss) {
@@ -47,7 +42,6 @@ test.describe("Admin journeys", () => {
       }
     }
 
-    // Dashboard title is always visible regardless of activation card state
     await expect(dashboardTitle).toBeVisible();
 
     await context.close();
@@ -59,12 +53,10 @@ test.describe("Admin journeys", () => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
-    // Admin must be on the dashboard (not /auth or /onboarding)
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 15000 });
     const dashboardTitle = page.getByTestId("text-dashboard-title");
     await expect(dashboardTitle).toBeVisible({ timeout: 12000 });
 
-    // Navigate to data-entry — either via the CTA or directly
     const missingDataAlert = page.getByTestId("alert-missing-data");
     const alertVisible = await missingDataAlert.isVisible().catch(() => false);
 
@@ -76,7 +68,6 @@ test.describe("Admin journeys", () => {
       await page.goto("/data-entry");
     }
 
-    // Either way we must end up on the data-entry page and NOT on /auth
     await page.waitForLoadState("networkidle");
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
     expect(page.url()).toContain("/data-entry");
@@ -90,20 +81,16 @@ test.describe("Admin journeys", () => {
     await page.goto("/data-entry");
     await page.waitForLoadState("networkidle");
 
-    // Must be on data-entry — not auth-redirected
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
 
-    // Click the Manual Entry tab
     const manualTab = page.getByTestId("tab-manual-entry");
     await expect(manualTab).toBeVisible({ timeout: 10000 });
     await manualTab.click();
     await page.waitForTimeout(1500);
 
-    // At least one manual metric input must be visible (metrics are seeded on first login)
     const firstInput = page.locator('[data-testid^="input-manual-"]').first();
     await expect(firstInput).toBeVisible({ timeout: 10000 });
 
-    // Fill in a numeric value and save
     await firstInput.clear();
     await firstInput.fill("42.5");
     await page.waitForTimeout(300);
@@ -112,7 +99,6 @@ test.describe("Admin journeys", () => {
     await expect(firstSaveBtn).toBeVisible({ timeout: 5000 });
     await firstSaveBtn.click();
 
-    // Wait for the save to process — no error alert must appear
     await page.waitForTimeout(2000);
     const errorBanner = page.locator("[role='alert']").filter({ hasText: /error|failed/i });
     await expect(errorBanner).not.toBeVisible({ timeout: 3000 });
@@ -126,10 +112,8 @@ test.describe("Admin journeys", () => {
     await page.goto("/reports");
     await page.waitForLoadState("networkidle");
 
-    // Must be on reports — not auth-redirected
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
 
-    // Look for a report type button first, click if found
     const firstTypeBtn = page.locator('[data-testid^="button-export-type-"]').first();
     const typeBtnVisible = await firstTypeBtn.isVisible({ timeout: 5000 }).catch(() => false);
     if (typeBtnVisible) {
@@ -137,12 +121,10 @@ test.describe("Admin journeys", () => {
       await page.waitForTimeout(500);
     }
 
-    // The main export button must be present
     const exportBtn = page.getByTestId("button-export-esg-report");
     await expect(exportBtn).toBeVisible({ timeout: 10000 });
     await exportBtn.click();
 
-    // Report preview section or success toast must appear; no 500 error allowed
     const reportPreview = page.getByTestId("report-preview");
     const previewVisible = await reportPreview.isVisible({ timeout: 15000 }).catch(() => false);
 
@@ -150,7 +132,6 @@ test.describe("Admin journeys", () => {
       const reportTitle = page.getByTestId("text-report-title");
       await expect(reportTitle).toBeVisible({ timeout: 5000 });
     } else {
-      // No inline preview — ensure no 500 error appeared
       const errorBanner = page.locator("[role='alert']").filter({ hasText: /500|server error/i });
       await expect(errorBanner).not.toBeVisible({ timeout: 3000 });
     }

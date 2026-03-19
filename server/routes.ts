@@ -6162,8 +6162,15 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
   app.get("/api/reports/:id/files", requireAuth, async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const ownerCheck = await db.execute(
+        sql`SELECT id FROM report_runs WHERE id = ${req.params.id} AND company_id = ${companyId}`
+      );
+      if (!ownerCheck.rows.length) {
+        return res.status(404).json({ error: "Report not found" });
+      }
       const files = await storage.getGeneratedFilesByReportRun(req.params.id);
-      res.json(files.filter(f => f.companyId === (req.session as any).companyId).map(f => ({ id: f.id, filename: f.filename, fileType: f.fileType, fileSize: f.fileSize, generatedAt: f.generatedAt })));
+      res.json(files.map(f => ({ id: f.id, filename: f.filename, fileType: f.fileType, fileSize: f.fileSize, generatedAt: f.generatedAt })));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

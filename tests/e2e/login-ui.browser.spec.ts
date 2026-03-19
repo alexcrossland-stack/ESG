@@ -5,12 +5,11 @@
  * Uses the admin credentials seeded by global-setup.
  */
 import { test, expect } from "@playwright/test";
-import { ADMIN_STATE_FILE } from "../global-setup.js";
+import { ADMIN_STATE_FILE } from "./global-setup.js";
 import fs from "fs";
 
 test.describe("Login UI", () => {
   test("login via UI form → dashboard loads with title", async ({ page }) => {
-    // Read admin credentials from seed info written by global-setup
     const seedInfo = JSON.parse(
       fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")
     ) as { tenantA: { adminEmail: string } };
@@ -24,10 +23,8 @@ test.describe("Login UI", () => {
     await page.getByTestId("input-password").fill(password);
     await page.getByTestId("button-login").click();
 
-    // After login, the app should redirect to dashboard or onboarding
     await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 15000 });
 
-    // Either the dashboard title or onboarding title should be visible
     const dashboardTitle = page.getByTestId("text-dashboard-title");
     const onboardingTitle = page.getByTestId("text-onboarding-title");
     const titleVisible = await Promise.race([
@@ -46,23 +43,19 @@ test.describe("Login UI", () => {
     await page.getByTestId("input-password").fill("WrongPass123!");
     await page.getByTestId("button-login").click();
 
-    // Should stay on /auth
     await page.waitForTimeout(2000);
     expect(page.url()).toContain("/auth");
   });
 
   test("authenticated admin sees dashboard (via storageState)", async ({ browser }) => {
-    // Load the admin storageState so we skip the login UI
     const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
     const page = await context.newPage();
 
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
-    // App should NOT redirect to /auth when already authenticated
     await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 15000 });
 
-    // Dashboard or onboarding should be shown
     const dashboardTitle = page.getByTestId("text-dashboard-title");
     const onboardingTitle = page.getByTestId("text-onboarding-title");
     const titleVisible = await Promise.race([

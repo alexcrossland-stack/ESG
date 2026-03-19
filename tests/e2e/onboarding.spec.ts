@@ -1,42 +1,25 @@
 /**
- * E2E: Onboarding flow — minimum path + Quick Start dismissal
+ * E2E: Onboarding flow — default metrics exist after seed, onboarding PUT does not 500
+ *
+ * Uses the Tenant A admin token from the shared seed (global-setup) to verify
+ * that default metrics are available after onboarding and that the onboarding
+ * step endpoint is functional, without going through the register rate limit.
  */
 import { test, expect } from "@playwright/test";
+import fs from "fs";
 
-const SUFFIX = `${Date.now()}ob`;
+function readSeedInfo() {
+  return JSON.parse(fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")) as {
+    tenantA: { adminToken: string };
+  };
+}
 
 test.describe("Onboarding flow", () => {
   test("new user login triggers seedDatabase and metrics are available", async ({ request }) => {
-    const email = `e2e-onboard-${SUFFIX}@test-esg.example`;
-    const password = "Test1234!";
-
-    const registerRes = await request.post("/api/auth/register", {
-      data: {
-        username: `e2eonboard${SUFFIX}`,
-        email,
-        password,
-        companyName: `E2E Onboard Co ${SUFFIX}`,
-        termsAccepted: true,
-        privacyAccepted: true,
-        termsVersion: "1.0",
-        privacyVersion: "1.0",
-      },
-    });
-    if (registerRes.status() === 429) {
-      test.skip(true, "Register rate limited — skipping test");
-      return;
-    }
-    expect(registerRes.status()).toBe(200);
-
-    const loginRes = await request.post("/api/auth/login", {
-      data: { email, password },
-    });
-    expect(loginRes.status()).toBe(200);
-    const { token } = await loginRes.json();
-    expect(token).toBeTruthy();
+    const { tenantA } = readSeedInfo();
 
     const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     expect(metricsRes.status()).toBe(200);
     const metrics = await metricsRes.json();
@@ -45,32 +28,7 @@ test.describe("Onboarding flow", () => {
   });
 
   test("onboarding step PUT does not return 500", async ({ request }) => {
-    const email = `e2e-onboard2-${SUFFIX}@test-esg.example`;
-    const password = "Test1234!";
-
-    const registerRes = await request.post("/api/auth/register", {
-      data: {
-        username: `e2eonboard2${SUFFIX}`,
-        email,
-        password,
-        companyName: `E2E Onboard2 Co ${SUFFIX}`,
-        termsAccepted: true,
-        privacyAccepted: true,
-        termsVersion: "1.0",
-        privacyVersion: "1.0",
-      },
-    });
-    if (registerRes.status() === 429) {
-      test.skip(true, "Register rate limited — skipping test");
-      return;
-    }
-    expect(registerRes.status()).toBe(200);
-
-    const loginRes = await request.post("/api/auth/login", {
-      data: { email, password },
-    });
-    expect(loginRes.status()).toBe(200);
-    const { token } = await loginRes.json();
+    const { tenantA } = readSeedInfo();
 
     const stepRes = await request.put("/api/onboarding/step", {
       data: {
@@ -78,7 +36,7 @@ test.describe("Onboarding flow", () => {
         path: "/onboarding",
         esgMaturity: "beginner",
       },
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     expect(stepRes.status()).not.toBe(500);
   });

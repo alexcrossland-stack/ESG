@@ -1,63 +1,24 @@
 /**
  * E2E: Viewer restrictions — write UI absent/disabled, API returns 403
+ *
+ * Uses the Tenant A viewer and admin tokens from the shared seed (global-setup)
+ * to test role-based access control without per-test user creation.
  */
-import { test, expect, APIRequestContext } from "@playwright/test";
-import { Client } from "pg";
-import bcrypt from "bcryptjs";
+import { test, expect } from "@playwright/test";
+import fs from "fs";
 
-const SUFFIX = `${Date.now()}vr`;
-
-async function createAdminAndViewer(request: APIRequestContext): Promise<{ adminToken: string; viewerToken: string; companyId: string }> {
-  const adminEmail = `e2e-vr-admin-${SUFFIX}@test-esg.example`;
-  const viewerEmail = `e2e-vr-viewer-${SUFFIX}@test-esg.example`;
-  const password = "Test1234!";
-
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL not set");
-
-  const client = new Client({ connectionString: dbUrl });
-  await client.connect();
-  const hash = await bcrypt.hash(password, 10);
-
-  const compRes = await client.query<{ id: string }>(
-    "INSERT INTO companies (name, onboarding_complete, onboarding_completed_at) VALUES ($1, true, NOW()) RETURNING id",
-    [`E2E Viewer Co ${SUFFIX}`]
-  );
-  const companyId = compRes.rows[0].id;
-
-  await client.query(
-    `INSERT INTO users (username, email, password, role, company_id, terms_accepted_at, privacy_accepted_at, terms_version_accepted, privacy_version_accepted)
-     VALUES ($1, $2, $3, 'admin', $4, NOW(), NOW(), '1.0', '1.0')
-     ON CONFLICT (email) DO NOTHING`,
-    [`e2evradmin${SUFFIX}`, adminEmail, hash, companyId]
-  );
-  await client.query(
-    `INSERT INTO users (username, email, password, role, company_id, terms_accepted_at, privacy_accepted_at, terms_version_accepted, privacy_version_accepted)
-     VALUES ($1, $2, $3, 'viewer', $4, NOW(), NOW(), '1.0', '1.0')
-     ON CONFLICT (email) DO NOTHING`,
-    [`e2evrviewer${SUFFIX}`, viewerEmail, hash, companyId]
-  );
-  await client.end();
-
-  const loginAdmin = await request.post("/api/auth/login", {
-    data: { email: adminEmail, password },
-  });
-  const { token: adminToken } = await loginAdmin.json();
-
-  const loginViewer = await request.post("/api/auth/login", {
-    data: { email: viewerEmail, password },
-  });
-  const { token: viewerToken } = await loginViewer.json();
-
-  return { adminToken, viewerToken, companyId };
+function readSeedInfo() {
+  return JSON.parse(fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")) as {
+    tenantA: { adminToken: string; viewerToken: string };
+  };
 }
 
 test.describe("Viewer restrictions", () => {
   test("viewer is blocked from all write endpoints (403)", async ({ request }) => {
-    const { viewerToken, adminToken } = await createAdminAndViewer(request);
+    const { tenantA } = readSeedInfo();
 
     const adminMetricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${adminToken}` },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     const metrics = await adminMetricsRes.json();
     const metricId = metrics[0]?.id ?? "00000000-0000-0000-0000-000000000000";
@@ -71,17 +32,17 @@ test.describe("Viewer restrictions", () => {
 
     for (const { method, path, body } of writeEndpoints) {
       const res = method === "PUT"
-        ? await request.put(path, { data: body, headers: { Authorization: `Bearer ${viewerToken}` } })
-        : await request.post(path, { data: body, headers: { Authorization: `Bearer ${viewerToken}` } });
+        ? await request.put(path, { data: body, headers: { Authorization: `Bearer ${tenantA.viewerToken}` } })
+        : await request.post(path, { data: body, headers: { Authorization: `Bearer ${tenantA.viewerToken}` } });
       expect(res.status()).toBe(403);
     }
   });
 
   test("viewer can read metrics (200) but not write (403)", async ({ request }) => {
-    const { viewerToken } = await createAdminAndViewer(request);
+    const { tenantA } = readSeedInfo();
 
     const readRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${viewerToken}` },
+      headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
     expect(readRes.status()).toBe(200);
 
@@ -90,7 +51,7 @@ test.describe("Viewer restrictions", () => {
 
     const writeRes = await request.post("/api/data-entry", {
       data: { metricId, period: "2024-Q1", value: 1 },
-      headers: { Authorization: `Bearer ${viewerToken}` },
+      headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
     expect(writeRes.status()).toBe(403);
   });
