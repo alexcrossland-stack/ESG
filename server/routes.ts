@@ -1932,9 +1932,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // GET /api/metric-definitions — list all (optionally filtered)
   app.get("/api/metric-definitions", requireAuth, async (req, res) => {
     try {
-      const { pillar, isCore, isActive } = req.query as Record<string, string>;
+      const { pillar, search, isCore, isActive } = req.query as Record<string, string>;
       const filter: Record<string, any> = {};
       if (pillar) filter.pillar = pillar;
+      if (search) filter.search = search;
       if (isCore !== undefined) filter.isCore = isCore === "true";
       if (isActive !== undefined) filter.isActive = isActive === "true";
       const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
@@ -2065,12 +2066,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (rp) forcedPeriod = rp.name;
       }
 
+      // Fetch active sites for archive exclusion (used in period scan and value aggregation)
+      const _dashboardSites = await storage.getSites(companyId);
+      const _activeSiteIdsForPeriod = new Set(_dashboardSites.filter(s => s.status === "active").map(s => s.id));
+
       let latestPeriod = forcedPeriod || "";
       if (!forcedPeriod) {
         for (const metric of enabledMetrics) {
           const vals = await storage.getMetricValues(metric.id);
           for (const v of vals) {
-            if (v.period > latestPeriod) latestPeriod = v.period;
+            // Only consider active-site or org-level values when determining latest period
+            if ((v.siteId === null || _activeSiteIdsForPeriod.has(v.siteId)) && v.period > latestPeriod) {
+              latestPeriod = v.period;
+            }
           }
         }
       }
@@ -2086,13 +2094,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const scoredMetricInputs: ScoredMetric[] = [];
       const missingDataAlerts: { metricName: string; category: string; period: string }[] = [];
 
+      // Reuse the active site IDs already fetched above for archive exclusion
+      const activeSiteIds = _activeSiteIdsForPeriod;
+
       for (const metric of enabledMetrics) {
         const values = await storage.getMetricValues(metric.id);
-        // Period values: prefer org-level (null siteId), otherwise aggregate across active sites + unassigned
-        const periodValues = values.filter(v => v.period === latestPeriod);
-        let latestVal = periodValues.find(v => !v.siteId) || periodValues[0] || null;
-        // If multiple site values and no org-level value, aggregate numerically
-        if (periodValues.length > 1 && !periodValues.find(v => !v.siteId)) {
+        // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
+        const periodValues = values.filter(v =>
+          v.period === latestPeriod &&
+          (v.siteId === null || activeSiteIds.has(v.siteId))
+        );
+        // Prefer org-level (null siteId) value; fall back to site-aggregated value
+        let latestVal = periodValues.find(v => !v.siteId) || null;
+        if (!latestVal && periodValues.length > 0) {
+          // Aggregate site-specific values: sum for additive/quantitative metrics, average for rate/percentage
           const numericVals = periodValues.map(v => v.value !== null ? Number(v.value) : null).filter(n => n !== null) as number[];
           if (numericVals.length > 0) {
             const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
@@ -3208,12 +3223,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
-      // Enforce siteId for multi-site companies
+      // Enforce siteId when company has any active sites
       if (!bodySiteId) {
         const _qSites = await storage.getSites(companyId);
         const _qActiveSites = _qSites.filter(s => s.status === "active");
-        if (_qActiveSites.length >= 2) {
-          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and questionnaires must be assigned to a specific site." });
+        if (_qActiveSites.length >= 1) {
+          return res.status(400).json({ error: "Please select a site. Questionnaires must be assigned to a specific site." });
         }
       }
       // Validate siteId ownership if provided (write: true blocks archived sites)
@@ -4118,12 +4133,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: bodySiteId } = req.body;
-      // Enforce siteId for multi-site companies
+      // Enforce siteId when company has any active sites
       if (!bodySiteId) {
         const _evSites = await storage.getSites(companyId);
         const _evActiveSites = _evSites.filter(s => s.status === "active");
-        if (_evActiveSites.length >= 2) {
-          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and evidence must be assigned to a specific site." });
+        if (_evActiveSites.length >= 1) {
+          return res.status(400).json({ error: "Please select a site. Evidence must be assigned to a specific site." });
         }
       }
       // Validate siteId ownership if provided (write: true blocks archived sites)
@@ -4728,7 +4743,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/chat/assist", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { message, pageContext, companyContext } = req.body;
+      const { message, pageContext, companyContext, siteId: chatSiteId } = req.body;
 
       if (!message?.trim()) return res.status(400).json({ error: "Message is required" });
 
@@ -4738,6 +4753,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
         : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
 
+      let siteContext = "";
+      if (chatSiteId) {
+        const site = await storage.getSite(chatSiteId, companyId);
+        if (site) siteContext = `\n- Currently viewing site: ${site.name}`;
+      }
       const systemPrompt = `You are an ESG implementation coach for small and medium-sized businesses (SMEs). Your role is to help business owners and managers understand ESG (Environmental, Social, and Governance) practices and take practical action.
 
 Respond in plain, simple English. Be concise — 2-4 sentences maximum. Focus on what the user should do next. Avoid jargon. Be encouraging and practical.
@@ -4748,7 +4768,7 @@ Company context:
 - ESG maturity level: ${companyContext?.maturityLevel ? maturityLabel : "Unknown"}
 - Policies adopted: ${companyContext?.policiesAdopted ?? "Unknown"}
 - Metrics with data entered: ${companyContext?.metricsWithData ?? "Unknown"}
-- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}
+- Evidence files uploaded: ${companyContext?.evidenceCount ?? "Unknown"}${siteContext}
 
 Answer the user's question based on this context. If you're asked about something outside ESG, gently redirect to ESG topics.`;
 
@@ -5389,11 +5409,12 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!_parseCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
       if (_parseTier !== "pro") return upgradeRequired(req, res);
-      // Enforce siteId for multi-site companies at parse time
+      // Enforce siteId when company has any active sites
       const { format, content, siteId: parseSiteId } = req.body;
-      const activeSitesForParse = await storage.getSites(companyId);
-      if (activeSitesForParse.length >= 2 && !parseSiteId) {
-        return res.status(400).json({ error: "siteId is required when company has multiple active sites" });
+      const _parseSites = await storage.getSites(companyId);
+      const _parseActiveSites = _parseSites.filter(s => s.status === "active");
+      if (_parseActiveSites.length >= 1 && !parseSiteId) {
+        return res.status(400).json({ error: "siteId is required when company has active sites" });
       }
       if (parseSiteId) {
         const parseOwnership = await validateSiteOwnership(parseSiteId, companyId, { write: true });
@@ -5440,12 +5461,12 @@ Answer the user's question based on this context. If you're asked about somethin
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
-      // Enforce siteId for multi-site companies
+      // Enforce siteId when company has any active sites
       if (!bodySiteId) {
         const _impSites = await storage.getSites(companyId);
         const _impActiveSites = _impSites.filter(s => s.status === "active");
-        if (_impActiveSites.length >= 2) {
-          return res.status(400).json({ error: "Please select a site. Your organisation has multiple sites and imported data must be assigned to a specific site." });
+        if (_impActiveSites.length >= 1) {
+          return res.status(400).json({ error: "Please select a site. Imported data must be assigned to a specific site." });
         }
       }
       if (bodySiteId) {
@@ -6981,31 +7002,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // METRIC DEFINITIONS API
   // ============================================================
 
-  app.get("/api/metric-definitions", requireAuth, async (req, res) => {
-    try {
-      const { pillar, search, isCore, isActive } = req.query;
-      const filters: any = {};
-      if (pillar && typeof pillar === "string") filters.pillar = pillar;
-      if (search && typeof search === "string") filters.search = search;
-      if (isCore !== undefined) filters.isCore = isCore === "true";
-      if (isActive !== undefined) filters.isActive = isActive === "true";
-      const defs = await storage.getMetricDefinitions(filters);
-      res.json(defs);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get("/api/metric-definitions/:id", requireAuth, async (req, res) => {
-    try {
-      const def = await storage.getMetricDefinition(req.params.id);
-      if (!def) return res.status(404).json({ error: "Not found" });
-      res.json(def);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   app.patch("/api/metric-definitions/:id/toggle", requireAuth, async (req, res) => {
     try {
       const def = await storage.getMetricDefinition(req.params.id);
@@ -7116,51 +7112,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  // ============================================================
-  // METRIC EVIDENCE API
-  // ============================================================
-
-  app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
-    try {
-      const companyId = (req as any)._auth?.companyId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const metricValue = await storage.getMetricDefinitionValueById(req.params.metricValueId, companyId);
-      if (!metricValue) return res.status(404).json({ error: "Metric value not found" });
-      const evidence = await storage.getMetricEvidence(req.params.metricValueId);
-      res.json(evidence);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.post("/api/metric-evidence", requireAuth, async (req, res) => {
-    try {
-      const companyId = (req as any)._auth?.companyId;
-      const userId = (req as any)._auth?.userId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const { metricValueId, fileUrl, storageKey, fileName, fileType, notes } = req.body;
-      if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
-      const metricValue = await storage.getMetricDefinitionValueById(metricValueId, companyId);
-      if (!metricValue) return res.status(404).json({ error: "Metric value not found or not accessible" });
-      const evidence = await storage.createMetricEvidence({ metricValueId, fileUrl: fileUrl ?? null, storageKey: storageKey ?? null, fileName, fileType: fileType ?? null, notes: notes ?? null, uploadedByUserId: userId });
-      res.json(evidence);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.delete("/api/metric-evidence/:id", requireAuth, async (req, res) => {
-    try {
-      const companyId = (req as any)._auth?.companyId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const ev = await storage.getMetricEvidenceById(req.params.id, companyId);
-      if (!ev) return res.status(404).json({ error: "Evidence not found or not accessible" });
-      await storage.deleteMetricEvidence(req.params.id);
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
 
   // ============================================================
   // METRIC CALCULATION RUNS API

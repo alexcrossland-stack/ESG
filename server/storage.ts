@@ -1799,6 +1799,7 @@ export class DatabaseStorage implements IStorage {
       const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
 
       const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
+      if (period) qqConditions.push(eq(questionnaires.period, period));
       const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
 
       rows.push({
@@ -1822,7 +1823,9 @@ export class DatabaseStorage implements IStorage {
     const uEvConds: any[] = [eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)];
     if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
     const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
-    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)));
+    const uQqConds: any[] = [eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)];
+    if (period) uQqConds.push(eq(questionnaires.period, period));
+    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...uQqConds));
 
     if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
       rows.push({ siteId: null, siteName: "Unassigned", status: "active", metricCount: Number(uMvRow?.cnt ?? 0), evidenceCount: Number(uEvRow?.cnt ?? 0), questionnaireCount: Number(uQqRow?.cnt ?? 0) });
