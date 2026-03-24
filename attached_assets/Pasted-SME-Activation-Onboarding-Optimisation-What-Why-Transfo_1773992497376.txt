@@ -1,0 +1,358 @@
+SME Activation & Onboarding Optimisation
+
+What & Why
+
+Transform the first-use experience so a non-technical SME user can complete a full activation journey in one session (10–15 minutes):
+
+Sign up → complete onboarding → add first data → understand outcome → generate first report
+
+This is not a feature build. It is a system-wide activation, usability, copy, and flow optimisation pass.
+
+Core rule:
+Every screen must answer:
+	•	What is this?
+	•	Why does it matter?
+	•	What should I do next?
+
+This task must remove friction, eliminate dead ends, enforce forward progress, and actively guide the user. If a user can land on a page and do nothing, the task is incomplete.
+
+This task supersedes #5, #6, #7, #19, #24.
+
+⸻
+
+Critical Implementation Rule
+
+Use one shared activation state model. Do NOT duplicate logic across pages.
+
+Create a single derived state:
+
+activationState = {
+hasCompletedOnboarding: boolean,
+hasAddedData: boolean,
+hasUploadedEvidence: boolean,
+hasGeneratedReport: boolean
+}
+
+This must drive:
+	•	dashboard checklist
+	•	next-step banner
+	•	empty state CTAs
+	•	report readiness
+
+No duplication of logic across components.
+
+⸻
+
+Done Looks Like
+
+Activation
+	•	Full journey completed in one session (10–15 mins)
+	•	Time to first data < 5 mins
+	•	Time to first report < 15 mins
+
+Dashboard
+	•	Persistent checklist:
+	•	Add data
+	•	Upload evidence
+	•	Generate report
+	•	Live progress (0–100%)
+	•	Checklist never disappears until complete
+	•	Dynamic next-step banner always visible until activation complete
+	•	No empty charts, blank tables, or unexplained “0” values
+
+Onboarding
+	•	Each step includes:
+	•	plain-English title
+	•	“what this is”
+	•	“why this matters”
+	•	Defaults applied:
+	•	framework
+	•	reporting period
+	•	core metrics
+	•	First site auto-created
+	•	Completion screen:
+	•	success confirmation
+	•	summary of setup
+	•	CTA → Add your first data point
+
+Data Entry
+	•	Inputs show units and example values
+	•	Inline validation
+	•	Success feedback after save
+	•	Immediate UI update
+	•	Clear next-step CTA
+	•	“Metric category” → “Type of data”
+	•	One-line explanation per type
+
+Empty States
+
+Apply to:
+	•	dashboard
+	•	metrics
+	•	data entry
+	•	evidence
+	•	reports
+	•	policies
+
+Each must include:
+	•	what this is
+	•	why it matters
+	•	what to do next
+	•	one primary CTA
+
+No blank states anywhere.
+
+Reports
+	•	Empty state with CTA → Generate report
+	•	Framework selector explained in plain English
+	•	Insufficient data message explains exactly what is missing and links to fix
+
+Tooltips
+
+Add “?” tooltips for:
+	•	framework
+	•	evidence
+	•	maturity
+	•	scope 1 / 2 / 3
+	•	type of data
+
+Rules:
+	•	one sentence
+	•	plain English
+	•	click-friendly (not hover-only)
+
+Error Handling
+	•	No generic errors
+	•	Each error explains cause + fix
+	•	No silent failures
+
+Micro UX
+	•	“Submit” → Save data
+	•	“Continue” → Next step
+	•	All async actions show loading state
+	•	No dead links
+
+Analytics
+
+Track:
+	•	onboarding step completed
+	•	onboarding completed
+	•	first data added
+	•	first report generated
+	•	onboarding drop-off
+
+Use existing endpoint or add:
+POST /api/analytics/events
+
+Payload must include:
+	•	timestamp
+	•	user_id
+	•	company_id
+	•	event_name
+
+⸻
+
+Out of Scope
+	•	new features
+	•	new data models/tables (unless unavoidable)
+	•	new frameworks or metrics
+	•	admin-side changes
+	•	scoring/calculation changes
+	•	architecture redesign
+	•	mobile-specific work
+
+⸻
+
+Execution Approach
+
+Phase 1 — UX Audit (no coding)
+
+Audit all relevant pages.
+
+Output:
+	•	grouped by page
+	•	severity: Critical / High / Medium
+	•	issue + proposed fix
+
+Audit for:
+	•	empty states
+	•	unclear copy
+	•	missing CTAs
+	•	dead ends
+	•	inconsistent buttons
+	•	missing defaults
+	•	user confusion points
+
+Do not proceed until complete.
+
+⸻
+
+Phase 2 — Activation Flow Enforcement
+
+Enforce system flow:
+	1.	Onboarding complete
+	2.	Dashboard loads
+	3.	User directed to add data
+	4.	After data → directed to generate report
+
+Must be:
+	•	visible
+	•	persistent
+	•	state-driven
+
+⸻
+
+Phase 3 — Implementation (in order)
+
+1. Dashboard Activation
+Add:
+	•	“Get started” checklist
+	•	Next-step banner
+
+Checklist:
+	•	Add data
+	•	Upload evidence
+	•	Generate report
+
+Requirements:
+	•	driven by activationState
+	•	live updates
+	•	never disappears
+
+Banner logic:
+	•	No data → Add your first ESG data point
+	•	Data added → Generate your first report
+	•	Report done → Improve or expand
+
+Replace all empty dashboard states with:
+	•	explanation
+	•	why it matters
+	•	CTA
+
+⸻
+
+2. Onboarding
+Rewrite all steps:
+	•	plain English
+	•	include “what” + “why”
+
+Apply defaults:
+	•	framework
+	•	reporting period
+	•	metrics
+	•	first site
+
+Replace completion screen with:
+	•	success message
+	•	summary
+	•	CTA → Add your first data point
+
+⸻
+
+3. Data Entry
+Add:
+	•	units
+	•	example values
+	•	inline validation
+
+Rename:
+	•	Metric category → Type of data
+
+After save:
+	•	show success
+	•	update UI
+	•	direct next step (no dead end)
+
+⸻
+
+4. Empty States
+Replace ALL empty states using existing component.
+
+Each must include:
+	•	what it is
+	•	why it matters
+	•	what to do next
+	•	CTA
+
+CTA must link directly to action (not generic page).
+
+⸻
+
+5. Reports
+Add:
+	•	empty state + Generate report CTA
+	•	framework explanation
+	•	insufficient data message with exact requirement + direct link
+
+⸻
+
+6. Tooltips
+Add tooltips to key ESG terms.
+
+Rules:
+	•	one sentence
+	•	plain English
+	•	click-based
+
+⸻
+
+7. Error Handling
+Replace all generic errors.
+
+Each must include:
+	•	what happened
+	•	how to fix it
+
+Also:
+	•	add loading states
+	•	fix all CTAs
+	•	ensure visible success feedback
+
+⸻
+
+8. Analytics
+Track key activation events.
+
+Use existing endpoint or create:
+POST /api/analytics/events
+
+⸻
+
+Phase 4 — End-to-End Validation
+
+Test with a fresh account.
+
+User must:
+	1.	sign up
+	2.	complete onboarding
+	3.	add one data point
+	4.	understand outcome
+	5.	generate report
+
+All in one session, no confusion.
+
+If user asks “what do I do next?” → task fails.
+
+⸻
+
+Relevant Files
+
+client/src/pages/onboarding.tsx
+client/src/pages/dashboard.tsx
+client/src/pages/data-entry.tsx
+client/src/pages/metrics.tsx
+client/src/pages/reports.tsx
+client/src/pages/evidence.tsx
+client/src/components/empty-state.tsx
+client/src/components/page-guidance.tsx
+client/src/components/ui/tooltip.tsx
+client/src/components/ui/form.tsx
+
+⸻
+
+Final Instruction
+
+This is not a UI polish task.
+
+This is:
+A guided activation system implemented through shared state logic, UX clarity, flow control, and end-to-end usability hardening.
