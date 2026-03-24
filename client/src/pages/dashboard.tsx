@@ -125,27 +125,36 @@ function CategoryBar({ label, counts, score }: {
 }
 
 function ActivationCard() {
-  const queryClient = useQueryClient();
-  const { data: status, isLoading } = useQuery<any>({
-    queryKey: ["/api/onboarding/status"],
-    refetchOnWindowFocus: true,
-  });
+  const activation = useActivationState();
 
-  const dismissMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/onboarding/dismiss-card", { dismiss: true }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
-    },
-  });
+  if (activation.isLoading || activation.isError) {
+    return (
+      <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
+        <CardHeader className="pb-2">
+          <Skeleton className="h-4 w-48" />
+          <Skeleton className="h-1.5 w-full mt-2" />
+        </CardHeader>
+        <CardContent className="pb-3 space-y-2">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
 
-  if (isLoading || !status || status.activationComplete) return null;
-  if (status.dismissedAt) return null;
+  if (!activation.activationSteps.length) return null;
+  if (activation.activationComplete) return null;
 
-  const completedCount = status.completedCount ?? 0;
-  const totalSteps = status.totalSteps ?? 6;
-  const overallPercent = status.overallPercent ?? 0;
-  const steps: any[] = status.steps ?? [];
-  const nextStep = status.nextStep;
+  const { activationSteps, activationPercent, activationNextStep } = activation;
+
+  const progressLabel = activationPercent === 0
+    ? "Not started yet — pick step 1 below"
+    : activationPercent === 33
+    ? "1 of 3 done — keep going"
+    : activationPercent === 67
+    ? "2 of 3 done — almost there"
+    : "All 3 done — you're set up!";
 
   return (
     <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
@@ -153,30 +162,22 @@ function ActivationCard() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-primary" />
-            Get up and running — {completedCount} of {totalSteps} complete
+            Get started — 3 steps to your first ESG report
           </CardTitle>
-          <button
-            className="text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => dismissMutation.mutate()}
-            disabled={dismissMutation.isPending}
-            data-testid="button-dismiss-activation-card"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
         </div>
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <CardDescription className="text-xs">{completedCount} of {totalSteps} steps complete</CardDescription>
-            <span className="text-xs font-medium text-primary">{overallPercent}%</span>
+            <CardDescription className="text-xs">{progressLabel}</CardDescription>
+            <span className="text-xs font-medium text-primary">{activationPercent}%</span>
           </div>
           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${overallPercent}%` }} />
+            <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${activationPercent}%` }} />
           </div>
         </div>
       </CardHeader>
       <CardContent className="pb-3">
         <div className="space-y-1">
-          {steps.map((step: any) => (
+          {activationSteps.map((step, idx) => (
             <Link key={step.key} href={step.actionUrl || "/"}>
               <div
                 className="flex items-start gap-2.5 p-2 rounded-md hover:bg-background/60 cursor-pointer transition-colors group"
@@ -185,24 +186,29 @@ function ActivationCard() {
                 {step.complete ? (
                   <CheckCircle2 className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                 ) : (
-                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0 mt-0.5 group-hover:border-primary/50 transition-colors" />
+                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0 mt-0.5 group-hover:border-primary/50 transition-colors flex items-center justify-center">
+                    <span className="text-[9px] font-bold text-muted-foreground">{idx + 1}</span>
+                  </div>
                 )}
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm leading-snug ${step.complete ? "text-muted-foreground line-through" : "font-medium"}`}>{step.label}</p>
                   {!step.complete && <p className="text-xs text-muted-foreground">{step.description}</p>}
+                  {!step.complete && step.why && (
+                    <p className="text-xs text-primary/70 mt-0.5 italic">{step.why}</p>
+                  )}
                 </div>
-                {!step.complete && step.key === nextStep?.key && (
+                {!step.complete && activationNextStep && step.key === activationNextStep.key && (
                   <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium shrink-0">Next</span>
                 )}
               </div>
             </Link>
           ))}
         </div>
-        {nextStep && (
+        {activationNextStep && (
           <div className="mt-3 pt-3 border-t">
-            <Link href={nextStep.actionUrl || "/"}>
+            <Link href={activationNextStep.actionUrl || "/"}>
               <Button size="sm" className="w-full" data-testid="button-activation-primary-cta">
-                Start: {nextStep.label}
+                {activationNextStep.label} <ArrowRight className="w-3.5 h-3.5 ml-1" />
               </Button>
             </Link>
           </div>
@@ -214,31 +220,15 @@ function ActivationCard() {
 
 function NextStepBanner() {
   const activation = useActivationState();
-  if (activation.isLoading || activation.activationComplete) return null;
 
-  let message = "";
-  let href = "/data-entry";
-  let actionLabel = "Add your first data point";
-
-  if (!activation.hasCompletedOnboarding) {
-    message = "Complete your setup to activate your ESG workspace.";
-    href = "/onboarding";
-    actionLabel = "Continue setup";
-  } else if (!activation.hasAddedData) {
-    message = "Your workspace is ready. Add your first data point to see your ESG score.";
-    href = "/data-entry";
-    actionLabel = "Add data now";
-  } else if (!activation.hasUploadedEvidence) {
-    message = "Great start! Upload supporting evidence (an invoice or certificate) to improve your data quality.";
-    href = "/evidence";
-    actionLabel = "Upload evidence";
-  } else if (!activation.hasGeneratedReport) {
-    message = "You have data and evidence. Generate your first ESG report to share with stakeholders.";
-    href = "/reports";
-    actionLabel = "Generate report";
+  if (activation.isLoading || activation.isError) {
+    return <Skeleton className="h-12 w-full rounded-lg" />;
   }
 
-  if (!message) return null;
+  if (activation.activationComplete) return null;
+
+  const next = activation.activationNextStep;
+  if (!next) return null;
 
   return (
     <div
@@ -247,11 +237,11 @@ function NextStepBanner() {
     >
       <div className="flex items-center gap-2 min-w-0">
         <Zap className="w-4 h-4 text-primary shrink-0" />
-        <p className="text-sm text-foreground leading-snug">{message}</p>
+        <p className="text-sm text-foreground leading-snug">{next.description}</p>
       </div>
-      <Link href={href}>
+      <Link href={next.actionUrl || "/"}>
         <Button size="sm" className="shrink-0" data-testid="button-next-step-banner">
-          {actionLabel} <ArrowRight className="w-3.5 h-3.5 ml-1" />
+          {next.label} <ArrowRight className="w-3.5 h-3.5 ml-1" />
         </Button>
       </Link>
     </div>
@@ -815,16 +805,16 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {emissionsChartData.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Leaf className="w-4 h-4 text-primary" />
-                Carbon Emissions
-              </CardTitle>
-              <CardDescription className="text-xs">Scope 1 & 2 (tCO2e)</CardDescription>
-            </CardHeader>
-            <CardContent>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Leaf className="w-4 h-4 text-primary" />
+              Carbon Emissions
+            </CardTitle>
+            <CardDescription className="text-xs">Scope 1 & 2 (tCO2e)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {emissionsChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={160}>
                 <BarChart data={emissionsChartData}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -835,20 +825,27 @@ export default function Dashboard() {
                   <Bar dataKey="scope2" name="Scope 2" fill="hsl(158, 44%, 52%)" radius={[3, 3, 0, 0]} stackId="a" />
                 </BarChart>
               </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
+            ) : (
+              <div className="flex flex-col items-center justify-center h-40 text-center gap-2" data-testid="empty-state-emissions">
+                <Leaf className="w-7 h-7 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No carbon data yet</p>
+                <p className="text-xs text-muted-foreground/70 max-w-[180px]">Add electricity or gas usage in Data Entry to see emissions here.</p>
+                <Link href="/data-entry"><Button size="sm" variant="outline" className="mt-1 text-xs h-7" data-testid="button-empty-emissions-cta">Add data</Button></Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {electricityChart.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Zap className="w-4 h-4 text-primary" />
-                Electricity
-              </CardTitle>
-              <CardDescription className="text-xs">Monthly kWh</CardDescription>
-            </CardHeader>
-            <CardContent>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Zap className="w-4 h-4 text-primary" />
+              Electricity
+            </CardTitle>
+            <CardDescription className="text-xs">Monthly kWh</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {electricityChart.length > 0 ? (
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={electricityChart}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -861,22 +858,29 @@ export default function Dashboard() {
                   <Line type="monotone" dataKey="value" stroke={COLORS.environmental} strokeWidth={2} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
+            ) : (
+              <div className="flex flex-col items-center justify-center h-40 text-center gap-2" data-testid="empty-state-electricity">
+                <Zap className="w-7 h-7 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No electricity data yet</p>
+                <p className="text-xs text-muted-foreground/70 max-w-[180px]">Enter your monthly kWh from your electricity bill to track usage.</p>
+                <Link href="/data-entry"><Button size="sm" variant="outline" className="mt-1 text-xs h-7" data-testid="button-empty-electricity-cta">Add data</Button></Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {workforceChart.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Users className="w-4 h-4 text-blue-500" />
-                Workforce
-              </CardTitle>
-              <CardDescription className="text-xs">Total headcount</CardDescription>
-            </CardHeader>
-            <CardContent>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Users className="w-4 h-4 text-blue-500" />
+              Workforce
+            </CardTitle>
+            <CardDescription className="text-xs">Total headcount</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {workforceChart.length > 0 ? (
               <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={workforceChart}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -886,9 +890,16 @@ export default function Dashboard() {
                   <Bar dataKey="value" fill={COLORS.social} radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
+            ) : (
+              <div className="flex flex-col items-center justify-center h-36 text-center gap-2" data-testid="empty-state-workforce">
+                <Users className="w-7 h-7 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No headcount data yet</p>
+                <p className="text-xs text-muted-foreground/70 max-w-[160px]">Add your total employee count to track workforce trends.</p>
+                <Link href="/data-entry"><Button size="sm" variant="outline" className="mt-1 text-xs h-7" data-testid="button-empty-workforce-cta">Add data</Button></Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-2">

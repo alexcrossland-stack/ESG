@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
@@ -21,13 +21,13 @@ import {
 } from "lucide-react";
 
 const V2_STEPS = [
-  { key: "profile", label: "Company Profile", icon: Building2, desc: "Tell us about your business" },
-  { key: "maturity", label: "ESG Maturity", icon: Star, desc: "Assess your current ESG level" },
-  { key: "focus", label: "ESG Priorities", icon: Target, desc: "Choose your focus areas" },
-  { key: "reporting", label: "Reporting Setup", icon: BarChart3, desc: "Configure metrics and frequency" },
-  { key: "data_entry", label: "First Data Entry", icon: Zap, desc: "Enter your first data point" },
-  { key: "evidence", label: "Evidence Linking", icon: Upload, desc: "Link supporting evidence" },
-  { key: "action_plan", label: "Your ESG Action Plan", icon: FileCheck, desc: "See your personalised plan" },
+  { key: "profile", label: "Company Profile", icon: Building2, desc: "Tell us about your business — so the platform can set up the right metrics, benchmarks, and reporting requirements for your sector." },
+  { key: "maturity", label: "ESG Maturity", icon: Star, desc: "A quick 5-question check — this lets us tailor your starting plan and suggest the most relevant ESG actions for where you are today." },
+  { key: "focus", label: "ESG Priorities", icon: Target, desc: "Choose the ESG topics that matter most to your business and stakeholders — these shape which metrics you track and report on." },
+  { key: "reporting", label: "Reporting Setup", icon: BarChart3, desc: "Set how often you report and which metrics to activate — this determines what you measure and how your ESG score is calculated." },
+  { key: "data_entry", label: "First Data Entry", icon: Zap, desc: "Add your first real data point — an electricity bill, headcount, or any metric value. This is what makes your ESG score come to life." },
+  { key: "evidence", label: "Evidence Linking", icon: Upload, desc: "Attach a supporting document (invoice, certificate, or bill) — this proves your data is accurate and is required by auditors and customers." },
+  { key: "action_plan", label: "Your ESG Action Plan", icon: FileCheck, desc: "Your personalised next steps — a prioritised list of actions to improve your ESG performance, based on your answers." },
 ];
 
 const INDUSTRIES = [
@@ -325,6 +325,7 @@ export default function Onboarding() {
 
   const [showWizard, setShowWizard] = useState(false);
   const [showCompletion, setShowCompletion] = useState(false);
+  const completionFiredRef = useRef(false);
   const [step, setStep] = useState(1);
   const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
 
@@ -404,6 +405,20 @@ export default function Onboarding() {
     }
   }, [industry]);
 
+  const dropOffGuardRef = useRef({ showWizard: false, step: 1 });
+  useEffect(() => {
+    dropOffGuardRef.current.showWizard = showWizard;
+    dropOffGuardRef.current.step = step;
+  }, [showWizard, step]);
+
+  useEffect(() => {
+    return () => {
+      if (dropOffGuardRef.current.showWizard && !completionFiredRef.current) {
+        trackEvent(AnalyticsEvents.ONBOARDING_DROPPED, { step_reached: dropOffGuardRef.current.step });
+      }
+    };
+  }, []);
+
   const saveMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PUT", "/api/onboarding/step", data),
     onSuccess: () => {
@@ -418,6 +433,7 @@ export default function Onboarding() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      completionFiredRef.current = true;
       trackEvent(AnalyticsEvents.ONBOARDING_COMPLETED, { path: "guided" });
       setShowCompletion(true);
     },
@@ -520,6 +536,7 @@ export default function Onboarding() {
     apiRequest("POST", "/api/onboarding/complete", { path: "quick_start", onboardingVersion: 2 }).then(() => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      completionFiredRef.current = true;
       trackEvent(AnalyticsEvents.ONBOARDING_COMPLETED, { path: "quick_start" });
       setShowCompletion(true);
     });
@@ -1135,7 +1152,7 @@ export default function Onboarding() {
               )}
               {step < V2_STEPS.length ? (
                 <Button onClick={saveAndNext} disabled={!isStepValid() || saveMutation.isPending} data-testid="button-next">
-                  Continue <ArrowRight className="w-4 h-4 ml-1" />
+                  Next step <ArrowRight className="w-4 h-4 ml-1" />
                 </Button>
               ) : (
                 <Button

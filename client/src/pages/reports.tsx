@@ -19,6 +19,7 @@ import {
   Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
+import { Link } from "wouter";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
@@ -1650,7 +1651,10 @@ export default function Reports() {
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Report Type</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-1.5">
+                Report Type
+                <EsgTooltip term="framework" />
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5">
               {REPORT_TEMPLATES.map(t => {
@@ -1774,15 +1778,24 @@ export default function Reports() {
               </div>
 
               {can("report_generation") && (
-                <Button
-                  className="w-full"
-                  onClick={() => generateMutation.mutate()}
-                  disabled={generateMutation.isPending}
-                  data-testid="button-generate-report"
-                >
-                  <FileText className="w-3.5 h-3.5 mr-1.5" />
-                  {generateMutation.isPending ? "Generating..." : "Generate Report"}
-                </Button>
+                <>
+                  {!activation.isLoading && !activation.isError && !activation.hasAddedData && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2">
+                      <strong>Data required:</strong> add figures in Data Entry before generating a report.{" "}
+                      <Link href="/data-entry" className="underline font-medium">Go to Data Entry →</Link>
+                    </p>
+                  )}
+                  <Button
+                    className="w-full"
+                    onClick={() => generateMutation.mutate()}
+                    disabled={generateMutation.isPending || activation.isLoading || !activation.hasAddedData}
+                    data-testid="button-generate-report"
+                    title={!activation.isLoading && !activation.hasAddedData ? "Add data in Data Entry first" : undefined}
+                  >
+                    <FileText className="w-3.5 h-3.5 mr-1.5" />
+                    {generateMutation.isPending ? "Generating..." : "Generate Report"}
+                  </Button>
+                </>
               )}
             </CardContent>
           </Card>
@@ -1842,11 +1855,39 @@ export default function Reports() {
               <ReportPreview data={reportData} sections={effectiveSections} />
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center h-64 border border-dashed border-border rounded-md space-y-3">
-              <FileText className="w-10 h-10 text-muted-foreground" />
-              <div className="text-center">
+            <div className="flex flex-col items-center justify-center h-64 border border-dashed border-border rounded-md space-y-3 text-center px-6" data-testid="empty-state-report-preview">
+              <FileText className="w-10 h-10 text-muted-foreground/50" />
+              <div>
                 <p className="text-sm font-medium">No report generated yet</p>
-                <p className="text-xs text-muted-foreground mt-1">Choose a template, configure sections, and click Generate Report</p>
+                {(activation.isLoading || activation.isError) ? (
+                  <Skeleton className="h-4 w-48 mt-2 mx-auto" />
+                ) : !activation.hasAddedData ? (
+                  <>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      <strong>Missing: data entry</strong> — you need at least one month of figures before you can generate a report.
+                      {!activation.hasUploadedEvidence && " Once you've added data, also upload an evidence file to improve report quality."}
+                    </p>
+                    <Link href="/data-entry">
+                      <Button size="sm" variant="outline" className="mt-3" data-testid="button-report-empty-add-data">
+                        Go to Data Entry
+                      </Button>
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground mt-1">Your data is ready. Select a template on the left and click Generate Report to create your first ESG report.</p>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="mt-3"
+                      data-testid="button-report-empty-generate"
+                      disabled={generateMutation.isPending}
+                      onClick={() => generateMutation.mutate()}
+                    >
+                      {generateMutation.isPending ? "Generating..." : "Generate report now"}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -1898,7 +1939,7 @@ export default function Reports() {
                     data-testid={`button-submit-report-${report.id}`}
                   >
                     <Send className="w-3.5 h-3.5 mr-1.5" />
-                    Submit
+                    Send for review
                   </Button>
                 )}
                 {canApprove && report.workflowStatus === "submitted" && (

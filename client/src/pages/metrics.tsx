@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
@@ -438,11 +439,16 @@ export default function Metrics() {
             </div>
             <div>
               <p className="text-sm font-medium">No metrics activated yet</p>
-              <p className="text-xs text-muted-foreground mt-1">Activate metrics to start tracking your ESG performance — each metric measures one aspect of your environment, social, or governance impact.</p>
+              <p className="text-xs text-muted-foreground mt-1">Metrics are the individual measurements that make up your ESG score — things like carbon emissions, headcount, and whether policies are in place.</p>
             </div>
             <p className="text-xs text-muted-foreground">
-              Toggle individual metrics on below, or complete the onboarding setup to have metrics pre-selected for your industry.
+              Scroll down to turn on the metrics relevant to your business, or complete onboarding to have metrics pre-selected for your industry.
             </p>
+            <Link href="/onboarding">
+              <Button size="sm" variant="outline" data-testid="button-metrics-empty-onboarding">
+                Complete onboarding to pre-select metrics
+              </Button>
+            </Link>
           </div>
         )}
         {filtered.length === 0 && metrics.length > 0 && (

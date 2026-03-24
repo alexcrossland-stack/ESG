@@ -4,3 +4,7 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+# E2E test auth fixtures (contain session tokens)
+tests/e2e/.auth/
+test-results/
+attached_assets/

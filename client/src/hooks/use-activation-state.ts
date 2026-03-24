@@ -1,5 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 
+export type ActivationStep = {
+  key: string;
+  label: string;
+  complete: boolean;
+  actionUrl: string;
+  description: string;
+  why?: string;
+};
+
 export type ActivationState = {
   hasCompletedOnboarding: boolean;
   hasAddedData: boolean;
@@ -9,18 +18,18 @@ export type ActivationState = {
   overallPercent: number;
   completedCount: number;
   totalSteps: number;
-  steps: Array<{
-    key: string;
-    label: string;
-    complete: boolean;
-    actionUrl: string;
-    description: string;
-  }>;
-  nextStep: { key: string; label: string; actionUrl: string; description: string } | null;
+  steps: ActivationStep[];
+  nextStep: ActivationStep | null;
   dismissedAt: string | null;
+  activationSteps: ActivationStep[];
+  activationPercent: number;
+  activationCompletedCount: number;
+  activationNextStep: ActivationStep | null;
+  isLoading: boolean;
+  isError: boolean;
 };
 
-const EMPTY_STATE: ActivationState = {
+const EMPTY_STATE: Omit<ActivationState, "isLoading" | "isError"> = {
   hasCompletedOnboarding: false,
   hasAddedData: false,
   hasUploadedEvidence: false,
@@ -32,16 +41,22 @@ const EMPTY_STATE: ActivationState = {
   steps: [],
   nextStep: null,
   dismissedAt: null,
+  activationSteps: [],
+  activationPercent: 0,
+  activationCompletedCount: 0,
+  activationNextStep: null,
 };
 
 export function useActivationState() {
-  const { data, isLoading, refetch } = useQuery<any>({
+  const { data, isLoading, isError, refetch } = useQuery<any>({
     queryKey: ["/api/onboarding/status"],
     refetchOnWindowFocus: true,
     staleTime: 30_000,
   });
 
-  if (!data || isLoading) return { ...EMPTY_STATE, isLoading };
+  if (isLoading || !data) {
+    return { ...EMPTY_STATE, isLoading: isLoading || !data, isError };
+  }
 
   const state: ActivationState = {
     hasCompletedOnboarding: !!data.onboardingComplete,
@@ -55,7 +70,13 @@ export function useActivationState() {
     steps: data.steps ?? [],
     nextStep: data.nextStep ?? null,
     dismissedAt: data.dismissedAt ?? null,
+    activationSteps: data.activationSteps ?? [],
+    activationPercent: data.activationPercent ?? 0,
+    activationCompletedCount: data.activationCompletedCount ?? 0,
+    activationNextStep: data.activationNextStep ?? null,
+    isLoading: false,
+    isError: false,
   };
 
-  return { ...state, isLoading, refetch };
+  return { ...state, refetch };
 }

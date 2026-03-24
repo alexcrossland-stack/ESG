@@ -118,6 +118,7 @@ export interface IStorage {
   // Metric Values
   getMetricValues(metricId: string): Promise<MetricValue[]>;
   getMetricValuesByPeriod(companyId: string, period: string): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
+  hasAnyData(companyId: string): Promise<boolean>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   updateMetricValue(id: string, data: Partial<MetricValue>): Promise<MetricValue | undefined>;
   lockPeriod(companyId: string, period: string): Promise<void>;
@@ -621,6 +622,23 @@ export class DatabaseStorage implements IStorage {
       .where(
         sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId}) AND ${metricValues.period} = ${period}`
       );
+  }
+
+  async hasAnyData(companyId: string): Promise<boolean> {
+    const rawResult = await db
+      .select({ id: rawDataInputs.id })
+      .from(rawDataInputs)
+      .where(eq(rawDataInputs.companyId, companyId))
+      .limit(1);
+    if (rawResult.length > 0) return true;
+    const mvResult = await db
+      .select({ id: metricValues.id })
+      .from(metricValues)
+      .where(
+        sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`
+      )
+      .limit(1);
+    return mvResult.length > 0;
   }
 
   async getRawDataByPeriod(companyId: string, period: string, siteId?: string | null) {

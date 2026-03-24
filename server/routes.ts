@@ -1437,24 +1437,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const now = new Date();
-      const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-
-      const [metrics, rawDataList, evidenceList, reportsList, policiesList, questList, metricValues] = await Promise.all([
+      const [metrics, evidenceList, reportsList, policiesList, questList, hasData] = await Promise.all([
         storage.getMetrics(companyId),
-        storage.getRawDataByPeriod(companyId, currentPeriod).catch(() => []),
         storage.getEvidenceFiles(companyId),
         storage.getReportRuns(companyId),
         storage.getPolicy(companyId),
         storage.getQuestionnaires(companyId),
-        storage.getMetricValuesByPeriod(companyId, currentPeriod),
+        storage.hasAnyData(companyId),
       ]);
 
       const step1Complete = !!(company.name && company.name.trim() && company.industry && company.country);
       const answers = (company.onboardingAnswers as any) || {};
       const step2Complete = !!(answers.selectedTopics && Array.isArray(answers.selectedTopics) && answers.selectedTopics.length > 0);
       const step3Complete = !!(answers.reportingFrequency && metrics.length > 0);
-      const step4Complete = rawDataList.length > 0 || metricValues.length > 0;
+      const step4Complete = hasData;
       const step5Complete = evidenceList.length > 0;
       const hasReport = reportsList.length > 0;
       const hasPolicy = !!(policiesList);
@@ -1467,7 +1463,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         { key: "focus", label: "Choose ESG focus areas", complete: step2Complete, actionUrl: "/onboarding", description: "Select your priority ESG topics", hint: "Complete when: at least one ESG topic is selected" },
         { key: "reporting", label: "Set up reporting basics", complete: step3Complete, actionUrl: "/onboarding", description: "Reporting frequency and active metrics", hint: "Complete when: reporting frequency is set and at least one metric is active" },
         { key: "data_entry", label: "Enter first data", complete: step4Complete, actionUrl: "/data-entry", description: "Add your first metric value or raw data", hint: "Complete when: at least one real value is recorded for any metric or input" },
-        { key: "evidence", label: "Upload first evidence", complete: step5Complete, actionUrl: "/evidence", description: "Link a supporting document or file", hint: "Complete when: at least one evidence file is uploaded and linked" },
+        { key: "evidence", label: "Upload first evidence", complete: step5Complete, actionUrl: "/evidence?upload=1", description: "Link a supporting document or file", hint: "Complete when: at least one evidence file is uploaded and linked" },
         { key: "output", label: "Generate first output", complete: step6Complete, actionUrl: "/reports", description: "Create a report, policy, or questionnaire response", hint: "Complete when: at least one report is generated, a policy draft exists, or a questionnaire is submitted" },
       ];
 
@@ -1476,19 +1472,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const nextStep = steps.find(s => !s.complete) || null;
       const activationComplete = steps.every(s => s.complete);
 
+      const activationSteps = [
+        {
+          key: "data_entry",
+          label: "Add your first data",
+          complete: step4Complete,
+          actionUrl: "/data-entry",
+          description: "Enter an electricity bill, headcount, or any metric value",
+          why: "Data is what makes your ESG score real — without it, nothing can be measured or reported.",
+        },
+        {
+          key: "evidence",
+          label: "Upload supporting evidence",
+          complete: step5Complete,
+          actionUrl: "/evidence?upload=1",
+          description: "Attach an invoice, certificate, or utility bill",
+          why: "Evidence proves your figures are accurate — it's what auditors, customers, and banks look for.",
+        },
+        {
+          key: "report",
+          label: "Generate your first report",
+          complete: hasReport,
+          actionUrl: "/reports",
+          description: "Create a management report or board pack",
+          why: "Reports are how ESG data becomes useful — for internal decisions and external stakeholder requests.",
+        },
+      ];
+
+      const activationCompletedCount = activationSteps.filter(s => s.complete).length;
+      const activationPercent = activationCompletedCount === 0 ? 0 : activationCompletedCount === 1 ? 33 : activationCompletedCount === 2 ? 67 : 100;
+      const activationNextStep = activationSteps.find(s => !s.complete) || null;
+      const activationDone = activationSteps.every(s => s.complete);
+
       res.json({
-        complete: activationComplete,
+        complete: activationDone,
         onboardingComplete: !!company.onboardingComplete,
-        activationComplete,
+        activationComplete: activationDone,
         hasAddedData: step4Complete,
         hasUploadedEvidence: step5Complete,
-        hasGeneratedReport: step6Complete,
+        hasGeneratedReport: hasReport,
         steps,
         overallPercent,
         completedCount,
         totalSteps: steps.length,
         nextStep,
         dismissedAt: company.activationCardDismissedAt,
+        activationSteps,
+        activationPercent,
+        activationCompletedCount,
+        activationNextStep,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1506,6 +1538,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  const ONCE_ONLY_EVENTS = new Set(["first_data_added", "first_report_generated"]);
+
   app.post("/api/analytics/events", requireAuth, async (req, res) => {
     try {
       const session = req.session as any;
@@ -1513,6 +1547,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!event_name || typeof event_name !== "string") {
         return res.status(400).json({ error: "event_name is required" });
       }
+
+      if (ONCE_ONLY_EVENTS.has(event_name)) {
+        const company = await storage.getCompany(session.companyId);
+        const answers = (company?.onboardingAnswers as Record<string, any>) || {};
+        const milestoneKey = `milestone_${event_name}`;
+        if (answers[milestoneKey]) {
+          return res.status(204).end();
+        }
+        answers[milestoneKey] = new Date().toISOString();
+        await storage.updateCompany(session.companyId, { onboardingAnswers: answers });
+      }
+
       const payload = {
         timestamp: new Date().toISOString(),
         user_id: session.userId,

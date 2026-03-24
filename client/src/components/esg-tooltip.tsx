@@ -4,39 +4,43 @@ import { HelpCircle, X } from "lucide-react";
 const ESG_TERMS: Record<string, { title: string; body: string }> = {
   scope1: {
     title: "Scope 1 — Direct emissions",
-    body: "Carbon from sources you own or control directly: gas boilers, company vehicles, on-site generators. You measure this from your gas and fuel bills.",
+    body: "Carbon from sources you own or control directly, such as gas boilers, company vehicles, and on-site generators.",
   },
   scope2: {
     title: "Scope 2 — Purchased electricity",
-    body: "Carbon from the grid electricity you buy. It is automatically calculated from your kWh usage using the UK government's grid emission factor.",
+    body: "Carbon from the grid electricity you buy, automatically calculated from your kWh usage using the government's emission factor.",
   },
   scope3: {
     title: "Scope 3 — Indirect emissions",
-    body: "Carbon from your supply chain, business travel, and waste. These are usually estimated and are optional for SMEs unless a customer asks for them.",
+    body: "Carbon from your supply chain, business travel, and waste — typically estimated and optional for SMEs.",
   },
   evidence: {
     title: "Evidence",
-    body: "A file (invoice, certificate, or report) that proves a data point is accurate. Uploading evidence improves your data quality score and builds trust with customers and lenders.",
+    body: "A file (invoice, certificate, or report) that proves a data point is accurate and improves your data quality score.",
   },
   maturity: {
     title: "ESG Maturity",
-    body: "A simple measure of how far along your ESG journey you are — Starter (just beginning), Developing (some practices in place), or Established (formal programme). It adapts your action plan.",
+    body: "A measure of how far along your ESG journey you are — Starter, Developing, or Established — used to tailor your action plan.",
   },
   framework: {
     title: "ESG Framework",
-    body: "A standardised structure for reporting ESG data — for example GRI, TCFD, or CDP. Most SMEs start with a simple summary report rather than a full framework.",
+    body: "A standardised structure for reporting ESG data, such as GRI or TCFD — most SMEs start with a simple management report.",
   },
   esg: {
     title: "ESG",
-    body: "Environmental, Social, and Governance — three areas used to measure a business's impact and responsibility. Customers, banks, and investors increasingly ask for ESG data.",
+    body: "Environmental, Social, and Governance — three areas used to measure a business's impact, increasingly requested by customers, banks, and investors.",
   },
   dataQuality: {
     title: "Data Quality Score",
-    body: "A score (0–100%) showing how complete and reliable your data is. It improves when you add evidence files, get data approved, and enter actual rather than estimated values.",
+    body: "A score (0–100%) showing how complete and reliable your data is, improving as you add evidence files and actual rather than estimated values.",
   },
   reporting_period: {
     title: "Reporting Period",
-    body: "The month you are recording data for. Enter data for each month using your utility bills and other records. Monthly data gives the most accurate annual totals.",
+    body: "The month you are recording data for — enter data monthly using utility bills and other records for the most accurate annual totals.",
+  },
+  dataType: {
+    title: "Type of data",
+    body: "Manual means you typed it in; Estimated means it is an approximation; Evidenced means you have a file (e.g. an invoice) to back it up — evidenced data scores highest for quality.",
   },
 };
 

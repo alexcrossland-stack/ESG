@@ -538,12 +538,12 @@ export default function DataEntry() {
                 data-testid="button-save-recalculate"
               >
                 <Calculator className="w-4 h-4 mr-2" />
-                {saveRawMutation.isPending || recalcMutation.isPending ? "Calculating..." : "Save & Calculate Metrics"}
+                {saveRawMutation.isPending || recalcMutation.isPending ? "Saving..." : "Save data"}
               </Button>
             </div>
           )}
 
-          {activation.hasAddedData && !activation.hasUploadedEvidence && (
+          {!activation.isLoading && !activation.isError && activation.hasAddedData && !activation.hasUploadedEvidence && (
             <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800" data-testid="banner-upload-evidence">
               <div className="flex items-center gap-2 min-w-0">
                 <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
@@ -693,19 +693,21 @@ export default function DataEntry() {
                               />
                             </div>
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">Source</Label>
+                              <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                Type of data <EsgTooltip term="dataType" />
+                              </Label>
                               <Select
                                 value={manualDataSourceTypes[metric.metricId] || "manual"}
                                 onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metric.metricId]: val }))}
                                 disabled={editDisabled}
                               >
-                                <SelectTrigger className="w-28 h-8" data-testid={`select-source-type-${metric.metricId}`}>
+                                <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metric.metricId}`}>
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  <SelectItem value="manual">Manual</SelectItem>
-                                  <SelectItem value="estimated">Estimated</SelectItem>
-                                  <SelectItem value="evidenced">Evidenced</SelectItem>
+                                  <SelectItem value="manual">Manual — entered directly</SelectItem>
+                                  <SelectItem value="estimated">Estimated — approximate</SelectItem>
+                                  <SelectItem value="evidenced">Evidenced — backed by a file</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -473,6 +473,15 @@ export default function Evidence() {
   // Lifted site-view state so upload button and list are in sync
   const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
   const [uploadOpen, setUploadOpen] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("upload") === "1") {
+      setUploadOpen(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
   const resolvedViewSite = viewSiteId === "__all__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
   const isArchivedView = resolvedViewSite?.status === "archived";
   const canUpload = can("metrics_data_entry") && !atLimit && !isArchivedView;
@@ -687,7 +696,13 @@ function EvidenceRequestsPanel() {
       {isLoading && <div className="text-center text-muted-foreground py-8">Loading requests...</div>}
 
       {!isLoading && (!requests || requests.length === 0) && (
-        <div className="text-center text-muted-foreground py-8">No evidence requests</div>
+        <div className="text-center py-10 space-y-3" data-testid="empty-state-evidence-requests">
+          <p className="text-sm font-medium">No evidence requests yet</p>
+          <p className="text-xs text-muted-foreground max-w-xs mx-auto">
+            Evidence requests let you ask a team member to upload a specific file — for example, ask your finance team for the latest electricity bill.
+          </p>
+          <p className="text-xs text-muted-foreground">Use the "Request File" button above to send your first request.</p>
+        </div>
       )}
 
       {(requests || []).map((req: any) => {
