@@ -41,6 +41,7 @@ import PublicProfilePage from "@/pages/public-profile";
 import AdminHealthPage from "@/pages/admin-health";
 import AdminAnalyticsPage from "@/pages/admin-analytics";
 import HelpPage from "@/pages/help";
+import HelpArticlePage from "@/pages/help-article";
 import AdminSupportPage from "@/pages/admin-support";
 import AdminPage from "@/pages/admin";
 import AdminCompanyPage from "@/pages/admin-company";
@@ -326,6 +327,7 @@ function ProtectedApp() {
                 <Route path="/sites" component={SitesPage} />
                 <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
                 <Route path="/help" component={HelpPage} />
+                <Route path="/help/:slug" component={HelpArticlePage} />
                 <Route path="/framework-settings" component={FrameworkSettingsPage} />
                 <Route path="/framework-readiness" component={FrameworkReadinessPage} />
                 <Route path="/materiality" component={MaterialityPage} />

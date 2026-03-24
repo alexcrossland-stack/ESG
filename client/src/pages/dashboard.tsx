@@ -31,6 +31,7 @@ import { Building2, ArrowRight } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
+import { ContextualHelpLink } from "@/components/help";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -668,6 +669,7 @@ export default function Dashboard() {
             <p className="text-xs font-medium text-muted-foreground text-center flex items-center gap-1 justify-center">ESG Position <EsgTooltip term="esg" /></p>
             <ScoreRing score={esgScore} label="Overall" />
             <p className="text-[10px] text-center text-muted-foreground leading-tight mt-1">See 4-dimension breakdown below</p>
+            <ContextualHelpLink slug="what-your-esg-score-means" label="What does this mean?" className="mt-1" />
           </CardContent>
         </Card>
 

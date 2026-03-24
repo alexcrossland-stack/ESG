@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -11,181 +11,26 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Search, ChevronDown, ChevronRight, HelpCircle, BarChart3, FileText, Upload,
-  Settings, Leaf, Users, Shield, Zap, MessageSquare, CheckCircle, ExternalLink
+  Search, HelpCircle, BarChart3, FileText, MessageSquare, CheckCircle,
+  Zap, ClipboardList, Shield, Users, ChevronRight, BookOpen, X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import {
+  searchArticles, getFeaturedArticles, getArticlesByCategory,
+  HELP_CATEGORIES, HELP_ARTICLES, type HelpCategory, type HelpArticle,
+} from "@/lib/help-content";
 
-interface HelpArticle {
-  id: string;
-  title: string;
-  content: string;
-  tags?: string[];
-}
-
-interface HelpGroup {
-  id: string;
-  icon: any;
-  title: string;
-  description: string;
-  articles: HelpArticle[];
-}
-
-const HELP_GROUPS: HelpGroup[] = [
-  {
-    id: "getting-started",
-    icon: Zap,
-    title: "Getting Started",
-    description: "Set up your ESG platform and complete your first steps",
-    articles: [
-      {
-        id: "onboarding-overview",
-        title: "How to complete the activation checklist",
-        content: "The activation checklist on your dashboard shows 6 steps to get your ESG programme running. Each step becomes ticked once you complete the corresponding action. Steps are: 1. Complete your company profile (name, industry, country). 2. Choose ESG focus areas in the onboarding wizard. 3. Set a reporting frequency and activate metrics. 4. Enter your first data value. 5. Upload a piece of evidence. 6. Generate a report, policy, or questionnaire response. You can dismiss the checklist once all steps are done, or hide it early using the Dismiss button.",
-        tags: ["onboarding", "checklist", "dashboard"],
-      },
-      {
-        id: "company-profile",
-        title: "Updating your company profile",
-        content: "Go to Settings > Company Profile to update your company name, industry, country, employee count, and reporting year. This information is used to populate reports and benchmark your performance against similar businesses. Your industry selection also influences which ESG metrics are suggested as priorities.",
-        tags: ["settings", "profile"],
-      },
-      {
-        id: "first-data",
-        title: "Entering your first ESG data",
-        content: "Navigate to Data Entry in the sidebar. Choose a metric (such as Energy Use or Carbon Emissions), select a reporting period, and enter the measured value with its unit. You can also upload supporting evidence directly from the data entry form. For bulk uploads, use the CSV import feature available on the Data Entry page.",
-        tags: ["data", "metrics", "entry"],
-      },
-    ],
-  },
-  {
-    id: "metrics-data",
-    icon: BarChart3,
-    title: "Metrics & Data Entry",
-    description: "Recording ESG values, CSV imports, and evidence linking",
-    articles: [
-      {
-        id: "csv-import",
-        title: "Importing data via CSV",
-        content: "On the Data Entry page, click 'Import CSV'. Download the appropriate template (Energy, Carbon, Social, or Governance), fill in your data in the exact column format shown, then upload the file. The system validates each row and reports any errors before importing. Successful rows are imported immediately; failed rows are listed so you can correct and re-upload.",
-        tags: ["csv", "import", "bulk"],
-      },
-      {
-        id: "metric-management",
-        title: "Managing your active metrics",
-        content: "Go to Metrics in the sidebar to view all available metrics for your industry. Toggle metrics on or off using the Active switch. Only active metrics appear in data entry forms and reports. You can also set target values and assign ownership to specific team members from this page.",
-        tags: ["metrics", "management"],
-      },
-      {
-        id: "evidence-linking",
-        title: "Uploading and linking evidence",
-        content: "Evidence files (PDFs, images, spreadsheets) can be uploaded from the Evidence page or directly when entering data. Each piece of evidence can be tagged to one or more metrics, giving auditors a clear link between your reported values and the underlying documentation. Supported formats: PDF, DOCX, XLSX, PNG, JPG, up to 25 MB.",
-        tags: ["evidence", "upload", "files"],
-      },
-      {
-        id: "raw-data",
-        title: "Using raw data inputs",
-        content: "Some metrics accept structured raw data inputs rather than single figures. For example, energy invoices can be entered line-by-line with date, supplier, and kWh figures. The platform aggregates these into the metric total automatically. Raw data inputs also make it easier to trace reported figures back to source documents.",
-        tags: ["raw data", "inputs"],
-      },
-    ],
-  },
-  {
-    id: "reporting",
-    icon: FileText,
-    title: "Reports & Policy",
-    description: "Generating reports, ESG policies, and questionnaire responses",
-    articles: [
-      {
-        id: "generate-report",
-        title: "Generating an ESG report",
-        content: "Go to Reports and click 'New Report'. Choose a report type: ESG Summary (high-level performance overview), CSRD Readiness (compliance gap analysis), Carbon Footprint (Scope 1, 2, and 3 emissions), or Stakeholder Report (narrative with KPIs). Select the reporting period, add any commentary, then click Generate. Reports are produced as downloadable PDFs. Previously generated reports are listed on the Reports page for re-download.",
-        tags: ["reports", "pdf", "export"],
-      },
-      {
-        id: "policy-generator",
-        title: "Using the AI Policy Generator",
-        content: "The Policy Generator uses AI to create draft ESG policies tailored to your company profile. Go to Policy Generator, select a policy type (e.g., Environmental Policy, Modern Slavery Statement), review the suggested content, and edit as needed. You can regenerate any section or the entire policy. When satisfied, save the policy to your Policy Library. Always have policies reviewed by a qualified person before publishing externally.",
-        tags: ["policy", "ai", "generator"],
-      },
-      {
-        id: "questionnaire",
-        title: "Completing a stakeholder questionnaire",
-        content: "Questionnaires in ESG Manager represent requests from customers, investors, or frameworks (e.g., CDP, EcoVadis). Go to Questionnaires, open a questionnaire, and fill in answers per section. Use the AI Autofill feature to pre-populate answers using your existing data and Answer Library. Review all AI-filled answers before submitting. Submitted questionnaires are locked and archived for audit purposes.",
-        tags: ["questionnaire", "autofill", "ai"],
-      },
-    ],
-  },
-  {
-    id: "compliance",
-    icon: Shield,
-    title: "Compliance & Topics",
-    description: "ESG topics, material issues, and regulatory frameworks",
-    articles: [
-      {
-        id: "material-topics",
-        title: "Setting your material ESG topics",
-        content: "Material topics are the ESG issues most relevant to your business. Go to ESG Topics and toggle which topics apply to your operations. Environmental topics include energy, emissions, water, and waste. Social topics include employee wellbeing, diversity, training, and health and safety. Governance topics include anti-bribery, data privacy, and board oversight. Your topic selection influences which metrics are prioritised and which report sections are populated.",
-        tags: ["topics", "material", "materiality"],
-      },
-      {
-        id: "compliance-tracker",
-        title: "Using the compliance tracker",
-        content: "The Compliance Tracker shows your obligations under selected ESG frameworks (e.g., CSRD, GRI, UN SDGs). Each obligation is linked to relevant metrics so you can see at a glance which data you still need to collect. Mark obligations as 'In Progress', 'Complete', or 'Not Applicable'. The tracker also flags upcoming reporting deadlines.",
-        tags: ["compliance", "frameworks", "CSRD", "GRI"],
-      },
-    ],
-  },
-  {
-    id: "team",
-    icon: Users,
-    title: "Team & Access",
-    description: "Inviting users, roles, and permissions",
-    articles: [
-      {
-        id: "invite-users",
-        title: "Inviting team members",
-        content: "Go to Settings > Team to invite colleagues. Enter their email address and assign a role: Admin (full access), Editor (can enter data and manage content), Contributor (data entry only), or Viewer (read-only). Invited users receive an email with a link to create their account and join your company workspace.",
-        tags: ["team", "invite", "users", "roles"],
-      },
-      {
-        id: "roles-permissions",
-        title: "Understanding roles and permissions",
-        content: "Admin: Full access to all features including settings, billing, and user management. Editor: Can manage metrics, enter data, generate reports, and manage policies. Cannot access billing or team management. Contributor: Can enter data values and upload evidence. Cannot generate reports or manage settings. Viewer: Read-only access to dashboards, reports, and metrics. Cannot edit anything.",
-        tags: ["roles", "permissions", "access"],
-      },
-    ],
-  },
-  {
-    id: "account",
-    icon: Settings,
-    title: "Account & Settings",
-    description: "Profile, notifications, data export, and privacy",
-    articles: [
-      {
-        id: "data-export",
-        title: "Exporting your data",
-        content: "You can export all your ESG data at any time from Settings > Privacy & Data Rights. Click 'Request Data Export' to generate a downloadable archive of all your metrics, reports, and profile data. The export is prepared within 24 hours and you receive an email when it is ready. Data is exported as CSV and JSON files in a ZIP archive.",
-        tags: ["export", "data", "GDPR"],
-      },
-      {
-        id: "notifications",
-        title: "Managing notifications",
-        content: "Go to Settings > Notifications to control which emails you receive. You can enable or disable notifications for: data submission reminders, report generation alerts, team activity updates, and compliance deadline warnings. In-app notifications appear in the bell icon at the top right.",
-        tags: ["notifications", "email", "alerts"],
-      },
-      {
-        id: "privacy-rights",
-        title: "Exercising your data rights",
-        content: "As a registered user, you have rights under UK GDPR including the right to access your data, correct inaccuracies, request deletion, and data portability. Go to Settings > Privacy & Data Rights to submit a formal request. Your request is logged and processed within 30 days. For account deletion, note that some audit logs may be retained for legal compliance purposes.",
-        tags: ["privacy", "GDPR", "data rights", "deletion"],
-      },
-    ],
-  },
-];
+const CATEGORY_ICONS: Record<HelpCategory, any> = {
+  "Getting Started": Zap,
+  "Adding Data": ClipboardList,
+  "Score and Progress": BarChart3,
+  "Reports": FileText,
+  "Compliance": Shield,
+  "Account and Team": Users,
+  "Troubleshooting": HelpCircle,
+};
 
 const supportSchema = z.object({
   category: z.string().min(1, "Please select a category"),
@@ -193,31 +38,41 @@ const supportSchema = z.object({
   message: z.string().min(20, "Please describe your issue in at least 20 characters").max(5000, "Message too long"),
 });
 
-function ArticleItem({ article }: { article: HelpArticle }) {
-  const [open, setOpen] = useState(false);
+function ArticleCard({ article }: { article: HelpArticle }) {
   return (
-    <div className="border rounded-lg overflow-hidden" id={article.id} data-testid={`help-article-${article.id}`}>
-      <button
-        className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-muted/40 transition-colors"
-        onClick={() => setOpen(!open)}
-        data-testid={`help-article-toggle-${article.id}`}
-      >
-        <span className="text-sm font-medium">{article.title}</span>
-        {open ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
-      </button>
-      {open && (
-        <div className="px-4 pb-4 text-sm text-muted-foreground leading-relaxed border-t bg-muted/20">
-          <p className="pt-3">{article.content}</p>
-          {article.tags && (
-            <div className="flex flex-wrap gap-1.5 mt-3">
-              {article.tags.map(tag => (
-                <Badge key={tag} variant="secondary" className="text-xs font-normal">{tag}</Badge>
-              ))}
-            </div>
-          )}
+    <Link href={`/help/${article.slug}`} data-testid={`link-article-${article.slug}`}>
+      <div className="flex items-start gap-2.5 p-3 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer group border border-transparent hover:border-border">
+        <BookOpen className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors leading-tight">{article.title}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed line-clamp-2">{article.summary}</p>
         </div>
-      )}
-    </div>
+        <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
+    </Link>
+  );
+}
+
+function CategoryCard({ category }: { category: typeof HELP_CATEGORIES[0] }) {
+  const Icon = CATEGORY_ICONS[category.name];
+  const articles = getArticlesByCategory(category.name);
+  return (
+    <Link href={`/help?category=${encodeURIComponent(category.name)}`} data-testid={`link-category-${category.name.replace(/\s+/g, "-").toLowerCase()}`}>
+      <Card className="hover:shadow-sm transition-shadow cursor-pointer hover:border-primary/30 h-full">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <Icon className="w-4 h-4 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <p className="font-semibold text-sm">{category.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{category.description}</p>
+              <p className="text-xs text-muted-foreground mt-2 font-medium">{articles.length} {articles.length === 1 ? "guide" : "guides"}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 
@@ -263,7 +118,7 @@ function SupportForm({ user, company }: { user: any; company: any }) {
             Your reference number is{" "}
             <span className="font-mono font-semibold text-foreground" data-testid="support-ref-number">{refNumber}</span>
           </p>
-          <p className="text-xs text-muted-foreground mt-2">We typically respond within 1-2 business days.</p>
+          <p className="text-xs text-muted-foreground mt-2">We typically respond within 1–2 business days.</p>
         </div>
         <Button size="sm" variant="outline" onClick={() => setRefNumber(null)} data-testid="button-new-request">
           Send another request
@@ -296,7 +151,6 @@ function SupportForm({ user, company }: { user: any; company: any }) {
             <FormMessage />
           </FormItem>
         )} />
-
         <FormField control={form.control} name="subject" render={({ field }) => (
           <FormItem>
             <FormLabel>Subject</FormLabel>
@@ -306,7 +160,6 @@ function SupportForm({ user, company }: { user: any; company: any }) {
             <FormMessage />
           </FormItem>
         )} />
-
         <FormField control={form.control} name="message" render={({ field }) => (
           <FormItem>
             <FormLabel>Message</FormLabel>
@@ -321,12 +174,10 @@ function SupportForm({ user, company }: { user: any; company: any }) {
             <FormMessage />
           </FormItem>
         )} />
-
         <div className="text-xs text-muted-foreground space-y-1">
           <p>Submitting as: <span className="font-medium">{user?.email}</span> ({company?.name})</p>
           <p>Current page: <span className="font-mono">{location}</span></p>
         </div>
-
         <Button type="submit" disabled={mutation.isPending} className="w-full" data-testid="button-submit-support">
           {mutation.isPending ? "Sending..." : "Send Support Request"}
         </Button>
@@ -337,60 +188,63 @@ function SupportForm({ user, company }: { user: any; company: any }) {
 
 export default function HelpPage() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"articles" | "contact">("articles");
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["getting-started"]));
+  const [activeCategory, setActiveCategory] = useState<HelpCategory | null>(null);
+  const [showContact, setShowContact] = useState(false);
+  const [location] = useLocation();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({ queryKey: ["/api/auth/me"] });
   const user = authData?.user;
   const company = authData?.company;
 
-  const toggleGroup = (id: string) => {
-    setExpandedGroups(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const cat = params.get("category") as HelpCategory | null;
+    if (cat && HELP_CATEGORIES.some(c => c.name === cat)) setActiveCategory(cat);
+    if (params.get("contact") === "1") setShowContact(true);
+  }, [location]);
 
-  const lowerSearch = searchQuery.toLowerCase().trim();
-  const filteredGroups = HELP_GROUPS.map(group => ({
-    ...group,
-    articles: lowerSearch
-      ? group.articles.filter(a =>
-          a.title.toLowerCase().includes(lowerSearch) ||
-          a.content.toLowerCase().includes(lowerSearch) ||
-          a.tags?.some(t => t.toLowerCase().includes(lowerSearch))
-        )
-      : group.articles,
-  })).filter(g => g.articles.length > 0);
+  const searchResults = searchQuery.trim() ? searchArticles(searchQuery) : [];
+  const isSearching = searchQuery.trim().length > 0;
 
-  const totalArticles = HELP_GROUPS.reduce((acc, g) => acc + g.articles.length, 0);
+  const displayArticles = activeCategory
+    ? getArticlesByCategory(activeCategory)
+    : null;
+
+  const featured = getFeaturedArticles();
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6 pb-12">
       <div className="space-y-1">
-        <h1 className="text-2xl font-bold">Help &amp; Support</h1>
-        <p className="text-muted-foreground text-sm">{totalArticles} articles covering every feature of ESG Manager</p>
+        <h1 className="text-2xl font-bold">Help Centre</h1>
+        <p className="text-muted-foreground text-sm">{HELP_ARTICLES.length} guides covering every part of ESG Manager</p>
       </div>
 
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <Input
-            placeholder="Search help articles..."
-            className="pl-9"
+            placeholder="Search guides — try 'score', 'evidence', 'report'..."
+            className="pl-9 pr-9"
             value={searchQuery}
             onChange={e => {
               setSearchQuery(e.target.value);
-              if (e.target.value) setExpandedGroups(new Set(HELP_GROUPS.map(g => g.id)));
+              if (e.target.value) setActiveCategory(null);
             }}
             data-testid="input-help-search"
           />
+          {searchQuery && (
+            <button
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setSearchQuery("")}
+              data-testid="button-clear-search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
         <Button
-          variant={activeTab === "contact" ? "default" : "outline"}
-          onClick={() => setActiveTab(activeTab === "contact" ? "articles" : "contact")}
+          variant={showContact ? "default" : "outline"}
+          onClick={() => setShowContact(!showContact)}
           data-testid="button-contact-support"
           className="shrink-0"
         >
@@ -399,11 +253,14 @@ export default function HelpPage() {
         </Button>
       </div>
 
-      {activeTab === "contact" && (
+      {showContact && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Contact Support</CardTitle>
-            <CardDescription>Our team typically responds within 1-2 business days. For urgent issues, email <a href="mailto:support@esgmanager.com" className="underline">support@esgmanager.com</a> directly.</CardDescription>
+            <CardDescription>
+              Our team typically responds within 1–2 business days. For urgent issues, email{" "}
+              <a href="mailto:support@esgmanager.com" className="underline">support@esgmanager.com</a> directly.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <SupportForm user={user} company={company} />
@@ -411,60 +268,87 @@ export default function HelpPage() {
         </Card>
       )}
 
-      {searchQuery && filteredGroups.length === 0 && (
-        <div className="text-center py-10 space-y-2">
-          <HelpCircle className="w-8 h-8 text-muted-foreground mx-auto" />
-          <p className="text-sm text-muted-foreground">No articles found for "{searchQuery}"</p>
-          <Button size="sm" variant="outline" onClick={() => setActiveTab("contact")} data-testid="button-contact-no-results">
-            Contact Support
-          </Button>
+      {isSearching && (
+        <div className="space-y-3">
+          {searchResults.length > 0 ? (
+            <>
+              <p className="text-sm text-muted-foreground">{searchResults.length} {searchResults.length === 1 ? "guide" : "guides"} found for "{searchQuery}"</p>
+              <div className="space-y-1">
+                {searchResults.map(article => (
+                  <ArticleCard key={article.slug} article={article} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-10 space-y-2">
+              <HelpCircle className="w-8 h-8 text-muted-foreground mx-auto" />
+              <p className="text-sm text-muted-foreground">No guides found for "{searchQuery}"</p>
+              <p className="text-xs text-muted-foreground">Try different words, or contact support below.</p>
+              <Button size="sm" variant="outline" onClick={() => setShowContact(true)} data-testid="button-contact-no-results">
+                Contact Support
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
-      <div className="space-y-3">
-        {filteredGroups.map(group => {
-          const Icon = group.icon;
-          const isOpen = expandedGroups.has(group.id);
-          return (
-            <Card key={group.id} data-testid={`help-group-${group.id}`}>
-              <button
-                className="flex items-center gap-3 w-full p-4 text-left hover:bg-muted/30 transition-colors rounded-lg"
-                onClick={() => toggleGroup(group.id)}
-                data-testid={`help-group-toggle-${group.id}`}
-              >
-                <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <Icon className="w-4 h-4 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm">{group.title}</p>
-                  <p className="text-xs text-muted-foreground truncate">{group.description}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground">{group.articles.length}</span>
-                  {isOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
-                </div>
-              </button>
-              {isOpen && (
-                <CardContent className="pt-0 pb-3 px-3 space-y-1.5">
-                  <Separator className="mb-2" />
-                  {group.articles.map(article => (
-                    <ArticleItem key={article.id} article={article} />
-                  ))}
-                </CardContent>
-              )}
-            </Card>
-          );
-        })}
-      </div>
+      {!isSearching && activeCategory && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveCategory(null)}
+              className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+              data-testid="button-back-to-categories"
+            >
+              ← All categories
+            </button>
+            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-sm font-medium">{activeCategory}</span>
+          </div>
+          <div className="space-y-1">
+            {(displayArticles ?? []).map(article => (
+              <ArticleCard key={article.slug} article={article} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isSearching && !activeCategory && (
+        <>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-semibold">Start here</h2>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {featured.map(article => (
+                <ArticleCard key={article.slug} article={article} />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold">Browse by topic</h2>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {HELP_CATEGORIES.map(cat => (
+                <CategoryCard key={cat.name} category={cat} />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <Card className="bg-muted/40 border-dashed">
         <CardContent className="flex items-center gap-4 py-4">
           <MessageSquare className="w-5 h-5 text-muted-foreground shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium">Still need help?</p>
-            <p className="text-xs text-muted-foreground">Our support team is here for you at <a href="mailto:support@esgmanager.com" className="underline">support@esgmanager.com</a></p>
+            <p className="text-xs text-muted-foreground">
+              Our support team is here for you at{" "}
+              <a href="mailto:support@esgmanager.com" className="underline">support@esgmanager.com</a>
+            </p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setActiveTab("contact")} data-testid="button-contact-bottom">
+          <Button size="sm" variant="outline" onClick={() => setShowContact(true)} data-testid="button-contact-bottom">
             Get in touch
           </Button>
         </CardContent>

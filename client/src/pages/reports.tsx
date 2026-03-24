@@ -28,6 +28,7 @@ import { EmptyState } from "@/components/empty-state";
 import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
+import { ContextualHelpLink } from "@/components/help";
 
 const ESG_EXPORT_TYPES = [
   {
@@ -1795,6 +1796,9 @@ export default function Reports() {
                     <FileText className="w-3.5 h-3.5 mr-1.5" />
                     {generateMutation.isPending ? "Generating..." : "Generate Report"}
                   </Button>
+                  <div className="flex justify-center">
+                    <ContextualHelpLink slug="generate-your-first-report" label="How to generate a report" />
+                  </div>
                 </>
               )}
             </CardContent>

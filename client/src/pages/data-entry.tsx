@@ -31,6 +31,7 @@ import { EvidenceSuggestions } from "@/components/evidence-suggestions";
 import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
+import { ContextualHelpLink } from "@/components/help";
 import { Link } from "wouter";
 
 const RAW_DATA_FIELDS = {
@@ -531,7 +532,8 @@ export default function DataEntry() {
           })}
 
           {!editDisabled && (
-            <div className="flex justify-end gap-2">
+            <div className="flex items-center justify-end gap-4">
+              <ContextualHelpLink slug="add-first-esg-data-point" label="How to enter data" />
               <Button
                 onClick={handleSaveRawAndRecalc}
                 disabled={saveRawMutation.isPending || recalcMutation.isPending}

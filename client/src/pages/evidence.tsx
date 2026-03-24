@@ -17,6 +17,7 @@ import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { EmptyState } from "@/components/empty-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
+import { ContextualHelpLink } from "@/components/help";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
   Trash2, Eye, FileText, BarChart3, Shield, PieChart,
@@ -122,7 +123,10 @@ function UploadEvidenceDialog({ onUploaded, forceOpen, onOpenChange }: { onUploa
       </DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Upload Evidence</DialogTitle>
+          <div className="flex items-center justify-between pr-6">
+            <DialogTitle>Upload Evidence</DialogTitle>
+            <ContextualHelpLink slug="upload-supporting-evidence" label="What counts as evidence?" />
+          </div>
         </DialogHeader>
         <div className="space-y-4">
           {isMultiSite && (
