@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, lt, isNull, or, count, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, lt, isNull, or, count, gte, lte, inArray, asc, ilike, avg } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -15,6 +15,10 @@ import {
   esgTargets, esgActions, esgRisks,
   identityProviders, dataExportJobs, dataDeletionRequests,
   userSessions,
+  groups, groupCompanies, userGroupRoles,
+  type Group, type InsertGroup,
+  type GroupCompany, type InsertGroupCompany,
+  type UserGroupRole, type InsertUserGroupRole,
   type UserSession, type InsertUserSession,
   type AuthToken, type InsertAuthToken,
   type User, type InsertUser, type Company, type InsertCompany,
@@ -433,6 +437,50 @@ export interface IStorage {
   revokeAllUserSessionsExcept(userId: string, currentSessionId: string): Promise<number>;
   setUserSessionStepUp(sessionId: string): Promise<void>;
   cleanupExpiredUserSessions(): Promise<number>;
+
+  // Portfolio Groups
+  createGroup(data: InsertGroup): Promise<Group>;
+  getGroupById(id: string): Promise<Group | undefined>;
+  getGroupsForUser(userId: string): Promise<Group[]>;
+  getGroupCompanies(groupId: string): Promise<Company[]>;
+  addCompanyToGroup(groupId: string, companyId: string): Promise<GroupCompany>;
+  removeCompanyFromGroup(groupId: string, companyId: string): Promise<void>;
+  assignUserGroupRole(userId: string, groupId: string, role: string): Promise<UserGroupRole>;
+  removeUserGroupRole(userId: string, groupId: string): Promise<void>;
+  getUserGroupRoles(userId: string): Promise<UserGroupRole[]>;
+  getGroupsForUserWithRoleContext(userId: string): Promise<Array<Group & { role: string; companyCount: number }>>;
+  getPortfolioGroupSummary(groupId: string, authorizedCompanyIds: string[]): Promise<{
+    totalCompanies: number;
+    averageEsgScore: number | null;
+    missingDataCount: number;
+    overdueUpdatesCount: number;
+    reportsReadyCount: number;
+    highRiskFlagsCount: number;
+  }>;
+  getPortfolioGroupCompanies(groupId: string, authorizedCompanyIds: string[], options: {
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+    sortDir?: "asc" | "desc";
+    search?: string;
+    sector?: string;
+    status?: string;
+    scoreBand?: string;
+    alertsOnly?: boolean;
+  }): Promise<{ rows: any[]; total: number }>;
+  getPortfolioGroupAlerts(groupId: string, authorizedCompanyIds: string[]): Promise<{
+    neverOnboarded: Array<{ companyId: string; companyName: string; reason: string }>;
+    missingEvidence: Array<{ companyId: string; companyName: string; reason: string }>;
+    overdueUpdates: Array<{ companyId: string; companyName: string; reason: string }>;
+    noRecentReport: Array<{ companyId: string; companyName: string; reason: string }>;
+  }>;
+  getPortfolioGroupActivity(groupId: string, authorizedCompanyIds: string[], limit?: number): Promise<Array<{
+    companyId: string;
+    companyName: string;
+    action: string;
+    actor: string | null;
+    timestamp: Date;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2968,6 +3016,496 @@ export class DatabaseStorage implements IStorage {
       .where(lt(userSessions.expiresAt, new Date()))
       .returning();
     return result.length;
+  }
+
+  // Portfolio Groups implementation
+
+  async createGroup(data: InsertGroup): Promise<Group> {
+    const [g] = await db.insert(groups).values(data).returning();
+    return g;
+  }
+
+  async getGroupById(id: string): Promise<Group | undefined> {
+    const [g] = await db.select().from(groups).where(eq(groups.id, id));
+    return g;
+  }
+
+  async getGroupsForUser(userId: string): Promise<Group[]> {
+    return db.select({ group: groups })
+      .from(userGroupRoles)
+      .innerJoin(groups, eq(userGroupRoles.groupId, groups.id))
+      .where(eq(userGroupRoles.userId, userId))
+      .then(rows => rows.map(r => r.group));
+  }
+
+  async getGroupCompanies(groupId: string): Promise<Company[]> {
+    return db.select({ company: companies })
+      .from(groupCompanies)
+      .innerJoin(companies, eq(groupCompanies.companyId, companies.id))
+      .where(eq(groupCompanies.groupId, groupId))
+      .then(rows => rows.map(r => r.company));
+  }
+
+  async addCompanyToGroup(groupId: string, companyId: string): Promise<GroupCompany> {
+    const [gc] = await db.insert(groupCompanies).values({ groupId, companyId }).returning();
+    return gc;
+  }
+
+  async removeCompanyFromGroup(groupId: string, companyId: string): Promise<void> {
+    await db.delete(groupCompanies).where(
+      and(eq(groupCompanies.groupId, groupId), eq(groupCompanies.companyId, companyId))
+    );
+  }
+
+  async assignUserGroupRole(userId: string, groupId: string, role: string): Promise<UserGroupRole> {
+    const typedRole = role as "portfolio_owner" | "portfolio_viewer";
+    const [existing] = await db.select().from(userGroupRoles).where(
+      and(eq(userGroupRoles.userId, userId), eq(userGroupRoles.groupId, groupId))
+    );
+    if (existing) {
+      const [updated] = await db.update(userGroupRoles)
+        .set({ role: typedRole, updatedAt: new Date() })
+        .where(and(eq(userGroupRoles.userId, userId), eq(userGroupRoles.groupId, groupId)))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(userGroupRoles).values({ userId, groupId, role: typedRole }).returning();
+    return created;
+  }
+
+  async removeUserGroupRole(userId: string, groupId: string): Promise<void> {
+    await db.delete(userGroupRoles).where(
+      and(eq(userGroupRoles.userId, userId), eq(userGroupRoles.groupId, groupId))
+    );
+  }
+
+  async getUserGroupRoles(userId: string): Promise<UserGroupRole[]> {
+    return db.select().from(userGroupRoles).where(eq(userGroupRoles.userId, userId));
+  }
+
+  async getGroupsForUserWithRoleContext(userId: string): Promise<Array<Group & { role: string; companyCount: number }>> {
+    const rows = await db.select({
+      group: groups,
+      role: userGroupRoles.role,
+      companyCount: count(groupCompanies.id),
+    })
+      .from(userGroupRoles)
+      .innerJoin(groups, eq(userGroupRoles.groupId, groups.id))
+      .leftJoin(groupCompanies, eq(groupCompanies.groupId, groups.id))
+      .where(eq(userGroupRoles.userId, userId))
+      .groupBy(groups.id, userGroupRoles.role);
+    return rows.map(r => ({ ...r.group, role: r.role, companyCount: Number(r.companyCount) }));
+  }
+
+  async getPortfolioGroupSummary(groupId: string, authorizedCompanyIds: string[]): Promise<{
+    totalCompanies: number;
+    averageEsgScore: number | null;
+    missingDataCount: number;
+    overdueUpdatesCount: number;
+    reportsReadyCount: number;
+    highRiskFlagsCount: number;
+  }> {
+    if (authorizedCompanyIds.length === 0) {
+      return { totalCompanies: 0, averageEsgScore: null, missingDataCount: 0, overdueUpdatesCount: 0, reportsReadyCount: 0, highRiskFlagsCount: 0 };
+    }
+
+    // All companies in group visible to this user, via indexed join
+    const companiesInGroup = await db.select({ company: companies })
+      .from(groupCompanies)
+      .innerJoin(companies, eq(groupCompanies.companyId, companies.id))
+      .where(
+        and(
+          eq(groupCompanies.groupId, groupId),
+          inArray(groupCompanies.companyId, authorizedCompanyIds)
+        )
+      );
+
+    const totalCompanies = companiesInGroup.length;
+    if (totalCompanies === 0) {
+      return { totalCompanies: 0, averageEsgScore: null, missingDataCount: 0, overdueUpdatesCount: 0, reportsReadyCount: 0, highRiskFlagsCount: 0 };
+    }
+
+    const companyIds = companiesInGroup.map(r => r.company.id);
+
+    // missingDataCount: unique companies where onboardingComplete is false OR no metric values recorded.
+    // Use set union to avoid double-counting companies that satisfy both conditions.
+    const notOnboardedRows = await db.select({ id: companies.id })
+      .from(companies)
+      .where(
+        and(
+          inArray(companies.id, companyIds),
+          eq(companies.onboardingComplete, false)
+        )
+      );
+    const notOnboardedIds = new Set(notOnboardedRows.map(r => r.id));
+
+    const metricsWithValues = await db.selectDistinct({ companyId: metrics.companyId })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(inArray(metrics.companyId, companyIds));
+    const companiesWithValues = new Set(metricsWithValues.map(r => r.companyId));
+
+    // Union: not onboarded OR no metric values (avoids double-counting)
+    const missingDataIds = new Set([
+      ...notOnboardedIds,
+      ...companyIds.filter(id => !companiesWithValues.has(id)),
+    ]);
+    const missingDataCount = missingDataIds.size;
+
+    // overdueUpdatesCount: no metric values updated within staleness window (90 days per existing platform conventions).
+    // The platform uses 90-day staleness across all data workflows; we reuse the same window.
+    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentUpdateCompanies = await db.selectDistinct({ companyId: metrics.companyId })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(
+        and(
+          inArray(metrics.companyId, companyIds),
+          gte(metricValues.submittedAt, cutoff)
+        )
+      );
+    const companiesWithRecentUpdates = new Set(recentUpdateCompanies.map(r => r.companyId));
+    const overdueUpdatesCount = companyIds.filter(id => !companiesWithRecentUpdates.has(id)).length;
+
+    // reportsReadyCount: companies with a generated report in the current reporting year.
+    // "Current reporting year" = calendar year of today, consistent with existing report run conventions.
+    const yearStart = new Date(new Date().getFullYear(), 0, 1);
+    const recentReportCompanies = await db.selectDistinct({ companyId: reportRuns.companyId })
+      .from(reportRuns)
+      .where(
+        and(
+          inArray(reportRuns.companyId, companyIds),
+          gte(reportRuns.generatedAt, yearStart)
+        )
+      );
+    const reportsReadyCount = recentReportCompanies.length;
+
+    // highRiskFlagsCount: companies with at least one open ESG risk with high or very_high impact AND likelihood.
+    // This matches the existing esgRiskImpactEnum and esgRiskLikelihoodEnum definitions.
+    const highRiskCompanies = await db.selectDistinct({ companyId: esgRisks.companyId })
+      .from(esgRisks)
+      .where(
+        and(
+          inArray(esgRisks.companyId, companyIds),
+          eq(esgRisks.status, "open"),
+          inArray(esgRisks.impact, ["high", "very_high"]),
+          inArray(esgRisks.likelihood, ["high", "very_high"])
+        )
+      );
+    const highRiskFlagsCount = highRiskCompanies.length;
+
+    // averageEsgScore: simple average across companies of each company's average metric value (0–100 range).
+    // ESG score = simple average of all valid numeric metric values for each company, then averaged across companies.
+    const metricValuesForGroup = await db.select({
+      companyId: metrics.companyId,
+      value: metricValues.value,
+    })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(inArray(metrics.companyId, companyIds));
+
+    const byCompany = new Map<string, number[]>();
+    for (const row of metricValuesForGroup) {
+      const n = parseFloat(row.value ?? "NaN");
+      if (!isNaN(n) && n >= 0 && n <= 100) {
+        const arr = byCompany.get(row.companyId) ?? [];
+        arr.push(n);
+        byCompany.set(row.companyId, arr);
+      }
+    }
+    let esgScoreSum = 0, esgScoreCount = 0;
+    for (const vals of byCompany.values()) {
+      if (vals.length > 0) {
+        esgScoreSum += vals.reduce((a, b) => a + b, 0) / vals.length;
+        esgScoreCount++;
+      }
+    }
+    const averageEsgScore = esgScoreCount > 0 ? Math.round((esgScoreSum / esgScoreCount) * 10) / 10 : null;
+
+    return { totalCompanies, averageEsgScore, missingDataCount, overdueUpdatesCount, reportsReadyCount, highRiskFlagsCount };
+  }
+
+  async getPortfolioGroupCompanies(groupId: string, authorizedCompanyIds: string[], options: {
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+    sortDir?: "asc" | "desc";
+    search?: string;
+    sector?: string;
+    status?: string;
+    scoreBand?: string;
+    alertsOnly?: boolean;
+  }): Promise<{ rows: any[]; total: number }> {
+    const { page = 1, pageSize = 20, sortBy = "companyName", sortDir = "asc", search, sector, status, scoreBand, alertsOnly } = options;
+
+    if (authorizedCompanyIds.length === 0) return { rows: [], total: 0 };
+
+    // Build DB-level filter conditions (columns available in the companies table)
+    const conditions = [
+      eq(groupCompanies.groupId, groupId),
+      inArray(groupCompanies.companyId, authorizedCompanyIds),
+    ];
+    if (search) {
+      conditions.push(ilike(companies.name, `%${search}%`));
+    }
+    if (sector) {
+      conditions.push(eq(companies.industry, sector));
+    }
+    if (status === "onboarded") {
+      conditions.push(eq(companies.onboardingComplete, true));
+    } else if (status === "not_onboarded") {
+      conditions.push(eq(companies.onboardingComplete, false));
+    }
+
+    // Sort at query layer for DB-sortable fields
+    let orderExpr;
+    if (sortBy === "companyName") {
+      orderExpr = sortDir === "desc" ? desc(companies.name) : asc(companies.name);
+    } else if (sortBy === "sector") {
+      orderExpr = sortDir === "desc" ? desc(companies.industry) : asc(companies.industry);
+    } else {
+      orderExpr = asc(companies.name);
+    }
+
+    // Fetch all rows matching DB-level conditions (no pagination yet — scoreBand/alertsOnly are post-computed)
+    const allRows = await db.select({ company: companies })
+      .from(groupCompanies)
+      .innerJoin(companies, eq(groupCompanies.companyId, companies.id))
+      .where(and(...conditions))
+      .orderBy(orderExpr);
+
+    if (allRows.length === 0) return { rows: [], total: 0 };
+
+    const allCompanyIds = allRows.map(r => r.company.id);
+
+    // Batch-fetch last data update per company using aggregate
+    const lastUpdateRows = await db.select({
+      companyId: metrics.companyId,
+      lastUpdate: sql<Date | null>`MAX(${metricValues.submittedAt})`,
+    })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(inArray(metrics.companyId, allCompanyIds))
+      .groupBy(metrics.companyId);
+    const lastUpdateMap = new Map(lastUpdateRows.map(r => [r.companyId, r.lastUpdate]));
+
+    // Batch-fetch alert (open risk) count per company using aggregate
+    const alertCountRows = await db.select({
+      companyId: esgRisks.companyId,
+      alertCount: count(),
+    })
+      .from(esgRisks)
+      .where(
+        and(
+          inArray(esgRisks.companyId, allCompanyIds),
+          eq(esgRisks.status, "open")
+        )
+      )
+      .groupBy(esgRisks.companyId);
+    const alertCountMap = new Map(alertCountRows.map(r => [r.companyId, Number(r.alertCount)]));
+
+    // Batch-fetch per-pillar metric values for ESG score computation
+    const metricValuesForAll = await db.select({
+      companyId: metrics.companyId,
+      category: metrics.category,
+      value: metricValues.value,
+    })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(inArray(metrics.companyId, allCompanyIds));
+
+    // Compute per-company scores
+    const scoreData = new Map<string, { env: number[]; social: number[]; gov: number[] }>();
+    for (const { companyId, category, value } of metricValuesForAll) {
+      const n = parseFloat(value ?? "NaN");
+      if (isNaN(n) || n < 0 || n > 100) continue;
+      const d = scoreData.get(companyId) ?? { env: [], social: [], gov: [] };
+      if (category === "environmental") d.env.push(n);
+      else if (category === "social") d.social.push(n);
+      else if (category === "governance") d.gov.push(n);
+      scoreData.set(companyId, d);
+    }
+
+    const mean = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : null;
+
+    // Build all computed rows
+    let computedRows = allRows.map(r => {
+      const c = r.company;
+      const scores = scoreData.get(c.id);
+      const envScore = scores ? mean(scores.env) : null;
+      const socialScore = scores ? mean(scores.social) : null;
+      const govScore = scores ? mean(scores.gov) : null;
+      const allVals = [...(scores?.env ?? []), ...(scores?.social ?? []), ...(scores?.gov ?? [])];
+      const esgScore = allVals.length > 0 ? mean(allVals) : null;
+      const alertCount = alertCountMap.get(c.id) ?? 0;
+
+      return {
+        companyId: c.id,
+        companyName: c.name,
+        sector: c.industry,
+        sizeBand: c.revenueBand,
+        esgScore,
+        environmentalScore: envScore,
+        socialScore,
+        governanceScore: govScore,
+        lastDataUpdate: lastUpdateMap.get(c.id) ?? null,
+        reportingStatus: c.onboardingComplete ? "active" : "not_onboarded",
+        alertCount,
+      };
+    });
+
+    // Apply post-computed filters — these affect the total count as they require computed fields
+    if (alertsOnly) {
+      computedRows = computedRows.filter(r => r.alertCount > 0);
+    }
+
+    // scoreBand filter: "high" = esgScore >= 70, "medium" = 40-69, "low" = < 40, "none" = no score
+    // Bands represent the platform's standard ESG performance tiers (0–100 scale).
+    if (scoreBand) {
+      computedRows = computedRows.filter(r => {
+        if (scoreBand === "none") return r.esgScore === null;
+        if (r.esgScore === null) return false;
+        if (scoreBand === "high") return r.esgScore >= 70;
+        if (scoreBand === "medium") return r.esgScore >= 40 && r.esgScore < 70;
+        if (scoreBand === "low") return r.esgScore < 40;
+        return true;
+      });
+    }
+
+    // If sorting by computed field (esgScore, alertCount), sort after computation
+    if (sortBy === "esgScore") {
+      computedRows.sort((a, b) => {
+        const av = a.esgScore ?? -1;
+        const bv = b.esgScore ?? -1;
+        return sortDir === "desc" ? bv - av : av - bv;
+      });
+    } else if (sortBy === "alertCount") {
+      computedRows.sort((a, b) => sortDir === "desc" ? b.alertCount - a.alertCount : a.alertCount - b.alertCount);
+    }
+
+    const total = computedRows.length;
+    const offset = (page - 1) * pageSize;
+    const paginatedRows = computedRows.slice(offset, offset + pageSize);
+
+    return { rows: paginatedRows, total };
+  }
+
+  async getPortfolioGroupAlerts(groupId: string, authorizedCompanyIds: string[]): Promise<{
+    neverOnboarded: Array<{ companyId: string; companyName: string; reason: string }>;
+    missingEvidence: Array<{ companyId: string; companyName: string; reason: string }>;
+    overdueUpdates: Array<{ companyId: string; companyName: string; reason: string }>;
+    noRecentReport: Array<{ companyId: string; companyName: string; reason: string }>;
+  }> {
+    if (authorizedCompanyIds.length === 0) {
+      return { neverOnboarded: [], missingEvidence: [], overdueUpdates: [], noRecentReport: [] };
+    }
+
+    // Fetch all companies in the group visible to user — single join query
+    const gcRows = await db.select({ company: companies })
+      .from(groupCompanies)
+      .innerJoin(companies, eq(groupCompanies.companyId, companies.id))
+      .where(
+        and(
+          eq(groupCompanies.groupId, groupId),
+          inArray(groupCompanies.companyId, authorizedCompanyIds)
+        )
+      );
+
+    const allCompanies = gcRows.map(r => r.company);
+    const neverOnboarded: Array<{ companyId: string; companyName: string; reason: string }> = [];
+    const onboardedCompanies = allCompanies.filter(c => {
+      if (!c.onboardingComplete) {
+        neverOnboarded.push({ companyId: c.id, companyName: c.name, reason: "Onboarding not completed" });
+        return false;
+      }
+      return true;
+    });
+
+    if (onboardedCompanies.length === 0) {
+      return { neverOnboarded, missingEvidence: [], overdueUpdates: [], noRecentReport: [] };
+    }
+
+    const onboardedIds = onboardedCompanies.map(c => c.id);
+    const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
+
+    // Missing evidence: onboarded companies with no approved evidence files (single batch query)
+    const approvedEvidenceCompanies = await db.selectDistinct({ companyId: evidenceFiles.companyId })
+      .from(evidenceFiles)
+      .where(
+        and(
+          inArray(evidenceFiles.companyId, onboardedIds),
+          eq(evidenceFiles.evidenceStatus, "approved")
+        )
+      );
+    const companiesWithApprovedEvidence = new Set(approvedEvidenceCompanies.map(r => r.companyId));
+    const missingEvidence = onboardedIds
+      .filter(id => !companiesWithApprovedEvidence.has(id))
+      .map(id => ({ companyId: id, companyName: companyNameMap.get(id) ?? "", reason: "No approved evidence files" }));
+
+    // Overdue updates: no metric values submitted within staleness window (90 days — platform staleness convention)
+    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentUpdateCompanies = await db.selectDistinct({ companyId: metrics.companyId })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(
+        and(
+          inArray(metrics.companyId, onboardedIds),
+          gte(metricValues.submittedAt, cutoff)
+        )
+      );
+    const companiesWithRecentUpdates = new Set(recentUpdateCompanies.map(r => r.companyId));
+    const overdueUpdates = onboardedIds
+      .filter(id => !companiesWithRecentUpdates.has(id))
+      .map(id => ({ companyId: id, companyName: companyNameMap.get(id) ?? "", reason: "No metric data submitted in the last 90 days" }));
+
+    // No recent report: no report run in the current calendar year (matches existing platform reporting period logic)
+    const yearStart = new Date(new Date().getFullYear(), 0, 1);
+    const recentReportCompanies = await db.selectDistinct({ companyId: reportRuns.companyId })
+      .from(reportRuns)
+      .where(
+        and(
+          inArray(reportRuns.companyId, onboardedIds),
+          gte(reportRuns.generatedAt, yearStart)
+        )
+      );
+    const companiesWithRecentReports = new Set(recentReportCompanies.map(r => r.companyId));
+    const noRecentReport = onboardedIds
+      .filter(id => !companiesWithRecentReports.has(id))
+      .map(id => ({ companyId: id, companyName: companyNameMap.get(id) ?? "", reason: "No report generated in the current year" }));
+
+    return { neverOnboarded, missingEvidence, overdueUpdates, noRecentReport };
+  }
+
+  async getPortfolioGroupActivity(groupId: string, authorizedCompanyIds: string[], limit = 20): Promise<Array<{
+    companyId: string;
+    companyName: string;
+    action: string;
+    actor: string | null;
+    timestamp: Date;
+  }>> {
+    if (authorizedCompanyIds.length === 0) return [];
+
+    // Single join query with indexed companyId filter — no N+1
+    const logs = await db.select({
+      companyId: auditLogs.companyId,
+      companyName: companies.name,
+      action: auditLogs.action,
+      actor: auditLogs.userId,
+      timestamp: auditLogs.createdAt,
+    })
+      .from(auditLogs)
+      .innerJoin(companies, eq(auditLogs.companyId, companies.id))
+      .where(inArray(auditLogs.companyId, authorizedCompanyIds))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(limit);
+
+    return logs.map(r => ({
+      companyId: r.companyId ?? "",
+      companyName: r.companyName,
+      action: r.action,
+      actor: r.actor ?? null,
+      timestamp: r.timestamp ?? new Date(),
+    }));
   }
 }
 

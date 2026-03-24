@@ -3,7 +3,7 @@ import { pgTable, text, varchar, boolean, integer, serial, timestamp, jsonb, dec
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer", "super_admin"]);
+export const roleEnum = pgEnum("role", ["admin", "editor", "contributor", "approver", "viewer", "super_admin", "portfolio_owner", "portfolio_viewer"]);
 export const planTierEnum = pgEnum("plan_tier", ["free", "pro"]);
 export const planStatusEnum = pgEnum("plan_status", ["active", "past_due", "cancelled", "over_limit"]);
 export const authTokenTypeEnum = pgEnum("auth_token_type", ["invitation", "password_reset"]);
@@ -1409,3 +1409,59 @@ export const securityAlerts = pgTable("security_alerts", {
 }));
 
 export type SecurityAlert = typeof securityAlerts.$inferSelect;
+
+// ============================================================
+// PORTFOLIO GROUPS
+// ============================================================
+
+export const groupTypeEnum = pgEnum("group_type", ["portfolio", "holding_company", "advisor_group", "other"]);
+export const portfolioRoleEnum = pgEnum("portfolio_role", ["portfolio_owner", "portfolio_viewer"]);
+
+export const groups = pgTable("groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  type: groupTypeEnum("type").notNull().default("portfolio"),
+  description: text("description"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  slugIdx: uniqueIndex("idx_groups_slug").on(table.slug),
+}));
+
+export const groupCompanies = pgTable("group_companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  groupId: varchar("group_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  uniqueGroupCompany: uniqueIndex("idx_group_companies_unique").on(table.groupId, table.companyId),
+  groupIdIdx: index("idx_group_companies_group_id").on(table.groupId),
+  companyIdIdx: index("idx_group_companies_company_id").on(table.companyId),
+}));
+
+export const userGroupRoles = pgTable("user_group_roles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  groupId: varchar("group_id").notNull(),
+  role: portfolioRoleEnum("role").notNull().default("portfolio_viewer"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueUserGroup: uniqueIndex("idx_user_group_roles_unique").on(table.userId, table.groupId),
+  userIdIdx: index("idx_user_group_roles_user_id").on(table.userId),
+  groupIdIdx: index("idx_user_group_roles_group_id").on(table.groupId),
+}));
+
+export const insertGroupSchema = createInsertSchema(groups).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertGroup = z.infer<typeof insertGroupSchema>;
+export type Group = typeof groups.$inferSelect;
+
+export const insertGroupCompanySchema = createInsertSchema(groupCompanies).omit({ id: true, createdAt: true });
+export type InsertGroupCompany = z.infer<typeof insertGroupCompanySchema>;
+export type GroupCompany = typeof groupCompanies.$inferSelect;
+
+export const insertUserGroupRoleSchema = createInsertSchema(userGroupRoles).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertUserGroupRole = z.infer<typeof insertUserGroupRoleSchema>;
+export type UserGroupRole = typeof userGroupRoles.$inferSelect;

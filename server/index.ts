@@ -302,6 +302,76 @@ app.use((req, res, next) => {
   }
   console.log("[Startup] MFA & GDPR schema migrations applied");
 
+  // Portfolio Groups schema migrations (Task #54)
+  // drizzle-kit push cannot be used on this codebase (pre-existing super_admin_actions conflict),
+  // so DDL is applied inline here, idempotently, following the platform's established pattern.
+  const portfolioMigrations = [
+    // Extend role enum with portfolio roles
+    `ALTER TYPE role ADD VALUE IF NOT EXISTS 'portfolio_owner'`,
+    `ALTER TYPE role ADD VALUE IF NOT EXISTS 'portfolio_viewer'`,
+    // Create portfolio-specific enums if not already present (with all required values)
+    `DO $$ BEGIN
+       CREATE TYPE group_type AS ENUM ('portfolio', 'holding_company', 'advisor_group', 'other');
+     EXCEPTION WHEN duplicate_object THEN NULL;
+     END $$`,
+    // Add any enum values that may have been added since initial creation
+    `DO $$ BEGIN ALTER TYPE group_type ADD VALUE IF NOT EXISTS 'holding_company'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE group_type ADD VALUE IF NOT EXISTS 'advisor_group'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE group_type ADD VALUE IF NOT EXISTS 'other'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN
+       CREATE TYPE portfolio_role AS ENUM ('portfolio_owner', 'portfolio_viewer');
+     EXCEPTION WHEN duplicate_object THEN NULL;
+     END $$`,
+    `DO $$ BEGIN ALTER TYPE portfolio_role ADD VALUE IF NOT EXISTS 'portfolio_owner'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE portfolio_role ADD VALUE IF NOT EXISTS 'portfolio_viewer'; EXCEPTION WHEN others THEN NULL; END $$`,
+    // groups table: portfolio group definitions (type column uses group_type enum)
+    `CREATE TABLE IF NOT EXISTS groups (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name text NOT NULL,
+      slug text NOT NULL,
+      type group_type NOT NULL DEFAULT 'portfolio',
+      description text,
+      created_by_user_id varchar,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    )`,
+    // Unique slug index
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_slug ON groups(slug)`,
+    // group_companies table: many-to-many between groups and companies
+    `CREATE TABLE IF NOT EXISTS group_companies (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      group_id varchar NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      created_at timestamp DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_group_companies_unique ON group_companies(group_id, company_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_group_companies_group_id ON group_companies(group_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_group_companies_company_id ON group_companies(company_id)`,
+    // user_group_roles table: per-user role within a group
+    `CREATE TABLE IF NOT EXISTS user_group_roles (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id varchar NOT NULL,
+      group_id varchar NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      role portfolio_role NOT NULL DEFAULT 'portfolio_viewer',
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_group_roles_unique ON user_group_roles(user_id, group_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_group_roles_user_id ON user_group_roles(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_group_roles_group_id ON user_group_roles(group_id)`,
+  ];
+  for (const migration of portfolioMigrations) {
+    try {
+      await db.execute(sql.raw(migration));
+    } catch (e: any) {
+      // Idempotent — ignore "already exists" and enum duplicate value errors
+      if (!e.message?.includes("already exists") && !e.message?.includes("duplicate")) {
+        console.warn(`[Startup] Portfolio migration warning: ${e.message?.substring(0, 120)}`);
+      }
+    }
+  }
+  console.log("[Startup] Portfolio Groups schema migrations applied");
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
