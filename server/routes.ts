@@ -1232,17 +1232,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const company = user.companyId ? await storage.getCompany(user.companyId) : null;
     const consentOutdated = user.termsVersionAccepted !== CURRENT_LEGAL_VERSION || user.privacyVersionAccepted !== CURRENT_LEGAL_VERSION;
 
-    // Portfolio access context (non-blocking: errors here don't fail the auth/me endpoint)
-    let defaultLandingContext: "company" | "portfolio" = "company";
+    let defaultLandingContext: "portfolio" | "company" = "company";
     let portfolioGroups: any[] = [];
     try {
-      const { resolvePortfolioAccess: resolveAccess } = await import("./portfolio-access");
-      const accessCtx = await resolveAccess(user.id, user.role, user.companyId ?? null);
-      defaultLandingContext = accessCtx.defaultLandingContext;
-      portfolioGroups = accessCtx.groups.map(g => ({ id: g.id, name: g.name, type: g.type, role: g.role, companyCount: g.companyCount }));
+      const { resolvePortfolioAccess: resolvePortAccess } = await import("./portfolio-access");
+      const portAccess = await resolvePortAccess(user.id, user.role, user.companyId);
+      defaultLandingContext = portAccess.defaultLandingContext;
+      portfolioGroups = portAccess.groups;
     } catch (portfolioErr: unknown) {
-      // Log the error so portfolio access failures are observable; endpoint continues with company context
-      console.error("[/api/auth/me] Portfolio access resolution failed — defaulting to 'company' landing context:", portfolioErr instanceof Error ? portfolioErr.message : String(portfolioErr));
+      console.error("[/api/auth/me] Portfolio access resolution failed:", portfolioErr instanceof Error ? portfolioErr.message : String(portfolioErr));
     }
 
     res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, consentOutdated, currentLegalVersion: CURRENT_LEGAL_VERSION, defaultLandingContext, portfolioGroups });
@@ -7692,345 +7690,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   registerAgentRoutes(app);
-
-  // ============================================================
-  // PORTFOLIO API ROUTES
-  // ============================================================
-
-  // Import portfolio access service
-  const { resolvePortfolioAccess, resolveGroupAccess } = await import("./portfolio-access");
-
-  // GET /api/portfolio/groups — groups the user belongs to
-  app.get("/api/portfolio/groups", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      // Use centralized access resolution to determine all groups the user may see
-      const { groups: accessibleGroups } = await resolvePortfolioAccess(auth.userId, user.role, auth.companyId ?? null);
-      const countMap = new Map(accessibleGroups.map(g => [g.id, g.companyCount]));
-
-      const result = accessibleGroups.map(g => ({
-        id: g.id,
-        name: g.name,
-        type: g.type,
-        role: g.role,
-        companyCount: countMap.get(g.id) ?? 0,
-      }));
-
-      await storage.createAuditLog({
-        companyId: auth.companyId ?? null,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_dashboard_viewed",
-        entityType: "portfolio",
-        details: { groupCount: result.length },
-      });
-
-      res.json(result);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // GET /api/portfolio/groups/:groupId/summary — aggregate summary cards
-  app.get("/api/portfolio/groups/:groupId/summary", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized, authorizedCompanyIds } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const group = await storage.getGroupById(groupId);
-      if (!group) return res.status(404).json({ error: "Group not found" });
-
-      const summary = await storage.getPortfolioGroupSummary(groupId, authorizedCompanyIds);
-      res.json(summary);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // GET /api/portfolio/groups/:groupId/companies — paginated company rows
-  app.get("/api/portfolio/groups/:groupId/companies", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized, authorizedCompanyIds } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const group = await storage.getGroupById(groupId);
-      if (!group) return res.status(404).json({ error: "Group not found" });
-
-      const page = parseInt(req.query.page as string) || 1;
-      const pageSize = Math.min(parseInt(req.query.pageSize as string) || 20, 100);
-      const sortBy = (req.query.sortBy as string) || "companyName";
-      const sortDir = ((req.query.sortDir as string) === "desc" ? "desc" : "asc") as "asc" | "desc";
-      const search = req.query.search as string | undefined;
-      const sector = req.query.sector as string | undefined;
-      const status = req.query.status as string | undefined;
-      const scoreBand = req.query.scoreBand as string | undefined;
-      const alertsOnly = req.query.alertsOnly === "true";
-
-      const result = await storage.getPortfolioGroupCompanies(groupId, authorizedCompanyIds, {
-        page, pageSize, sortBy, sortDir, search, sector, status, scoreBand, alertsOnly,
-      });
-
-      res.json(result);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // GET /api/portfolio/groups/:groupId/alerts — structured alerts
-  app.get("/api/portfolio/groups/:groupId/alerts", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized, authorizedCompanyIds } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const group = await storage.getGroupById(groupId);
-      if (!group) return res.status(404).json({ error: "Group not found" });
-
-      const alerts = await storage.getPortfolioGroupAlerts(groupId, authorizedCompanyIds);
-      res.json(alerts);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // GET /api/portfolio/groups/:groupId/activity — recent audit log entries
-  app.get("/api/portfolio/groups/:groupId/activity", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized, authorizedCompanyIds } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const group = await storage.getGroupById(groupId);
-      if (!group) return res.status(404).json({ error: "Group not found" });
-
-      const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
-      const activity = await storage.getPortfolioGroupActivity(groupId, authorizedCompanyIds, limit);
-      res.json(activity);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // POST /api/portfolio/groups/:groupId/companies — add a company to a group (portfolio_owner only)
-  app.post("/api/portfolio/groups/:groupId/companies", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const userRoles = await storage.getUserGroupRoles(auth.userId);
-      const membership = userRoles.find(r => r.groupId === groupId);
-      if (!membership || (membership.role !== "portfolio_owner" && user.role !== "super_admin")) {
-        return res.status(403).json({ error: "portfolio_owner role required to manage companies" });
-      }
-
-      const { companyId } = req.body;
-      if (!companyId || typeof companyId !== "string") {
-        return res.status(400).json({ error: "companyId is required" });
-      }
-      const company = await storage.getCompany(companyId);
-      if (!company) return res.status(404).json({ error: "Company not found" });
-
-      await storage.addCompanyToGroup(groupId, companyId);
-
-      await storage.createAuditLog({
-        companyId: auth.companyId ?? null,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_company_added",
-        entityType: "group",
-        entityId: groupId,
-        details: { groupId, companyId, companyName: company.name },
-      });
-
-      res.status(201).json({ success: true });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // DELETE /api/portfolio/groups/:groupId/companies/:companyId — remove a company from a group
-  app.delete("/api/portfolio/groups/:groupId/companies/:companyId", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId, companyId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const userRoles = await storage.getUserGroupRoles(auth.userId);
-      const membership = userRoles.find(r => r.groupId === groupId);
-      if (!membership || (membership.role !== "portfolio_owner" && user.role !== "super_admin")) {
-        return res.status(403).json({ error: "portfolio_owner role required to manage companies" });
-      }
-
-      const company = await storage.getCompany(companyId);
-      await storage.removeCompanyFromGroup(groupId, companyId);
-
-      await storage.createAuditLog({
-        companyId: auth.companyId ?? null,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_company_removed",
-        entityType: "group",
-        entityId: groupId,
-        details: { groupId, companyId, companyName: company?.name ?? companyId },
-      });
-
-      res.json({ success: true });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // POST /api/portfolio/groups/:groupId/roles — assign a user role in a group
-  app.post("/api/portfolio/groups/:groupId/roles", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const userRoles = await storage.getUserGroupRoles(auth.userId);
-      const membership = userRoles.find(r => r.groupId === groupId);
-      if (!membership || (membership.role !== "portfolio_owner" && user.role !== "super_admin")) {
-        return res.status(403).json({ error: "portfolio_owner role required to manage group roles" });
-      }
-
-      const { userId: targetUserId, role } = req.body;
-      if (!targetUserId || !role || !["portfolio_owner", "portfolio_viewer"].includes(role)) {
-        return res.status(400).json({ error: "userId and valid role (portfolio_owner|portfolio_viewer) are required" });
-      }
-
-      await storage.assignUserGroupRole(targetUserId, groupId, role);
-
-      await storage.createAuditLog({
-        companyId: auth.companyId ?? null,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_user_role_assigned",
-        entityType: "group",
-        entityId: groupId,
-        details: { groupId, targetUserId, role },
-      });
-
-      res.status(201).json({ success: true });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // DELETE /api/portfolio/groups/:groupId/roles/:userId — remove a user's role from a group
-  app.delete("/api/portfolio/groups/:groupId/roles/:userId", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { groupId, userId: targetUserId } = req.params;
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      const { authorized } = await resolveGroupAccess(auth.userId, user.role, groupId);
-      if (!authorized) return res.status(403).json({ error: "Not authorized to access this group" });
-
-      const userRoles = await storage.getUserGroupRoles(auth.userId);
-      const membership = userRoles.find(r => r.groupId === groupId);
-      if (!membership || (membership.role !== "portfolio_owner" && user.role !== "super_admin")) {
-        return res.status(403).json({ error: "portfolio_owner role required to manage group roles" });
-      }
-
-      await storage.removeUserGroupRole(targetUserId, groupId);
-
-      await storage.createAuditLog({
-        companyId: auth.companyId ?? null,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_user_role_removed",
-        entityType: "group",
-        entityId: groupId,
-        details: { groupId, targetUserId },
-      });
-
-      res.json({ success: true });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
-  // POST /api/portfolio/switch-to-company — log when user navigates from portfolio into a company
-  app.post("/api/portfolio/switch-to-company", requireAuth, async (req, res) => {
-    try {
-      const auth = (req as any)._auth;
-      const { companyId: targetCompanyId, groupId } = req.body;
-
-      if (!targetCompanyId || typeof targetCompanyId !== "string") {
-        return res.status(400).json({ error: "companyId is required" });
-      }
-
-      const user = await storage.getUser(auth.userId);
-      if (!user) return res.status(401).json({ error: "User not found" });
-
-      // Verify the user is authorized to access the target company via portfolio access resolution
-      const { accessibleCompanies } = await resolvePortfolioAccess(auth.userId, user.role, auth.companyId ?? null);
-      const isAccessible = accessibleCompanies.some(c => c.id === targetCompanyId);
-      if (!isAccessible) {
-        return res.status(403).json({ error: "Not authorized to access this company" });
-      }
-
-      await storage.createAuditLog({
-        companyId: auth.companyId,
-        userId: auth.userId,
-        actorType: "user",
-        action: "portfolio_switched_to_company",
-        entityType: "company",
-        entityId: targetCompanyId,
-        details: { fromGroupId: groupId ?? null, toCompanyId: targetCompanyId },
-      });
-
-      res.json({ success: true });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
-    }
-  });
-
   startScheduler();
 
   // ============================================================
@@ -10850,6 +10509,315 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     if (!payload?.jobId || !companyId) return { error: "Missing jobId or companyId" };
     await processExportJob(payload.jobId, payload.requestedBy, companyId, payload.exportScope);
     return { jobId: payload.jobId, status: "completed" };
+  });
+
+  // ============================================================
+  // PORTFOLIO ROUTES
+  // ============================================================
+
+  const { resolvePortfolioAccess, assertGroupAccess } = await import("./portfolio-access");
+  const { groups: groupsTable, groupCompanies: groupCompaniesTable, companies: companiesTable, auditLogs: auditLogsTable, reportRuns: reportRunsTable, metricValues: metricValuesTable, metrics: metricsTable } = await import("@shared/schema");
+  const { inArray: drizzleInArray, desc: drizzleDesc } = await import("drizzle-orm");
+
+  function isPortfolioRole(role: string) {
+    return ["portfolio_owner", "portfolio_viewer", "super_admin"].includes(role);
+  }
+
+  function requirePortfolioAuth(req: Request, res: Response): { userId: string; userRole: string; companyId: string | null } | null {
+    const auth = resolveAuth(req);
+    if (!auth) { res.status(401).json({ error: "Not authenticated" }); return null; }
+    const user = auth as any;
+    const role = (req.session as any).role || user.role || "";
+    if (!isPortfolioRole(role)) { res.status(403).json({ error: "Portfolio access required" }); return null; }
+    return { userId: auth.userId, userRole: role, companyId: (req.session as any).companyId || null };
+  }
+
+  app.get("/api/portfolio/groups", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const sessionData = req.session as any;
+      const role = sessionData.role || "";
+      const user = await storage.getUser(auth.userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
+
+      const access = await resolvePortfolioAccess(user.id, user.role, user.companyId);
+      res.json(access.groups);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/portfolio/groups/:groupId/summary", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const user = await storage.getUser(auth.userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
+
+      const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
+      if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
+
+      const gcRows = await db.select({ companyId: groupCompaniesTable.companyId })
+        .from(groupCompaniesTable)
+        .where(eq(groupCompaniesTable.groupId, req.params.groupId));
+
+      const companyIds = gcRows.map(r => r.companyId);
+      const totalCompanies = companyIds.length;
+
+      if (totalCompanies === 0) {
+        return res.json({ totalCompanies: 0, averageEsgScore: null, missingDataCount: 0, overdueUpdatesCount: 0, reportsReadyCount: 0, highRiskFlagsCount: 0 });
+      }
+
+      const companyCos = await db.select({ id: companiesTable.id, onboardingComplete: companiesTable.onboardingComplete })
+        .from(companiesTable)
+        .where(drizzleInArray(companiesTable.id, companyIds));
+
+      const missingDataCount = companyCos.filter(c => !c.onboardingComplete).length;
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
+      const recentReports = await db.select({ companyId: reportRunsTable.companyId })
+        .from(reportRunsTable)
+        .where(and(
+          drizzleInArray(reportRunsTable.companyId, companyIds),
+          sql`${reportRunsTable.generatedAt} > ${ninetyDaysAgo}`
+        ));
+      const companiesWithReports = new Set(recentReports.map(r => r.companyId));
+      const reportsReadyCount = companiesWithReports.size;
+
+      const recentMetricUpdates = await db.select({ companyId: metricsTable.companyId })
+        .from(metricsTable)
+        .innerJoin(metricValuesTable, eq(metricValuesTable.metricId, metricsTable.id))
+        .where(and(
+          drizzleInArray(metricsTable.companyId, companyIds),
+          sql`${metricValuesTable.submittedAt} > ${thirtyDaysAgo}`
+        ));
+      const companiesWithRecentData = new Set(recentMetricUpdates.map(r => r.companyId));
+      const overdueUpdatesCount = companyIds.filter(id => !companiesWithRecentData.has(id)).length;
+
+      res.json({
+        totalCompanies,
+        averageEsgScore: null,
+        missingDataCount,
+        overdueUpdatesCount,
+        reportsReadyCount,
+        highRiskFlagsCount: 0,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/portfolio/groups/:groupId/companies", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const user = await storage.getUser(auth.userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
+
+      const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
+      if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
+
+      const gcRows = await db.select({ companyId: groupCompaniesTable.companyId })
+        .from(groupCompaniesTable)
+        .where(eq(groupCompaniesTable.groupId, req.params.groupId));
+
+      const companyIds = gcRows.map(r => r.companyId);
+
+      if (companyIds.length === 0) {
+        return res.json({ companies: [], total: 0, page: 1, pageSize: 20 });
+      }
+
+      const page = Math.max(1, parseInt(String(req.query.page || "1")));
+      const pageSize = Math.min(50, Math.max(1, parseInt(String(req.query.pageSize || "20"))));
+      const search = String(req.query.search || "").trim().toLowerCase();
+
+      const allCompanies = await db.select({
+        id: companiesTable.id,
+        name: companiesTable.name,
+        industry: companiesTable.industry,
+        employeeCount: companiesTable.employeeCount,
+        onboardingComplete: companiesTable.onboardingComplete,
+        createdAt: companiesTable.createdAt,
+      })
+        .from(companiesTable)
+        .where(drizzleInArray(companiesTable.id, companyIds));
+
+      let filtered = allCompanies;
+      if (search) {
+        filtered = filtered.filter(c => c.name.toLowerCase().includes(search));
+      }
+
+      const statusFilter = String(req.query.status || "");
+      if (statusFilter === "onboarding") filtered = filtered.filter(c => !c.onboardingComplete);
+      if (statusFilter === "active") filtered = filtered.filter(c => c.onboardingComplete);
+
+      const total = filtered.length;
+      const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+      const companyIdsPage = paged.map(c => c.id);
+      let recentReportsMap: Record<string, boolean> = {};
+      if (companyIdsPage.length > 0) {
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        const recentReports = await db.select({ companyId: reportRunsTable.companyId })
+          .from(reportRunsTable)
+          .where(and(
+            drizzleInArray(reportRunsTable.companyId, companyIdsPage),
+            sql`${reportRunsTable.generatedAt} > ${ninetyDaysAgo}`
+          ));
+        for (const r of recentReports) recentReportsMap[r.companyId] = true;
+      }
+
+      const rows = paged.map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        sector: c.industry || null,
+        sizeBand: c.employeeCount ? (c.employeeCount < 50 ? "Small" : c.employeeCount < 250 ? "Medium" : "Large") : null,
+        esgScore: null,
+        environmentalScore: null,
+        socialScore: null,
+        governanceScore: null,
+        lastDataUpdate: null,
+        reportingStatus: recentReportsMap[c.id] ? "Report available" : (c.onboardingComplete ? "Active" : "Onboarding incomplete"),
+        alertCount: c.onboardingComplete ? 0 : 1,
+      }));
+
+      res.json({ companies: rows, total, page, pageSize });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/portfolio/groups/:groupId/alerts", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const user = await storage.getUser(auth.userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
+
+      const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
+      if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
+
+      const gcRows = await db.select({ companyId: groupCompaniesTable.companyId })
+        .from(groupCompaniesTable)
+        .where(eq(groupCompaniesTable.groupId, req.params.groupId));
+
+      const companyIds = gcRows.map(r => r.companyId);
+
+      if (companyIds.length === 0) {
+        return res.json({ neverOnboarded: [], missingEvidence: [], overdueUpdates: [], noRecentReport: [] });
+      }
+
+      const allCompanies = await db.select({ id: companiesTable.id, name: companiesTable.name, onboardingComplete: companiesTable.onboardingComplete })
+        .from(companiesTable)
+        .where(drizzleInArray(companiesTable.id, companyIds));
+
+      const neverOnboarded = allCompanies.filter(c => !c.onboardingComplete).map(c => ({ companyId: c.id, companyName: c.name, reason: "Onboarding not completed" }));
+
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
+      const onboardedIds = allCompanies.filter(c => c.onboardingComplete).map(c => c.id);
+
+      let overdueUpdates: { companyId: string; companyName: string; reason: string }[] = [];
+      let noRecentReport: { companyId: string; companyName: string; reason: string }[] = [];
+
+      if (onboardedIds.length > 0) {
+        const recentMetrics = await db.select({ companyId: metricsTable.companyId })
+          .from(metricsTable)
+          .innerJoin(metricValuesTable, eq(metricValuesTable.metricId, metricsTable.id))
+          .where(and(
+            drizzleInArray(metricsTable.companyId, onboardedIds),
+            sql`${metricValuesTable.submittedAt} > ${thirtyDaysAgo}`
+          ));
+        const companiesWithData = new Set(recentMetrics.map(r => r.companyId));
+        overdueUpdates = onboardedIds
+          .filter(id => !companiesWithData.has(id))
+          .map(id => ({ companyId: id, companyName: allCompanies.find(c => c.id === id)?.name || id, reason: "No data updated in the last 30 days" }));
+
+        const recentReports = await db.select({ companyId: reportRunsTable.companyId })
+          .from(reportRunsTable)
+          .where(and(
+            drizzleInArray(reportRunsTable.companyId, onboardedIds),
+            sql`${reportRunsTable.generatedAt} > ${ninetyDaysAgo}`
+          ));
+        const companiesWithReports = new Set(recentReports.map(r => r.companyId));
+        noRecentReport = onboardedIds
+          .filter(id => !companiesWithReports.has(id))
+          .map(id => ({ companyId: id, companyName: allCompanies.find(c => c.id === id)?.name || id, reason: "No report generated in the last 90 days" }));
+      }
+
+      res.json({ neverOnboarded, missingEvidence: [], overdueUpdates, noRecentReport });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/portfolio/groups/:groupId/activity", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const user = await storage.getUser(auth.userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
+
+      const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
+      if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
+
+      const gcRows = await db.select({ companyId: groupCompaniesTable.companyId })
+        .from(groupCompaniesTable)
+        .where(eq(groupCompaniesTable.groupId, req.params.groupId));
+
+      const companyIds = gcRows.map(r => r.companyId);
+
+      if (companyIds.length === 0) {
+        return res.json([]);
+      }
+
+      const { auditLogs: auditLogsSchema } = await import("@shared/schema");
+      const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || "20"))));
+      const logs = await db.select({
+        id: auditLogsSchema.id,
+        companyId: auditLogsSchema.companyId,
+        action: auditLogsSchema.action,
+        entityType: auditLogsSchema.entityType,
+        userId: auditLogsSchema.userId,
+        createdAt: auditLogsSchema.createdAt,
+      })
+        .from(auditLogsSchema)
+        .where(drizzleInArray(auditLogsSchema.companyId, companyIds))
+        .orderBy(drizzleDesc(auditLogsSchema.createdAt))
+        .limit(limit);
+
+      const coNames: Record<string, string> = {};
+      const cos = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).where(drizzleInArray(companiesTable.id, companyIds));
+      for (const co of cos) coNames[co.id] = co.name;
+
+      const actionLabels: Record<string, string> = {
+        metric_value_submitted: "updated ESG data",
+        evidence_uploaded: "uploaded evidence",
+        report_generated: "generated a report",
+        policy_published: "published a policy",
+        onboarding_completed: "completed onboarding",
+        user_invited: "invited a team member",
+        login: "logged in",
+        page_view: "viewed a page",
+      };
+
+      const activity = logs.map(log => ({
+        id: log.id,
+        companyId: log.companyId,
+        companyName: coNames[log.companyId || ""] || log.companyId || "Unknown",
+        action: actionLabels[log.action] || log.action,
+        actor: log.userId || null,
+        timestamp: log.createdAt,
+      }));
+
+      res.json(activity);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   return httpServer;

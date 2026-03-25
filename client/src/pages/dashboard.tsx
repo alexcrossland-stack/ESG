@@ -493,6 +493,23 @@ function SiteBreakdownCard({ period }: { period?: string }) {
   );
 }
 
+function BackToPortfolioBanner() {
+  const fromPortfolio = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("from") === "portfolio";
+  if (!fromPortfolio) return null;
+  return (
+    <div className="flex items-center justify-between px-4 py-2 rounded-lg bg-primary/5 border border-primary/20 mb-2" data-testid="banner-back-to-portfolio">
+      <span className="text-sm text-foreground">
+        Viewing from <span className="font-medium">Portfolio Dashboard</span>
+      </span>
+      <Link href="/portfolio">
+        <Button size="sm" variant="outline" className="h-7 text-xs" data-testid="link-back-to-portfolio">
+          ← Back to Portfolio Dashboard
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
@@ -575,6 +592,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
+      <BackToPortfolioBanner />
       <PageGuidance
         pageKey="dashboard"
         title="ESG Dashboard — what the numbers mean"

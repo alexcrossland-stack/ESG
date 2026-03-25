@@ -6,6 +6,7 @@ import {
   SidebarHeader, SidebarFooter, SidebarSeparator,
   SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton, SidebarMenuBadge,
 } from "@/components/ui/sidebar";
+import { usePortfolioAccess } from "@/hooks/use-portfolio-access";
 import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
@@ -124,6 +125,7 @@ function SiteSwitcher() {
 export function AppSidebar() {
   const [location] = useLocation();
   const { can, isAdmin, isSuperAdmin } = usePermissions();
+  const { canAccessPortfolio, groups: portfolioGroups } = usePortfolioAccess();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -218,6 +220,24 @@ export function AppSidebar() {
                   <TooltipContent side="right">See your ESG progress and next actions</TooltipContent>
                 </Tooltip>
               </SidebarMenuItem>
+
+              {/* Portfolio — visible to portfolio users */}
+              {canAccessPortfolio && (
+                <SidebarMenuItem>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <SidebarMenuButton asChild data-active={isActive(location, "/portfolio")}>
+                        <Link href="/portfolio" data-testid="nav-portfolio">
+                          <BarChart3 className="w-4 h-4 shrink-0" />
+                          <span>Portfolio</span>
+                          {isActive(location, "/portfolio") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                        </Link>
+                      </SidebarMenuButton>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">Portfolio Dashboard — monitor all your companies</TooltipContent>
+                  </Tooltip>
+                </SidebarMenuItem>
+              )}
 
               {/* ESG Setup */}
               <Collapsible open={esgOpen} onOpenChange={setEsgOpen} asChild>

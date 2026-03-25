@@ -60,6 +60,7 @@ import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
 import FrameworkSettingsPage from "@/pages/framework-settings";
 import FrameworkReadinessPage from "@/pages/framework-readiness";
+import PortfolioPage from "@/pages/portfolio";
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -249,11 +250,14 @@ function ConsentBanner() {
   );
 }
 
+const PORTFOLIO_ROLES = ["portfolio_owner", "portfolio_viewer", "super_admin"];
+
 function ProtectedApp() {
-  const { data, isLoading } = useQuery<{ user: any; company: any }>({
+  const { data, isLoading } = useQuery<{ user: any; company: any; defaultLandingContext?: string; portfolioGroups?: any[] }>({
     queryKey: ["/api/auth/me"],
     retry: false,
   });
+  const [location] = useLocation();
 
   usePageTracking();
 
@@ -272,8 +276,24 @@ function ProtectedApp() {
     return <Redirect to="/auth" />;
   }
 
-  if (data?.user?.role !== "super_admin" && !data?.company?.onboardingComplete) {
+  const isPortfolioUser = PORTFOLIO_ROLES.includes(data?.user?.role);
+  if (data?.user?.role !== "super_admin" && !isPortfolioUser && !data?.company?.onboardingComplete) {
     return <Onboarding />;
+  }
+
+  // Post-login redirect for portfolio users (only from root without special params)
+  const hasPortfolioRedirectParam = typeof window !== "undefined" && (
+    new URLSearchParams(window.location.search).get("from") === "portfolio" ||
+    new URLSearchParams(window.location.search).get("portfolioCompanyId")
+  );
+  if (
+    location === "/" &&
+    !hasPortfolioRedirectParam &&
+    data?.defaultLandingContext === "portfolio" &&
+    PORTFOLIO_ROLES.includes(data?.user?.role) &&
+    (data?.portfolioGroups?.length || 0) > 0
+  ) {
+    return <Redirect to="/portfolio" />;
   }
 
   return (
@@ -330,6 +350,7 @@ function ProtectedApp() {
                 <Route path="/help/:slug" component={HelpArticlePage} />
                 <Route path="/framework-settings" component={FrameworkSettingsPage} />
                 <Route path="/framework-readiness" component={FrameworkReadinessPage} />
+                <Route path="/portfolio" component={PortfolioPage} />
                 <Route path="/materiality" component={MaterialityPage} />
                 <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
                 <Route path="/esg-targets" component={EsgTargetsPage} />
