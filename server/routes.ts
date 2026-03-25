@@ -1911,7 +1911,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id/target", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.put("/api/metrics/:id/target", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const existing = await storage.getMetric(req.params.id);
@@ -11006,29 +11006,24 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   const { groups: groupsTable, groupCompanies: groupCompaniesTable, companies: companiesTable, auditLogs: auditLogsTable, reportRuns: reportRunsTable, metricValues: metricValuesTable, metrics: metricsTable } = await import("@shared/schema");
   const { inArray: drizzleInArray, desc: drizzleDesc } = await import("drizzle-orm");
 
-  function isPortfolioRole(role: string) {
-    return ["portfolio_owner", "portfolio_viewer", "super_admin"].includes(role);
-  }
-
   function requirePortfolioAuth(req: Request, res: Response): { userId: string; userRole: string; companyId: string | null } | null {
     const auth = resolveAuth(req);
     if (!auth) { res.status(401).json({ error: "Not authenticated" }); return null; }
     const user = auth as any;
     const role = (req.session as any).role || user.role || "";
-    if (!isPortfolioRole(role)) { res.status(403).json({ error: "Portfolio access required" }); return null; }
     return { userId: auth.userId, userRole: role, companyId: (req.session as any).companyId || null };
   }
 
   app.get("/api/portfolio/groups", requireAuth, async (req, res) => {
     try {
       const auth = resolveAuth(req)!;
-      const sessionData = req.session as any;
-      const role = sessionData.role || "";
       const user = await storage.getUser(auth.userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
 
       const access = await resolvePortfolioAccess(user.id, user.role, user.companyId);
+      if (access.groups.length === 0 && user.role !== "super_admin") {
+        return res.status(403).json({ error: "Portfolio access required" });
+      }
       res.json(access.groups);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -11040,8 +11035,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
-
       const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
       if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
 
@@ -11102,7 +11095,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
 
       const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
       if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
@@ -11182,7 +11174,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
 
       const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
       if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });
@@ -11247,7 +11238,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!isPortfolioRole(user.role)) return res.status(403).json({ error: "Portfolio access required" });
 
       const groupAccess = await assertGroupAccess(user.id, user.role, req.params.groupId);
       if (!groupAccess) return res.status(403).json({ error: "Group not found or access denied" });

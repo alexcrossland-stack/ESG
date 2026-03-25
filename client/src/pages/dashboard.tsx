@@ -18,7 +18,7 @@ import {
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ActivityFeed } from "@/components/activity-feed";
 import { Progress } from "@/components/ui/progress";
@@ -763,6 +763,19 @@ export default function Dashboard() {
     ? (() => { const d = new Date(activePeriod.startDate); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })()
     : undefined;
 
+  const showMilestone = (() => {
+    if (milestoneDismissed || !readiness?.hasGeneratedReport) return false;
+    try {
+      return localStorage.getItem("milestone_first_report_seen") !== "true";
+    } catch { return false; }
+  })();
+
+  useEffect(() => {
+    if (showMilestone) {
+      try { localStorage.setItem("milestone_first_report_seen", "true"); } catch {}
+    }
+  }, [showMilestone]);
+
   if (isLoading) {
     return (
       <div className="p-4 sm:p-6 space-y-4">
@@ -822,18 +835,6 @@ export default function Dashboard() {
     .slice(0, 5);
 
   const hasAlerts = missingDataAlerts.length > 0 || overdueActions.length > 0 || upcomingPolicyReviews.length > 0;
-  const showMilestone = (() => {
-    if (milestoneDismissed || !readiness?.hasGeneratedReport) return false;
-    try {
-      return localStorage.getItem("milestone_first_report_seen") !== "true";
-    } catch { return false; }
-  })();
-
-  useEffect(() => {
-    if (showMilestone) {
-      try { localStorage.setItem("milestone_first_report_seen", "true"); } catch {}
-    }
-  }, [showMilestone]);
 
   const handleDismissMilestone = () => {
     setMilestoneDismissed(true);
