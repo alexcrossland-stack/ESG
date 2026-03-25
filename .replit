@@ -42,6 +42,10 @@ args = "test:api"
 task = "workflow.run"
 args = "test:e2e"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "regression"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -83,6 +87,17 @@ args = "npx playwright test"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow]]
+name = "regression"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx playwright test --grep 'REGR-'"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [agent]
 integrations = ["javascript_openai_ai_integrations:2.0.0"]
