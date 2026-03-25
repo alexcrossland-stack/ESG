@@ -18,7 +18,7 @@ import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
-  Send, Check, X, FileCheck, Loader2, ArrowRight,
+  Send, Check, X, FileCheck, Loader2, ArrowRight, Sparkles, Pencil,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
@@ -33,6 +33,8 @@ import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { Link } from "wouter";
+import { ValueSourceBadge } from "@/components/value-source-badge";
+import { useSearch } from "wouter";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -109,6 +111,9 @@ export default function DataEntry() {
   const { can, isApprover } = usePermissions();
   const { isPro } = useBillingStatus();
   const { activeSiteId } = useSiteContext();
+  const searchString = useSearch();
+  const searchParams = new URLSearchParams(searchString);
+  const highlightEstimated = searchParams.get("highlight") === "estimated";
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
@@ -120,6 +125,14 @@ export default function DataEntry() {
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
   const [manualDataSourceTypes, setManualDataSourceTypes] = useState<Record<string, string>>({});
+  const [estimateBannerDismissed, setEstimateBannerDismissed] = useState(false);
+  const [pendingEstimates, setPendingEstimates] = useState<Record<string, { value: number; label: string; unit: string; metricId: string; inputKey?: string; source: string; explanation: string; methodology: string }>>({});
+  const [acceptedEstimates, setAcceptedEstimates] = useState<Set<string>>(new Set());
+  const [skippedEstimates, setSkippedEstimates] = useState<Set<string>>(new Set());
+  const [autoEstimateTriggered, setAutoEstimateTriggered] = useState(false);
+  const [editingEstimate, setEditingEstimate] = useState<string | null>(null);
+  const [editEstimateValue, setEditEstimateValue] = useState("");
+  const [editSaveAsActual, setEditSaveAsActual] = useState(false);
 
   const { data: evidenceCoverage } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
@@ -215,6 +228,79 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
     },
   });
+
+  const fetchEstimatesMutation = useMutation({
+    mutationFn: (opts?: { force?: boolean }) => apiRequest("POST", "/api/data-entries/estimate", { period: selectedPeriod, force: opts?.force }).then((r: any) => r.json()),
+    onSuccess: (data: any) => {
+      const estimates: Record<string, { value: number; label: string; unit: string; metricId: string; inputKey?: string; source: string; explanation: string; methodology: string }> = {};
+      if (data?.estimates && Array.isArray(data.estimates)) {
+        for (const e of data.estimates) {
+          if (!e.shouldPrefill) continue;
+          const key = e.metricId || e.metricName;
+          estimates[key] = {
+            value: e.estimatedValue,
+            label: e.metricName,
+            unit: e.unit || "",
+            metricId: e.metricId || "",
+            inputKey: "",
+            source: `${data.industry || "sector"} average (${e.confidence} confidence)`,
+            explanation: e.explanation || "",
+            methodology: e.methodology || "",
+          };
+        }
+      }
+      if (Object.keys(estimates).length === 0) {
+        toast({ title: "No estimates available", description: "All fields are already filled in, or we don't have sector data for your company type." });
+      } else {
+        setPendingEstimates(estimates);
+        setEstimateBannerDismissed(false);
+        setAcceptedEstimates(new Set());
+        setSkippedEstimates(new Set());
+      }
+    },
+    onError: () => toast({ title: "Could not load estimates", variant: "destructive" }),
+  });
+
+  const acceptEstimateMutation = useMutation({
+    mutationFn: (estimate: { metricId: string; value: number; notes: string }) =>
+      apiRequest("POST", "/api/data-entry", { ...estimate, period: selectedPeriod, dataSourceType: "estimated", siteId: activeSiteId || null }),
+    onSuccess: (_, vars) => {
+      setAcceptedEstimates(prev => new Set([...prev, vars.metricId]));
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+    },
+    onError: () => toast({ title: "Could not save estimate", variant: "destructive" }),
+  });
+
+  const replaceEstimateMutation = useMutation({
+    mutationFn: (data: { metricId: string; value: number; notes: string; saveAsActual: boolean }) =>
+      apiRequest("POST", "/api/data-entry", { metricId: data.metricId, value: data.value, notes: data.notes, period: selectedPeriod, dataSourceType: data.saveAsActual ? "manual" : "estimated", siteId: activeSiteId || null }),
+    onSuccess: (_, vars) => {
+      setAcceptedEstimates(prev => new Set([...prev, vars.metricId]));
+      setEditingEstimate(null);
+      setEditEstimateValue("");
+      setEditSaveAsActual(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      toast({ title: "Value saved", description: vars.saveAsActual ? "Saved as actual data." : "Saved as edited estimate." });
+    },
+    onError: () => toast({ title: "Could not save value", variant: "destructive" }),
+  });
+
+  useEffect(() => {
+    if (autoEstimateTriggered || estimateBannerDismissed) return;
+    if (!entryData || entryLoading) return;
+    const prefillKey = `estimate_prefill_shown_${selectedPeriod}`;
+    if (localStorage.getItem(prefillKey) === "true") return;
+    const allMetrics = entryData?.metrics || [];
+    const filledValues = (entryData?.values || []).filter((v: any) => v.value !== null && v.value !== undefined);
+    const filledMetricIds = new Set(filledValues.map((v: any) => v.metricId));
+    const manualMetrics = allMetrics.filter((m: any) => m.metricType === "manual" || !m.metricType);
+    const emptyMetrics = manualMetrics.filter((m: any) => !filledMetricIds.has(m.id));
+    if (manualMetrics.length > 0 && emptyMetrics.length > 0) {
+      setAutoEstimateTriggered(true);
+      localStorage.setItem(prefillKey, "true");
+      fetchEstimatesMutation.mutate();
+    }
+  }, [entryData, entryLoading, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod]);
 
   const lockMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/data-entry/${selectedPeriod}/lock`, {}),
@@ -322,6 +408,26 @@ export default function DataEntry() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canEdit && (
+            <Button
+              size="sm"
+              variant={highlightEstimated ? "secondary" : "outline"}
+              className="h-8 text-xs gap-1.5"
+              onClick={() => {
+                if (highlightEstimated) {
+                  window.history.replaceState({}, "", "/data-entry");
+                } else {
+                  window.history.replaceState({}, "", "/data-entry?highlight=estimated");
+                }
+                window.dispatchEvent(new PopStateEvent("popstate"));
+                window.location.reload();
+              }}
+              data-testid="button-review-estimates"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Review estimates
+            </Button>
+          )}
           {!canEdit && (
             <Badge variant="secondary" className="gap-1" data-testid="badge-read-only">
               <Eye className="w-3 h-3" />
@@ -432,6 +538,228 @@ export default function DataEntry() {
           </>
         )}
       </div>
+
+      {highlightEstimated && Object.keys(pendingEstimates).length === 0 && !fetchEstimatesMutation.isPending && !estimateBannerDismissed && (
+        <Alert className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800" data-testid="banner-highlight-estimated">
+          <Sparkles className="w-4 h-4 text-amber-600" />
+          <AlertDescription className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Review your estimated values</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Fields with estimated data are highlighted below. Replace them with actual figures, or load new estimates for any remaining empty fields.</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
+                onClick={() => fetchEstimatesMutation.mutate()}
+                disabled={fetchEstimatesMutation.isPending}
+                data-testid="button-load-estimates"
+              >
+                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                {fetchEstimatesMutation.isPending ? "Loading..." : "Load new estimates"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
+                onClick={() => { setAutoEstimateTriggered(false); fetchEstimatesMutation.mutate({ force: true }); }}
+                disabled={fetchEstimatesMutation.isPending}
+                data-testid="button-recalculate-estimates"
+              >
+                <Calculator className="w-3.5 h-3.5 mr-1.5" />
+                Recalculate
+              </Button>
+              <Button size="sm" variant="ghost" className="text-amber-700 dark:text-amber-300 h-7 px-2" onClick={() => setEstimateBannerDismissed(true)} data-testid="button-dismiss-estimate-banner">
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {Object.keys(pendingEstimates).length > 0 && !estimateBannerDismissed && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800" data-testid="card-estimate-prefill">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-600" />
+                <span>Pre-filled Estimates</span>
+                <Badge variant="outline" className="text-xs border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300">
+                  Estimated
+                </Badge>
+              </div>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-muted-foreground" onClick={() => setEstimateBannerDismissed(true)} data-testid="button-close-estimates">
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </CardTitle>
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              These sector-based estimates fill empty fields only — your actual data is never overwritten.
+              Accept to use as a starting point, or skip to enter your own figures.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {Object.entries(pendingEstimates).map(([key, est]) => {
+              const isAccepted = acceptedEstimates.has(key);
+              const isSkipped = skippedEstimates.has(key);
+              if (isSkipped) return null;
+              return (
+                <div
+                  key={key}
+                  className={`flex items-center justify-between gap-3 p-3 rounded-md border bg-white dark:bg-amber-950/30 ${isAccepted ? "border-emerald-300 dark:border-emerald-700" : "border-amber-200 dark:border-amber-800"}`}
+                  data-testid={`estimate-row-${key}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{est.label}</span>
+                      <ValueSourceBadge source="estimated" />
+                      <span className="text-xs text-muted-foreground">{est.unit}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-base font-bold">{est.value.toLocaleString()}</span>
+                      <span className="text-xs text-muted-foreground">from {est.source}</span>
+                    </div>
+                    {est.explanation && (
+                      <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-1">{est.explanation}</p>
+                    )}
+                    {est.methodology && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5 italic">{est.methodology}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isAccepted ? (
+                      <Badge variant="secondary" className="text-xs gap-1 text-emerald-600 dark:text-emerald-400" data-testid={`estimate-accepted-${key}`}>
+                        <CheckCircle2 className="w-3 h-3" />
+                        Accepted
+                      </Badge>
+                    ) : editingEstimate === key ? (
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            value={editEstimateValue}
+                            onChange={(e) => setEditEstimateValue(e.target.value)}
+                            className="h-7 w-24 text-xs"
+                            data-testid={`input-edit-estimate-${key}`}
+                            autoFocus
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                            onClick={() => {
+                              const val = parseFloat(editEstimateValue);
+                              if (!isNaN(val) && est.metricId) {
+                                replaceEstimateMutation.mutate({ metricId: est.metricId, value: val, notes: editSaveAsActual ? "Actual value" : `Edited estimate (${est.source})`, saveAsActual: editSaveAsActual });
+                              }
+                            }}
+                            disabled={replaceEstimateMutation.isPending}
+                            data-testid={`button-save-edited-${key}`}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            onClick={() => { setEditingEstimate(null); setEditEstimateValue(""); setEditSaveAsActual(false); }}
+                            data-testid={`button-cancel-edit-${key}`}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                        <label className="flex items-center gap-1.5 cursor-pointer" data-testid={`toggle-save-as-actual-${key}`}>
+                          <input
+                            type="checkbox"
+                            checked={editSaveAsActual}
+                            onChange={(e) => setEditSaveAsActual(e.target.checked)}
+                            className="rounded border-gray-300"
+                          />
+                          <span className="text-[10px] text-muted-foreground">Save as actual (not estimate)</span>
+                        </label>
+                      </div>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300"
+                          onClick={() => {
+                            if (est.metricId) {
+                              const noteText = [est.explanation, est.methodology].filter(Boolean).join(" | ") || `Sector estimate (${est.source})`;
+                              acceptEstimateMutation.mutate({ metricId: est.metricId, value: est.value, notes: noteText });
+                            } else {
+                              setAcceptedEstimates(prev => new Set([...prev, key]));
+                              if (est.inputKey) {
+                                setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
+                              }
+                            }
+                          }}
+                          disabled={acceptEstimateMutation.isPending}
+                          data-testid={`button-accept-estimate-${key}`}
+                        >
+                          <Check className="w-3 h-3 mr-1" />
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() => { setEditingEstimate(key); setEditEstimateValue(String(est.value)); }}
+                          data-testid={`button-edit-estimate-${key}`}
+                        >
+                          <Pencil className="w-3 h-3 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-muted-foreground"
+                          onClick={() => setSkippedEstimates(prev => new Set([...prev, key]))}
+                          data-testid={`button-skip-estimate-${key}`}
+                        >
+                          Skip
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {Object.keys(pendingEstimates).length > 0 && (
+              <div className="flex items-center justify-between pt-2">
+                <p className="text-xs text-muted-foreground">
+                  {acceptedEstimates.size} of {Object.keys(pendingEstimates).length - skippedEstimates.size} estimates accepted
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs h-7"
+                  onClick={() => {
+                    const allAccepted = new Set<string>();
+                    for (const [key, est] of Object.entries(pendingEstimates)) {
+                      if (!skippedEstimates.has(key)) {
+                        allAccepted.add(key);
+                        if (est.metricId) {
+                          const noteText = [est.explanation, est.methodology].filter(Boolean).join(" | ") || `Sector estimate (${est.source})`;
+                          acceptEstimateMutation.mutate({ metricId: est.metricId, value: est.value, notes: noteText });
+                        } else if (est.inputKey) {
+                          setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
+                        }
+                      }
+                    }
+                    setAcceptedEstimates(allAccepted);
+                  }}
+                  data-testid="button-accept-all-estimates"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                  Accept All
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
@@ -633,13 +961,14 @@ export default function DataEntry() {
                     return (
                       <div
                         key={metric.metricId}
-                        className={`grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 p-3 rounded-md border ${hasValue ? "border-primary/20 bg-primary/5" : "border-border"}`}
+                        className={`grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 p-3 rounded-md border ${highlightEstimated && metricValue?.dataSourceType === "estimated" ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20 ring-1 ring-amber-300" : hasValue ? "border-primary/20 bg-primary/5" : "border-border"}`}
                         data-testid={`manual-row-${metric.metricId}`}
                       >
                         <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
+                            <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
                             <DataSourceBadge type={metricValue?.dataSourceType} />
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}

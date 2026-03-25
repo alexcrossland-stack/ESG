@@ -13,7 +13,7 @@ import {
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
   Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
-  Database, TrendingDown, BookOpen, Globe,
+  Database, TrendingDown, BookOpen, Globe, Star, Download,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import { useSiteContext } from "@/hooks/use-site-context";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
+import { ValueSourceBadge } from "@/components/value-source-badge";
 import { Building2, ArrowRight } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
 import { useActivationState } from "@/hooks/use-activation-state";
@@ -396,6 +397,234 @@ function DataQualityCard() {
   );
 }
 
+function ConfidencePill({ confidence, label }: { confidence: string; label: string }) {
+  const config: Record<string, { cls: string }> = {
+    score_in_progress: { cls: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400" },
+    draft: { cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+    provisional: { cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
+    confirmed: { cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
+  };
+  const cls = config[confidence]?.cls || config.draft.cls;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cls}`} data-testid="badge-score-confidence">
+      {label}
+    </span>
+  );
+}
+
+function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weightedScore: any }) {
+  const { data: readiness, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
+
+  if (isLoading) return <Skeleton className="h-40 w-full" />;
+
+  const confidence = readiness?.scoreConfidence || "score_in_progress";
+  const confidenceLabel = readiness?.scoreConfidenceLabel || "Score in progress";
+  const explanation = readiness?.scoreConfidenceExplanation || "";
+  const dataCompleteness = readiness?.dataCompletenessPercent ?? 0;
+  const evidenceCoverage = readiness?.evidenceCoveragePercent ?? 0;
+  const reportingReady = readiness?.reportingReadiness ?? false;
+  const estimatedPct = readiness?.estimatedPercent ?? 0;
+  const missingPct = readiness?.missingPercent ?? 0;
+  const plainSummary = readiness?.plainEnglishSummary || "";
+
+  return (
+    <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-background" data-testid="card-dashboard-hero">
+      <CardContent className="p-5">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex flex-col items-center shrink-0">
+            {confidence === "score_in_progress" ? (
+              <div className="w-24 h-24 rounded-full border-4 border-dashed border-muted flex items-center justify-center">
+                <span className="text-xs text-muted-foreground text-center leading-tight">Score<br/>in progress</span>
+              </div>
+            ) : (
+              <ScoreRing score={esgScore} label="ESG Score" />
+            )}
+            <ConfidencePill confidence={confidence} label={confidenceLabel} />
+          </div>
+
+          <div className="flex-1 min-w-0 space-y-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">{plainSummary}</p>
+              {explanation && confidence !== "confirmed" && (
+                <p className="text-xs text-muted-foreground mt-1 italic">{explanation}</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="flex flex-col gap-1 p-2 rounded-md bg-background/60 border border-border" data-testid="stat-data-completeness">
+                <div className="flex items-center gap-1">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Data</p>
+                  <ValueSourceBadge source="actual" />
+                </div>
+                <p className="text-lg font-bold">{dataCompleteness}%</p>
+                <Progress value={dataCompleteness} className="h-1" />
+              </div>
+              <div className="flex flex-col gap-1 p-2 rounded-md bg-background/60 border border-border" data-testid="stat-evidence-strength">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Evidence</p>
+                <p className="text-lg font-bold">{evidenceCoverage}%</p>
+                <Progress value={evidenceCoverage} className="h-1" />
+              </div>
+              <div className="flex flex-col gap-1 p-2 rounded-md bg-background/60 border border-border" data-testid="stat-estimated-pct">
+                <div className="flex items-center gap-1">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Estimated</p>
+                  <ValueSourceBadge source="estimated" />
+                </div>
+                <p className="text-lg font-bold text-amber-600">{estimatedPct}%</p>
+                <Progress value={estimatedPct} className="h-1 [&>div]:bg-amber-500" />
+              </div>
+              <div className="flex flex-col gap-1 p-2 rounded-md bg-background/60 border border-border" data-testid="stat-reporting-readiness">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Reporting</p>
+                <p className={`text-xs font-medium mt-0.5 ${reportingReady ? "text-emerald-600" : "text-amber-600"}`}>
+                  {reportingReady ? "Ready" : "Not yet"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">{reportingReady ? "Draft report available" : `${missingPct}% missing`}</p>
+              </div>
+            </div>
+
+            {estimatedPct > 20 && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                <Info className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <p className="text-xs text-amber-700 dark:text-amber-300">{estimatedPct}% of your data is estimated. <Link href="/data-entry?highlight=estimated" className="underline font-medium" data-testid="link-replace-estimates">Replace with actual values</Link> to improve your score confidence.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActionFeedCard() {
+  const { data: actions, isLoading } = useQuery<any[]>({ queryKey: ["/api/dashboard/actions"] });
+
+  if (isLoading) return (
+    <Card data-testid="card-action-feed">
+      <CardHeader className="pb-2">
+        <Skeleton className="h-4 w-48" />
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+      </CardContent>
+    </Card>
+  );
+
+  if (!actions || actions.length === 0) return null;
+
+  const effortColors: Record<string, string> = {
+    low: "text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 dark:text-emerald-300",
+    medium: "text-amber-600 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300",
+    high: "text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-300",
+  };
+  const impactColors: Record<string, string> = {
+    low: "text-gray-500",
+    medium: "text-blue-600 dark:text-blue-400",
+    high: "text-primary",
+  };
+
+  return (
+    <Card data-testid="card-action-feed">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Zap className="w-4 h-4 text-primary" />
+          What to do next
+        </CardTitle>
+        <CardDescription className="text-xs">Prioritised actions to improve your ESG performance</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {actions.map((action: any, idx: number) => (
+          <div
+            key={action.id}
+            className="flex items-start gap-3 p-3 rounded-md border border-border hover:bg-muted/30 transition-colors"
+            data-testid={`action-card-${action.id}`}
+          >
+            <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+              {idx + 1}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                <p className="text-sm font-medium">{action.title}</p>
+                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${effortColors[action.effort]}`}>
+                  {action.effort} effort
+                </span>
+                <span className={`text-[10px] font-medium ${impactColors[action.impact]}`}>
+                  {action.impact} impact
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-snug">{action.explanation}</p>
+              <p className="text-xs text-primary/70 italic mt-0.5">{action.whyItMatters}</p>
+            </div>
+            <Link href={action.ctaUrl}>
+              <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" data-testid={`button-action-cta-${action.id}`}>
+                {action.ctaLabel}
+                <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            </Link>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function FirstReportMilestone({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10" data-testid="card-milestone-first-report">
+      <CardContent className="p-5">
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+            <Star className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Your first ESG report is ready!</h3>
+                <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-0.5">
+                  Your draft score is now available. This is your ESG baseline — keep improving data accuracy to strengthen your score over time.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="w-6 h-6 shrink-0 text-muted-foreground"
+                onClick={onDismiss}
+                data-testid="button-dismiss-milestone"
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <Link href="/reports">
+                <Button size="sm" className="h-7 text-xs gap-1.5" data-testid="button-milestone-view-report">
+                  <FileText className="w-3 h-3" />
+                  View report
+                </Button>
+              </Link>
+              <Link href="/reports">
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" data-testid="button-milestone-download-report">
+                  <Download className="w-3 h-3" />
+                  Download report
+                </Button>
+              </Link>
+              <Link href="/data-entry">
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" data-testid="button-milestone-improve-accuracy">
+                  <TrendingUp className="w-3 h-3" />
+                  Improve accuracy
+                </Button>
+              </Link>
+              <Link href="/data-entry?highlight=estimated">
+                <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5" data-testid="button-milestone-review-estimates">
+                  <CheckCircle className="w-3 h-3" />
+                  Review estimated values
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function BenchmarkSummaryCard() {
   const { data: comparison, isLoading } = useQuery<any[]>({
     queryKey: ["/api/benchmarks/comparison"],
@@ -512,6 +741,9 @@ function BackToPortfolioBanner() {
 
 export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
+  const [milestoneDismissed, setMilestoneDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem("milestone_first_report_dismissed") === "true"; } catch { return false; }
+  });
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
   const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()) });
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
@@ -520,6 +752,7 @@ export default function Dashboard() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
+  const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
   const { can, isAdmin } = usePermissions();
   const { activeSiteId } = useSiteContext();
 
@@ -589,6 +822,23 @@ export default function Dashboard() {
     .slice(0, 5);
 
   const hasAlerts = missingDataAlerts.length > 0 || overdueActions.length > 0 || upcomingPolicyReviews.length > 0;
+  const showMilestone = (() => {
+    if (milestoneDismissed || !readiness?.hasGeneratedReport) return false;
+    try {
+      return localStorage.getItem("milestone_first_report_seen") !== "true";
+    } catch { return false; }
+  })();
+
+  useEffect(() => {
+    if (showMilestone) {
+      try { localStorage.setItem("milestone_first_report_seen", "true"); } catch {}
+    }
+  }, [showMilestone]);
+
+  const handleDismissMilestone = () => {
+    setMilestoneDismissed(true);
+    try { localStorage.setItem("milestone_first_report_dismissed", "true"); } catch {}
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
@@ -640,6 +890,14 @@ export default function Dashboard() {
 
       <NextStepBanner />
       <ActivationCard />
+
+      {showMilestone && (
+        <FirstReportMilestone onDismiss={handleDismissMilestone} />
+      )}
+
+      <DashboardHeroCard esgScore={esgScore} weightedScore={weightedScore} />
+
+      <ActionFeedCard />
 
       {hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">

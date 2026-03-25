@@ -16,8 +16,9 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
-  Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network,
+  Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network, Sparkles, Info, FileCheck, PartyPopper,
 } from "lucide-react";
+import { ValueSourceBadge } from "@/components/value-source-badge";
 import { format, subMonths } from "date-fns";
 import { Link } from "wouter";
 import { usePermissions } from "@/lib/permissions";
@@ -391,13 +392,20 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
     evidenceCoverage, factorMethodology, period, generatedAt, generatedBy, reportTemplate,
     branding, dataQualityAssessment, complianceStatus, periodComparison,
+    reportTitle, dataQualitySummary,
   } = data;
 
-  const templateLabel = REPORT_TEMPLATES.find(t => t.id === reportTemplate)?.label || "ESG Report";
+  const templateLabel = reportTitle || (REPORT_TEMPLATES.find(t => t.id === reportTemplate)?.label || "ESG Report");
   const brandColor = branding?.color || undefined;
 
   return (
     <div className="bg-white dark:bg-card border border-border rounded-md p-8 space-y-6 text-sm max-h-[700px] overflow-y-auto" data-testid="report-preview">
+      {dataQualitySummary?.isDraftQuality && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md text-xs text-amber-700 dark:text-amber-300 mb-2" data-testid="report-draft-quality-banner">
+          <Info className="w-3.5 h-3.5 shrink-0" />
+          <span>{dataQualitySummary.methodologyNote}</span>
+        </div>
+      )}
       <div className="text-center space-y-1 pb-4 border-b border-border">
         <div className="flex items-center justify-center gap-2 mb-3">
           <div className="p-2 rounded-lg" style={{ backgroundColor: brandColor || "hsl(var(--primary))" }}>
@@ -409,6 +417,11 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         </h1>
         {branding?.tagline && <p className="text-muted-foreground text-xs italic">{branding.tagline}</p>}
         <p className="text-muted-foreground font-medium">{templateLabel}</p>
+        {dataQualitySummary?.isDraftQuality && (
+          <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-600 dark:border-amber-700 dark:text-amber-400" data-testid="badge-draft-report">
+            Draft — contains estimated data
+          </Badge>
+        )}
         <p className="text-xs text-muted-foreground">Reporting Period: {period}</p>
         <p className="text-xs text-muted-foreground">Generated {generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy 'at' HH:mm") : ""} by {generatedBy}</p>
         <div className="flex items-center justify-center gap-2 mt-2">
@@ -512,8 +525,13 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
                 </thead>
                 <tbody>
                   {catValues.map((v: any) => (
-                    <tr key={v.id} className="border-b border-border/50" data-testid={`row-metric-${v.id}`}>
-                      <td className="py-1">{v.metricName}</td>
+                    <tr key={v.id} className={`border-b border-border/50 ${v.dataSourceLabel === "estimated" ? "bg-amber-50/50 dark:bg-amber-950/10" : ""}`} data-testid={`row-metric-${v.id}`}>
+                      <td className="py-1">
+                        <span className="flex items-center gap-1.5">
+                          {v.metricName}
+                          <ValueSourceBadge source={!v.value && v.value !== 0 ? "missing" : v.dataSourceLabel === "estimated" ? "estimated" : "actual"} explanation={v.dataSourceLabel === "estimated" && v.notes ? v.notes : undefined} />
+                        </span>
+                      </td>
                       <td className="py-1 font-medium">{v.value} {v.unit || ""}</td>
                       <td className="py-1"><SourceBadge label={v.dataSourceLabel} /></td>
                       <td className="py-1"><StatusBadge status={v.workflowLabel} /></td>
@@ -895,6 +913,38 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         </div>
       )}
 
+      {dataQualitySummary && (
+        <div data-testid="section-data-quality-methodology" className="bg-muted/30 rounded-md p-4 space-y-2 text-xs">
+          <h3 className="font-semibold text-sm flex items-center gap-2">
+            <Info className="w-3.5 h-3.5 text-primary" />
+            Data Quality & Methodology
+          </h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="flex items-center gap-2">
+              <ValueSourceBadge source="actual" />
+              <span className="text-muted-foreground">{dataQualitySummary.actualPercent ?? 0}% of metrics</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <ValueSourceBadge source="estimated" />
+              <span className="text-muted-foreground">{dataQualitySummary.estimatedPercent ?? 0}% of metrics</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <ValueSourceBadge source="missing" />
+              <span className="text-muted-foreground">{dataQualitySummary.missingPercent ?? 0}% of metrics</span>
+            </div>
+          </div>
+          {dataQualitySummary.methodologyNote && (
+            <p className="text-muted-foreground italic mt-2">{dataQualitySummary.methodologyNote}</p>
+          )}
+          {dataQualitySummary.isDraftQuality && (
+            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md p-2 text-amber-700 dark:text-amber-300 mt-2">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              This report contains estimated data. Replace estimates with actual values to improve report quality and confidence level.
+            </div>
+          )}
+        </div>
+      )}
+
       {sections.includeComplianceStatus && complianceStatus && (
         <div data-testid="section-compliance-status">
           <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
@@ -1207,8 +1257,10 @@ export default function Reports() {
   const { data: actionsData = [] } = useQuery<any[]>({ queryKey: ["/api/actions"] });
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const [exportingAssurance, setExportingAssurance] = useState(false);
+  const [showFirstReportMilestone, setShowFirstReportMilestone] = useState(false);
 
   const activation = useActivationState();
+  const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -1226,7 +1278,11 @@ export default function Reports() {
       setReportData(data.data);
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
-      if (isFirstReport) trackEvent(AnalyticsEvents.FIRST_REPORT_GENERATED, { template: selectedTemplate, period: selectedPeriod });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/readiness"] });
+      if (isFirstReport) {
+        trackEvent(AnalyticsEvents.FIRST_REPORT_GENERATED, { template: selectedTemplate, period: selectedPeriod });
+        setShowFirstReportMilestone(true);
+      }
       toast({ title: "Report generated", description: `${templateConfig.label} is ready to preview and export.` });
     },
     onError: (e: any) => toast({
@@ -1648,6 +1704,71 @@ export default function Reports() {
         </p>
       </div>
 
+      {readiness && (
+        <Card className={`${readiness.reportingReadiness ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800" : "border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800"}`} data-testid="card-report-readiness">
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {readiness.reportingReadiness ? (
+                  <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                )}
+                <div>
+                  <p className="text-sm font-medium">
+                    {readiness.isFirstReport && readiness.reportingReadiness
+                      ? "Ready for your first report"
+                      : readiness.reportingReadiness
+                      ? "Ready to generate"
+                      : "More data needed before generating"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {readiness.plainEnglishSummary || `${readiness.dataCompletenessPercent ?? 0}% of metrics filled`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <ValueSourceBadge source="actual" />
+                  <span>{readiness.actualPercent ?? 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <ValueSourceBadge source="estimated" />
+                  <span>{readiness.estimatedPercent ?? 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <ValueSourceBadge source="missing" />
+                  <span>{readiness.missingPercent ?? 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <FileCheck className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Evidence: {readiness.evidenceCoveragePercent ?? 0}%</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="font-medium capitalize">{readiness.scoreConfidenceLabel || readiness.scoreConfidence}</span>
+                </div>
+              </div>
+            </div>
+            {readiness.estimatedPercent > 20 && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
+                <Info className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {readiness.estimatedPercent}% of your metrics are estimated. Your report will be labelled as a{" "}
+                  <strong>{readiness.isFirstReport ? "Draft ESG Baseline" : "Draft ESG Summary"}</strong> until more actual data is added.
+                </span>
+              </div>
+            )}
+            {readiness.isFirstReport && readiness.reportingReadiness && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>This will generate your <strong>Initial ESG Baseline Report</strong> — a starting point you can share with stakeholders and build on over time.</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="space-y-4">
           <Card>
@@ -1856,6 +1977,39 @@ export default function Reports() {
                   )}
                 </div>
               </div>
+              {showFirstReportMilestone && (
+                <Card className="border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 dark:from-emerald-950/30 dark:to-emerald-900/20 dark:border-emerald-800" data-testid="card-first-report-milestone">
+                  <CardContent className="p-5">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                        <PartyPopper className="w-5 h-5 text-emerald-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Your first ESG report is ready!</h3>
+                        <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
+                          This is a great starting point. Review the report below, then keep improving your data to strengthen your score.
+                        </p>
+                        <div className="flex items-center gap-2 mt-3">
+                          <Link href="/data-entry">
+                            <Button size="sm" variant="outline" className="h-7 text-xs border-emerald-300 text-emerald-700" data-testid="button-milestone-add-data">
+                              Add more data
+                            </Button>
+                          </Link>
+                          <Link href="/data-entry?highlight=estimated">
+                            <Button size="sm" variant="outline" className="h-7 text-xs border-emerald-300 text-emerald-700" data-testid="button-milestone-review-estimates">
+                              Review estimates
+                            </Button>
+                          </Link>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-emerald-600" onClick={() => setShowFirstReportMilestone(false)} data-testid="button-milestone-dismiss">
+                            <X className="w-3.5 h-3.5 mr-1" />
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
               <ReportPreview data={reportData} sections={effectiveSections} />
             </>
           ) : (

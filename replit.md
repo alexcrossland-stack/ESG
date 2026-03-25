@@ -26,12 +26,12 @@ The application is a full-stack SaaS web application.
 - **Database:** PostgreSQL with Drizzle ORM.
 - **Authentication:** Session-based authentication with `express-session`, `connect-pg-simple`, `bcrypt`, role-based access control (RBAC) with four roles and seven permission modules.
 - **Core Features:**
-    - **Dashboard:** ESG performance overview, scores, emissions, alerts.
+    - **Dashboard:** ESG performance overview, scores, emissions, alerts. Action-based hero card with confidence labels (Score in progress / Draft / Provisional / Confirmed), ranked priority action feed, and first-report milestone banner.
     - **ESG Policy Builder:** Policy creation, versioning, draft/publish workflow.
-    - **Metrics Library & Data Entry:** 58 default ESG metrics (manual, calculated, derived) with bulk Excel uploads.
+    - **Metrics Library & Data Entry:** 58 default ESG metrics (manual, calculated, derived) with bulk Excel uploads. Pre-filled sector-based estimate acceptance UI with accept/skip affordances and Actual/Estimated/Missing badges (`ValueSourceBadge` component).
     - **Scoring System:** Traffic light system for metric status, weighted ESG scoring, multi-dimensional scoring (completeness, performance, management maturity, framework readiness).
     - **Action Tracker:** Management of ESG improvement actions.
-    - **Reports:** Structured report generator with configurable sections, text/CSV export.
+    - **Reports:** Structured report generator with configurable sections, text/CSV export. Readiness indicator with data quality breakdown, dynamic report naming (Initial ESG Baseline Report / Draft ESG Summary / confirmed report titles), and methodology notes on draft-quality reports.
     - **Evidence Management:** Tracking files linked to modules.
     - **Workflow Management:** Enforced state transitions and audit trails for key entities.
     - **AI Safety/Governance:** AI-generated outputs require human review.

@@ -2994,6 +2994,409 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── SME Upgrade: Dashboard Readiness & Action Feed ─────────────────────────
+
+  app.get("/api/dashboard/readiness", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const reportRuns = await storage.getReportRuns(companyId);
+
+      // Data completeness: what % of enabled metrics have any value
+      let filledMetrics = 0;
+      let estimatedMetrics = 0;
+      let actualMetrics = 0;
+
+      for (const metric of enabledMetrics) {
+        const vals = await storage.getMetricValues(metric.id);
+        const latestVal = vals.sort((a, b) => (b.period ?? "").localeCompare(a.period ?? "")).find(v => v.value !== null && v.value !== undefined);
+        if (latestVal) {
+          filledMetrics++;
+          if (latestVal.dataSourceType === "estimated") estimatedMetrics++;
+          else actualMetrics++;
+        }
+      }
+
+      const totalMetrics = enabledMetrics.length;
+      const missingMetrics = totalMetrics - filledMetrics;
+      const dataCompletenessPercent = totalMetrics > 0 ? Math.round((filledMetrics / totalMetrics) * 100) : 0;
+      const actualPercent = totalMetrics > 0 ? Math.round((actualMetrics / totalMetrics) * 100) : 0;
+      const estimatedPercent = totalMetrics > 0 ? Math.round((estimatedMetrics / totalMetrics) * 100) : 0;
+      const missingPercent = totalMetrics > 0 ? Math.round((missingMetrics / totalMetrics) * 100) : 0;
+
+      // Evidence coverage
+      const evidenceLinked = evidenceFiles.filter(e => e.linkedModule === "metric_value" || e.linkedModule === "metrics");
+      const evidenceCoveragePercent = totalMetrics > 0 ? Math.min(100, Math.round((evidenceLinked.length / totalMetrics) * 100)) : 0;
+
+      // Determine score confidence: Draft / Provisional / Confirmed / Score in progress
+      let scoreConfidence: "score_in_progress" | "draft" | "provisional" | "confirmed";
+      let scoreConfidenceLabel: string;
+      let scoreConfidenceExplanation: string;
+
+      if (filledMetrics === 0) {
+        scoreConfidence = "score_in_progress";
+        scoreConfidenceLabel = "Score in progress";
+        scoreConfidenceExplanation = "Add your first data point to see an ESG score.";
+      } else if (estimatedPercent > 50) {
+        scoreConfidence = "draft";
+        scoreConfidenceLabel = "Draft";
+        scoreConfidenceExplanation = "This score is based mainly on estimated data. Replace estimated values with actual data to improve confidence.";
+      } else if (estimatedPercent > 20 || dataCompletenessPercent < 60) {
+        scoreConfidence = "provisional";
+        scoreConfidenceLabel = "Provisional";
+        scoreConfidenceExplanation = "This score is partly based on estimated data. Improve accuracy by replacing estimates with actual figures.";
+      } else {
+        scoreConfidence = "confirmed";
+        scoreConfidenceLabel = "Confirmed";
+        scoreConfidenceExplanation = "Your score is based primarily on actual data and is ready for reporting.";
+      }
+
+      // Reporting readiness: can we generate a report?
+      const minViableThreshold = filledMetrics >= Math.min(3, totalMetrics) || dataCompletenessPercent >= 30;
+      const hasGeneratedReport = reportRuns.length > 0;
+      const isFirstReport = !hasGeneratedReport;
+
+      // Determine dashboard state
+      let dashboardState: string;
+      if (!company?.onboardingComplete) {
+        dashboardState = "no_onboarding";
+      } else if (filledMetrics === 0) {
+        dashboardState = "onboarding_complete_no_data";
+      } else if (evidenceLinked.length === 0) {
+        dashboardState = "some_data_no_evidence";
+      } else if (!minViableThreshold) {
+        dashboardState = "some_data_some_evidence";
+      } else if (!hasGeneratedReport) {
+        dashboardState = "ready_for_draft_report";
+      } else {
+        dashboardState = "report_generated";
+      }
+
+      // Plain-English summary based on state
+      const summaryByState: Record<string, string> = {
+        no_onboarding: "Complete your profile setup to unlock your ESG score and reporting.",
+        onboarding_complete_no_data: "You're set up. Now add your first data — start with electricity consumption or headcount.",
+        some_data_no_evidence: "Good start! Upload a supporting document (like an energy bill) to back up your data and improve your score.",
+        some_data_some_evidence: "You have data and evidence. Keep filling in more metrics to reach your draft report.",
+        ready_for_draft_report: "You have enough data for a draft report. Generating it now gives you a baseline to build on.",
+        report_generated: "Your ESG report is in place. Keep improving your data accuracy to strengthen your score.",
+      };
+
+      res.json({
+        dashboardState,
+        scoreConfidence,
+        scoreConfidenceLabel,
+        scoreConfidenceExplanation,
+        dataCompletenessPercent,
+        actualPercent,
+        estimatedPercent,
+        missingPercent,
+        totalMetrics,
+        filledMetrics,
+        estimatedMetrics,
+        actualMetrics,
+        missingMetrics,
+        evidenceCoveragePercent,
+        reportingReadiness: minViableThreshold,
+        hasGeneratedReport,
+        isFirstReport,
+        plainEnglishSummary: summaryByState[dashboardState] || "",
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/dashboard/actions", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      const allMetrics = await storage.getMetrics(companyId);
+      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const policy = await storage.getPolicy(companyId);
+      const actions = await storage.getActionPlans(companyId);
+      const reportRuns = await storage.getReportRuns(companyId);
+
+      // Check data completeness
+      let filledMetrics = 0;
+      let estimatedMetrics = 0;
+      let actualMetrics = 0;
+      const metricsWithNoData: string[] = [];
+
+      for (const metric of enabledMetrics) {
+        const vals = await storage.getMetricValues(metric.id);
+        const latestVal = vals.sort((a, b) => (b.period ?? "").localeCompare(a.period ?? "")).find(v => v.value !== null && v.value !== undefined);
+        if (latestVal) {
+          filledMetrics++;
+          if (latestVal.dataSourceType === "estimated") estimatedMetrics++;
+          else actualMetrics++;
+        } else {
+          metricsWithNoData.push(metric.name);
+        }
+      }
+
+      const totalMetrics = enabledMetrics.length;
+      const dataCompletenessPercent = totalMetrics > 0 ? Math.round((filledMetrics / totalMetrics) * 100) : 0;
+      const evidenceLinked = evidenceFiles.filter(e => e.linkedModule === "metric_value" || e.linkedModule === "metrics");
+      const evidenceCoveragePercent = totalMetrics > 0 ? Math.min(100, Math.round((evidenceLinked.length / totalMetrics) * 100)) : 0;
+      const hasPolicy = !!policy && policy.status === "published";
+      const activeActions = actions.filter(a => a.status === "in_progress" || a.status === "not_started");
+      const hasReport = reportRuns.length > 0;
+
+      // Build prioritised action list
+      const actionItems: Array<{
+        id: string;
+        title: string;
+        explanation: string;
+        whyItMatters: string;
+        effort: "low" | "medium" | "high";
+        impact: "low" | "medium" | "high";
+        ctaLabel: string;
+        ctaUrl: string;
+        priority: number;
+      }> = [];
+
+      // Action: Complete onboarding
+      if (!company?.onboardingComplete) {
+        actionItems.push({
+          id: "complete_onboarding",
+          title: "Complete your company setup",
+          explanation: "Finish entering your company profile so we can set up the right metrics and benchmarks for your sector.",
+          whyItMatters: "Without a complete profile, your ESG metrics and score may not reflect your actual sector or size.",
+          effort: "low",
+          impact: "high",
+          ctaLabel: "Complete setup",
+          ctaUrl: "/onboarding",
+          priority: 1,
+        });
+      }
+
+      // Action: Add first data
+      if (filledMetrics === 0) {
+        actionItems.push({
+          id: "add_first_data",
+          title: "Add your first ESG data",
+          explanation: "Enter your electricity consumption, headcount, or any ESG metric to get your first score.",
+          whyItMatters: "Without data, we can't calculate your ESG score or generate a report.",
+          effort: "low",
+          impact: "high",
+          ctaLabel: "Enter data",
+          ctaUrl: "/data-entry",
+          priority: 2,
+        });
+      } else if (estimatedMetrics > 0) {
+        // Action: Review estimated values
+        actionItems.push({
+          id: "review_estimates",
+          title: "Replace estimated values with actual data",
+          explanation: `${estimatedMetrics} of your metric values are estimates. Replacing them with real figures improves your score confidence.`,
+          whyItMatters: "Estimated values reduce the credibility of your score. Actual data is required for customer and investor reports.",
+          effort: "medium",
+          impact: "high",
+          ctaLabel: "Review estimates",
+          ctaUrl: "/data-entry?highlight=estimated",
+          priority: 3,
+        });
+      }
+
+      // Action: Upload evidence
+      if (filledMetrics > 0 && evidenceCoveragePercent < 40) {
+        actionItems.push({
+          id: "upload_evidence",
+          title: "Upload supporting evidence",
+          explanation: "Attach energy bills, payroll records, or certificates to support your data entries.",
+          whyItMatters: "Evidence is required by auditors and customers to verify your ESG claims. It also improves your score.",
+          effort: "low",
+          impact: "high",
+          ctaLabel: "Upload evidence",
+          ctaUrl: "/evidence",
+          priority: 4,
+        });
+      }
+
+      // Action: Create ESG policy
+      if (!hasPolicy) {
+        actionItems.push({
+          id: "create_policy",
+          title: "Create your ESG policy",
+          explanation: "Generate an ESG policy document in minutes using our policy generator.",
+          whyItMatters: "An ESG policy demonstrates commitment and is required by many reporting frameworks.",
+          effort: "low",
+          impact: "medium",
+          ctaLabel: "Create policy",
+          ctaUrl: "/policy-generator",
+          priority: 5,
+        });
+      }
+
+      // Action: Generate first report
+      if (filledMetrics >= Math.min(3, totalMetrics) && !hasReport) {
+        actionItems.push({
+          id: "generate_report",
+          title: "Generate your first ESG report",
+          explanation: "You have enough data to produce a draft report. It will clearly note where data is estimated vs measured.",
+          whyItMatters: "Even a draft report shows customers and investors that you are actively tracking your ESG performance.",
+          effort: "low",
+          impact: "high",
+          ctaLabel: "Generate report",
+          ctaUrl: "/reports",
+          priority: 6,
+        });
+      }
+
+      // Action: Set targets on metrics
+      const metricsWithTargets = enabledMetrics.filter(m => m.targetValue !== null || m.targetMin !== null || m.targetMax !== null);
+      if (enabledMetrics.length > 0 && metricsWithTargets.length < enabledMetrics.length * 0.5) {
+        actionItems.push({
+          id: "set_targets",
+          title: "Set targets for your key metrics",
+          explanation: "Define what you are aiming for on your most important ESG metrics to track progress over time.",
+          whyItMatters: "Targets help you measure improvement and demonstrate ambition to customers, banks, and investors.",
+          effort: "medium",
+          impact: "medium",
+          ctaLabel: "Set targets",
+          ctaUrl: "/metrics",
+          priority: 7,
+        });
+      }
+
+      // Action: Fill incomplete data
+      if (dataCompletenessPercent > 0 && dataCompletenessPercent < 80 && metricsWithNoData.length > 0) {
+        actionItems.push({
+          id: "fill_missing_data",
+          title: "Fill in missing metric data",
+          explanation: `${metricsWithNoData.length} metric${metricsWithNoData.length !== 1 ? "s" : ""} have no data yet. Even estimated values help.`,
+          whyItMatters: "Incomplete data means your score is lower and less credible. More metrics = a more complete picture.",
+          effort: "medium",
+          impact: "high",
+          ctaLabel: "Enter missing data",
+          ctaUrl: "/data-entry",
+          priority: 8,
+        });
+      }
+
+      // Sort by priority
+      actionItems.sort((a, b) => a.priority - b.priority);
+
+      res.json(actionItems.slice(0, 6));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      const { period, metricIds, force } = req.body;
+
+      const allMetrics = await storage.getMetrics(companyId);
+      const targetMetrics = metricIds
+        ? allMetrics.filter(m => metricIds.includes(m.id) && m.enabled)
+        : allMetrics.filter(m => m.enabled);
+
+      const estimates: Array<{
+        metricId: string;
+        metricName: string;
+        category: string;
+        unit: string;
+        estimatedValue: number;
+        explanation: string;
+        methodology: string;
+        confidence: "low" | "medium" | "high";
+        shouldPrefill: boolean;
+      }> = [];
+
+      const industry = company?.industry || "Professional Services";
+      const employeeCount = company?.employeeCount || 25;
+      const sizeLabel = employeeCount <= 9 ? "micro" : employeeCount <= 49 ? "small" : employeeCount <= 249 ? "medium" : "large";
+
+      // Industry-based estimation benchmarks
+      const BENCHMARKS: Record<string, Record<string, { value: number; unit: string; confidence: "low" | "medium" | "high" }>> = {
+        "Professional Services": {
+          electricity_kwh: { value: Math.round(employeeCount * 1500), unit: "kWh", confidence: "medium" },
+          gas_kwh: { value: Math.round(employeeCount * 800), unit: "kWh", confidence: "medium" },
+          employee_headcount: { value: employeeCount, unit: "people", confidence: "high" },
+          total_waste_tonnes: { value: Math.round(employeeCount * 0.05 * 10) / 10, unit: "tonnes", confidence: "low" },
+          water_m3: { value: Math.round(employeeCount * 8 * 12), unit: "m³", confidence: "low" },
+        },
+        "Manufacturing": {
+          electricity_kwh: { value: Math.round(employeeCount * 8000), unit: "kWh", confidence: "medium" },
+          gas_kwh: { value: Math.round(employeeCount * 5000), unit: "kWh", confidence: "medium" },
+          total_waste_tonnes: { value: Math.round(employeeCount * 0.5), unit: "tonnes", confidence: "low" },
+          water_m3: { value: Math.round(employeeCount * 30 * 12), unit: "m³", confidence: "low" },
+          employee_headcount: { value: employeeCount, unit: "people", confidence: "high" },
+        },
+        "Retail": {
+          electricity_kwh: { value: Math.round(employeeCount * 3000), unit: "kWh", confidence: "medium" },
+          total_waste_tonnes: { value: Math.round(employeeCount * 0.2), unit: "tonnes", confidence: "low" },
+          employee_headcount: { value: employeeCount, unit: "people", confidence: "high" },
+          water_m3: { value: Math.round(employeeCount * 15 * 12), unit: "m³", confidence: "low" },
+        },
+      };
+
+      const industryBenchmarks = BENCHMARKS[industry] || BENCHMARKS["Professional Services"];
+
+      // Map metric names to benchmark keys
+      const METRIC_KEY_MAP: Record<string, string> = {
+        "Electricity Consumption": "electricity_kwh",
+        "Gas / Fuel Consumption": "gas_kwh",
+        "Total Employees": "employee_headcount",
+        "Employee Headcount": "employee_headcount",
+        "Total Waste Generated": "total_waste_tonnes",
+        "Water Consumption": "water_m3",
+      };
+
+      for (const metric of targetMetrics) {
+        if (!metric.enabled || metric.metricType === "calculated" || metric.metricType === "derived") continue;
+
+        // Check if metric already has actual data
+        const vals = await storage.getMetricValues(metric.id);
+        const existingActual = vals.find(v =>
+          v.value !== null &&
+          v.value !== undefined &&
+          v.dataSourceType !== "estimated" &&
+          (!period || v.period === period)
+        );
+
+        if (existingActual) continue; // Never overwrite actual values
+
+        // Check if already has estimated value for this period
+        const existingEstimate = vals.find(v =>
+          v.value !== null &&
+          v.dataSourceType === "estimated" &&
+          (!period || v.period === period)
+        );
+
+        const benchmarkKey = METRIC_KEY_MAP[metric.name] || metric.name.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const benchmark = industryBenchmarks[benchmarkKey];
+
+        if (benchmark) {
+          const explanation = `This is an estimate based on your sector and company size. Typical for a ${sizeLabel} ${industry.toLowerCase()} business with ${employeeCount} employees.`;
+          estimates.push({
+            metricId: metric.id,
+            metricName: metric.name,
+            category: metric.category,
+            unit: metric.unit || benchmark.unit,
+            estimatedValue: benchmark.value,
+            explanation,
+            methodology: `Sector benchmark: ${industry}, company size: ${employeeCount} employees. Confidence: ${benchmark.confidence}.`,
+            confidence: benchmark.confidence,
+            shouldPrefill: force || !existingEstimate,
+          });
+        }
+      }
+
+      res.json({ estimates, period, industry, employeeCount });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Action Plans routes
   app.get("/api/actions", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
@@ -3419,10 +3822,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         periodComparisonData = { currentPeriod: period, previousPeriod, metrics: compMetrics };
       }
 
+      // Determine report naming (T007): "Initial ESG Baseline Report" for first, "Draft ESG Summary" if high estimated coverage
+      const existingReportRuns = await storage.getReportRuns(companyId);
+      const isFirstReportEver = existingReportRuns.length === 0;
+      const reportEstimatedCount = valuesWithLabels.filter((v: any) => v.dataSourceType === "estimated").length;
+      const reportEstimatedPercent = valuesWithLabels.length > 0 ? Math.round((reportEstimatedCount / valuesWithLabels.length) * 100) : 0;
+      const isDraftQuality = reportEstimatedPercent > 20 || (valuesWithLabels.length < Math.ceil(enabledMetrics.length * 0.6));
+
+      let reportTitle: string;
+      if (isFirstReportEver) {
+        reportTitle = "Initial ESG Baseline Report";
+      } else if (isDraftQuality) {
+        reportTitle = "Draft ESG Summary";
+      } else {
+        const templateName = reportTemplate === "customer" ? "Supply Chain" : reportTemplate === "annual" ? "Annual" : "Management";
+        reportTitle = `${templateName} ESG Report`;
+      }
+
+      const methodologyNote = isDraftQuality
+        ? `This report contains estimated data (${reportEstimatedPercent}% of metrics use sector-based estimates). Results should be treated as indicative until replaced with actual measured values.`
+        : "This report is based primarily on measured data and is suitable for stakeholder distribution.";
+
+      const reportActualCount = valuesWithLabels.filter((v: any) => v.dataSourceType && v.dataSourceType !== "estimated").length;
+      const reportMissingCount = enabledMetrics.length - valuesWithLabels.length;
+      const reportActualPercent = enabledMetrics.length > 0 ? Math.round((reportActualCount / enabledMetrics.length) * 100) : 0;
+      const reportMissingPercent = enabledMetrics.length > 0 ? Math.round((reportMissingCount / enabledMetrics.length) * 100) : 0;
+
+      const dataQualitySummary = {
+        reportTitle,
+        isFirstReport: isFirstReportEver,
+        isDraftQuality,
+        estimatedPercent: reportEstimatedPercent,
+        actualPercent: reportActualPercent,
+        missingPercent: Math.max(0, reportMissingPercent),
+        totalMetrics: enabledMetrics.length,
+        filledMetrics: valuesWithLabels.length,
+        estimatedMetrics: reportEstimatedCount,
+        actualMetrics: reportActualCount,
+        missingMetrics: Math.max(0, reportMissingCount),
+        methodologyNote,
+      };
+
       const reportData = {
         generatedAt: new Date().toISOString(),
         generatedBy: generatingUser?.username || userId,
         reportTemplate: reportTemplate || "management",
+        reportTitle,
+        dataQualitySummary,
         period,
         company,
         branding,
