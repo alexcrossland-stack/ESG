@@ -2684,19 +2684,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/esg-scores/all", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { scoreCompleteness, scorePerformance, scoreManagementMaturity, scoreFrameworkReadiness } = await import("./esg-scoring");
+      const { getEsgScoreWithConfidence } = await import("./esg-scoring");
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const siteIdParam = req.query.siteId;
       const siteId = siteIdParam === "null" ? null
         : typeof siteIdParam === "string" ? siteIdParam
         : undefined;
-      const [completeness, performance, maturity, frameworkReadiness] = await Promise.all([
-        scoreCompleteness(companyId, period),
-        scorePerformance(companyId, period, siteId),
-        scoreManagementMaturity(companyId),
-        scoreFrameworkReadiness(companyId),
-      ]);
-      res.json({ completeness, performance, maturity, frameworkReadiness });
+      const { completeness, performance, managementMaturity: maturity, frameworkReadiness, scoreConfidenceLabel } = await getEsgScoreWithConfidence(companyId, period, siteId);
+      res.json({ completeness, performance, maturity, frameworkReadiness, scoreConfidenceLabel });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2734,6 +2729,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(500).json({ error: e.message });
     }
   });
+
+  // ============================================================
+  // SME: Dashboard Actions, Readiness, and Estimation endpoints
+  // ============================================================
+
+  // GET /api/dashboard/actions — ranked action list for the authenticated company
+  app.get("/api/dashboard/actions", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { resolveDashboardActions } = await import("./dashboard-actions");
+      const result = await resolveDashboardActions(companyId);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/dashboard/readiness — combined score and report readiness
+  app.get("/api/dashboard/readiness", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { getScoreReadiness } = await import("./score-readiness");
+      const { getReportReadiness } = await import("./report-readiness");
+      const [scoreReadiness, reportReadiness] = await Promise.all([
+        getScoreReadiness(companyId),
+        getReportReadiness(companyId),
+      ]);
+      res.json({ scoreReadiness, reportReadiness });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/data-entries/estimate — returns estimation suggestions only, does NOT persist
+  app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+    try {
+      const { runEstimationEngine } = await import("./estimation-engine");
+      const profile = req.body?.profile ?? {};
+      const actuals = req.body?.actuals ?? {};
+      const estimates = runEstimationEngine(profile, actuals);
+      res.json({ estimates, notice: "These are estimates only and have not been saved. Review and accept individual values to persist them." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
 
   // Enhanced dashboard
   app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {

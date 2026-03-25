@@ -399,6 +399,8 @@ export const metricValues = pgTable("metric_values", {
   metricDefIdIdx: index("idx_metric_values_metric_def_id").on(table.metricDefinitionId),
 }));
 
+export const estimateConfidenceEnum = pgEnum("estimate_confidence", ["high", "medium", "low"]);
+
 export const rawDataInputs = pgTable("raw_data_inputs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull(),
@@ -423,6 +425,11 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   reviewComment: text("review_comment"),
   reportingPeriodId: varchar("reporting_period_id"),
   siteId: varchar("site_id"),
+  estimateMethod: text("estimate_method"),
+  estimateConfidence: estimateConfidenceEnum("estimate_confidence"),
+  estimateBasisJson: jsonb("estimate_basis_json"),
+  isUserReviewed: boolean("is_user_reviewed").default(false),
+  lastEstimatedAt: timestamp("last_estimated_at"),
 }, (table) => ({
   siteIdIdx: index("idx_raw_data_site_id").on(table.siteId),
 }));

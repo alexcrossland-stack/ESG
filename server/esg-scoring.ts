@@ -1,5 +1,6 @@
 import { storage } from "./storage";
 import { getTrafficLightStatus } from "./calculations";
+import { getScoreReadiness } from "./score-readiness";
 
 export interface CompletenessScore {
   score: number;
@@ -560,5 +561,35 @@ export async function scoreFrameworkReadiness(companyId: string): Promise<Framew
     overallTotal,
     explanation,
     topGaps: topGaps.slice(0, 5),
+  };
+}
+
+export interface EsgScoreWithConfidence {
+  completeness: CompletenessScore;
+  performance: PerformanceScore;
+  managementMaturity: ManagementMaturityScore;
+  frameworkReadiness: FrameworkReadinessScore;
+  scoreConfidenceLabel: string | null;
+}
+
+export async function getEsgScoreWithConfidence(
+  companyId: string,
+  period?: string,
+  siteId?: string | null
+): Promise<EsgScoreWithConfidence> {
+  const [completeness, performance, managementMaturity, frameworkReadiness, readiness] = await Promise.all([
+    scoreCompleteness(companyId, period),
+    scorePerformance(companyId, period, siteId),
+    scoreManagementMaturity(companyId),
+    scoreFrameworkReadiness(companyId),
+    getScoreReadiness(companyId),
+  ]);
+
+  return {
+    completeness,
+    performance,
+    managementMaturity,
+    frameworkReadiness,
+    scoreConfidenceLabel: readiness.scoreConfidenceLabel,
   };
 }

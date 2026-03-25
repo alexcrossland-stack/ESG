@@ -128,6 +128,8 @@ export interface IStorage {
   lockPeriod(companyId: string, period: string): Promise<void>;
 
   // Raw Data Inputs
+  // RawDataInput / InsertRawDataInput include estimation fields added in Task #56:
+  // estimateMethod, estimateConfidence, estimateBasisJson, isUserReviewed, lastEstimatedAt
   getRawDataByPeriod(companyId: string, period: string, siteId?: string | null): Promise<RawDataInput[]>;
   createRawDataInput(data: InsertRawDataInput): Promise<RawDataInput>;
   updateRawDataInput(id: string, data: Partial<RawDataInput>): Promise<RawDataInput | undefined>;
