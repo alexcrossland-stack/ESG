@@ -30,6 +30,9 @@ import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordRese
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { registerAgentRoutes } from "./agent-routes";
 import { evaluateSecurityEvent, getSecurityAlerts, SECURITY_EVENTS } from "./alert-engine";
+import { featureFlags, featureDisabledResponse } from "./feature-flags";
+import { trackTelemetryEvent } from "./telemetry";
+import { auditLog } from "./audit";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -944,6 +947,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
     (req.session as any).userId = user.id;
     (req.session as any).companyId = user.companyId;
+    (req.session as any).role = user.role ?? null;
     (req.session as any).lastActivity = Date.now();
     (req.session as any).createdAt = Date.now();
     const sessionId = req.session.id;
@@ -1282,7 +1286,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const before = await storage.getCompany(companyId);
       const company = await storage.updateCompany(companyId, req.body);
+      auditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "company_profile_updated",
+        entityType: "company",
+        entityId: companyId,
+        details: {
+          before: { name: before?.name, industry: before?.industry, country: before?.country, employeeCount: before?.employeeCount },
+          after: { name: company?.name, industry: company?.industry, country: company?.country, employeeCount: company?.employeeCount },
+        },
+        req,
+      });
       res.json(company);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1322,6 +1341,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (path) {
         update.onboardingPath = path;
         update.onboardingStartedAt = new Date();
+        const userId = (req.session as any).userId;
+        trackTelemetryEvent("onboarding_started", { userId, companyId, properties: { path, version } });
       }
       if (companyProfile) {
         if (companyProfile.name) update.name = companyProfile.name;
@@ -1435,6 +1456,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: companyId,
         details: { path: completedPath, version },
       });
+      trackTelemetryEvent("onboarding_completed", { userId, companyId, properties: { path: completedPath, version } });
 
       const company = await storage.getCompany(companyId);
       res.json(company);
@@ -1926,7 +1948,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "targetValue must be a number" });
       }
       const parsedTargetValue = Number(targetValue);
+      const userId = (req.session as any).userId;
+      const existingTargets = await storage.getMetricTarget(req.params.id);
       const target = await storage.upsertMetricTarget(req.params.id, parsedTargetValue, targetYear);
+      auditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "metric_target_updated",
+        entityType: "metric",
+        entityId: req.params.id,
+        details: {
+          metricName: existing.name,
+          before: existingTargets ? { targetValue: existingTargets.targetValue, targetYear: existingTargets.targetYear } : null,
+          after: { targetValue: parsedTargetValue, targetYear: targetYear ?? null },
+        },
+        req,
+      });
       res.json(target);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2019,6 +2057,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         (resolvedSiteId ? v.siteId === resolvedSiteId : !v.siteId)
       );
 
+      const isFirstInsert = !existingForPeriod;
+      const isFirstEver = isFirstInsert ? !(await storage.hasAnyData(companyId)) : false;
+
       let result;
       if (existingForPeriod) {
         if (existingForPeriod.locked) {
@@ -2034,14 +2075,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         result = await storage.createMetricValue(createData);
       }
 
-      await storage.createAuditLog({
+      auditLog({
         companyId,
         userId,
-        action: "Metric value submitted",
+        actorType: "user",
+        action: existingForPeriod ? "metric_value_updated" : "metric_value_created",
         entityType: "metric_value",
         entityId: result.id,
-        details: { period, value },
+        details: {
+          metricId,
+          period,
+          before: existingForPeriod ? { value: existingForPeriod.value, notes: existingForPeriod.notes } : null,
+          after: { value, notes: notes ?? null },
+        },
+        req,
       });
+
+      if (isFirstEver) {
+        storage.getTelemetryEvents({ eventName: "first_metric_added", companyId, limit: 1 }).then(existing => {
+          if (existing.length === 0) trackTelemetryEvent("first_metric_added", { userId, companyId });
+        }).catch(() => {});
+      }
 
       res.json(result);
     } catch (e: any) {
@@ -2764,6 +2818,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // POST /api/data-entries/estimate — returns estimation suggestions only, does NOT persist
   app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+    if (!featureFlags.estimationEnabled) {
+      const { status, body } = featureDisabledResponse("estimation");
+      return res.status(status).json(body);
+    }
     try {
       const { runEstimationEngine } = await import("./estimation-engine");
       const profile = req.body?.profile ?? {};
@@ -3289,6 +3347,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+    if (!featureFlags.estimationEnabled) {
+      const { status, body } = featureDisabledResponse("estimation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
@@ -3487,6 +3549,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), reportLimiter, async (req, res) => {
+    if (!featureFlags.reportGenerationEnabled) {
+      const { status, body } = featureDisabledResponse("report_generation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -3902,13 +3968,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         siteId: bodySiteId || null,
       });
 
-      await storage.createAuditLog({
-        companyId, userId,
-        action: "Report generated",
-        entityType: "report",
+      auditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "report_generated",
+        entityType: "report_run",
         entityId: report.id,
-        details: { period, reportType, reportTemplate },
+        details: {
+          before: null,
+          after: { period, reportType: reportType ?? "pdf", reportTemplate: reportTemplate ?? "management" },
+        },
+        req,
       });
+
+      const prevReports = await storage.getReportRuns(companyId);
+      if (prevReports.length === 1) {
+        storage.getTelemetryEvents({ eventName: "first_report_generated", companyId, limit: 1 }).then(existing => {
+          if (existing.length === 0) trackTelemetryEvent("first_report_generated", { userId, companyId });
+        }).catch(() => {});
+      }
 
       if (bodySiteId) {
         storage.createUserActivity({
@@ -5014,6 +5093,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/users/invite", requireAuth, requirePermission("user_management"), inviteLimiter, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const actorId = (req.session as any).userId;
+      const { email, role = "contributor", inviteeName } = req.body;
+      if (!email) return res.status(400).json({ error: "email is required" });
+      const validRoles = ["admin", "contributor", "approver", "viewer"];
+      if (!validRoles.includes(role)) return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+
+      const existing = await storage.getUserByEmail(email);
+      if (existing && existing.companyId === companyId) {
+        return res.status(409).json({ error: "A user with that email is already a member of this company" });
+      }
+
+      const { plaintext, hash } = generateSecureToken();
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email, expiresAt });
+
+      const company = await storage.getCompany(companyId);
+      const actor = await storage.getUser(actorId);
+      const emailPayload = buildInvitationEmail({
+        inviteeName: inviteeName || email,
+        companyName: company?.name || "your company",
+        inviterName: actor?.username || actor?.email || "A team member",
+        token: plaintext,
+      });
+      emailPayload.to = email;
+      sendEmail(emailPayload).catch(() => {});
+
+      auditLog({
+        companyId,
+        userId: actorId,
+        actorType: "user",
+        action: "user_invited",
+        entityType: "user",
+        entityId: null,
+        details: {
+          before: null,
+          after: { email, role, inviteeName: inviteeName ?? null, expiresAt: expiresAt.toISOString() },
+        },
+        req,
+      });
+
+      res.json({ ok: true, message: `Invitation sent to ${email}` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.put("/api/users/:id/role", requireAuth, requirePermission("user_management"), requireStepUp, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
@@ -5039,10 +5167,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog({
         companyId,
         userId,
-        action: "User role changed",
+        action: "user_role_changed",
         entityType: "user",
         entityId: req.params.id,
-        details: { previousRole, newRole: role, targetUsername: targetUser.username },
+        details: {
+          before: { role: previousRole },
+          after: { role, targetUsername: targetUser.username },
+        },
         ipAddress: getClientIp(req),
         userAgent: req.headers["user-agent"],
       });
@@ -5639,17 +5770,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateQuestionnaireQuestion(linkedEntityId, { dataSourceType: "evidenced" } as any);
       }
 
-      storage.createAuditLog({
+      auditLog({
         companyId,
         userId,
         actorType: "user",
         action: "evidence_uploaded",
         entityType: "evidence_file",
         entityId: file.id,
-        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
-        userAgent: req.headers["user-agent"] || null,
-        details: { filename, linkedModule, linkedEntityId, linkedPeriod },
-      } as any).catch(() => {});
+        details: {
+          before: null,
+          after: { filename, linkedModule: linkedModule ?? null, linkedEntityId: linkedEntityId ?? null, linkedPeriod: linkedPeriod ?? null },
+        },
+        req,
+      });
+      storage.getEvidenceFiles(companyId).then(allEvidence => {
+        if (allEvidence.length === 1) {
+          return storage.getTelemetryEvents({ eventName: "first_evidence_uploaded", companyId, limit: 1 }).then(existing => {
+            if (existing.length === 0) trackTelemetryEvent("first_evidence_uploaded", { userId, companyId });
+          });
+        }
+      }).catch(() => {});
       res.json(file);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5680,17 +5820,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           updates.reviewedBy = userId;
           updates.reviewedAt = new Date();
         }
-        storage.createAuditLog({
+        auditLog({
           companyId,
           userId,
           actorType: "user",
           action: "evidence_status_changed",
           entityType: "evidence_file",
           entityId: req.params.id,
-          ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
-          userAgent: req.headers["user-agent"] || null,
-          details: { filename: owned.filename, previousStatus, newStatus: evidenceStatus },
-        } as any).catch(() => {});
+          details: {
+            before: { filename: owned.filename, evidenceStatus: previousStatus },
+            after: { filename: owned.filename, evidenceStatus },
+          },
+          req,
+        });
       }
       const file = await storage.updateEvidenceFile(req.params.id, updates);
       if (!file) return res.status(404).json({ error: "Evidence not found" });
@@ -5708,17 +5850,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const owned = allFiles.find(f => f.id === req.params.id);
       if (!owned) return res.status(404).json({ error: "Evidence not found" });
       await storage.deleteEvidenceFile(req.params.id);
-      storage.createAuditLog({
+      auditLog({
         companyId,
         userId,
         actorType: "user",
         action: "evidence_deleted",
         entityType: "evidence_file",
         entityId: req.params.id,
-        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
-        userAgent: req.headers["user-agent"] || null,
-        details: { filename: owned.filename, linkedModule: owned.linkedModule },
-      } as any).catch(() => {});
+        details: {
+          before: { filename: owned.filename, linkedModule: owned.linkedModule ?? null, linkedPeriod: owned.linkedPeriod ?? null, evidenceStatus: owned.evidenceStatus ?? null },
+          after: null,
+        },
+        req,
+      });
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6627,6 +6771,10 @@ Use the live data above to give accurate, specific advice. If you don't have inf
   });
 
   app.post("/api/reports/:id/generate-file", requireAuth, async (req, res) => {
+    if (!featureFlags.reportGenerationEnabled) {
+      const { status, body } = featureDisabledResponse("report_generation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       const { format } = req.body;
@@ -6710,6 +6858,10 @@ Use the live data above to give accurate, specific advice. If you don't have inf
   });
 
   app.get("/api/reports/:id/download/:fileId", requireAuth, async (req, res) => {
+    if (!featureFlags.reportGenerationEnabled) {
+      const { status, body } = featureDisabledResponse("report_generation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -6726,6 +6878,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         userAgent: req.headers["user-agent"] || null,
         details: { filename: file.filename, fileType: file.fileType, reportRunId: req.params.id },
       } as any).catch(() => {});
+      trackTelemetryEvent("report_downloaded", { userId, companyId, properties: { reportRunId: req.params.id, fileId: req.params.fileId, filename: file.filename, fileType: file.fileType } });
       const buffer = Buffer.from(file.fileData || "", "base64");
       const contentType = file.fileType === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
       res.setHeader("Content-Type", contentType);
@@ -7561,7 +7714,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const auth = resolveAuth(req);
       const { action, page, details } = req.body;
-      const validActions = ["page_view", "data_entry_save", "report_generated", "import_completed", "questionnaire_autofill", "carbon_calculation", "control_centre_action", "login", "upgrade_prompt_shown", "upgrade_prompt_clicked", "blocked_action_attempted"];
+      const validActions = ["page_view", "data_entry_save", "report_generated", "import_completed", "questionnaire_autofill", "carbon_calculation", "control_centre_action", "login", "upgrade_prompt_shown", "upgrade_prompt_clicked", "blocked_action_attempted", "dashboard_action_clicked", "help_article_opened"];
       if (!validActions.includes(action)) { res.status(400).json({ error: "Invalid action" }); return; }
 
       const sanitizedDetails = details ? { ...details } : {};
@@ -7576,6 +7729,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         page: page || null,
         details: Object.keys(sanitizedDetails).length ? sanitizedDetails : null,
       });
+
+      if (action === "dashboard_action_clicked" || action === "help_article_opened") {
+        const telemetryAction: import("./telemetry").TelemetryEventName = action;
+        trackTelemetryEvent(telemetryAction, {
+          userId: auth?.userId ?? null,
+          companyId: auth?.companyId ?? null,
+          properties: Object.keys(sanitizedDetails).length ? sanitizedDetails : undefined,
+        });
+      }
+
       res.json({ tracked: true });
     } catch {
       res.json({ tracked: false });
@@ -7934,9 +8097,81 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.post("/api/admin/integrity-check", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const { checkDashboardVsMetrics, checkReportVsDashboard, checkPortfolioVsCompanies } = await import("./integrity-checks");
+      const { companyId: targetCompanyId, groupId: targetGroupId } = req.body;
+      if (targetCompanyId) {
+        const [dashResult, reportResult] = await Promise.all([
+          checkDashboardVsMetrics(targetCompanyId),
+          checkReportVsDashboard(targetCompanyId),
+        ]);
+        return res.json({ companyId: targetCompanyId, dashboardCheck: dashResult, reportCheck: reportResult });
+      }
+      if (targetGroupId) {
+        const companyIdsResult = await db.execute(sql`SELECT company_id FROM group_companies WHERE group_id = ${targetGroupId}`);
+        const companyIds = ((companyIdsResult as any).rows ?? []).map((r: any) => r.company_id as string);
+        const portResult = await checkPortfolioVsCompanies(targetGroupId, companyIds);
+        return res.json({ groupId: targetGroupId, portfolioCheck: portResult });
+      }
+      const companies = await db.execute(sql`SELECT id FROM companies WHERE status = 'active' LIMIT 50`);
+      const rows = (companies as any).rows ?? [];
+      const results: any[] = [];
+      for (const row of rows) {
+        const cid = row.id as string;
+        const [dashResult, reportResult] = await Promise.all([
+          checkDashboardVsMetrics(cid),
+          checkReportVsDashboard(cid),
+        ]);
+        results.push({ companyId: cid, dashboardOk: dashResult.ok, reportOk: reportResult.ok, discrepancies: [...dashResult.discrepancies, ...reportResult.discrepancies] });
+      }
+      const groups = await db.execute(sql`SELECT id FROM groups LIMIT 20`);
+      const groupRows = (groups as any).rows ?? [];
+      const portfolioResults: any[] = [];
+      for (const row of groupRows) {
+        const gid = row.id as string;
+        const cidsResult = await db.execute(sql`SELECT company_id FROM group_companies WHERE group_id = ${gid}`);
+        const cids = ((cidsResult as any).rows ?? []).map((r: any) => r.company_id as string);
+        if (cids.length > 0) {
+          const portResult = await checkPortfolioVsCompanies(gid, cids);
+          portfolioResults.push({ groupId: gid, ok: portResult.ok, discrepancies: portResult.discrepancies });
+        }
+      }
+      const totalDiscrepancies = results.reduce((sum, r) => sum + r.discrepancies.length, 0) + portfolioResults.reduce((sum, r) => sum + r.discrepancies.length, 0);
+      res.json({ checked: rows.length, groupsChecked: groupRows.length, totalDiscrepancies, results, portfolioResults });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/telemetry", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit || "200")), 500);
+      const { eventName, companyId: qCompanyId, userId: qUserId } = req.query as Record<string, string>;
+      const events = await storage.getTelemetryEvents({ eventName: eventName || undefined, companyId: qCompanyId || undefined, userId: qUserId || undefined, limit });
+      res.json(events);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       const limit = Math.min(parseInt(String(req.query.limit || "200")), 500);
+      const { companyId: qCompanyId, userId: qUserId, entityType, action, dateFrom, dateTo } = req.query as Record<string, string>;
+      const hasFilters = qCompanyId || qUserId || entityType || action || dateFrom || dateTo;
+      if (hasFilters) {
+        const logs = await storage.queryAuditLogs({
+          companyId: qCompanyId || undefined,
+          userId: qUserId || undefined,
+          entityType: entityType || undefined,
+          action: action || undefined,
+          dateFrom: dateFrom ? new Date(dateFrom) : undefined,
+          dateTo: dateTo ? new Date(dateTo) : undefined,
+          limit,
+        });
+        return res.json(logs);
+      }
       const logs = await storage.getAllAuditLogs(limit);
       res.json(logs);
     } catch (e: any) {
@@ -9254,6 +9489,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // ============================================================
 
   app.post("/api/reports/export/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    if (!featureFlags.reportGenerationEnabled) {
+      const { status, body } = featureDisabledResponse("report_generation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -9495,6 +9734,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   // GET /api/reports/export-data/:reportType — returns JSON data for preview
   app.get("/api/reports/export-data/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+    if (!featureFlags.reportGenerationEnabled) {
+      const { status, body } = featureDisabledResponse("report_generation");
+      return res.status(status).json(body);
+    }
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -11015,6 +11258,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   }
 
   app.get("/api/portfolio/groups", requireAuth, async (req, res) => {
+    if (!featureFlags.portfolioEnabled) {
+      const { status, body } = featureDisabledResponse("portfolio");
+      return res.status(status).json(body);
+    }
     try {
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
@@ -11031,6 +11278,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   app.get("/api/portfolio/groups/:groupId/summary", requireAuth, async (req, res) => {
+    if (!featureFlags.portfolioEnabled) {
+      const { status, body } = featureDisabledResponse("portfolio");
+      return res.status(status).json(body);
+    }
     try {
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
@@ -11091,6 +11342,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   app.get("/api/portfolio/groups/:groupId/companies", requireAuth, async (req, res) => {
+    if (!featureFlags.portfolioEnabled) {
+      const { status, body } = featureDisabledResponse("portfolio");
+      return res.status(status).json(body);
+    }
     try {
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
@@ -11170,6 +11425,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   app.get("/api/portfolio/groups/:groupId/alerts", requireAuth, async (req, res) => {
+    if (!featureFlags.portfolioEnabled) {
+      const { status, body } = featureDisabledResponse("portfolio");
+      return res.status(status).json(body);
+    }
     try {
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);
@@ -11234,6 +11493,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   app.get("/api/portfolio/groups/:groupId/activity", requireAuth, async (req, res) => {
+    if (!featureFlags.portfolioEnabled) {
+      const { status, body } = featureDisabledResponse("portfolio");
+      return res.status(status).json(body);
+    }
     try {
       const auth = resolveAuth(req)!;
       const user = await storage.getUser(auth.userId);

@@ -32,6 +32,7 @@ const recurringJobs: RecurringJobDef[] = [
   { jobType: "gdpr_export_cleanup", intervalMs: 6 * 60 * 60 * 1000, lastRun: 0 },
   { jobType: "gdpr_deletion_processor", intervalMs: 60 * 60 * 1000, lastRun: 0 },
   { jobType: "generated_files_cleanup", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
+  { jobType: "data_integrity_check", intervalMs: 24 * 60 * 60 * 1000, lastRun: 0 },
 ];
 
 export function registerJobHandler(jobType: string, handler: JobHandler) {
@@ -483,6 +484,44 @@ export function getSchedulerStatus() {
   };
 }
 
+async function dataIntegrityCheckHandler(_payload: any, _companyId: string | null): Promise<any> {
+  try {
+    const { checkDashboardVsMetrics, checkReportVsDashboard, checkPortfolioVsCompanies } = await import("./integrity-checks");
+    const companies = await db.execute(sql`SELECT id FROM companies WHERE status = 'active' LIMIT 50`);
+    const rows = (companies as any).rows ?? [];
+    let totalDiscrepancies = 0;
+    for (const row of rows) {
+      const cid = row.id as string;
+      const [dashResult, reportResult] = await Promise.all([
+        checkDashboardVsMetrics(cid),
+        checkReportVsDashboard(cid),
+      ]);
+      totalDiscrepancies += dashResult.discrepancies.length + reportResult.discrepancies.length;
+    }
+    const groups = await db.execute(sql`SELECT id FROM groups LIMIT 20`);
+    const groupRows = (groups as any).rows ?? [];
+    for (const row of groupRows) {
+      const gid = row.id as string;
+      const companyIdsResult = await db.execute(sql`SELECT company_id FROM group_companies WHERE group_id = ${gid}`);
+      const companyIds = ((companyIdsResult as any).rows ?? []).map((r: any) => r.company_id as string);
+      if (companyIds.length > 0) {
+        const portResult = await checkPortfolioVsCompanies(gid, companyIds);
+        totalDiscrepancies += portResult.discrepancies.length;
+      }
+    }
+    const msg = `[integrity] Daily check complete: ${rows.length} companies + ${groupRows.length} groups checked, ${totalDiscrepancies} discrepancies`;
+    if (totalDiscrepancies > 0) {
+      console.warn(msg);
+    } else {
+      console.log(msg);
+    }
+    return { checked: rows.length, groupsChecked: groupRows.length, totalDiscrepancies };
+  } catch (e: any) {
+    console.error("[integrity] Daily check error:", e?.message ?? e);
+    return { error: String(e) };
+  }
+}
+
 export function startScheduler() {
   registerJobHandler("reminder_check", reminderCheckHandler);
   registerJobHandler("evidence_expiry", evidenceExpiryHandler);
@@ -494,6 +533,7 @@ export function startScheduler() {
   registerJobHandler("gdpr_export_cleanup", gdprExportCleanupHandler);
   registerJobHandler("gdpr_deletion_processor", gdprDeletionProcessorHandler);
   registerJobHandler("generated_files_cleanup", generatedFilesCleanupHandler);
+  registerJobHandler("data_integrity_check", dataIntegrityCheckHandler);
 
   tickTimer = setInterval(runRecurringTick, TICK_INTERVAL);
   queueTimer = setInterval(processQueue, QUEUE_POLL_INTERVAL);

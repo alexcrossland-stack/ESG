@@ -132,6 +132,52 @@ app.use((req, res, next) => {
         } catch {}
       }
       log(logLine);
+
+      const statusCode = res.statusCode;
+      if (statusCode >= 400) {
+        const isPortfolioRoute = path.startsWith("/api/portfolio") || path.startsWith("/api/groups");
+        const sessionData = (req as any).session as any;
+        const auth = (req as any)._auth as { userId?: string; companyId?: string; role?: string } | undefined;
+        const userId = auth?.userId ?? sessionData?.userId ?? null;
+        const companyId = auth?.companyId ?? sessionData?.companyId ?? null;
+        const role = auth?.role ?? sessionData?.role ?? null;
+        const groupId = (req.params as any)?.groupId ?? null;
+
+        const errorContext: Record<string, unknown> = {
+          method: req.method,
+          path,
+          statusCode,
+          userId,
+          companyId,
+          role,
+          durationMs: duration,
+          isPortfolioRoute,
+        };
+        if (groupId) errorContext.groupId = groupId;
+        if (isPortfolioRoute) errorContext.portfolioTag = true;
+
+        if (statusCode >= 500) {
+          console.error(`[api-error] ${statusCode} ${req.method} ${path}`, JSON.stringify(errorContext));
+          storage.createPlatformHealthEvent({
+            eventType: isPortfolioRoute ? "portfolio_5xx_error" : "api_5xx_error",
+            severity: "error",
+            message: `API ${statusCode}: ${req.method} ${path}`,
+            details: errorContext,
+            companyId: companyId ?? null,
+          }).catch(() => {});
+        } else {
+          console.warn(`[api-error] ${statusCode} ${req.method} ${path}`, JSON.stringify(errorContext));
+          if (isPortfolioRoute) {
+            storage.createPlatformHealthEvent({
+              eventType: "portfolio_4xx_error",
+              severity: "warning",
+              message: `Portfolio API ${statusCode}: ${req.method} ${path}`,
+              details: errorContext,
+              companyId: companyId ?? null,
+            }).catch(() => {});
+          }
+        }
+      }
     }
   });
 
@@ -371,6 +417,27 @@ app.use((req, res, next) => {
     }
   }
   console.log("[Startup] Portfolio Groups schema migrations applied");
+
+  // Telemetry Events schema migration (Task #59)
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS telemetry_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_name text NOT NULL,
+        user_id varchar,
+        company_id varchar,
+        group_id varchar,
+        properties jsonb,
+        recorded_at timestamp DEFAULT now() NOT NULL
+      )
+    `));
+    await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS idx_telemetry_event_name ON telemetry_events(event_name)`));
+    await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS idx_telemetry_company_id ON telemetry_events(company_id)`));
+    await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS idx_telemetry_recorded_at ON telemetry_events(recorded_at)`));
+    console.log("[Startup] Telemetry events schema migration applied");
+  } catch (e: any) {
+    console.warn("[Startup] Telemetry migration warning:", e.message?.substring(0, 100));
+  }
 
   await registerRoutes(httpServer, app);
 

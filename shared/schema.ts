@@ -1472,3 +1472,25 @@ export type InsertGroupCompany = z.infer<typeof insertGroupCompanySchema>;
 export const insertUserGroupRoleSchema = createInsertSchema(userGroupRoles).omit({ id: true, createdAt: true, updatedAt: true });
 export type UserGroupRole = typeof userGroupRoles.$inferSelect;
 export type InsertUserGroupRole = z.infer<typeof insertUserGroupRoleSchema>;
+
+// ============================================================
+// TELEMETRY EVENTS (Task #59)
+// ============================================================
+
+export const telemetryEvents = pgTable("telemetry_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventName: text("event_name").notNull(),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  groupId: varchar("group_id"),
+  properties: jsonb("properties"),
+  recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+}, (table) => ({
+  eventNameIdx: index("idx_telemetry_event_name").on(table.eventName),
+  companyIdIdx: index("idx_telemetry_company_id").on(table.companyId),
+  recordedAtIdx: index("idx_telemetry_recorded_at").on(table.recordedAt),
+}));
+
+export const insertTelemetryEventSchema = createInsertSchema(telemetryEvents).omit({ id: true, recordedAt: true });
+export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
+export type InsertTelemetryEvent = z.infer<typeof insertTelemetryEventSchema>;

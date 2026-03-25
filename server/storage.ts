@@ -74,6 +74,8 @@ import {
   type IdentityProvider, type InsertIdentityProvider,
   type DataExportJob, type InsertDataExportJob,
   type DataDeletionRequest, type InsertDataDeletionRequest,
+  telemetryEvents,
+  type TelemetryEvent, type InsertTelemetryEvent,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -183,6 +185,7 @@ export interface IStorage {
 
   getAuditLogs(companyId: string, limit?: number): Promise<AuditLog[]>;
   getAllAuditLogs(limit?: number, filters?: { action?: string; actorType?: string }): Promise<AuditLog[]>;
+  queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]>;
   createAuditLog(log: Omit<AuditLog, "id" | "createdAt">): Promise<AuditLog>;
 
   // Dashboard
@@ -483,6 +486,10 @@ export interface IStorage {
     actor: string | null;
     timestamp: Date;
   }>>;
+
+  // Telemetry Events (Task #59)
+  createTelemetryEvent(data: InsertTelemetryEvent): Promise<TelemetryEvent>;
+  getTelemetryEvents(filters?: { eventName?: string; companyId?: string; userId?: string; limit?: number }): Promise<TelemetryEvent[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -978,8 +985,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllAuditLogs(limit = 200, filters?: { action?: string; actorType?: string }) {
+    const conditions: any[] = [];
+    if (filters?.action) conditions.push(eq(auditLogs.action, filters.action));
+    if (filters?.actorType) conditions.push(eq(auditLogs.actorType, filters.actorType));
     let query = db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit) as any;
+    if (conditions.length > 0) query = db.select().from(auditLogs).where(and(...conditions)).orderBy(desc(auditLogs.createdAt)).limit(limit) as any;
     return query;
+  }
+
+  async queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]> {
+    const conditions: any[] = [];
+    if (filters.companyId) conditions.push(eq(auditLogs.companyId, filters.companyId));
+    if (filters.userId) conditions.push(eq(auditLogs.userId, filters.userId));
+    if (filters.entityType) conditions.push(eq(auditLogs.entityType, filters.entityType));
+    if (filters.action) conditions.push(eq(auditLogs.action, filters.action));
+    if (filters.dateFrom) conditions.push(gte(auditLogs.createdAt, filters.dateFrom));
+    if (filters.dateTo) conditions.push(lte(auditLogs.createdAt, filters.dateTo));
+    const limit = filters.limit ?? 200;
+    if (conditions.length > 0) {
+      return db.select().from(auditLogs).where(and(...conditions)).orderBy(desc(auditLogs.createdAt)).limit(limit);
+    }
+    return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit);
   }
 
   async createAuditLog(log: Omit<AuditLog, "id" | "createdAt">) {
@@ -3508,6 +3534,24 @@ export class DatabaseStorage implements IStorage {
       actor: r.actor ?? null,
       timestamp: r.timestamp ?? new Date(),
     }));
+  }
+
+  async createTelemetryEvent(data: InsertTelemetryEvent): Promise<TelemetryEvent> {
+    const [event] = await db.insert(telemetryEvents).values(data).returning();
+    return event;
+  }
+
+  async getTelemetryEvents(filters?: { eventName?: string; companyId?: string; userId?: string; limit?: number }): Promise<TelemetryEvent[]> {
+    const conditions = [];
+    if (filters?.eventName) conditions.push(eq(telemetryEvents.eventName, filters.eventName));
+    if (filters?.companyId) conditions.push(eq(telemetryEvents.companyId, filters.companyId));
+    if (filters?.userId) conditions.push(eq(telemetryEvents.userId, filters.userId));
+
+    const query = db.select().from(telemetryEvents);
+    if (conditions.length > 0) {
+      return query.where(and(...conditions)).orderBy(desc(telemetryEvents.recordedAt)).limit(filters?.limit ?? 100);
+    }
+    return query.orderBy(desc(telemetryEvents.recordedAt)).limit(filters?.limit ?? 100);
   }
 }
 
