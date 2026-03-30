@@ -822,12 +822,20 @@ export default function AdminPage() {
           <h1 className="text-2xl font-bold" data-testid="heading-admin-console">Platform Admin Console</h1>
           <p className="text-muted-foreground text-sm mt-1">Manage all tenants, users, and platform health from one place.</p>
         </div>
-        <Link href="/admin/esg">
-          <Button variant="outline" size="sm" data-testid="link-admin-esg-management" className="gap-1.5">
-            <ExternalLink className="w-3.5 h-3.5" />
-            ESG Platform Management
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link href="/create-company">
+            <Button size="sm" data-testid="button-admin-create-company" className="gap-1.5">
+              <Building2 className="w-3.5 h-3.5" />
+              Create Company
+            </Button>
+          </Link>
+          <Link href="/admin/esg">
+            <Button variant="outline" size="sm" data-testid="link-admin-esg-management" className="gap-1.5">
+              <ExternalLink className="w-3.5 h-3.5" />
+              ESG Platform Management
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {statsLoading ? (

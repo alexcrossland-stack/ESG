@@ -11470,6 +11470,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         creatorUserId: callerUser.id,
       });
 
+      // Update the session companyId so subsequent API calls immediately use the new company context.
+      // super_admin does not switch company context (they operate across all companies), but
+      // admin and portfolio_owner callers are promoted to admin of the new company and should switch.
+      if (callerUser.role !== "super_admin") {
+        (req.session as any).companyId = result.companyId;
+      }
+
       const newCompany = await storage.getCompany(result.companyId);
       res.status(201).json({
         company: newCompany,
@@ -11481,6 +11488,73 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (e.message?.includes("already exists")) {
         return res.status(409).json({ error: e.message });
       }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/companies/:id/invites — invite a user by email to a specific company.
+  // Unlike POST /api/users/invite (session-scoped), this endpoint explicitly targets
+  // the company ID in the URL, so it works correctly even when a super_admin creates
+  // a new company without switching their session context.
+  app.post("/api/companies/:id/invites", requireAuth, inviteLimiter, async (req, res) => {
+    try {
+      const targetCompanyId = req.params.id;
+      const auth = resolveAuth(req)!;
+      const callerUser = await storage.getUser(auth.userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      // Permission check: caller must be super_admin, or must belong to targetCompanyId
+      // with a role that allows user management (admin, portfolio_owner).
+      const isSuperAdmin = callerUser.role === "super_admin";
+      const isCompanyAdmin = callerUser.companyId === targetCompanyId &&
+        (callerUser.role === "admin" || callerUser.role === "portfolio_owner");
+      if (!isSuperAdmin && !isCompanyAdmin) {
+        return res.status(403).json({ error: "Insufficient permissions to invite users to this company" });
+      }
+
+      const { email, role = "contributor", inviteeName } = req.body;
+      if (!email) return res.status(400).json({ error: "email is required" });
+      const validRoles = ["admin", "contributor", "approver", "viewer"];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+      }
+
+      const existing = await storage.getUserByEmail(email);
+      if (existing && existing.companyId === targetCompanyId) {
+        return res.status(409).json({ error: "A user with that email is already a member of this company" });
+      }
+
+      const { plaintext, hash } = generateSecureToken();
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email, expiresAt });
+
+      const company = await storage.getCompany(targetCompanyId);
+      const actor = await storage.getUser(callerUser.id);
+      const emailPayload = buildInvitationEmail({
+        inviteeName: inviteeName || email,
+        companyName: company?.name || "your company",
+        inviterName: actor?.username || actor?.email || "A team member",
+        token: plaintext,
+      });
+      emailPayload.to = email;
+      sendEmail(emailPayload).catch(() => {});
+
+      auditLog({
+        companyId: targetCompanyId,
+        userId: callerUser.id,
+        actorType: "user",
+        action: "user_invited",
+        entityType: "user",
+        entityId: null,
+        details: {
+          before: null,
+          after: { email, role, inviteeName: inviteeName ?? null, expiresAt: expiresAt.toISOString() },
+        },
+        req,
+      });
+
+      res.json({ ok: true, message: `Invitation sent to ${email}` });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });

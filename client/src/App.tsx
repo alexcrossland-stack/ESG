@@ -61,6 +61,7 @@ import { SiteProvider } from "@/hooks/use-site-context";
 import FrameworkSettingsPage from "@/pages/framework-settings";
 import FrameworkReadinessPage from "@/pages/framework-readiness";
 import PortfolioPage from "@/pages/portfolio";
+import CreateCompanyPage from "@/pages/create-company";
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -363,6 +364,7 @@ function ProtectedApp() {
                 <Route path="/framework-settings" component={FrameworkSettingsPage} />
                 <Route path="/framework-readiness" component={FrameworkReadinessPage} />
                 <Route path="/portfolio" component={PortfolioPage} />
+                <Route path="/create-company" component={CreateCompanyPage} />
                 <Route path="/materiality" component={MaterialityPage} />
                 <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
                 <Route path="/esg-targets" component={EsgTargetsPage} />

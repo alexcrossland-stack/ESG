@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Building2, Users, AlertTriangle, FileText, CheckCircle, BarChart3,
   Search, ChevronRight, ArrowUpDown, RefreshCw, Clock, Activity,
-  ExternalLink, Info, Filter,
+  ExternalLink, Info, Filter, Plus,
 } from "lucide-react";
 import { usePortfolioAccess, type PortfolioGroup } from "@/hooks/use-portfolio-access";
 import { formatDistanceToNow } from "date-fns";
@@ -403,6 +403,7 @@ function NoGroupsState() {
 
 export default function PortfolioPage() {
   const { isLoading, canAccessPortfolio, groups, activeGroup, activeGroupId, setActiveGroupId, isMultiGroup } = usePortfolioAccess();
+  const [, navigate] = useLocation();
 
   if (isLoading) {
     return (
@@ -437,9 +438,15 @@ export default function PortfolioPage() {
             </p>
           )}
         </div>
-        {isMultiGroup && (
-          <GroupSwitcher groups={groups} activeGroupId={activeGroupId} onSwitch={setActiveGroupId} />
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" onClick={() => navigate("/create-company")} data-testid="button-portfolio-create-company" className="gap-1.5">
+            <Plus className="w-3.5 h-3.5" />
+            Add Company
+          </Button>
+          {isMultiGroup && (
+            <GroupSwitcher groups={groups} activeGroupId={activeGroupId} onSwitch={setActiveGroupId} />
+          )}
+        </div>
       </div>
 
       {activeGroupId && (
