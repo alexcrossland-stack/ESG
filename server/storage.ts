@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, lt, isNull, or, count, gte, lte, inArray, asc, ilike, avg } from "drizzle-orm";
+import { eq, and, desc, sql, lt, isNull, or, count, gte, lte, gt, inArray, asc, ilike, avg } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -78,6 +78,8 @@ import {
   type TelemetryEvent, type InsertTelemetryEvent,
   companyOnboardingChecklist,
   type CompanyOnboardingChecklist, type InsertOnboardingChecklist,
+  accessGrants,
+  type AccessGrant, type InsertAccessGrant,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -498,6 +500,12 @@ export interface IStorage {
   getOnboardingChecklist(companyId: string): Promise<CompanyOnboardingChecklist[]>;
   createOnboardingChecklistTask(data: InsertOnboardingChecklist): Promise<CompanyOnboardingChecklist>;
   updateOnboardingChecklistTask(companyId: string, taskKey: string, data: Partial<CompanyOnboardingChecklist>): Promise<CompanyOnboardingChecklist | undefined>;
+
+  // Access Grants (Task #67)
+  createAccessGrant(data: InsertAccessGrant): Promise<AccessGrant>;
+  listAccessGrants(filter?: { status?: "active" | "expired" | "revoked" }): Promise<any[]>;
+  getAccessGrant(id: string): Promise<AccessGrant | undefined>;
+  revokeAccessGrant(id: string): Promise<AccessGrant | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3665,6 +3673,52 @@ export class DatabaseStorage implements IStorage {
       ))
       .returning();
     return updated;
+  }
+
+  async createAccessGrant(data: InsertAccessGrant): Promise<AccessGrant> {
+    const [grant] = await db.insert(accessGrants).values(data).returning();
+    return grant;
+  }
+
+  async listAccessGrants(filter?: { status?: "active" | "expired" | "revoked" }): Promise<any[]> {
+    const now = new Date();
+    const rows = await db.execute(sql`
+      SELECT
+        ag.*,
+        c.name AS company_name,
+        u.name AS user_name,
+        cu.name AS created_by_name
+      FROM access_grants ag
+      LEFT JOIN companies c ON c.id = ag.company_id
+      LEFT JOIN users u ON u.id = ag.user_id
+      LEFT JOIN users cu ON cu.id = ag.created_by
+      ORDER BY ag.created_at DESC
+    `);
+    const grants = rows.rows as any[];
+    if (!filter?.status) return grants;
+    return grants.filter((g) => {
+      if (filter.status === "revoked") return g.revoked_at !== null;
+      if (filter.status === "active") {
+        return g.revoked_at === null && new Date(g.starts_at) <= now && new Date(g.ends_at) > now;
+      }
+      if (filter.status === "expired") {
+        return g.revoked_at === null && new Date(g.ends_at) <= now;
+      }
+      return true;
+    });
+  }
+
+  async getAccessGrant(id: string): Promise<AccessGrant | undefined> {
+    const [grant] = await db.select().from(accessGrants).where(eq(accessGrants.id, id));
+    return grant;
+  }
+
+  async revokeAccessGrant(id: string): Promise<AccessGrant | undefined> {
+    const [grant] = await db.update(accessGrants)
+      .set({ revokedAt: new Date(), updatedAt: new Date() })
+      .where(eq(accessGrants.id, id))
+      .returning();
+    return grant;
   }
 }
 

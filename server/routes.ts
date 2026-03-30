@@ -35,6 +35,8 @@ import { evaluateSecurityEvent, getSecurityAlerts, SECURITY_EVENTS } from "./ale
 import { featureFlags, featureDisabledResponse } from "./feature-flags";
 import { trackTelemetryEvent } from "./telemetry";
 import { auditLog, getClientIp } from "./audit";
+import { getEffectivePlanTier, getActiveGrant } from "./billing/entitlement";
+import { insertAccessGrantSchema } from "@shared/schema";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -352,17 +354,6 @@ async function requireSuperAdmin(req: Request, res: Response, next: Function) {
   return next();
 }
 
-function getEffectivePlanTier(company: any): { tier: "free" | "pro"; isBeta: boolean } {
-  if (company.planTier === "pro") return { tier: "pro", isBeta: false };
-  const now = new Date();
-  if (
-    company.isBetaCompany &&
-    (!company.betaExpiresAt || new Date(company.betaExpiresAt) > now)
-  ) {
-    return { tier: "pro", isBeta: true };
-  }
-  return { tier: "free", isBeta: false };
-}
 
 const ENVIRONMENTAL_RAW_KEYS = [
   "elec", "gas", "fuel", "waste", "water", "flight", "hotel", "rail", "car_miles",
@@ -2413,7 +2404,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { rows } = req.body as { rows: { name: string; period: string; value: number }[] };
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
 
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
@@ -3803,7 +3794,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const company = await storage.getCompany(companyId);
-      const { tier: _rptTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      const { tier: _rptTier } = company ? await getEffectivePlanTier(company) : { tier: "free" as const };
       if (_rptTier !== "pro" && reportTemplate && reportTemplate !== "management") {
         return upgradeRequired(req, res, "Free plan is limited to the Management report template. Upgrade to Pro for all templates.");
       }
@@ -4700,7 +4691,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { inputs } = req.body;
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
 
       const saved = await storage.createPolicyGenerationInput({ companyId, inputs });
@@ -4954,7 +4945,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
-      const { tier } = getEffectivePlanTier(company);
+      const { tier } = await getEffectivePlanTier(company);
       if (tier !== "pro") return upgradeRequired(req, res);
       const siteIdParam = req.query.siteId as string | undefined;
       const siteId = siteIdParam === "null" ? null : siteIdParam;
@@ -4974,7 +4965,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const companyId = (req.session as any).companyId;
     const company = await storage.getCompany(companyId);
     if (!company) return res.status(404).json({ error: "Company not found" });
-    const { tier } = getEffectivePlanTier(company);
+    const { tier } = await getEffectivePlanTier(company);
     if (tier !== "pro") return upgradeRequired(req, res);
     const q = await storage.getQuestionnaire(req.params.id);
     if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Questionnaire not found" });
@@ -4989,7 +4980,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { title, source, questions, siteId: bodySiteId, reportingPeriodId: bodyRpId } = req.body;
       const _company = await storage.getCompany(companyId);
       if (!_company) return res.status(404).json({ error: "Company not found" });
-      const { tier: _tier } = getEffectivePlanTier(_company);
+      const { tier: _tier } = await getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
       // Enforce siteId when company has any active sites
       if (!bodySiteId) {
@@ -5039,7 +5030,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const questionnaireId = req.params.id;
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
 
       const qRecord = await storage.getQuestionnaire(questionnaireId);
@@ -5143,7 +5134,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _cId = (req.session as any).companyId;
       const _co = await storage.getCompany(_cId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
       const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
       res.json(updated);
@@ -5157,7 +5148,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
       const q = await storage.getQuestionnaire(req.params.id);
       if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Not found" });
@@ -5189,7 +5180,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { answers } = req.body;
       const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
-      const { tier: _t } = getEffectivePlanTier(_co);
+      const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
 
       const template = await storage.getPolicyTemplate(req.params.slug);
@@ -5975,7 +5966,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const _evCo = await storage.getCompany(companyId);
       if (!_evCo) return res.status(404).json({ error: "Company not found" });
-      const { tier: _evTier } = getEffectivePlanTier(_evCo);
+      const { tier: _evTier } = await getEffectivePlanTier(_evCo);
       if (_evTier !== "pro") {
         const existingFiles = await storage.getEvidenceFiles(companyId);
         if (existingFiles.length >= 10) {
@@ -6215,7 +6206,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/compliance/requirements/:frameworkId", requireAuth, async (req, res) => {
     try {
       const _crCo = await storage.getCompany((req.session as any).companyId);
-      const { tier: _crTier } = _crCo ? getEffectivePlanTier(_crCo) : { tier: "free" as const };
+      const { tier: _crTier } = _crCo ? await getEffectivePlanTier(_crCo) : { tier: "free" as const };
       if (_crTier !== "pro") return upgradeRequired(req, res);
       const rows = await db.execute(
         sql`SELECT * FROM compliance_requirements WHERE framework_id = ${req.params.frameworkId} ORDER BY code`
@@ -6230,7 +6221,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const _csCo = await storage.getCompany(companyId);
-      const { tier: _csTier } = _csCo ? getEffectivePlanTier(_csCo) : { tier: "free" as const };
+      const { tier: _csTier } = _csCo ? await getEffectivePlanTier(_csCo) : { tier: "free" as const };
       if (_csTier !== "pro") return upgradeRequired(req, res);
       const frameworks = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
       const requirements = await db.execute(sql`SELECT * FROM compliance_requirements`);
@@ -6492,7 +6483,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       const _recCo = await storage.getCompany(companyId);
-      const { tier: _recTier } = _recCo ? getEffectivePlanTier(_recCo) : { tier: "free" as const };
+      const { tier: _recTier } = _recCo ? await getEffectivePlanTier(_recCo) : { tier: "free" as const };
       const limited = _recTier !== "pro" && recommendations.length > 3;
       const displayed = limited ? recommendations.slice(0, 3) : recommendations;
       res.json({ recommendations: displayed, total: recommendations.length, limited });
@@ -6625,7 +6616,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!message?.trim()) return res.status(400).json({ error: "Message is required" });
 
       const company = await storage.getCompany(companyId);
-      const { tier: _chatTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      const { tier: _chatTier } = company ? await getEffectivePlanTier(company) : { tier: "free" as const };
       if (_chatTier !== "pro") return upgradeRequired(req, res);
       const maturityLabel = company?.esgMaturity === "formal_programme" ? "Established"
         : company?.esgMaturity === "some_policies" ? "Developing" : "Starter";
@@ -7039,7 +7030,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const reportRun = reportRunResult.rows[0] as any;
       const reportData = reportRun.report_data || {};
       const company = await storage.getCompany(companyId);
-      const { tier: _fileTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      const { tier: _fileTier } = company ? await getEffectivePlanTier(company) : { tier: "free" as const };
       if (_fileTier !== "pro") return upgradeRequired(req, res);
       const companyName = company?.name || "Company";
 
@@ -7167,7 +7158,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const { format, content, title } = req.body;
       const _iCo = await storage.getCompany(companyId);
       if (!_iCo) return res.status(404).json({ error: "Company not found" });
-      const { tier: _iTier } = getEffectivePlanTier(_iCo);
+      const { tier: _iTier } = await getEffectivePlanTier(_iCo);
       if (_iTier !== "pro") return upgradeRequired(req, res);
       if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
       if (title.length > 200) { res.status(400).json({ error: "Title must be 200 characters or fewer" }); return; }
@@ -7291,7 +7282,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const { text, title } = req.body;
       const _grCo = await storage.getCompany(companyId);
       if (!_grCo) return res.status(404).json({ error: "Company not found" });
-      const { tier: _grTier } = getEffectivePlanTier(_grCo);
+      const { tier: _grTier } = await getEffectivePlanTier(_grCo);
       if (_grTier !== "pro") return upgradeRequired(req, res);
       if (!text || typeof text !== "string") { res.status(400).json({ error: "Questionnaire text is required" }); return; }
       if (text.length > 50000) { res.status(400).json({ error: "Text exceeds 50,000 character limit" }); return; }
@@ -7416,7 +7407,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
       const _parseCo = await storage.getCompany(companyId);
       if (!_parseCo) return res.status(404).json({ error: "Company not found" });
-      const { tier: _parseTier } = getEffectivePlanTier(_parseCo);
+      const { tier: _parseTier } = await getEffectivePlanTier(_parseCo);
       if (_parseTier !== "pro") return upgradeRequired(req, res);
       // Enforce siteId when company has any active sites
       const { format, content, siteId: parseSiteId } = req.body;
@@ -7465,7 +7456,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const { mappings, rows, period, siteId: bodySiteId } = req.body;
       const _confCo = await storage.getCompany(companyId);
       if (!_confCo) return res.status(404).json({ error: "Company not found" });
-      const { tier: _confTier } = getEffectivePlanTier(_confCo);
+      const { tier: _confTier } = await getEffectivePlanTier(_confCo);
       if (_confTier !== "pro") return upgradeRequired(req, res);
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
@@ -7596,7 +7587,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
-      const { tier: _bmTier } = company ? getEffectivePlanTier(company) : { tier: "free" as const };
+      const { tier: _bmTier } = company ? await getEffectivePlanTier(company) : { tier: "free" as const };
       if (_bmTier !== "pro") return upgradeRequired(req, res);
       const employeeCount = company?.employeeCount || 1;
       const metrics = await storage.getMetrics(companyId);
@@ -7670,7 +7661,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
       const { enabled, expiresInDays, visibleSections } = req.body;
       const _shareCo = await storage.getCompany(companyId);
-      const { tier: _shareTier } = _shareCo ? getEffectivePlanTier(_shareCo) : { tier: "free" as const };
+      const { tier: _shareTier } = _shareCo ? await getEffectivePlanTier(_shareCo) : { tier: "free" as const };
       if (_shareTier !== "pro") return upgradeRequired(req, res);
       const ALLOWED_SECTIONS = ["esg_scores", "key_metrics", "policy_status", "carbon_summary", "compliance_highlights", "evidence_coverage", "certifications"];
       const sanitizedSections = Array.isArray(visibleSections)
@@ -8201,7 +8192,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
-      const { tier, isBeta } = getEffectivePlanTier(company);
+      const { tier, isBeta, isComped, compedUntil } = await getEffectivePlanTier(company);
       res.json({
         planTier: tier,
         planStatus: company.planStatus || "active",
@@ -8209,6 +8200,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         stripeCustomerId: company.stripeCustomerId,
         isBeta,
         betaExpiresAt: isBeta ? company.betaExpiresAt : null,
+        isComped,
+        compedUntil: isComped ? compedUntil : null,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -8452,6 +8445,93 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const expiredTokens = parseInt((expiredResult as any).rows?.[0]?.count || "0");
       checks.push({ check: "Expired auth tokens", pass: expiredTokens < 100, detail: `${expiredTokens} expired unused tokens pending cleanup` });
       res.json({ generatedAt: new Date().toISOString(), checks, summary: { passed: checks.filter(c => c.pass).length, failed: checks.filter(c => !c.pass).length, total: checks.length } });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ─── Access Grants (Task #67) ──────────────────────────────────
+  app.post("/api/admin/access-grants", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const actor = (req as any)._superAdmin || (req.session as any).userId;
+      const actorId = typeof actor === "string" ? actor : actor?.id;
+      const parsed = insertAccessGrantSchema.safeParse({
+        ...req.body,
+        createdBy: actorId,
+        startsAt: req.body.startsAt ? new Date(req.body.startsAt) : new Date(),
+        endsAt: req.body.endsAt ? new Date(req.body.endsAt) : undefined,
+      });
+      if (!parsed.success) return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
+      if (!parsed.data.companyId && !parsed.data.userId) {
+        return res.status(400).json({ error: "Either companyId or userId is required" });
+      }
+      const grant = await storage.createAccessGrant(parsed.data);
+      let targetName = parsed.data.companyId || parsed.data.userId || "unknown";
+      if (parsed.data.companyId) {
+        const co = await storage.getCompany(parsed.data.companyId);
+        if (co) targetName = co.name;
+      }
+      auditLog({
+        userId: actorId,
+        companyId: parsed.data.companyId || undefined,
+        eventName: "access_grant_created",
+        entityType: "access_grant",
+        entityId: grant.id,
+        details: {
+          target: targetName,
+          planType: grant.planType,
+          grantType: grant.grantType,
+          startsAt: grant.startsAt,
+          endsAt: grant.endsAt,
+          reason: grant.reason,
+        },
+      });
+      res.status(201).json(grant);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/access-grants", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const status = req.query.status as "active" | "expired" | "revoked" | undefined;
+      const grants = await storage.listAccessGrants(status ? { status } : undefined);
+      res.json(grants);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/access-grants/:id/revoke", requireAuth, requireSuperAdmin, async (req, res) => {
+    try {
+      const actor = (req as any)._superAdmin || (req.session as any).userId;
+      const actorId = typeof actor === "string" ? actor : actor?.id;
+      const { id } = req.params;
+      const existing = await storage.getAccessGrant(id);
+      if (!existing) return res.status(404).json({ error: "Grant not found" });
+      if (existing.revokedAt) return res.status(409).json({ error: "Grant already revoked" });
+      const revoked = await storage.revokeAccessGrant(id);
+      let targetName = existing.companyId || existing.userId || "unknown";
+      if (existing.companyId) {
+        const co = await storage.getCompany(existing.companyId);
+        if (co) targetName = co.name;
+      }
+      auditLog({
+        userId: actorId,
+        companyId: existing.companyId || undefined,
+        eventName: "access_grant_revoked",
+        entityType: "access_grant",
+        entityId: id,
+        details: {
+          target: targetName,
+          planType: existing.planType,
+          grantType: existing.grantType,
+          startsAt: existing.startsAt,
+          endsAt: existing.endsAt,
+          reason: existing.reason,
+        },
+      });
+      res.json(revoked);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

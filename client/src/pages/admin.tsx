@@ -19,8 +19,9 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, ExternalLink, Crown, Shield, Key,
+  DollarSign, ExternalLink, Crown, Shield, Key, Gift, Trash2,
 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -800,6 +801,282 @@ function BetaAccessTab() {
   );
 }
 
+function AccessGrantsTab() {
+  const { toast } = useToast();
+  const [showModal, setShowModal] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
+
+  const [form, setForm] = useState({
+    companyId: "",
+    planType: "pro",
+    grantType: "comped",
+    startsAt: new Date().toISOString().slice(0, 10),
+    endsAt: "",
+    reason: "",
+  });
+
+  const { data: companiesRaw } = useQuery<any>({
+    queryKey: ["/api/admin/companies"],
+    queryFn: () => fetch("/api/admin/companies?pageSize=200", { credentials: "include" }).then(r => r.ok ? r.json() : { companies: [] }),
+  });
+  const allCompanies: any[] = companiesRaw?.companies ?? [];
+
+  const { data: grantsRaw, isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/admin/access-grants", statusFilter],
+    queryFn: () => {
+      const qs = statusFilter !== "all" ? `?status=${statusFilter}` : "";
+      return fetch(`/api/admin/access-grants${qs}`, { credentials: "include" }).then(r => r.ok ? r.json() : []);
+    },
+  });
+  const grants: any[] = Array.isArray(grantsRaw) ? grantsRaw : [];
+
+  const createMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/access-grants", {
+      ...form,
+      startsAt: form.startsAt || new Date().toISOString(),
+      endsAt: form.endsAt,
+    }),
+    onSuccess: () => {
+      toast({ title: "Access grant created" });
+      setShowModal(false);
+      setForm({ companyId: "", planType: "pro", grantType: "comped", startsAt: new Date().toISOString().slice(0, 10), endsAt: "", reason: "" });
+      refetch();
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to create grant", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/access-grants/${id}/revoke`, {}),
+    onSuccess: () => {
+      toast({ title: "Grant revoked" });
+      setConfirmRevokeId(null);
+      refetch();
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to revoke grant", description: e.message, variant: "destructive" });
+    },
+  });
+
+  function fmtDate(d: string | null) {
+    if (!d) return "—";
+    return new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function grantStatus(g: any): "active" | "expired" | "revoked" {
+    if (g.revoked_at) return "revoked";
+    if (new Date(g.ends_at) <= new Date()) return "expired";
+    return "active";
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="font-semibold text-sm">Access Grants</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Grant time-limited complimentary Pro access to companies without Stripe.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 text-xs w-32" data-testid="select-grant-status-filter">
+              <SelectValue placeholder="Filter" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="expired">Expired</SelectItem>
+              <SelectItem value="revoked">Revoked</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setShowModal(true)} data-testid="button-new-access-grant">
+            <Gift className="w-3.5 h-3.5" />
+            New Grant
+          </Button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>
+      ) : grants.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground text-sm" data-testid="empty-access-grants">
+          No access grants found.
+        </div>
+      ) : (
+        <div className="rounded-lg border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-muted/50 border-b text-xs font-medium text-muted-foreground">
+                <th className="px-4 py-2.5 text-left">Target</th>
+                <th className="px-4 py-2.5 text-left">Plan / Type</th>
+                <th className="px-4 py-2.5 text-left">Dates</th>
+                <th className="px-4 py-2.5 text-left">Reason</th>
+                <th className="px-4 py-2.5 text-left">Status</th>
+                <th className="px-4 py-2.5 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grants.map((g: any) => {
+                const st = grantStatus(g);
+                return (
+                  <tr key={g.id} className="border-b last:border-b-0 hover:bg-muted/20" data-testid={`grant-row-${g.id}`}>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{g.company_name || g.user_name || g.company_id || g.user_id || "—"}</div>
+                      <div className="text-xs text-muted-foreground">By {g.created_by_name || g.created_by}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant="outline" className="capitalize text-xs">{g.plan_type}</Badge>
+                      <div className="text-xs text-muted-foreground mt-0.5 capitalize">{g.grant_type?.replace("_", " ")}</div>
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      <div>{fmtDate(g.starts_at)} –</div>
+                      <div>{fmtDate(g.ends_at)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground max-w-[160px] truncate" title={g.reason}>{g.reason || "—"}</td>
+                    <td className="px-4 py-3">
+                      {st === "active" && <Badge className="text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Active</Badge>}
+                      {st === "expired" && <Badge variant="outline" className="text-xs text-amber-700 border-amber-400">Expired</Badge>}
+                      {st === "revoked" && <Badge variant="outline" className="text-xs text-muted-foreground">Revoked</Badge>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {st === "active" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-destructive hover:text-destructive"
+                          onClick={() => setConfirmRevokeId(g.id)}
+                          data-testid={`button-revoke-grant-${g.id}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1" />
+                          Revoke
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Dialog open={showModal} onOpenChange={setShowModal}>
+        <DialogContent className="sm:max-w-md" data-testid="modal-new-access-grant">
+          <DialogHeader>
+            <DialogTitle>New Access Grant</DialogTitle>
+            <DialogDescription>Grant complimentary Pro access to a company. Access expires automatically on the end date.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="grant-company">Company</Label>
+              <Select value={form.companyId} onValueChange={(v) => setForm(f => ({ ...f, companyId: v }))}>
+                <SelectTrigger id="grant-company" data-testid="select-grant-company">
+                  <SelectValue placeholder="Select company…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allCompanies.map((c: any) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Grant Type</Label>
+                <Select value={form.grantType} onValueChange={(v) => setForm(f => ({ ...f, grantType: v }))}>
+                  <SelectTrigger data-testid="select-grant-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="comped">Comped</SelectItem>
+                    <SelectItem value="trial_extension">Trial Extension</SelectItem>
+                    <SelectItem value="manual_override">Manual Override</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Plan</Label>
+                <Select value={form.planType} onValueChange={(v) => setForm(f => ({ ...f, planType: v }))}>
+                  <SelectTrigger data-testid="select-grant-plan">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pro">Pro</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="grant-starts">Start Date</Label>
+                <Input
+                  id="grant-starts"
+                  type="date"
+                  value={form.startsAt}
+                  onChange={(e) => setForm(f => ({ ...f, startsAt: e.target.value }))}
+                  data-testid="input-grant-starts-at"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="grant-ends">End Date</Label>
+                <Input
+                  id="grant-ends"
+                  type="date"
+                  value={form.endsAt}
+                  onChange={(e) => setForm(f => ({ ...f, endsAt: e.target.value }))}
+                  data-testid="input-grant-ends-at"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="grant-reason">Reason</Label>
+              <Textarea
+                id="grant-reason"
+                placeholder="e.g. Partnership pilot, conference demo, support gesture…"
+                value={form.reason}
+                onChange={(e) => setForm(f => ({ ...f, reason: e.target.value }))}
+                rows={3}
+                data-testid="textarea-grant-reason"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowModal(false)} data-testid="button-cancel-grant">Cancel</Button>
+            <Button
+              onClick={() => createMutation.mutate()}
+              disabled={!form.companyId || !form.endsAt || !form.reason || createMutation.isPending}
+              data-testid="button-submit-grant"
+            >
+              {createMutation.isPending ? "Creating…" : "Create Grant"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!confirmRevokeId} onOpenChange={() => setConfirmRevokeId(null)}>
+        <DialogContent data-testid="modal-confirm-revoke">
+          <DialogHeader>
+            <DialogTitle>Revoke Access Grant</DialogTitle>
+            <DialogDescription>This will immediately end Pro access for this grant. The company will fall back to its normal entitlement state.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRevokeId(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={revokeMutation.isPending}
+              onClick={() => confirmRevokeId && revokeMutation.mutate(confirmRevokeId)}
+              data-testid="button-confirm-revoke"
+            >
+              {revokeMutation.isPending ? "Revoking…" : "Revoke Grant"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const { role } = usePermissions();
   const [, navigate] = useLocation();
@@ -871,6 +1148,9 @@ export default function AdminPage() {
           <TabsTrigger value="beta-access" data-testid="tab-beta-access">
             <Crown className="w-4 h-4 mr-2" /> Beta Access
           </TabsTrigger>
+          <TabsTrigger value="access-grants" data-testid="tab-access-grants">
+            <Gift className="w-4 h-4 mr-2" /> Access Grants
+          </TabsTrigger>
           <TabsTrigger value="security" data-testid="tab-security">
             <Shield className="w-4 h-4 mr-2" /> Security
           </TabsTrigger>
@@ -889,6 +1169,9 @@ export default function AdminPage() {
         </TabsContent>
         <TabsContent value="beta-access" className="mt-4">
           <BetaAccessTab />
+        </TabsContent>
+        <TabsContent value="access-grants" className="mt-4">
+          <AccessGrantsTab />
         </TabsContent>
         <TabsContent value="security" className="mt-4">
           <SecurityAuditTab />

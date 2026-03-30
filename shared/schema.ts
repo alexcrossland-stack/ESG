@@ -1523,3 +1523,34 @@ export const telemetryEvents = pgTable("telemetry_events", {
 export const insertTelemetryEventSchema = createInsertSchema(telemetryEvents).omit({ id: true, recordedAt: true });
 export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
 export type InsertTelemetryEvent = z.infer<typeof insertTelemetryEventSchema>;
+
+// ============================================================
+// ACCESS GRANTS (Task #67 — Complimentary Pro Access)
+// ============================================================
+
+export const grantTypeEnum = pgEnum("grant_type", ["comped", "trial_extension", "manual_override"]);
+export const grantPlanTypeEnum = pgEnum("grant_plan_type", ["pro"]);
+
+export const accessGrants = pgTable("access_grants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  planType: grantPlanTypeEnum("plan_type").notNull().default("pro"),
+  grantType: grantTypeEnum("grant_type").notNull(),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  createdBy: varchar("created_by").notNull(),
+  reason: text("reason").notNull(),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  companyIdIdx: index("idx_access_grants_company_id").on(table.companyId),
+  userIdIdx: index("idx_access_grants_user_id").on(table.userId),
+  endsAtIdx: index("idx_access_grants_ends_at").on(table.endsAt),
+  revokedAtIdx: index("idx_access_grants_revoked_at").on(table.revokedAt),
+}));
+
+export const insertAccessGrantSchema = createInsertSchema(accessGrants).omit({ id: true, createdAt: true, updatedAt: true, revokedAt: true });
+export type AccessGrant = typeof accessGrants.$inferSelect;
+export type InsertAccessGrant = z.infer<typeof insertAccessGrantSchema>;

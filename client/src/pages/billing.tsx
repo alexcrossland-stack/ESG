@@ -136,6 +136,8 @@ export default function BillingPage() {
     stripeCustomerId: string | null;
     isBeta: boolean;
     betaExpiresAt: string | null;
+    isComped: boolean;
+    compedUntil: string | null;
   }>({
     queryKey: ["/api/billing/status"],
   });
@@ -168,6 +170,7 @@ export default function BillingPage() {
 
   const isPro = billing?.planTier === "pro";
   const isBeta = billing?.isBeta ?? false;
+  const isComped = billing?.isComped ?? false;
   const isPastDue = billing?.planStatus === "past_due";
   const isCancelled = billing?.planStatus === "cancelled";
 
@@ -177,6 +180,10 @@ export default function BillingPage() {
 
   const betaExpiry = billing?.betaExpiresAt
     ? new Date(billing.betaExpiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
+    : null;
+
+  const compedExpiry = billing?.compedUntil
+    ? new Date(billing.compedUntil).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : null;
 
   return (
@@ -199,14 +206,21 @@ export default function BillingPage() {
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-medium text-sm">{isPro ? "ESG Manager Pro" : "ESG Manager Free"}</p>
-          {periodEnd && (
+          {isComped && compedExpiry && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">Complimentary access · Expires {compedExpiry}</p>
+          )}
+          {!isComped && periodEnd && (
             <p className="text-xs text-muted-foreground">
               {isCancelled ? `Cancels on ${periodEnd}` : `Renews on ${periodEnd}`}
             </p>
           )}
         </div>
-        <Badge variant={isPro ? "default" : "secondary"} className="capitalize" data-testid="badge-plan-tier">
-          {isPro && isBeta ? "Pro (Beta)" : billing?.planTier || "free"}
+        <Badge
+          variant={isPro ? "default" : "secondary"}
+          className={isComped ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 border-emerald-300" : "capitalize"}
+          data-testid="badge-plan-tier"
+        >
+          {isComped ? "Complimentary Pro" : isPro && isBeta ? "Pro (Beta)" : billing?.planTier || "free"}
         </Badge>
       </div>
 
@@ -324,6 +338,18 @@ export default function BillingPage() {
         )}
       </div>
 
+      {isComped && (
+        <div className="flex items-start gap-3 p-4 rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800" data-testid="banner-comped-access">
+          <Crown className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">You have Complimentary Pro access.</p>
+            {compedExpiry && (
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">This complimentary access expires on {compedExpiry}.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {isBeta && (
         <div className="flex items-start gap-3 p-4 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800" data-testid="banner-beta-access">
           <Crown className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
@@ -336,7 +362,7 @@ export default function BillingPage() {
         </div>
       )}
 
-      {isPro && !isCancelled && !isBeta && (
+      {isPro && !isCancelled && !isBeta && !isComped && (
         <div className="border rounded-lg p-4 space-y-3">
           <p className="font-medium text-sm">Cancel subscription</p>
           <p className="text-sm text-muted-foreground">

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Lock, Sparkles, ArrowRight, Zap } from "lucide-react";
+import { Lock, Sparkles, ArrowRight, Zap, Gift } from "lucide-react";
 import { Link } from "wouter";
 
 export function useBillingStatus() {
@@ -12,7 +12,9 @@ export function useBillingStatus() {
   });
   const isPro = data?.planTier === "pro";
   const isBeta = data?.isBeta === true;
-  return { billing: data, isPro, isBeta, isLoading };
+  const isComped = data?.isComped === true;
+  const compedUntil = data?.compedUntil ? new Date(data.compedUntil) : null;
+  return { billing: data, isPro, isBeta, isComped, compedUntil, isLoading };
 }
 
 function trackEvent(action: string, details?: Record<string, string>) {
