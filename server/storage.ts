@@ -76,6 +76,8 @@ import {
   type DataDeletionRequest, type InsertDataDeletionRequest,
   telemetryEvents,
   type TelemetryEvent, type InsertTelemetryEvent,
+  companyOnboardingChecklist,
+  type CompanyOnboardingChecklist, type InsertOnboardingChecklist,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -125,6 +127,7 @@ export interface IStorage {
   getMetricValues(metricId: string): Promise<MetricValue[]>;
   getMetricValuesByPeriod(companyId: string, period: string): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
   hasAnyData(companyId: string): Promise<boolean>;
+  countEstimatedValues(companyId: string): Promise<number>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   updateMetricValue(id: string, data: Partial<MetricValue>): Promise<MetricValue | undefined>;
   lockPeriod(companyId: string, period: string): Promise<void>;
@@ -490,6 +493,11 @@ export interface IStorage {
   // Telemetry Events (Task #59)
   createTelemetryEvent(data: InsertTelemetryEvent): Promise<TelemetryEvent>;
   getTelemetryEvents(filters?: { eventName?: string; companyId?: string; userId?: string; limit?: number }): Promise<TelemetryEvent[]>;
+
+  // Onboarding Checklist (Task #63)
+  getOnboardingChecklist(companyId: string): Promise<CompanyOnboardingChecklist[]>;
+  createOnboardingChecklistTask(data: InsertOnboardingChecklist): Promise<CompanyOnboardingChecklist>;
+  updateOnboardingChecklistTask(companyId: string, taskKey: string, data: Partial<CompanyOnboardingChecklist>): Promise<CompanyOnboardingChecklist | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -668,6 +676,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateMetricValue(id: string, data: Partial<MetricValue>) {
+    // Guard: never overwrite a measured (manual/evidenced) value with an estimate
+    const MEASURED_SOURCES: string[] = ["manual", "evidenced"];
+    const incomingSourceType = data.dataSourceType;
+    if (incomingSourceType === "estimated") {
+      const [existing] = await db.select().from(metricValues).where(eq(metricValues.id, id));
+      if (existing?.dataSourceType && MEASURED_SOURCES.includes(existing.dataSourceType)) {
+        return existing;
+      }
+    }
     const [v] = await db.update(metricValues).set(data).where(eq(metricValues.id, id)).returning();
     return v;
   }
@@ -698,6 +715,17 @@ export class DatabaseStorage implements IStorage {
     return mvResult.length > 0;
   }
 
+  async countEstimatedValues(companyId: string): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`cast(count(*) as int)` })
+      .from(metricValues)
+      .where(
+        sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})
+            AND ${metricValues.dataSourceType} = 'estimated'`
+      );
+    return result[0]?.count ?? 0;
+  }
+
   async getRawDataByPeriod(companyId: string, period: string, siteId?: string | null) {
     const conditions = [eq(rawDataInputs.companyId, companyId), eq(rawDataInputs.period, period)];
     if (siteId !== undefined) {
@@ -714,6 +742,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateRawDataInput(id: string, data: Partial<RawDataInput>) {
+    // Guard: never overwrite a measured (manual/evidenced) value with an estimate
+    const MEASURED_SOURCES: string[] = ["manual", "evidenced"];
+    const incomingSourceType: string | null | undefined = data.dataSourceType ?? data.source;
+    if (incomingSourceType && incomingSourceType === "estimated") {
+      const [existing] = await db.select().from(rawDataInputs).where(eq(rawDataInputs.id, id));
+      const existingSourceType: string | null | undefined = existing?.dataSourceType ?? existing?.source;
+      if (existing && existingSourceType && MEASURED_SOURCES.includes(existingSourceType)) {
+        return existing;
+      }
+    }
     const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, id)).returning();
     return r;
   }
@@ -731,6 +769,17 @@ export class DatabaseStorage implements IStorage {
         siteCondition,
       ));
     if (existing) {
+      // Guard: never overwrite a measured (manual/evidenced) value with an estimate
+      const MEASURED_SOURCES: string[] = ["manual", "evidenced"];
+      const incomingSourceType: string | null | undefined = data.dataSourceType ?? data.source;
+      const existingSourceType: string | null | undefined = existing.dataSourceType ?? existing.source;
+      if (
+        incomingSourceType === "estimated" &&
+        existingSourceType && MEASURED_SOURCES.includes(existingSourceType)
+      ) {
+        // Return existing record unchanged — measured data wins
+        return existing;
+      }
       const [r] = await db.update(rawDataInputs).set({ ...data, updatedAt: new Date() }).where(eq(rawDataInputs.id, existing.id)).returning();
       return r;
     } else {
@@ -3552,6 +3601,28 @@ export class DatabaseStorage implements IStorage {
       return query.where(and(...conditions)).orderBy(desc(telemetryEvents.recordedAt)).limit(filters?.limit ?? 100);
     }
     return query.orderBy(desc(telemetryEvents.recordedAt)).limit(filters?.limit ?? 100);
+  }
+
+  async getOnboardingChecklist(companyId: string): Promise<CompanyOnboardingChecklist[]> {
+    return db.select().from(companyOnboardingChecklist)
+      .where(eq(companyOnboardingChecklist.companyId, companyId))
+      .orderBy(companyOnboardingChecklist.displayOrder);
+  }
+
+  async createOnboardingChecklistTask(data: InsertOnboardingChecklist): Promise<CompanyOnboardingChecklist> {
+    const [task] = await db.insert(companyOnboardingChecklist).values(data).returning();
+    return task;
+  }
+
+  async updateOnboardingChecklistTask(companyId: string, taskKey: string, data: Partial<CompanyOnboardingChecklist>): Promise<CompanyOnboardingChecklist | undefined> {
+    const [updated] = await db.update(companyOnboardingChecklist)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(
+        eq(companyOnboardingChecklist.companyId, companyId),
+        eq(companyOnboardingChecklist.taskKey, taskKey),
+      ))
+      .returning();
+    return updated;
   }
 }
 

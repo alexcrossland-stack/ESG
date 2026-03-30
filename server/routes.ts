@@ -28,6 +28,7 @@ import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } fr
 import { generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
+import { seedCompanyDefaults, seedOnboardingChecklist, STANDARD_CHECKLIST_TASKS } from "./company-defaults";
 import { registerAgentRoutes } from "./agent-routes";
 import { evaluateSecurityEvent, getSecurityAlerts, SECURITY_EVENTS } from "./alert-engine";
 import { featureFlags, featureDisabledResponse } from "./feature-flags";
@@ -1471,6 +1472,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.upsertMaterialTopics(companyId, topicsList as any);
       }
 
+      // Seed onboarding checklist for the company (idempotent)
+      try { await seedOnboardingChecklist(companyId); } catch (e) { console.error("[onboarding] checklist seed error:", e); }
+
       const completedPath = isQuickStart ? "quick_start" : isManual ? "manual" : "guided";
       await storage.createAuditLog({
         companyId, userId,
@@ -1578,6 +1582,176 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationPercent,
         activationCompletedCount,
         activationNextStep,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ============================================================
+  // SETUP STATUS API (Task #63)
+  // GET /api/companies/:id/setup-status
+  // ============================================================
+
+  app.get("/api/companies/:id/setup-status", requireAuth, async (req, res) => {
+    try {
+      const requestedCompanyId = req.params.id;
+      const userId = (req.session as any).userId;
+
+      // Access control:
+      //   super_admin       — unrestricted
+      //   company member    — own company only (DB-backed user.companyId for strong consistency)
+      //   portfolio_owner / portfolio_viewer — allowed if the target company is in one of their groups
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      let canAccess = false;
+      if (user.role === "super_admin") {
+        canAccess = true;
+      } else if (requestedCompanyId === user.companyId) {
+        canAccess = true;
+      } else if (user.role === "portfolio_owner" || user.role === "portfolio_viewer") {
+        const { userGroupRoles: ugrTable, groupCompanies: gcTable } = await import("@shared/schema");
+        const { inArray: inArrayFn } = await import("drizzle-orm");
+        const callerGroups = await db
+          .select({ groupId: ugrTable.groupId })
+          .from(ugrTable)
+          .where(eq(ugrTable.userId, user.id));
+        if (callerGroups.length > 0) {
+          const groupIds = callerGroups.map(r => r.groupId);
+          const gcRows = await db
+            .select({ companyId: gcTable.companyId })
+            .from(gcTable)
+            .where(and(
+              eq(gcTable.companyId, requestedCompanyId),
+              inArrayFn(gcTable.groupId, groupIds)
+            ));
+          canAccess = gcRows.length > 0;
+        }
+      }
+
+      if (!canAccess) {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
+
+      const company = await storage.getCompany(requestedCompanyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const [metrics, evidenceList, reportsList, users_list, checklist, hasData, estimatedCount] = await Promise.all([
+        storage.getMetrics(requestedCompanyId),
+        storage.getEvidenceFiles(requestedCompanyId),
+        storage.getReportRuns(requestedCompanyId),
+        storage.getUsersByCompany(requestedCompanyId),
+        storage.getOnboardingChecklist(requestedCompanyId),
+        storage.hasAnyData(requestedCompanyId),
+        storage.countEstimatedValues(requestedCompanyId),
+      ]);
+
+      // Derive lifecycle state
+      const lifecycleState = !company.onboardingComplete
+        ? "onboarding"
+        : metrics.length === 0
+        ? "provisioning"
+        : hasData
+        ? "active"
+        : "setup";
+
+      // Onboarding completion
+      const onboardingComplete = !!company.onboardingComplete;
+      const hasProfile = !!(company.name && company.name.trim() && company.name !== "My Company" && company.industry && company.country);
+      const hasTeamMembers = users_list.length > 1;
+      const hasEvidence = evidenceList.length > 0;
+      const hasReport = reportsList.length > 0;
+
+      // Dashboard readiness
+      const dashboardReady = metrics.length > 0;
+      const reportingReady = metrics.length > 0 && hasData;
+
+      // Checklist progress — use persisted checklist if available, otherwise derive from data
+      let checklistItems: Array<{ taskKey: string; label: string; description: string; status: string; displayOrder: number }>;
+
+      if (checklist.length > 0) {
+        // Update checklist statuses based on current state
+        // review_estimated_values: complete when the company has data but no estimated values remain
+        const estimatedReviewed = hasData && estimatedCount === 0;
+        const taskStatusMap: Record<string, "complete" | "pending"> = {
+          complete_profile: hasProfile ? "complete" : "pending",
+          invite_team: hasTeamMembers ? "complete" : "pending",
+          enter_first_metrics: hasData ? "complete" : "pending",
+          upload_first_evidence: hasEvidence ? "complete" : "pending",
+          review_estimated_values: estimatedReviewed ? "complete" : "pending",
+          generate_first_report: hasReport ? "complete" : "pending",
+        };
+
+        // Persist any newly completed tasks
+        for (const [taskKey, newStatus] of Object.entries(taskStatusMap)) {
+          const item = checklist.find(c => c.taskKey === taskKey);
+          if (item && item.status !== newStatus && newStatus === "complete") {
+            storage.updateOnboardingChecklistTask(requestedCompanyId, taskKey, {
+              status: "complete",
+              completedAt: new Date(),
+            }).catch(() => {});
+          }
+        }
+
+        checklistItems = STANDARD_CHECKLIST_TASKS.map(t => ({
+          taskKey: t.taskKey,
+          label: t.label,
+          description: t.description,
+          status: taskStatusMap[t.taskKey] || "pending",
+          displayOrder: t.displayOrder,
+        }));
+      } else {
+        // Derive from current state, seed checklist for next time
+        const estimatedReviewed = hasData && estimatedCount === 0;
+        seedOnboardingChecklist(requestedCompanyId).catch(() => {});
+        checklistItems = STANDARD_CHECKLIST_TASKS.map(t => {
+          let status: "complete" | "pending" = "pending";
+          if (t.taskKey === "complete_profile" && hasProfile) status = "complete";
+          if (t.taskKey === "invite_team" && hasTeamMembers) status = "complete";
+          if (t.taskKey === "enter_first_metrics" && hasData) status = "complete";
+          if (t.taskKey === "upload_first_evidence" && hasEvidence) status = "complete";
+          if (t.taskKey === "review_estimated_values" && estimatedReviewed) status = "complete";
+          if (t.taskKey === "generate_first_report" && hasReport) status = "complete";
+          return { taskKey: t.taskKey, label: t.label, description: t.description, status, displayOrder: t.displayOrder };
+        });
+      }
+
+      const checklistCompletedCount = checklistItems.filter(t => t.status === "complete").length;
+      const checklistTotalCount = checklistItems.length;
+      const checklistPercent = Math.round((checklistCompletedCount / checklistTotalCount) * 100);
+
+      // Extract persisted sector defaults from onboarding answers
+      const onboardingAnswers = (company.onboardingAnswers as Record<string, unknown>) ?? {};
+      const sectorReportingCategories = (onboardingAnswers.sectorReportingCategories as string[]) ?? null;
+      const sectorPriorityNotes = (onboardingAnswers.sectorPriorityNotes as string) ?? null;
+      const sectorNormalized = (onboardingAnswers.sectorNormalized as string) ?? null;
+      const defaultsSeeded = !!(onboardingAnswers.sectorReportingCategories);
+
+      res.json({
+        companyId: requestedCompanyId,
+        lifecycleState,
+        onboardingComplete,
+        hasProfile,
+        hasMetrics: metrics.length > 0,
+        hasData,
+        hasEvidence,
+        hasReport,
+        hasTeamMembers,
+        dashboardReady,
+        reportingReady,
+        metricCount: metrics.length,
+        sector: company.industry || null,
+        sectorNormalized,
+        sectorReportingCategories,
+        sectorPriorityNotes,
+        defaultsSeeded,
+        checklist: checklistItems,
+        checklistProgress: {
+          completed: checklistCompletedCount,
+          total: checklistTotalCount,
+          percent: checklistPercent,
+        },
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -11408,74 +11582,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (e.message?.includes("unique") || e.code === "23505") {
         return res.status(409).json({ error: "Company is already in this group" });
       }
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get("/api/companies/:id/setup-status", requireAuth, async (req, res) => {
-    try {
-      const auth = resolveAuth(req)!;
-      const callerUser = await storage.getUser(auth.userId);
-      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
-
-      const targetCompanyId = req.params.id;
-      const company = await storage.getCompany(targetCompanyId);
-      if (!company) return res.status(404).json({ error: "Company not found" });
-
-      // super_admin: unrestricted
-      // direct company member: allowed
-      // portfolio role: only if the target company is actually in one of their groups
-      let canAccess = false;
-      if (callerUser.role === "super_admin") {
-        canAccess = true;
-      } else if (callerUser.companyId === targetCompanyId) {
-        canAccess = true;
-      } else if (callerUser.role === "portfolio_owner" || callerUser.role === "portfolio_viewer") {
-        // Verify the caller's groups contain this company (IDOR protection)
-        const { userGroupRoles: ugrTable, groupCompanies: gcTable } = await import("@shared/schema");
-        const { eq: eqFn, and: andFn, inArray: inArrayFn } = await import("drizzle-orm");
-        const callerGroups = await db.select({ groupId: ugrTable.groupId }).from(ugrTable).where(eqFn(ugrTable.userId, callerUser.id));
-        if (callerGroups.length > 0) {
-          const groupIds = callerGroups.map(r => r.groupId);
-          const gcRows = await db.select({ companyId: gcTable.companyId }).from(gcTable).where(andFn(inArrayFn(gcTable.groupId, groupIds), eqFn(gcTable.companyId, targetCompanyId)));
-          canAccess = gcRows.length > 0;
-        }
-      }
-
-      if (!canAccess) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const [metricsResult, reportRunsResult, policyResult] = await Promise.all([
-        storage.getMetrics(targetCompanyId).catch(() => [] as any[]),
-        storage.getReportRuns(targetCompanyId).catch(() => [] as any[]),
-        storage.getPolicy(targetCompanyId).catch(() => null),
-      ]);
-
-      const hasMetrics = metricsResult.length > 0;
-      const hasReports = reportRunsResult.length > 0;
-      const hasPolicies = !!policyResult;
-
-      const checklist = [
-        { key: "company_profile", label: "Company profile complete", done: !!(company.country && company.industry) },
-        { key: "metrics_configured", label: "Metrics configured", done: hasMetrics },
-        { key: "policy_set_up", label: "Policy set up", done: hasPolicies },
-      ];
-      const checklistComplete = checklist.every(c => c.done);
-
-      res.json({
-        lifecycleState: company.lifecycleState || "active",
-        onboardingComplete: company.onboardingComplete,
-        checklistProgress: {
-          items: checklist,
-          complete: checklistComplete,
-          doneCount: checklist.filter(c => c.done).length,
-          totalCount: checklist.length,
-        },
-        dashboardReady: company.onboardingComplete && hasMetrics,
-        reportingReady: company.onboardingComplete && hasMetrics && hasReports,
-      });
-    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });

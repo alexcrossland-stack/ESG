@@ -1477,6 +1477,32 @@ export type UserGroupRole = typeof userGroupRoles.$inferSelect;
 export type InsertUserGroupRole = z.infer<typeof insertUserGroupRoleSchema>;
 
 // ============================================================
+// COMPANY ONBOARDING CHECKLIST (Task #63)
+// ============================================================
+
+export const onboardingChecklistStatusEnum = pgEnum("onboarding_checklist_status", ["pending", "in_progress", "complete", "skipped"]);
+
+export const companyOnboardingChecklist = pgTable("company_onboarding_checklist", {
+  id: serial("id").primaryKey(),
+  companyId: varchar("company_id").notNull(),
+  taskKey: varchar("task_key").notNull(),
+  label: varchar("label").notNull().default(""),
+  description: text("description").default(""),
+  status: onboardingChecklistStatusEnum("status").notNull().default("pending"),
+  completedAt: timestamp("completed_at"),
+  skippedAt: timestamp("skipped_at"),
+  displayOrder: integer("display_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqueCompanyTask: uniqueIndex("company_onboarding_checklist_company_task_key").on(table.companyId, table.taskKey),
+}));
+
+export const insertOnboardingChecklistSchema = createInsertSchema(companyOnboardingChecklist).omit({ id: true, createdAt: true, updatedAt: true });
+export type CompanyOnboardingChecklist = typeof companyOnboardingChecklist.$inferSelect;
+export type InsertOnboardingChecklist = z.infer<typeof insertOnboardingChecklistSchema>;
+
+// ============================================================
 // TELEMETRY EVENTS (Task #59)
 // ============================================================
 

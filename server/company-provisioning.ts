@@ -1,7 +1,8 @@
 import { db, storage } from "./storage";
-import { companies, groupCompanies, userGroupRoles, users, roleEnum } from "@shared/schema";
+import { companies, groupCompanies, userGroupRoles, users, roleEnum, metrics, materialTopics, companyOnboardingChecklist } from "@shared/schema";
 import { eq, and, ilike } from "drizzle-orm";
 import { z } from "zod";
+import { seedCompanyDefaults } from "./company-defaults";
 
 type UserRole = typeof roleEnum.enumValues[number];
 
@@ -100,6 +101,22 @@ async function rollbackProvisionedCompany(
       await db.delete(groupCompanies).where(eq(groupCompanies.companyId, companyId));
     } catch (e) {
       console.error(`[provisionCompany] Rollback: failed to remove group links for ${companyId}:`, e);
+    }
+    // Remove any seeded defaults (metrics, material topics, checklist) to avoid orphaned rows
+    try {
+      await db.delete(metrics).where(eq(metrics.companyId, companyId));
+    } catch (e) {
+      console.error(`[provisionCompany] Rollback: failed to delete metrics for ${companyId}:`, e);
+    }
+    try {
+      await db.delete(materialTopics).where(eq(materialTopics.companyId, companyId));
+    } catch (e) {
+      console.error(`[provisionCompany] Rollback: failed to delete material topics for ${companyId}:`, e);
+    }
+    try {
+      await db.delete(companyOnboardingChecklist).where(eq(companyOnboardingChecklist.companyId, companyId));
+    } catch (e) {
+      console.error(`[provisionCompany] Rollback: failed to delete onboarding checklist for ${companyId}:`, e);
     }
     // Hard-delete the company (no real data exists yet)
     try {
@@ -240,6 +257,13 @@ export async function provisionCompany(input: ProvisionCompanyInput): Promise<Pr
 
       return company;
     });
+
+    // Seed sector-aware defaults after the transaction commits.
+    // Every new company must receive defaults — errors here fail provisioning so the caller
+    // can retry. Since the company row already exists, retrying provisionCompany would trigger
+    // the duplicate-name check; callers should instead retry only the seeding step.
+    // However, seedCompanyDefaults is idempotent: re-running after a partial failure is safe.
+    await seedCompanyDefaults(result.id, sector ?? null);
 
     return {
       companyId: result.id,
