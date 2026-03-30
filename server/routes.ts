@@ -12,6 +12,7 @@ import {
   users, type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
+import { hasProvisioningPermission, type ProvisioningAction } from "./permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -33,7 +34,7 @@ import { registerAgentRoutes } from "./agent-routes";
 import { evaluateSecurityEvent, getSecurityAlerts, SECURITY_EVENTS } from "./alert-engine";
 import { featureFlags, featureDisabledResponse } from "./feature-flags";
 import { trackTelemetryEvent } from "./telemetry";
-import { auditLog } from "./audit";
+import { auditLog, getClientIp } from "./audit";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -305,6 +306,22 @@ function requirePermission(module: PermissionModule) {
     const userId = (req.session as any).userId;
     const user = await storage.getUser(userId);
     if (!user || !hasPermission(user.role, module)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    return next();
+  };
+}
+
+/**
+ * Middleware backed by the authoritative provisioning permission matrix in
+ * server/permissions.ts. Use this for all provisioning write routes so that
+ * the single source of truth for role/action mapping is enforced consistently.
+ */
+function requireProvisioningPermission(action: ProvisioningAction) {
+  return async (req: Request, res: Response, next: Function) => {
+    const userId = (req.session as any).userId;
+    const user = await storage.getUser(userId);
+    if (!user || !hasProvisioningPermission(user.role, action)) {
       return res.status(403).json({ error: "Insufficient permissions" });
     }
     return next();
@@ -821,7 +838,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   const inviteLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 20,
+    max: process.env.REGRESSION_TEST === "1" ? 10000 : 20,
     message: { error: "Too many invite requests. Please try again later." },
     standardHeaders: true,
     legacyHeaders: false,
@@ -1307,7 +1324,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(company);
   });
 
-  app.put("/api/company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/company", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1338,7 +1355,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(settings || {});
   });
 
-  app.put("/api/company/settings", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/company/settings", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const settings = await storage.upsertCompanySettings(companyId, req.body);
@@ -1349,7 +1366,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Onboarding routes
-  app.put("/api/onboarding/step", requireAuth, async (req, res) => {
+  app.put("/api/onboarding/step", requireAuth, requireProvisioningPermission("complete_onboarding"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { step, path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers, onboardingVersion, selectedTopics, reportingFrequency } = req.body;
@@ -1396,7 +1413,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/onboarding/complete", requireAuth, async (req, res) => {
+  app.post("/api/onboarding/complete", requireAuth, requireProvisioningPermission("complete_onboarding"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -1476,12 +1493,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       try { await seedOnboardingChecklist(companyId); } catch (e) { console.error("[onboarding] checklist seed error:", e); }
 
       const completedPath = isQuickStart ? "quick_start" : isManual ? "manual" : "guided";
-      await storage.createAuditLog({
+      auditLog({
         companyId, userId,
-        action: `Onboarding completed (${completedPath}, v${version})`,
+        actorType: "user",
+        action: "onboarding_completed",
         entityType: "company",
         entityId: companyId,
         details: { path: completedPath, version },
+        req,
       });
       trackTelemetryEvent("onboarding_completed", { userId, companyId, properties: { path: completedPath, version } });
 
@@ -1758,7 +1777,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/onboarding/dismiss-card", requireAuth, async (req, res) => {
+  app.post("/api/onboarding/dismiss-card", requireAuth, requireProvisioningPermission("complete_onboarding"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { dismiss } = req.body;
@@ -1804,7 +1823,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/onboarding/action-plan", requireAuth, async (req, res) => {
+  app.post("/api/onboarding/action-plan", requireAuth, requireProvisioningPermission("complete_onboarding"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { esgMaturity, selectedTopics, selectedMetrics, reportingFrequency } = req.body;
@@ -2031,7 +2050,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ policy, latestVersion, versions });
   });
 
-  app.put("/api/policy", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.put("/api/policy", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2080,7 +2099,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(topics);
   });
 
-  app.put("/api/topics/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/topics/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { selected } = req.body;
@@ -2105,7 +2124,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(withTargets);
   });
 
-  app.post("/api/metrics", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/metrics", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const parsed = insertMetricSchema.parse({ ...req.body, companyId });
@@ -2116,7 +2135,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.put("/api/metrics/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const existing = await storage.getMetric(req.params.id);
@@ -2130,7 +2149,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id/target", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/metrics/:id/target", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const existing = await storage.getMetric(req.params.id);
@@ -2226,7 +2245,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ values, metrics: allMetrics.filter(m => m.enabled) });
   });
 
-  app.post("/api/data-entry", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/data-entry", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const companyId = (req.session as any).companyId;
@@ -2300,7 +2319,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entry/:period/lock", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/data-entry/:period/lock", requireAuth, requireProvisioningPermission("lock_period"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2335,7 +2354,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/raw-data", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/raw-data", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2370,7 +2389,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entry/bulk-upload", requireAuth, requirePermission("metrics_data_entry"), csvImportLimiter, async (req, res) => {
+  app.post("/api/data-entry/bulk-upload", requireAuth, requireProvisioningPermission("enter_metric_data"), csvImportLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2557,7 +2576,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Recalculate metrics for a period
-  app.post("/api/metrics/recalculate/:period", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/metrics/recalculate/:period", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2661,7 +2680,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Admin metric update
-  app.get("/api/metrics/all", requireAuth, requirePermission("template_admin"), async (req, res) => {
+  app.get("/api/metrics/all", requireAuth, requireProvisioningPermission("manage_templates"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const allMetrics = await storage.getMetrics(companyId);
@@ -2671,7 +2690,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id/admin", requireAuth, requirePermission("template_admin"), async (req, res) => {
+  app.put("/api/metrics/:id/admin", requireAuth, requireProvisioningPermission("manage_templates"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -2725,7 +2744,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PATCH /api/metric-definitions/:id/active — enable/disable advanced metrics
-  app.patch("/api/metric-definitions/:id/active", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.patch("/api/metric-definitions/:id/active", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const { isActive } = req.body;
       if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive must be boolean" });
@@ -2764,7 +2783,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // POST /api/metric-evidence — attach evidence to a metric value
-  app.post("/api/metric-evidence", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/metric-evidence", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = req.body;
@@ -2785,7 +2804,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // DELETE /api/metric-evidence/:id — remove an evidence attachment
-  app.delete("/api/metric-evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.delete("/api/metric-evidence/:id", requireAuth, requireProvisioningPermission("delete_evidence"), async (req, res) => {
     try {
       await storage.deleteMetricEvidence(req.params.id);
       res.json({ success: true });
@@ -2835,7 +2854,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PUT /api/framework-selections/:frameworkId — enable/disable a framework
-  app.put("/api/framework-selections/:frameworkId", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/framework-selections/:frameworkId", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { frameworkId } = req.params;
@@ -2849,7 +2868,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PUT /api/framework-selections — bulk update all framework selections
-  app.put("/api/framework-selections", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.put("/api/framework-selections", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { selections } = req.body;
@@ -2959,7 +2978,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // POST /api/metric-values/:id/calculate — trigger derived calculations for a value
-  app.post("/api/metric-values/:id/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/metric-values/:id/calculate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { metricCode, periodStart, periodEnd, siteId } = req.body;
@@ -3014,7 +3033,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // POST /api/data-entries/estimate — returns estimation suggestions only, does NOT persist
-  app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+  app.post("/api/data-entries/estimate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     if (!featureFlags.estimationEnabled) {
       const { status, body } = featureDisabledResponse("estimation");
       return res.status(status).json(body);
@@ -3543,7 +3562,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/data-entries/estimate", requireAuth, async (req, res) => {
+  app.post("/api/data-entries/estimate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     if (!featureFlags.estimationEnabled) {
       const { status, body } = featureDisabledResponse("estimation");
       return res.status(status).json(body);
@@ -3663,7 +3682,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(actions);
   });
 
-  app.post("/api/actions", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/actions", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -3681,7 +3700,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/actions/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.put("/api/actions/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -3703,7 +3722,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/actions/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.delete("/api/actions/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const existing = await storage.getActionPlan(req.params.id);
@@ -3745,7 +3764,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reports/generate", requireAuth, requirePermission("report_generation"), reportLimiter, async (req, res) => {
+  app.post("/api/reports/generate", requireAuth, requireProvisioningPermission("generate_report"), reportLimiter, async (req, res) => {
     if (!featureFlags.reportGenerationEnabled) {
       const { status, body } = featureDisabledResponse("report_generation");
       return res.status(status).json(body);
@@ -4182,7 +4201,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const prevReports = await storage.getReportRuns(companyId);
       if (prevReports.length === 1) {
         storage.getTelemetryEvents({ eventName: "first_report_generated", companyId, limit: 1 }).then(existing => {
-          if (existing.length === 0) trackTelemetryEvent("first_report_generated", { userId, companyId });
+          if (existing.length === 0) {
+            trackTelemetryEvent("first_report_generated", { userId, companyId });
+            auditLog({
+              companyId,
+              userId,
+              actorType: "user",
+              action: "first_report_generated",
+              entityType: "report_run",
+              entityId: report.id,
+              details: { period, reportType: reportType ?? "pdf" },
+            });
+          }
         }).catch(() => {});
       }
 
@@ -4215,7 +4245,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(enriched);
   });
 
-  app.get("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.get("/api/company/api-keys", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const keys = await storage.listAgentApiKeysByCompany(companyId);
@@ -4236,7 +4266,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/company/api-keys", requireAuth, requirePermission("settings_admin"), requireStepUp, async (req, res) => {
+  app.post("/api/company/api-keys", requireAuth, requireProvisioningPermission("update_company_settings"), requireStepUp, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4281,7 +4311,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/company/api-keys/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.delete("/api/company/api-keys/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4634,7 +4664,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
   });
 
-  app.post("/api/policy-generator/generate", requireAuth, aiLimiter, requirePermission("policy_editing"), async (req, res) => {
+  app.post("/api/policy-generator/generate", requireAuth, aiLimiter, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4712,7 +4742,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(history);
   });
 
-  app.post("/api/policy-generator/save-to-policy", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.post("/api/policy-generator/save-to-policy", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4828,7 +4858,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/carbon/calculate", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.post("/api/carbon/calculate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4877,7 +4907,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/carbon/calculations/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.delete("/api/carbon/calculations/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const calc = await storage.getCarbonCalculation(req.params.id);
@@ -4923,7 +4953,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ...q, questions });
   });
 
-  app.post("/api/questionnaires", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
+  app.post("/api/questionnaires", requireAuth, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -4973,7 +5003,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/questionnaires/:id/autofill", requireAuth, aiLimiter, requirePermission("questionnaire_access"), async (req, res) => {
+  app.post("/api/questionnaires/:id/autofill", requireAuth, aiLimiter, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5079,7 +5109,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/questionnaires/:qId/questions/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
+  app.put("/api/questionnaires/:qId/questions/:id", requireAuth, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const _cId = (req.session as any).companyId;
       const _co = await storage.getCompany(_cId);
@@ -5093,7 +5123,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/questionnaires/:id", requireAuth, requirePermission("questionnaire_access"), async (req, res) => {
+  app.delete("/api/questionnaires/:id", requireAuth, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const _co = await storage.getCompany(companyId);
@@ -5123,7 +5153,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(template);
   });
 
-  app.post("/api/policy-templates/:slug/generate", requireAuth, aiLimiter, requirePermission("policy_editing"), async (req, res) => {
+  app.post("/api/policy-templates/:slug/generate", requireAuth, aiLimiter, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5214,7 +5244,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(policy);
   });
 
-  app.put("/api/generated-policies/:id", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.put("/api/generated-policies/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5237,7 +5267,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/generated-policies/:id", requireAuth, requirePermission("policy_editing"), async (req, res) => {
+  app.delete("/api/generated-policies/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const policy = await storage.getGeneratedPolicy(req.params.id);
@@ -5249,7 +5279,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/policy-templates/:slug/admin", requireAuth, requirePermission("template_admin"), async (req, res) => {
+  app.put("/api/policy-templates/:slug/admin", requireAuth, requireProvisioningPermission("manage_templates"), async (req, res) => {
     try {
       const updated = await storage.updatePolicyTemplate(req.params.slug, req.body);
       if (!updated) return res.status(404).json({ error: "Template not found" });
@@ -5259,7 +5289,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/emission-factor-sets", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.get("/api/emission-factor-sets", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const factors = await db.select({
         factorYear: emissionFactorsTable.factorYear,
@@ -5279,7 +5309,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/users", requireAuth, requirePermission("user_management"), async (req, res) => {
+  app.get("/api/users", requireAuth, requireProvisioningPermission("invite_user"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const users = await storage.getUsersByCompany(companyId);
@@ -5290,7 +5320,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/users/invite", requireAuth, requirePermission("user_management"), inviteLimiter, async (req, res) => {
+  app.post("/api/users/invite", requireAuth, requireProvisioningPermission("invite_user"), inviteLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const actorId = (req.session as any).userId;
@@ -5339,7 +5369,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/users/:id/role", requireAuth, requirePermission("user_management"), requireStepUp, async (req, res) => {
+  app.put("/api/users/:id/role", requireAuth, requireProvisioningPermission("assign_user_role"), requireStepUp, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5389,14 +5419,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ===== WORKFLOW ROUTES =====
-  app.post("/api/workflow/submit", requireAuth, async (req, res) => {
+  app.post("/api/workflow/submit", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
-      if (!user || !["admin", "contributor", "editor"].includes(user.role)) {
-        return res.status(403).json({ error: "Only contributors and admins can submit" });
-      }
       const { entityType, entityIds } = req.body;
       const validTypes: Record<string, string> = {
         metric_value: "metric_values",
@@ -5428,7 +5455,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/workflow/review", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.post("/api/workflow/review", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5462,7 +5489,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/workflow/bulk-review", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.post("/api/workflow/bulk-review", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5536,7 +5563,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/my-approvals", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.get("/api/my-approvals", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const approvals = await storage.getUserApprovals(companyId);
@@ -5546,7 +5573,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/assign/:entityType/:entityId", requireAuth, requirePermission("user_management"), async (req, res) => {
+  app.put("/api/assign/:entityType/:entityId", requireAuth, requireProvisioningPermission("invite_user"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5573,7 +5600,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/assign/bulk", requireAuth, requirePermission("user_management"), async (req, res) => {
+  app.put("/api/assign/bulk", requireAuth, requireProvisioningPermission("invite_user"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5628,7 +5655,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/evidence-requests", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/evidence-requests", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5658,15 +5685,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/evidence-requests/:id", requireAuth, async (req, res) => {
+  app.put("/api/evidence-requests/:id", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
-      const isAdmin = user?.role === "admin";
+      const isAdmin = user?.role === "admin" || user?.role === "super_admin";
       const existing = await storage.getEvidenceRequests(companyId);
       const current = existing.find(r => r.id === req.params.id);
       if (!current) return res.status(404).json({ error: "Evidence request not found" });
+      // Resource-scope: admin can update any request; non-admin can only update assigned requests
       if (!isAdmin && current.assignedUserId !== userId) {
         return res.status(403).json({ error: "Not authorized to update this request" });
       }
@@ -5697,7 +5725,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/evidence-requests/:id/link", requireAuth, async (req, res) => {
+  app.put("/api/evidence-requests/:id/link", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5735,7 +5763,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reporting-periods", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/reporting-periods", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5764,7 +5792,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reporting-periods/:id/close", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/reporting-periods/:id/close", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5783,7 +5811,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reporting-periods/:id/lock", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/reporting-periods/:id/lock", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5802,7 +5830,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/reporting-periods/:id/copy-forward", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/reporting-periods/:id/copy-forward", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5898,7 +5926,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const BLOCKED_EXTENSIONS = /\.(exe|bat|cmd|sh|ps1|msi|vbs|js|jsx|ts|tsx|py|rb|pl|php|java|class|jar|dll|so|elf|dmg|pkg|app|cpl|scr|pif|com|gadget|reg|inf|sys|drv|bin|run|deb|rpm|apk)$/i;
   const ALLOWED_FILE_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "png", "jpg", "jpeg", "gif", "webp", "svg", "ppt", "pptx", "odt", "ods", "odp", "zip", "eml", "msg"];
 
-  app.post("/api/evidence", requireAuth, requirePermission("metrics_data_entry"), uploadLimiter, async (req, res) => {
+  app.post("/api/evidence", requireAuth, requireProvisioningPermission("upload_evidence"), uploadLimiter, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -5993,7 +6021,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.put("/api/evidence/:id", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -6039,7 +6067,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/evidence/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+  app.delete("/api/evidence/:id", requireAuth, requireProvisioningPermission("delete_evidence"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -6756,7 +6784,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/procurement-answers", requireAuth, async (req, res) => {
+  app.post("/api/procurement-answers", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { question, answer, category, linkedMetricIds, linkedPolicySection, linkedEvidenceIds, linkedComplianceReqIds, status } = req.body;
@@ -6773,7 +6801,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.put("/api/procurement-answers/:id", requireAuth, async (req, res) => {
+  app.put("/api/procurement-answers/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -6797,7 +6825,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.delete("/api/procurement-answers/:id", requireAuth, async (req, res) => {
+  app.delete("/api/procurement-answers/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       await db.execute(sql`DELETE FROM procurement_answers WHERE id = ${req.params.id} AND company_id = ${companyId}`);
@@ -6832,7 +6860,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.get("/api/assurance-pack", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.get("/api/assurance-pack", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const auditLogs = await storage.getAuditLogs(companyId);
@@ -6894,7 +6922,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/demo/seed", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/demo/seed", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -6947,7 +6975,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/procurement-answers/:id/record-usage", requireAuth, async (req, res) => {
+  app.post("/api/procurement-answers/:id/record-usage", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       await db.execute(sql`UPDATE procurement_answers SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = NOW() WHERE id = ${req.params.id} AND company_id = ${companyId}`);
@@ -6957,7 +6985,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/reminders/generate", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/reminders/generate", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const jobId = await enqueueJob("reminder_check", {}, companyId, `manual_reminder:${companyId}:${new Date().toISOString().slice(0, 10)}`);
@@ -6967,7 +6995,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/reports/:id/generate-file", requireAuth, async (req, res) => {
+  app.post("/api/reports/:id/generate-file", requireAuth, requireProvisioningPermission("generate_report_file"), async (req, res) => {
     if (!featureFlags.reportGenerationEnabled) {
       const { status, body } = featureDisabledResponse("report_generation");
       return res.status(status).json(body);
@@ -7102,7 +7130,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/questionnaires/import", requireAuth, async (req, res) => {
+  app.post("/api/questionnaires/import", requireAuth, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -7227,7 +7255,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/questionnaires/generate-responses", requireAuth, aiLimiter, requirePermission("questionnaire_access"), async (req, res) => {
+  app.post("/api/questionnaires/generate-responses", requireAuth, aiLimiter, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { text, title } = req.body;
@@ -7353,7 +7381,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     return { inputKey: null, confidence: 0 };
   }
 
-  app.post("/api/raw-data/import/parse", requireAuth, async (req, res) => {
+  app.post("/api/raw-data/import/parse", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const _parseCo = await storage.getCompany(companyId);
@@ -7400,7 +7428,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/raw-data/import/confirm", requireAuth, async (req, res) => {
+  app.post("/api/raw-data/import/confirm", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -7607,7 +7635,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/company/esg-profile/share", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/company/esg-profile/share", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const { enabled, expiresInDays, visibleSections } = req.body;
@@ -7642,7 +7670,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/company/esg-profile/rotate-token", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/company/esg-profile/rotate-token", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const token = randomUUID();
@@ -7942,7 +7970,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/analytics", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+  app.get("/api/admin/analytics", requireAuth, requireProvisioningPermission("update_company_settings"), async (_req, res) => {
     try {
       const analytics = await storage.getActivityAnalytics(30);
       res.json(analytics);
@@ -7951,7 +7979,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/analytics/timeline", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+  app.get("/api/admin/analytics/timeline", requireAuth, requireProvisioningPermission("update_company_settings"), async (_req, res) => {
     try {
       const timeline = await storage.getActivityTimeline(30);
       res.json(timeline);
@@ -7960,7 +7988,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/analytics/cleanup", requireAuth, requirePermission("settings_admin"), async (_req, res) => {
+  app.get("/api/admin/analytics/cleanup", requireAuth, requireProvisioningPermission("update_company_settings"), async (_req, res) => {
     try {
       const deleted = await storage.cleanupOldActivity(90);
       res.json({ deleted });
@@ -8115,7 +8143,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/billing/cancel", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/billing/cancel", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       if (!stripe) return res.status(503).json({ error: "Billing is not configured" });
       const companyId = (req.session as any).companyId;
@@ -9126,7 +9154,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   // POST /api/sites/migrate — DEPRECATED: Use /api/admin/migrate-sites instead (requires super-admin + dry-run flow)
   // This endpoint is disabled to enforce the admin-triggered migration contract
-  app.post("/api/sites/migrate", requireAuth, async (_req, res) => {
+  app.post("/api/sites/migrate", requireAuth, requireProvisioningPermission("update_company_settings"), async (_req, res) => {
     return res.status(403).json({
       error: "This endpoint is no longer available. Use /api/admin/migrate-sites with dry-run preview via the admin panel.",
     });
@@ -9146,7 +9174,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // POST /api/sites — create site
-  app.post("/api/sites", requireAuth, async (req, res) => {
+  app.post("/api/sites", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9187,7 +9215,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // PATCH /api/sites/:id — update site metadata (allowed even for archived)
-  app.patch("/api/sites/:id", requireAuth, async (req, res) => {
+  app.patch("/api/sites/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9214,7 +9242,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // DELETE /api/sites/:id — archive site (soft delete)
-  app.delete("/api/sites/:id", requireAuth, async (req, res) => {
+  app.delete("/api/sites/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9255,7 +9283,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // METRIC DEFINITIONS API
   // ============================================================
 
-  app.patch("/api/metric-definitions/:id/toggle", requireAuth, async (req, res) => {
+  app.patch("/api/metric-definitions/:id/toggle", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Metric definition not found" });
@@ -9267,7 +9295,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/metric-definitions/seed", requireAuth, async (req, res) => {
+  app.post("/api/metric-definitions/seed", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const { ALL_METRIC_DEFINITIONS } = await import("./metric-definitions-seed");
       const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
@@ -9298,7 +9326,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/metric-definition-values", requireAuth, async (req, res) => {
+  app.post("/api/metric-definition-values", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req as any)._auth?.companyId;
       const userId = (req as any)._auth?.userId;
@@ -9338,7 +9366,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/metric-definition-values/:id", requireAuth, async (req, res) => {
+  app.patch("/api/metric-definition-values/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req as any)._auth?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9398,7 +9426,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/materiality/topics/:id", requireAuth, async (req, res) => {
+  app.patch("/api/materiality/topics/:id", requireAuth, requireProvisioningPermission("manage_materiality"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9427,7 +9455,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/materiality/assessments", requireAuth, async (req, res) => {
+  app.post("/api/materiality/assessments", requireAuth, requireProvisioningPermission("manage_materiality"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9438,7 +9466,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/materiality/assessments/:id", requireAuth, async (req, res) => {
+  app.patch("/api/materiality/assessments/:id", requireAuth, requireProvisioningPermission("manage_materiality"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9464,7 +9492,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/policy-records", requireAuth, async (req, res) => {
+  app.post("/api/policy-records", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9475,7 +9503,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/policy-records/:id", requireAuth, async (req, res) => {
+  app.patch("/api/policy-records/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9486,7 +9514,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/policy-records/:id", requireAuth, async (req, res) => {
+  app.delete("/api/policy-records/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9512,7 +9540,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.put("/api/governance-assignments/:area", requireAuth, async (req, res) => {
+  app.put("/api/governance-assignments/:area", requireAuth, requireProvisioningPermission("manage_governance"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9523,7 +9551,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/governance-assignments/:id", requireAuth, async (req, res) => {
+  app.delete("/api/governance-assignments/:id", requireAuth, requireProvisioningPermission("manage_governance"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9549,7 +9577,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/esg-targets", requireAuth, async (req, res) => {
+  app.post("/api/esg-targets", requireAuth, requireProvisioningPermission("manage_targets"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9560,7 +9588,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/esg-targets/:id", requireAuth, async (req, res) => {
+  app.patch("/api/esg-targets/:id", requireAuth, requireProvisioningPermission("manage_targets"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9571,7 +9599,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/esg-targets/:id", requireAuth, async (req, res) => {
+  app.delete("/api/esg-targets/:id", requireAuth, requireProvisioningPermission("manage_targets"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9598,7 +9626,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/esg-actions", requireAuth, async (req, res) => {
+  app.post("/api/esg-actions", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9609,7 +9637,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/esg-actions/:id", requireAuth, async (req, res) => {
+  app.patch("/api/esg-actions/:id", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9620,7 +9648,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/esg-actions/:id", requireAuth, async (req, res) => {
+  app.delete("/api/esg-actions/:id", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9647,7 +9675,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/esg-risks", requireAuth, async (req, res) => {
+  app.post("/api/esg-risks", requireAuth, requireProvisioningPermission("manage_esg_risks"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9658,7 +9686,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/esg-risks/:id", requireAuth, async (req, res) => {
+  app.patch("/api/esg-risks/:id", requireAuth, requireProvisioningPermission("manage_esg_risks"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9669,7 +9697,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/esg-risks/:id", requireAuth, async (req, res) => {
+  app.delete("/api/esg-risks/:id", requireAuth, requireProvisioningPermission("manage_esg_risks"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9685,7 +9713,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // Six structured report types with measured/derived/estimated/missing labelling
   // ============================================================
 
-  app.post("/api/reports/export/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.post("/api/reports/export/:reportType", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     if (!featureFlags.reportGenerationEnabled) {
       const { status, body } = featureDisabledResponse("report_generation");
       return res.status(status).json(body);
@@ -9930,7 +9958,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // GET /api/reports/export-data/:reportType — returns JSON data for preview
-  app.get("/api/reports/export-data/:reportType", requireAuth, requirePermission("report_generation"), async (req, res) => {
+  app.get("/api/reports/export-data/:reportType", requireAuth, requireProvisioningPermission("generate_report"), async (req, res) => {
     if (!featureFlags.reportGenerationEnabled) {
       const { status, body } = featureDisabledResponse("report_generation");
       return res.status(status).json(body);
@@ -10959,7 +10987,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/admin/mfa-policy", requireAuth, requireStepUp, requirePermission("settings_admin"), async (req, res) => {
+  app.patch("/api/admin/mfa-policy", requireAuth, requireStepUp, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
@@ -10982,7 +11010,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/users/mfa-status", requireAuth, requirePermission("user_management"), async (req, res) => {
+  app.get("/api/admin/users/mfa-status", requireAuth, requireProvisioningPermission("invite_user"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const companyUsers = await storage.getUsersByCompany(companyId);
@@ -11026,7 +11054,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/identity-providers", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.get("/api/admin/identity-providers", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const providers = await storage.getIdentityProviders(companyId);
@@ -11036,7 +11064,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/admin/identity-providers", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.post("/api/admin/identity-providers", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
@@ -11057,7 +11085,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/admin/identity-providers/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.patch("/api/admin/identity-providers/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
@@ -11079,7 +11107,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.delete("/api/admin/identity-providers/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.delete("/api/admin/identity-providers/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
@@ -11279,7 +11307,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/gdpr/delete-company", requireAuth, requirePermission("settings_admin"), requireStepUp, async (req, res) => {
+  app.post("/api/gdpr/delete-company", requireAuth, requireProvisioningPermission("update_company_settings"), requireStepUp, async (req, res) => {
     try {
       const { userId, companyId } = (req as any)._auth;
       const { confirmationText, password } = req.body;
@@ -11324,7 +11352,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/gdpr/deletion-requests", requireAuth, requirePermission("settings_admin"), async (req, res) => {
+  app.get("/api/gdpr/deletion-requests", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const { companyId } = (req as any)._auth;
       const requests = await storage.getDataDeletionRequests(companyId);
@@ -11442,7 +11470,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // COMPANY PROVISIONING ROUTES
   // ============================================================
 
-  app.post("/api/companies", requireAuth, async (req, res) => {
+  app.post("/api/companies", requireAuth, requireProvisioningPermission("create_company"), async (req, res) => {
     try {
       const auth = resolveAuth(req)!;
       const callerUser = await storage.getUser(auth.userId);
@@ -11496,20 +11524,20 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // Unlike POST /api/users/invite (session-scoped), this endpoint explicitly targets
   // the company ID in the URL, so it works correctly even when a super_admin creates
   // a new company without switching their session context.
-  app.post("/api/companies/:id/invites", requireAuth, inviteLimiter, async (req, res) => {
+  app.post("/api/companies/:id/invites", requireAuth, requireProvisioningPermission("invite_user"), inviteLimiter, async (req, res) => {
     try {
       const targetCompanyId = req.params.id;
       const auth = resolveAuth(req)!;
       const callerUser = await storage.getUser(auth.userId);
       if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
 
-      // Permission check: caller must be super_admin, or must belong to targetCompanyId
-      // with a role that allows user management (admin, portfolio_owner).
+      // Resource-scope check: super_admin can invite to any company; admins/portfolio_owners
+      // can only invite to their own company. Role-level gate (requireProvisioningPermission)
+      // already ran, so here we only enforce the target-company ownership constraint.
       const isSuperAdmin = callerUser.role === "super_admin";
-      const isCompanyAdmin = callerUser.companyId === targetCompanyId &&
-        (callerUser.role === "admin" || callerUser.role === "portfolio_owner");
-      if (!isSuperAdmin && !isCompanyAdmin) {
-        return res.status(403).json({ error: "Insufficient permissions to invite users to this company" });
+      const isOwnerOfTargetCompany = callerUser.companyId === targetCompanyId;
+      if (!isSuperAdmin && !isOwnerOfTargetCompany) {
+        return res.status(403).json({ error: "You can only invite users to your own company" });
       }
 
       const { email, role = "contributor", inviteeName } = req.body;
@@ -11559,7 +11587,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/companies/:id/users", requireAuth, async (req, res) => {
+  app.post("/api/companies/:id/users", requireAuth, requireProvisioningPermission("assign_user_role"), async (req, res) => {
     try {
       const auth = resolveAuth(req)!;
       const callerUser = await storage.getUser(auth.userId);
@@ -11569,11 +11597,12 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const targetCompany = await storage.getCompany(targetCompanyId);
       if (!targetCompany) return res.status(404).json({ error: "Company not found" });
 
-      // Only company admin (same company) or super_admin may assign users to a company
-      const isAdmin = callerUser.role === "admin" || callerUser.role === "super_admin";
-      const isCompanyAdmin = isAdmin && (callerUser.companyId === targetCompanyId || callerUser.role === "super_admin");
-      if (!isCompanyAdmin) {
-        return res.status(403).json({ error: "Only admins can add users to a company" });
+      // Resource-scope check: super_admin can assign users to any company; admins can only
+      // assign users to their own company. Role-level gate already ran above.
+      const isSuperAdmin = callerUser.role === "super_admin";
+      const isOwnerOfTargetCompany = callerUser.companyId === targetCompanyId;
+      if (!isSuperAdmin && !isOwnerOfTargetCompany) {
+        return res.status(403).json({ error: "You can only assign users to your own company" });
       }
 
       const bodySchema = z.object({
@@ -11594,9 +11623,28 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(409).json({ error: "User already belongs to another company and cannot be reassigned directly" });
       }
 
+      const previousRole = targetUser.role;
+      const previousCompanyId = targetUser.companyId;
+
       const updatedUser = await storage.updateUser(parsed.data.userId, {
         companyId: targetCompanyId,
         role: parsed.data.role,
+      });
+
+      // Emit provisioning audit event so role assignment through this path is captured,
+      // matching the coverage of PATCH /api/users/:id/role
+      auditLog({
+        companyId: targetCompanyId,
+        userId: auth.userId,
+        action: "user_role_changed",
+        entityType: "user",
+        entityId: parsed.data.userId,
+        details: {
+          before: { role: previousRole, companyId: previousCompanyId },
+          after: { role: parsed.data.role, companyId: targetCompanyId, targetUsername: targetUser.username },
+        },
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"],
       });
 
       res.json({ user: updatedUser });
@@ -11605,7 +11653,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/groups/:groupId/companies", requireAuth, async (req, res) => {
+  app.post("/api/groups/:groupId/companies", requireAuth, requireProvisioningPermission("attach_company_to_group"), async (req, res) => {
     try {
       const auth = resolveAuth(req)!;
       const callerUser = await storage.getUser(auth.userId);
@@ -11635,22 +11683,37 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         if (ugRows[0].role !== "portfolio_owner") {
           return res.status(403).json({ error: "Only portfolio owners can attach companies to groups" });
         }
+        // Two-layer resource-scope check:
+        //   1. Role-level: caller must be portfolio_owner of the target group (checked above).
+        //   2. Resource-level: caller must control the target company being linked.
+        //      This prevents portfolio owners from arbitrarily linking companies they don't control,
+        //      which would expose those companies through portfolio rollup/company-switching flows.
+        //
+        //      Control is established when the caller's user.companyId matches the target company.
+        //      Note: role === "admin" is NOT required here — portfolio_owner is the expected role
+        //      for users who own both the group and a registered company.
+        const isAdminOfTargetCompany = callerUser.companyId === parsed.data.companyId;
+        if (!isAdminOfTargetCompany) {
+          return res.status(403).json({ error: "You must be an admin of the target company to add it to a group" });
+        }
       }
 
       const targetCompany = await storage.getCompany(parsed.data.companyId);
       if (!targetCompany) return res.status(404).json({ error: "Company not found" });
 
-      // Company-level authority check: the caller must also be the admin of the target company.
-      // This prevents portfolio owners from linking arbitrary companies they don't control.
-      // Only super_admin can link companies they are not directly admin of.
-      if (callerUser.role !== "super_admin") {
-        const callerOwnsCompany = callerUser.companyId === parsed.data.companyId && callerUser.role === "admin";
-        if (!callerOwnsCompany) {
-          return res.status(403).json({ error: "You must be an admin of the target company to add it to a group" });
-        }
-      }
-
       const groupCompany = await storage.addCompanyToGroup(groupId, parsed.data.companyId);
+
+      auditLog({
+        companyId: parsed.data.companyId,
+        userId: callerUser.id,
+        actorType: "user",
+        action: "company_linked_to_group",
+        entityType: "group_company",
+        entityId: groupId,
+        details: { companyId: parsed.data.companyId, groupId },
+        req,
+      });
+
       res.status(201).json({ groupCompany });
     } catch (e: any) {
       if (e.message?.includes("unique") || e.code === "23505") {

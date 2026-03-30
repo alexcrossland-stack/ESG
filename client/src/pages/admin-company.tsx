@@ -11,7 +11,7 @@ import {
   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
   ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
-  ArrowRightLeft, PlayCircle, Eye,
+  ArrowRightLeft, PlayCircle, Eye, Link2, Activity, Database,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -394,6 +394,99 @@ export default function AdminCompanyPage() {
           </CardContent>
         </Card>
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Provisioning Events
+            </CardTitle>
+          </CardHeader>
+          <CardContent data-testid="provisioning-events">
+            {(diag.provisioningEvents ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No provisioning events recorded</p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {(diag.provisioningEvents ?? []).map((ev: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2.5 text-xs" data-testid={`prov-event-${i}`}>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-mono font-medium">{ev.action}</span>
+                    </div>
+                    <span className="text-muted-foreground shrink-0">
+                      {ev.created_at ? formatDistanceToNow(new Date(ev.created_at), { addSuffix: true }) : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Link2 className="w-4 h-4" />
+              Group Memberships
+            </CardTitle>
+          </CardHeader>
+          <CardContent data-testid="group-memberships">
+            {(diag.groupMemberships ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">Not linked to any portfolio group</p>
+            ) : (
+              <div className="space-y-2">
+                {(diag.groupMemberships ?? []).map((g: any, i: number) => (
+                  <div key={g.id ?? i} className="flex items-center justify-between px-2 py-1.5 bg-muted/40 rounded text-xs" data-testid={`group-row-${i}`}>
+                    <div>
+                      <span className="font-medium">{g.name}</span>
+                      <span className="text-muted-foreground ml-1.5">/{g.slug}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="text-[10px]">{g.type}</Badge>
+                      <span className="text-muted-foreground">{g.linked_at ? format(new Date(g.linked_at), "d MMM yyyy") : ""}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {diag.dataReadiness && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Database className="w-4 h-4" />
+              Data Readiness
+              <Badge
+                variant={diag.dataReadiness.isDataReady ? "default" : "secondary"}
+                className={`ml-auto text-[10px] ${diag.dataReadiness.isDataReady ? "bg-emerald-600 hover:bg-emerald-700" : ""}`}
+                data-testid="data-readiness-badge"
+              >
+                {diag.dataReadiness.isDataReady ? "Ready" : "Incomplete"}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent data-testid="data-readiness-panel">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {[
+                { label: "Metrics configured", ok: diag.dataReadiness.hasMetrics },
+                { label: "Metric data entered", ok: diag.dataReadiness.hasMetricData },
+                { label: "Evidence uploaded", ok: diag.dataReadiness.hasEvidence },
+                { label: "Policy adopted", ok: diag.dataReadiness.hasPolicy },
+                { label: "Report generated", ok: diag.dataReadiness.hasReport },
+              ].map(({ label, ok }) => (
+                <div key={label} className={`flex flex-col items-center justify-center gap-1 p-3 rounded border text-xs text-center ${ok ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800" : "border-muted bg-muted/20"}`} data-testid={`readiness-${label.replace(/\s+/g, "-").toLowerCase()}`}>
+                  {ok ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <XCircle className="w-5 h-5 text-muted-foreground" />}
+                  <span className={ok ? "text-emerald-700 dark:text-emerald-300 font-medium" : "text-muted-foreground"}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-2">

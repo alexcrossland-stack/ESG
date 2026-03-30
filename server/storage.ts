@@ -1994,8 +1994,10 @@ export class DatabaseStorage implements IStorage {
       db.execute(sql`
         SELECT action, entity_type, created_at FROM audit_logs
         WHERE company_id = ${companyId}
-          AND action IN ('onboarding_complete', 'policy_created', 'policy_adopted', 'metric_entered',
-                         'evidence_uploaded', 'report_generated', 'assistant_used', 'login')
+          AND action IN ('onboarding_complete', 'onboarding_completed', 'policy_created', 'policy_adopted',
+                         'metric_entered', 'evidence_uploaded', 'report_generated', 'first_report_generated',
+                         'company_created', 'company_linked_to_group', 'user_invited', 'user_role_changed',
+                         'assistant_used', 'login')
         ORDER BY created_at DESC LIMIT 20
       `),
     ]);
@@ -2013,17 +2015,47 @@ export class DatabaseStorage implements IStorage {
 
     const migrationHistory = (migrationHistoryR as any).rows ?? [];
 
+    // Load group memberships for this company (provisioning health)
+    const groupMembershipsR = await db.execute(sql`
+      SELECT g.id, g.name, g.slug, g.type, gc.created_at AS linked_at
+      FROM group_companies gc
+      JOIN groups g ON g.id = gc.group_id
+      WHERE gc.company_id = ${companyId}
+      ORDER BY gc.created_at ASC
+    `);
+    const groupMemberships = (groupMembershipsR as any).rows ?? [];
+
+    // Load provisioning audit events
+    const provisioningEventsR = await db.execute(sql`
+      SELECT action, entity_type, entity_id, details, created_at, user_id
+      FROM audit_logs
+      WHERE company_id = ${companyId}
+        AND action IN ('company_created', 'company_linked_to_group', 'user_invited', 'user_role_changed',
+                       'onboarding_completed', 'first_report_generated')
+      ORDER BY created_at ASC
+    `);
+    const provisioningEvents = (provisioningEventsR as any).rows ?? [];
+
+    // Determine data readiness flags
+    const hasMetricData = r(mvR)[0]?.last_entry != null;
+    const hasEvidence = (r(evidenceR)[0]?.count ?? 0) > 0;
+    const hasReport = (r(reportsR)[0]?.count ?? 0) > 0;
+    const hasMetrics = (r(metricsR)[0]?.count ?? 0) > 0;
+    const hasPolicy = (r(policiesR)[0]?.count ?? 0) > 0;
+
     return {
       id: company.id,
       name: company.name,
       industry: company.industry,
       country: company.country,
       status: company.status ?? "active",
+      lifecycleState: company.lifecycleState ?? "created",
       planTier: company.planTier ?? "free",
       isBetaCompany: company.isBetaCompany ?? false,
       betaExpiresAt: company.betaExpiresAt ?? null,
       betaGrantedBy: company.betaGrantedBy ?? null,
       onboardingComplete: company.onboardingComplete ?? false,
+      onboardingCompletedAt: company.onboardingCompletedAt ?? null,
       maturityLevel: company.esgMaturity ?? null,
       employeeCount: company.employeeCount,
       createdAt: company.createdAt,
@@ -2035,10 +2067,20 @@ export class DatabaseStorage implements IStorage {
         reports: r(reportsR)[0]?.count ?? 0,
         aiUsageLast30Days: r(aiR)[0]?.count ?? 0,
       },
+      dataReadiness: {
+        hasMetrics,
+        hasMetricData,
+        hasEvidence,
+        hasPolicy,
+        hasReport,
+        isDataReady: hasMetrics && hasMetricData && hasEvidence && hasReport,
+      },
       lastMetricEntry: r(mvR)[0]?.last_entry ?? null,
       lastLogin: r(lastLoginR)[0]?.created_at ?? null,
       users: companyUsers.map(u => ({ id: u.id, username: u.username, email: u.email, role: u.role })),
       sites: companySites.map(s => ({ id: s.id, name: s.name, status: s.status, type: s.type })),
+      groupMemberships,
+      provisioningEvents,
       migrationHistory,
       recentErrors: r(errorsR),
       activityTimeline: r(activityR),

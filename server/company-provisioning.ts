@@ -3,6 +3,7 @@ import { companies, groupCompanies, userGroupRoles, users, roleEnum, metrics, ma
 import { eq, and, ilike } from "drizzle-orm";
 import { z } from "zod";
 import { seedCompanyDefaults } from "./company-defaults";
+import { auditLog } from "./audit";
 
 type UserRole = typeof roleEnum.enumValues[number];
 
@@ -264,6 +265,32 @@ export async function provisionCompany(input: ProvisionCompanyInput): Promise<Pr
     // the duplicate-name check; callers should instead retry only the seeding step.
     // However, seedCompanyDefaults is idempotent: re-running after a partial failure is safe.
     await seedCompanyDefaults(result.id, sector ?? null);
+
+    // Audit: company created
+    auditLog({
+      companyId: result.id,
+      userId: creatorUserId,
+      actorType: "user",
+      action: "company_created",
+      entityType: "company",
+      entityId: result.id,
+      details: {
+        after: { name: companyName, sector: sector ?? null, country: country ?? null, groupId: groupId ?? null },
+      },
+    });
+
+    // Audit: company linked to group (if applicable)
+    if (groupId) {
+      auditLog({
+        companyId: result.id,
+        userId: creatorUserId,
+        actorType: "user",
+        action: "company_linked_to_group",
+        entityType: "group_company",
+        entityId: groupId,
+        details: { companyId: result.id, groupId },
+      });
+    }
 
     return {
       companyId: result.id,
