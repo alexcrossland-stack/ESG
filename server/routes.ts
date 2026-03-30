@@ -856,6 +856,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existing = await storage.getUserByEmail(email);
       if (existing) return res.status(409).json({ error: "Email already registered" });
 
+      trackTelemetryEvent("signup_started", { properties: { companyName: companyName || null } });
+
       const hashedPassword = await hashPassword(password);
       const now = new Date();
       const tempUser = await storage.createUser({
@@ -877,7 +879,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           skipDuplicateNameCheck: true,
           skipCreatorPermissionCheck: true,
         });
-      } catch (provisionErr) {
+      } catch (provisionErr: any) {
         // Provisioning failed — hard-delete the just-created user so the email doesn't remain blocked
         try {
           const { users: usersTable } = await import("@shared/schema");
@@ -886,6 +888,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         } catch (cleanupErr) {
           console.error("[register] Failed to clean up orphaned user after provisioning failure:", cleanupErr);
         }
+        console.error("[provisioning] Provisioning failure during registration:", provisionErr?.message ?? provisionErr);
+        auditLog({
+          companyId: null,
+          userId: tempUser.id,
+          actorType: "system",
+          action: "provisioning_failure",
+          entityType: "company",
+          details: { error: provisionErr?.message ?? "Unknown provisioning error", email, companyName: companyName || "My Company" },
+        });
         throw provisionErr;
       }
       const company = await storage.getCompany(provisionResult.companyId);
@@ -901,6 +912,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: user.id,
         details: { email: user.email },
       });
+
+      trackTelemetryEvent("signup_completed", { userId: user.id, companyId: company.id });
+      trackTelemetryEvent("company_created", { userId: user.id, companyId: company.id, properties: { companyName: company.name } });
 
       await storage.createAuditLog({
         companyId: company.id,
@@ -2309,7 +2323,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       if (isFirstEver) {
         storage.getTelemetryEvents({ eventName: "first_metric_added", companyId, limit: 1 }).then(existing => {
-          if (existing.length === 0) trackTelemetryEvent("first_metric_added", { userId, companyId });
+          if (existing.length === 0) {
+            trackTelemetryEvent("first_metric_added", { userId, companyId });
+            trackTelemetryEvent("first_metric_entered", { userId, companyId });
+          }
         }).catch(() => {});
       }
 
@@ -4228,6 +4245,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ report, data: reportData });
     } catch (e: any) {
+      const companyId = (req.session as any)?.companyId;
+      const userId = (req.session as any)?.userId;
+      auditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "report_generation_failure",
+        entityType: "report_run",
+        entityId: null,
+        details: { error: e.message, period: req.body?.period, reportType: req.body?.reportType },
+        req,
+      });
       res.status(500).json({ error: e.message });
     }
   });
@@ -7078,6 +7107,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       res.json({ fileId: savedFile.id, filename, fileSize: fileBuffer.length, fileType: format });
     } catch (e: any) {
       try { await storage.createPlatformHealthEvent({ eventType: "report_failure", severity: "error", message: `Report generation failed: ${e.message}`, details: { reportId: req.params.id }, companyId: (req.session as any).companyId }); } catch {}
+      auditLog({ companyId: (req.session as any).companyId ?? null, userId: (req.session as any).userId ?? null, actorType: "system", action: "report_generation_failure", entityType: "report_run", entityId: req.params.id, details: { error: e.message } });
       res.status(500).json({ error: e.message });
     }
   });

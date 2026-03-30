@@ -1,8 +1,12 @@
 import { storage } from "./storage";
 
 export type TelemetryEventName =
+  | "signup_started"
+  | "signup_completed"
+  | "company_created"
   | "onboarding_started"
   | "onboarding_completed"
+  | "first_metric_entered"
   | "first_metric_added"
   | "first_evidence_uploaded"
   | "first_report_generated"
