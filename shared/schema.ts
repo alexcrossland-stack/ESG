@@ -25,6 +25,8 @@ export const supportRequestPriorityEnum = pgEnum("support_request_priority", ["l
 export const siteTypeEnum = pgEnum("site_type", ["operational", "office", "manufacturing", "warehouse", "retail", "data_centre", "other"]);
 export const siteStatusEnum = pgEnum("site_status", ["active", "archived"]);
 
+export const companyLifecycleStateEnum = pgEnum("company_lifecycle_state", ["created", "onboarding_started", "onboarding_completed", "active", "archived"]);
+
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -89,6 +91,7 @@ export const companies = pgTable("companies", {
   betaGrantedBy: text("beta_granted_by"),
   betaReason: text("beta_reason"),
   status: text("status").default("active"),
+  lifecycleState: companyLifecycleStateEnum("lifecycle_state").default("created"),
   createdAt: timestamp("created_at").defaultNow(),
   mfaPolicy: text("mfa_policy").default("optional"),
   deletionPendingAt: timestamp("deletion_pending_at"),

@@ -225,6 +225,45 @@ app.use((req, res, next) => {
   try {
     await db.execute(sql`ALTER TYPE role ADD VALUE IF NOT EXISTS 'super_admin'`);
   } catch {}
+  // Lifecycle state migration: ensure enum and column exist, then backfill existing companies to 'active'
+  try {
+    await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE company_lifecycle_state AS ENUM ('created', 'onboarding_started', 'onboarding_completed', 'active', 'archived');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+  } catch {}
+  try {
+    await db.execute(sql`
+      ALTER TABLE companies ADD COLUMN IF NOT EXISTS lifecycle_state company_lifecycle_state DEFAULT 'created'
+    `);
+    // One-time backfill: set all legacy companies to 'active'.
+    // When ADD COLUMN ... DEFAULT 'created' runs (first migration), Postgres sets ALL existing rows
+    // to 'created'. We must back-fill them to 'active' since they predate lifecycle state management.
+    // We use a migration_completed_at marker column to run this backfill only once — on the first
+    // startup after the column is added. On subsequent startups the column already exists and
+    // the DEFAULT won't overwrite existing non-null values, so the marker prevents double-runs.
+    const markerResult = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'companies' AND column_name = 'lifecycle_state_backfilled'
+    `);
+    const markerRows = (markerResult as any).rows ?? [];
+    if (markerRows.length === 0) {
+      // First time: backfill all existing companies to 'active'
+      await db.execute(sql`
+        UPDATE companies SET lifecycle_state = 'active'
+        WHERE lifecycle_state = 'created'
+      `);
+      // Add a marker column so this backfill only runs once
+      await db.execute(sql`
+        ALTER TABLE companies ADD COLUMN IF NOT EXISTS lifecycle_state_backfilled boolean DEFAULT true
+      `);
+      console.log("[Startup] lifecycle_state backfill completed — all existing companies set to 'active'");
+    }
+  } catch (e: any) {
+    console.warn("[Startup] lifecycle_state migration warning:", e.message);
+  }
   try {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS status text DEFAULT 'active'`);
   } catch {}

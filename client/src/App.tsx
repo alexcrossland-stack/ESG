@@ -277,20 +277,32 @@ function ProtectedApp() {
   }
 
   const isPortfolioUser = PORTFOLIO_ROLES.includes(data?.user?.role);
-  if (data?.user?.role !== "super_admin" && !isPortfolioUser && !data?.company?.onboardingComplete) {
+
+  // Newly provisioned companies (lifecycleState = 'created' | 'onboarding_started') must complete onboarding.
+  // Also covers the legacy path where onboardingComplete is false.
+  const companyLifecycleState = data?.company?.lifecycleState as string | undefined;
+  const isNewlyProvisioned = companyLifecycleState === "created" || companyLifecycleState === "onboarding_started";
+  const needsOnboarding = !data?.company?.onboardingComplete || isNewlyProvisioned;
+
+  if (data?.user?.role !== "super_admin" && !isPortfolioUser && needsOnboarding) {
     return <Onboarding />;
   }
 
-  // Post-login redirect for portfolio users (only from root without special params)
+  // Post-login redirect logic (deterministic, applied only at root path):
+  // 1. Portfolio users with multiple accessible companies  → /portfolio
+  // 2. Single-company users with a direct company         → /  (dashboard)
+  // 3. Newly provisioned company (admin who just created) → / (dashboard or will hit onboarding above)
   const hasPortfolioRedirectParam = typeof window !== "undefined" && (
     new URLSearchParams(window.location.search).get("from") === "portfolio" ||
     new URLSearchParams(window.location.search).get("portfolioCompanyId")
   );
+  // Use defaultLandingContext from server-side access resolution (resolvePortfolioAccess)
+  // as the authoritative landing decision. This handles mixed-access users correctly —
+  // a user can have group memberships even if their global role is not a portfolio role.
   if (
     location === "/" &&
     !hasPortfolioRedirectParam &&
     data?.defaultLandingContext === "portfolio" &&
-    PORTFOLIO_ROLES.includes(data?.user?.role) &&
     (data?.portfolioGroups?.length || 0) > 0
   ) {
     return <Redirect to="/portfolio" />;

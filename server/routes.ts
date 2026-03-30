@@ -36,6 +36,7 @@ import { auditLog } from "./audit";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
+import { provisionCompany } from "./company-provisioning";
 import { dispatchCriticalHealthEvent } from "./webhooks";
 import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
@@ -838,19 +839,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (existing) return res.status(409).json({ error: "Email already registered" });
 
       const hashedPassword = await hashPassword(password);
-      const company = await storage.createCompany({ name: companyName || "My Company" });
       const now = new Date();
-      const user = await storage.createUser({
+      const tempUser = await storage.createUser({
         username,
         email,
         password: hashedPassword,
         role: "admin",
-        companyId: company.id,
+        companyId: null,
         termsAcceptedAt: now,
         privacyAcceptedAt: now,
         termsVersionAccepted: termsVersion || "1.0",
         privacyVersionAccepted: privacyVersion || "1.0",
       });
+      let provisionResult;
+      try {
+        provisionResult = await provisionCompany({
+          companyName: companyName || "My Company",
+          creatorUserId: tempUser.id,
+          skipDuplicateNameCheck: true,
+          skipCreatorPermissionCheck: true,
+        });
+      } catch (provisionErr) {
+        // Provisioning failed — hard-delete the just-created user so the email doesn't remain blocked
+        try {
+          const { users: usersTable } = await import("@shared/schema");
+          const { eq: eqFn } = await import("drizzle-orm");
+          await db.delete(usersTable).where(eqFn(usersTable.id, tempUser.id));
+        } catch (cleanupErr) {
+          console.error("[register] Failed to clean up orphaned user after provisioning failure:", cleanupErr);
+        }
+        throw provisionErr;
+      }
+      const company = await storage.getCompany(provisionResult.companyId);
+      if (!company) throw new Error("Company provisioning failed");
+      const user = await storage.getUser(tempUser.id);
+      if (!user) throw new Error("User lookup failed after provisioning");
 
       await storage.createAuditLog({
         companyId: company.id,
@@ -11239,6 +11262,222 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     if (!payload?.jobId || !companyId) return { error: "Missing jobId or companyId" };
     await processExportJob(payload.jobId, payload.requestedBy, companyId, payload.exportScope);
     return { jobId: payload.jobId, status: "completed" };
+  });
+
+  // ============================================================
+  // COMPANY PROVISIONING ROUTES
+  // ============================================================
+
+  app.post("/api/companies", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const callerUser = await storage.getUser(auth.userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const bodySchema = z.object({
+        companyName: z.string().min(1).max(200),
+        sector: z.string().optional(),
+        country: z.string().optional(),
+        companySizeBand: z.string().optional(),
+        reportingYear: z.number().int().optional(),
+        groupId: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+      }
+
+      if (callerUser.role !== "admin" && callerUser.role !== "super_admin" && callerUser.role !== "portfolio_owner") {
+        return res.status(403).json({ error: "Insufficient permissions to create a company" });
+      }
+
+      const result = await provisionCompany({
+        ...parsed.data,
+        creatorUserId: callerUser.id,
+      });
+
+      const newCompany = await storage.getCompany(result.companyId);
+      res.status(201).json({
+        company: newCompany,
+        companyId: result.companyId,
+        lifecycleState: result.lifecycleState,
+        landingContext: result.landingContext,
+      });
+    } catch (e: any) {
+      if (e.message?.includes("already exists")) {
+        return res.status(409).json({ error: e.message });
+      }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/companies/:id/users", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const callerUser = await storage.getUser(auth.userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const targetCompanyId = req.params.id;
+      const targetCompany = await storage.getCompany(targetCompanyId);
+      if (!targetCompany) return res.status(404).json({ error: "Company not found" });
+
+      // Only company admin (same company) or super_admin may assign users to a company
+      const isAdmin = callerUser.role === "admin" || callerUser.role === "super_admin";
+      const isCompanyAdmin = isAdmin && (callerUser.companyId === targetCompanyId || callerUser.role === "super_admin");
+      if (!isCompanyAdmin) {
+        return res.status(403).json({ error: "Only admins can add users to a company" });
+      }
+
+      const bodySchema = z.object({
+        userId: z.string().min(1),
+        role: z.enum(["admin", "editor", "contributor", "approver", "viewer"]),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+      }
+
+      const targetUser = await storage.getUser(parsed.data.userId);
+      if (!targetUser) return res.status(404).json({ error: "User not found" });
+
+      // Cross-tenant safety: only allow assigning users who are currently unassigned (no company),
+      // or already belong to this company. Prevent cross-tenant user reassignment.
+      if (targetUser.companyId && targetUser.companyId !== targetCompanyId) {
+        return res.status(409).json({ error: "User already belongs to another company and cannot be reassigned directly" });
+      }
+
+      const updatedUser = await storage.updateUser(parsed.data.userId, {
+        companyId: targetCompanyId,
+        role: parsed.data.role,
+      });
+
+      res.json({ user: updatedUser });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/groups/:groupId/companies", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const callerUser = await storage.getUser(auth.userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const { groupId } = req.params;
+
+      const bodySchema = z.object({
+        companyId: z.string().min(1),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+      }
+
+      const group = await storage.getGroupById(groupId);
+      if (!group) return res.status(404).json({ error: "Group not found" });
+
+      if (callerUser.role !== "super_admin") {
+        const { db: importedDb } = await import("./storage");
+        const { userGroupRoles: ugr } = await import("@shared/schema");
+        const { eq: eqFn, and: andFn } = await import("drizzle-orm");
+        const ugRows = await importedDb.select().from(ugr).where(andFn(eqFn(ugr.userId, callerUser.id), eqFn(ugr.groupId, groupId)));
+        if (ugRows.length === 0) {
+          return res.status(403).json({ error: "You are not a member of this group" });
+        }
+        if (ugRows[0].role !== "portfolio_owner") {
+          return res.status(403).json({ error: "Only portfolio owners can attach companies to groups" });
+        }
+      }
+
+      const targetCompany = await storage.getCompany(parsed.data.companyId);
+      if (!targetCompany) return res.status(404).json({ error: "Company not found" });
+
+      // Company-level authority check: the caller must also be the admin of the target company.
+      // This prevents portfolio owners from linking arbitrary companies they don't control.
+      // Only super_admin can link companies they are not directly admin of.
+      if (callerUser.role !== "super_admin") {
+        const callerOwnsCompany = callerUser.companyId === parsed.data.companyId && callerUser.role === "admin";
+        if (!callerOwnsCompany) {
+          return res.status(403).json({ error: "You must be an admin of the target company to add it to a group" });
+        }
+      }
+
+      const groupCompany = await storage.addCompanyToGroup(groupId, parsed.data.companyId);
+      res.status(201).json({ groupCompany });
+    } catch (e: any) {
+      if (e.message?.includes("unique") || e.code === "23505") {
+        return res.status(409).json({ error: "Company is already in this group" });
+      }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/companies/:id/setup-status", requireAuth, async (req, res) => {
+    try {
+      const auth = resolveAuth(req)!;
+      const callerUser = await storage.getUser(auth.userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const targetCompanyId = req.params.id;
+      const company = await storage.getCompany(targetCompanyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      // super_admin: unrestricted
+      // direct company member: allowed
+      // portfolio role: only if the target company is actually in one of their groups
+      let canAccess = false;
+      if (callerUser.role === "super_admin") {
+        canAccess = true;
+      } else if (callerUser.companyId === targetCompanyId) {
+        canAccess = true;
+      } else if (callerUser.role === "portfolio_owner" || callerUser.role === "portfolio_viewer") {
+        // Verify the caller's groups contain this company (IDOR protection)
+        const { userGroupRoles: ugrTable, groupCompanies: gcTable } = await import("@shared/schema");
+        const { eq: eqFn, and: andFn, inArray: inArrayFn } = await import("drizzle-orm");
+        const callerGroups = await db.select({ groupId: ugrTable.groupId }).from(ugrTable).where(eqFn(ugrTable.userId, callerUser.id));
+        if (callerGroups.length > 0) {
+          const groupIds = callerGroups.map(r => r.groupId);
+          const gcRows = await db.select({ companyId: gcTable.companyId }).from(gcTable).where(andFn(inArrayFn(gcTable.groupId, groupIds), eqFn(gcTable.companyId, targetCompanyId)));
+          canAccess = gcRows.length > 0;
+        }
+      }
+
+      if (!canAccess) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const [metricsResult, reportRunsResult, policyResult] = await Promise.all([
+        storage.getMetrics(targetCompanyId).catch(() => [] as any[]),
+        storage.getReportRuns(targetCompanyId).catch(() => [] as any[]),
+        storage.getPolicy(targetCompanyId).catch(() => null),
+      ]);
+
+      const hasMetrics = metricsResult.length > 0;
+      const hasReports = reportRunsResult.length > 0;
+      const hasPolicies = !!policyResult;
+
+      const checklist = [
+        { key: "company_profile", label: "Company profile complete", done: !!(company.country && company.industry) },
+        { key: "metrics_configured", label: "Metrics configured", done: hasMetrics },
+        { key: "policy_set_up", label: "Policy set up", done: hasPolicies },
+      ];
+      const checklistComplete = checklist.every(c => c.done);
+
+      res.json({
+        lifecycleState: company.lifecycleState || "active",
+        onboardingComplete: company.onboardingComplete,
+        checklistProgress: {
+          items: checklist,
+          complete: checklistComplete,
+          doneCount: checklist.filter(c => c.done).length,
+          totalCount: checklist.length,
+        },
+        dashboardReady: company.onboardingComplete && hasMetrics,
+        reportingReady: company.onboardingComplete && hasMetrics && hasReports,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ============================================================
