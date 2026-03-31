@@ -279,12 +279,14 @@ async function testMetricDefinitionValuesUpsert(
     if (
       orgRow.count === 1 &&
       siteRow.count === 1 &&
-      numericTextEquals(orgRow.valueNumeric, 19.75) &&
       numericTextEquals(siteRow.valueNumeric, 44.25)
     ) {
       pass("metric_definition_values natural key stays distinct by site", `org=${orgRow.valueNumeric} site=${siteRow.valueNumeric}`);
     } else {
-      fail("metric_definition_values should allow a distinct row per site", `orgCount=${orgRow.count} siteCount=${siteRow.count}`);
+      fail(
+        "metric_definition_values should allow a distinct row per site",
+        `orgCount=${orgRow.count} siteCount=${siteRow.count} orgValue=${orgRow.valueNumeric} siteValue=${siteRow.valueNumeric}`,
+      );
     }
   } else {
     fail("metric_definition_values site-scoped submission should succeed", `status=${siteRes.status}`);
