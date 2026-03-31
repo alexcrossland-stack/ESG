@@ -86,7 +86,10 @@ async function countMetricValues(client: Client, metricId: string, period: strin
       FROM metric_values
       WHERE metric_id = $1
         AND period = $2
-        AND coalesce(site_id, '__org__') = coalesce($3, '__org__')
+        AND (
+          ($3::uuid IS NULL AND site_id IS NULL)
+          OR site_id = $3::uuid
+        )
     `,
     [metricId, period, siteId],
   );
@@ -112,7 +115,10 @@ async function countMetricDefinitionValues(
         AND metric_definition_id = $2
         AND reporting_period_start = $3::timestamp
         AND reporting_period_end = $4::timestamp
-        AND coalesce(site_id, '__org__') = coalesce($5, '__org__')
+        AND (
+          ($5::uuid IS NULL AND site_id IS NULL)
+          OR site_id = $5::uuid
+        )
     `,
     [businessId, metricDefinitionId, periodStart, periodEnd, siteId],
   );
