@@ -457,6 +457,38 @@ app.use((req, res, next) => {
   }
   console.log("[Startup] Portfolio Groups schema migrations applied");
 
+  // Company Onboarding Checklist schema migration (Task #63)
+  try {
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        CREATE TYPE onboarding_checklist_status AS ENUM ('pending', 'in_progress', 'complete', 'skipped');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `));
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS company_onboarding_checklist (
+        id serial PRIMARY KEY,
+        company_id varchar NOT NULL,
+        task_key varchar NOT NULL,
+        label varchar NOT NULL DEFAULT '',
+        description text DEFAULT '',
+        status onboarding_checklist_status NOT NULL DEFAULT 'pending',
+        completed_at timestamp,
+        skipped_at timestamp,
+        display_order integer NOT NULL DEFAULT 0,
+        created_at timestamp DEFAULT now(),
+        updated_at timestamp DEFAULT now()
+      )
+    `));
+    await db.execute(sql.raw(`
+      CREATE UNIQUE INDEX IF NOT EXISTS company_onboarding_checklist_company_task_key
+      ON company_onboarding_checklist(company_id, task_key)
+    `));
+    console.log("[Startup] Company onboarding checklist schema migration applied");
+  } catch (e: any) {
+    console.warn("[Startup] Onboarding checklist migration warning:", e.message?.substring(0, 100));
+  }
+
   // Telemetry Events schema migration (Task #59)
   try {
     await db.execute(sql.raw(`
