@@ -9,7 +9,7 @@ export default defineConfig({
   reporter: "list",
   globalSetup: "./tests/e2e/global-setup.ts",
   use: {
-    baseURL: "http://localhost:5000",
+    baseURL: process.env.BASE_URL || "http://localhost:5000",
     trace: "on-first-retry",
     actionTimeout: 15000,
     navigationTimeout: 30000,

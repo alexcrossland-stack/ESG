@@ -18,7 +18,7 @@ import http from "http";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 const TEST_PASSWORD = "Test1234!";
 
 export interface TenantA {

@@ -12,7 +12,7 @@ import http from "http";
 import { seedTestTenants } from "./fixtures/seed.js";
 import type { SeededTenants } from "./fixtures/seed.js";
 
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
 interface TestResult {
   name: string;
@@ -339,6 +339,39 @@ async function testCrossTenantIsolation(tenants: SeededTenants) {
     pass("Targeted questionnaire cross-tenant test — Tenant B questionnaire not created; skip", "skipped");
   }
 
+  // ── Targeted cross-tenant site write access — must return 403 or 404 only ──
+
+  {
+    const createSiteRes = await request("POST", "/api/sites", {
+      name: `Tenant B Site ${Date.now()}`,
+      type: "office",
+    }, tenantB.adminToken);
+
+    if (createSiteRes.status === 201) {
+      let tenantBSiteId: string | null = null;
+      try {
+        const parsed = JSON.parse(createSiteRes.body) as { id?: string };
+        tenantBSiteId = parsed.id ?? null;
+      } catch {
+        tenantBSiteId = null;
+      }
+
+      if (tenantBSiteId) {
+        const patchRes = await request("PATCH", `/api/sites/${tenantBSiteId}`, {
+          name: "Tenant A should not update this site",
+        }, tenantA.adminToken);
+        assertTargetedBlocked("Tenant A PATCH Tenant B site blocked (403/404)", patchRes.status, patchRes.body);
+
+        const deleteRes = await request("DELETE", `/api/sites/${tenantBSiteId}`, undefined, tenantA.adminToken);
+        assertTargetedBlocked("Tenant A DELETE Tenant B site blocked (403/404)", deleteRes.status, deleteRes.body);
+      } else {
+        fail("Cross-tenant site test setup failed", "site creation response missing id");
+      }
+    } else {
+      pass("Cross-tenant site write test setup skipped", `tenant B site creation returned status=${createSiteRes.status}`);
+    }
+  }
+
   // ── Company-scoped list endpoints — 200 is OK, but no Tenant B data must appear ──
 
   {
@@ -383,6 +416,17 @@ async function testRBACEnforcement(tenants: SeededTenants) {
   if (topicsRes.status === 200) {
     const topics = JSON.parse(topicsRes.body) as Array<{ id: string }>;
     if (topics.length > 0) tenantATopicId = topics[0].id;
+  }
+
+  // Get a non-derived metric definition ID for new-path write checks
+  let tenantAMetricDefinitionId = "00000000-0000-0000-0000-000000000002";
+  {
+    const defsRes = await request("GET", "/api/metric-definitions", undefined, adminToken);
+    if (defsRes.status === 200) {
+      const defs = JSON.parse(defsRes.body) as Array<{ id: string; isDerived?: boolean }>;
+      const firstNonDerived = defs.find((d) => !d.isDerived);
+      if (firstNonDerived?.id) tenantAMetricDefinitionId = firstNonDerived.id;
+    }
   }
 
   // ── Viewer checks ──
@@ -462,6 +506,92 @@ async function testRBACEnforcement(tenants: SeededTenants) {
     }
   }
 
+  // Viewer cannot POST /api/sites
+  {
+    const res = await request("POST", "/api/sites", {
+      name: `Viewer-created site ${Date.now()}`,
+      type: "office",
+    }, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/sites (settings_admin)", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/sites", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/metric-definition-values
+  {
+    const res = await request("POST", "/api/metric-definition-values", {
+      metricDefinitionId: tenantAMetricDefinitionId,
+      reportingPeriodStart: "2026-01-01T00:00:00.000Z",
+      reportingPeriodEnd: "2026-01-31T23:59:59.999Z",
+      valueNumeric: "12.34",
+      sourceType: "manual",
+    }, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/metric-definition-values", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/metric-definition-values", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/metric-definitions/seed
+  {
+    const res = await request("POST", "/api/metric-definitions/seed", {}, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/metric-definitions/seed", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/metric-definitions/seed", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/questionnaires/import
+  {
+    const res = await request("POST", "/api/questionnaires/import", {
+      format: "text",
+      title: "Viewer import attempt",
+      content: "1. What is your policy?",
+    }, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/questionnaires/import", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/questionnaires/import", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/raw-data/import/parse
+  {
+    const res = await request("POST", "/api/raw-data/import/parse", {
+      type: "csv",
+      content: "bWV0cmljLHZhbHVlCg==",
+    }, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/raw-data/import/parse", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/raw-data/import/parse", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/esg/roadmap
+  {
+    const res = await request("POST", "/api/esg/roadmap", {}, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/esg/roadmap", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/esg/roadmap", `status=${res.status}`);
+    }
+  }
+
+  // Viewer cannot POST /api/billing/create-checkout
+  {
+    const res = await request("POST", "/api/billing/create-checkout", {}, viewerToken);
+    if (res.status === 403) {
+      pass("Viewer blocked from POST /api/billing/create-checkout", `status=403`);
+    } else {
+      fail("Viewer should be blocked from POST /api/billing/create-checkout", `status=${res.status}`);
+    }
+  }
+
   // ── Contributor checks (has metrics_data_entry, policy_editing, questionnaire_access; lacks settings_admin, template_admin, report_generation, user_management) ──
 
   // Contributor cannot PUT /api/company/settings (settings_admin required)
@@ -513,6 +643,39 @@ async function testRBACEnforcement(tenants: SeededTenants) {
     }
   }
 
+  // Contributor cannot POST /api/sites (settings_admin required)
+  {
+    const res = await request("POST", "/api/sites", {
+      name: `Contributor-created site ${Date.now()}`,
+      type: "office",
+    }, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from POST /api/sites (settings_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from POST /api/sites", `status=${res.status}`);
+    }
+  }
+
+  // Contributor cannot POST /api/billing/create-checkout (settings_admin required)
+  {
+    const res = await request("POST", "/api/billing/create-checkout", {}, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from POST /api/billing/create-checkout (settings_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from POST /api/billing/create-checkout", `status=${res.status}`);
+    }
+  }
+
+  // Contributor cannot POST /api/notifications/refresh (settings_admin required)
+  {
+    const res = await request("POST", "/api/notifications/refresh", {}, contributorToken);
+    if (res.status === 403) {
+      pass("Contributor blocked from POST /api/notifications/refresh (settings_admin)", `status=403`);
+    } else {
+      fail("Contributor should be blocked from POST /api/notifications/refresh", `status=${res.status}`);
+    }
+  }
+
   // ── Admin checks ──
 
   // Admin (non-super-admin) is blocked from GET /api/admin/users (requireSuperAdmin)
@@ -522,6 +685,16 @@ async function testRBACEnforcement(tenants: SeededTenants) {
       pass("Admin blocked from GET /api/admin/users (super-admin only)", `status=${res.status}`);
     } else {
       fail("Admin should be blocked from GET /api/admin/users", `status=${res.status}`);
+    }
+  }
+
+  // Admin (non-super-admin) is blocked from POST /api/metric-definitions/seed
+  {
+    const res = await request("POST", "/api/metric-definitions/seed", {}, adminToken);
+    if (res.status === 403 || res.status === 401) {
+      pass("Admin blocked from POST /api/metric-definitions/seed (super-admin only)", `status=${res.status}`);
+    } else {
+      fail("Admin should be blocked from POST /api/metric-definitions/seed", `status=${res.status}`);
     }
   }
 }
@@ -685,6 +858,114 @@ async function testMalformedPayloads(tenants: SeededTenants) {
   }
 }
 
+// ─── Suite 9: Company Profile Mass-Assignment Safety ───────────────────────
+
+async function testCompanyProfileMassAssignment(tenants: SeededTenants) {
+  console.log("\n── Suite 9: Company Profile Mass-Assignment Safety ──");
+
+  const { tenantA } = tenants;
+  const adminToken = tenantA.adminToken;
+
+  const initialRes = await request("GET", "/api/company", undefined, adminToken);
+  if (initialRes.status !== 200) {
+    fail("GET /api/company for mass-assignment baseline", `status=${initialRes.status}`);
+    return;
+  }
+
+  const initialCompany = JSON.parse(initialRes.body) as {
+    revenueBand?: string | null;
+    locations?: number | null;
+    planTier?: string | null;
+    planStatus?: string | null;
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
+    isBetaCompany?: boolean | null;
+    status?: string | null;
+  };
+
+  const alternateRevenueBand = initialCompany.revenueBand === "Under £1m" ? "£1m – £5m" : "Under £1m";
+  const alternateLocations = initialCompany.locations === 1 ? 2 : 1;
+
+  {
+    const res = await request("PUT", "/api/company", {
+      revenueBand: alternateRevenueBand,
+      locations: alternateLocations,
+    }, adminToken);
+
+    if (res.status !== 200) {
+      fail("PUT /api/company accepts whitelisted profile fields", `status=${res.status}`);
+    } else {
+      const updated = JSON.parse(res.body) as { revenueBand?: string | null; locations?: number | null };
+      if (updated.revenueBand === alternateRevenueBand && updated.locations === alternateLocations) {
+        pass("PUT /api/company updates whitelisted profile fields", `revenueBand=${updated.revenueBand}, locations=${updated.locations}`);
+      } else {
+        fail("PUT /api/company should persist whitelisted profile fields", `body=${res.body.slice(0, 160)}`);
+      }
+    }
+  }
+
+  {
+    const res = await request("PUT", "/api/company", {
+      planTier: "pro",
+      planStatus: "cancelled",
+      stripeCustomerId: "cus_mass_assignment_test",
+      stripeSubscriptionId: "sub_mass_assignment_test",
+      isBetaCompany: true,
+      status: "suspended",
+    }, adminToken);
+
+    if (res.status === 400) {
+      pass("PUT /api/company rejects restricted billing/account-state fields", "status=400");
+    } else {
+      fail("PUT /api/company should reject restricted billing/account-state fields", `status=${res.status}`);
+    }
+  }
+
+  {
+    const mixedRevenueBand = alternateRevenueBand === "£25m – £100m" ? "£5m – £25m" : "£25m – £100m";
+    const res = await request("PUT", "/api/company", {
+      revenueBand: mixedRevenueBand,
+      planTier: "pro",
+    }, adminToken);
+
+    if (res.status === 400) {
+      pass("PUT /api/company rejects mixed whitelisted + restricted payloads", "status=400");
+    } else {
+      fail("PUT /api/company should reject mixed whitelisted + restricted payloads", `status=${res.status}`);
+    }
+
+    const afterMixedRes = await request("GET", "/api/company", undefined, adminToken);
+    if (afterMixedRes.status !== 200) {
+      fail("GET /api/company after mixed payload rejection", `status=${afterMixedRes.status}`);
+    } else {
+      const afterMixed = JSON.parse(afterMixedRes.body) as {
+        revenueBand?: string | null;
+        planTier?: string | null;
+        planStatus?: string | null;
+        stripeCustomerId?: string | null;
+        stripeSubscriptionId?: string | null;
+        isBetaCompany?: boolean | null;
+        status?: string | null;
+      };
+
+      const safeFieldPreserved = afterMixed.revenueBand === alternateRevenueBand;
+      const restrictedFieldsPreserved =
+        afterMixed.planTier === initialCompany.planTier &&
+        afterMixed.planStatus === initialCompany.planStatus &&
+        afterMixed.stripeCustomerId === initialCompany.stripeCustomerId &&
+        afterMixed.stripeSubscriptionId === initialCompany.stripeSubscriptionId &&
+        afterMixed.isBetaCompany === initialCompany.isBetaCompany &&
+        afterMixed.status === initialCompany.status;
+
+      if (safeFieldPreserved && restrictedFieldsPreserved) {
+        pass("Rejected mixed payload does not partially update company fields", `revenueBand=${afterMixed.revenueBand}`);
+      } else {
+        fail("Rejected mixed payload should leave company unchanged except prior allowed update", `body=${afterMixedRes.body.slice(0, 200)}`);
+      }
+    }
+  }
+}
+
 // ─── Run All Suites ────────────────────────────────────────────────────────
 
 async function run() {
@@ -717,6 +998,7 @@ async function run() {
     const freshTenants = await seedTestTenants();
     await testSessionLifecycle(tenants);
     await testMalformedPayloads(freshTenants);
+    await testCompanyProfileMassAssignment(freshTenants);
 
   } catch (err) {
     console.error("\nTest runner error:", err);

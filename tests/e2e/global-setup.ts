@@ -7,13 +7,14 @@ const AUTH_DIR = "tests/e2e/.auth";
 export const ADMIN_STATE_FILE = `${AUTH_DIR}/admin.json`;
 export const VIEWER_STATE_FILE = `${AUTH_DIR}/viewer.json`;
 export const SEED_INFO_FILE = `${AUTH_DIR}/seed-info.json`;
+const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
 function writeStorageState(filePath: string, token: string): void {
   const state = {
     cookies: [],
     origins: [
       {
-        origin: "http://localhost:5000",
+        origin: BASE_URL,
         localStorage: [{ name: "auth_token", value: token }],
       },
     ],

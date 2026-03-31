@@ -9,6 +9,11 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
+    "test:release": "node --import tsx tests/release-critical.test.ts",
+    "test:security-db": "node --import tsx tests/api-security.test.ts",
+    "test:metric-upsert": "node --import tsx tests/metric-upsert.test.ts",
+    "test:e2e:release": "playwright test tests/e2e/activation-journey.browser.spec.ts tests/e2e/metric-entry.spec.ts tests/e2e/reports.spec.ts tests/e2e/admin-journeys.browser.spec.ts tests/e2e/viewer-restrictions.spec.ts",
+    "test:preflight:standalone": "npm run test:security-db && npm run test:metric-upsert && npm run test:e2e:release",
     "test:api": "tsx tests/api-security.test.ts",
     "test:e2e": "playwright test",
     "test:all": "tsx tests/api-security.test.ts && playwright test"
