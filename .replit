@@ -110,3 +110,7 @@ timeoutMs = 20000
 
 [userenv.development]
 REGRESSION_TEST = "1"
+
+[userenv.production]
+NODE_ENV = "production"
+APP_BASE_URL = "https://esgmanager.app"
