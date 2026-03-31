@@ -8,7 +8,8 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_metrics_company_category ON metrics(company_id, category)",
   "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_id ON metric_values(metric_id)",
   "CREATE INDEX IF NOT EXISTS idx_metric_values_period ON metric_values(metric_id, period)",
-  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_values_metric_period_site_unique ON metric_values(metric_id, period, coalesce(site_id, '__org__'))",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_values_metric_period_org_unique ON metric_values(metric_id, period) WHERE site_id IS NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_values_metric_period_site_unique ON metric_values(metric_id, period, site_id) WHERE site_id IS NOT NULL",
   "CREATE INDEX IF NOT EXISTS idx_metric_values_reporting_period ON metric_values(reporting_period_id)",
   "CREATE INDEX IF NOT EXISTS idx_raw_data_company_id ON raw_data_inputs(company_id)",
   "CREATE INDEX IF NOT EXISTS idx_raw_data_company_period ON raw_data_inputs(company_id, period)",
@@ -66,7 +67,8 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_metric_calc_runs_business ON metric_calculation_runs(business_id)",
   "CREATE INDEX IF NOT EXISTS idx_metric_calc_runs_metric_def ON metric_calculation_runs(metric_definition_id)",
   "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_def_id ON metric_values(metric_definition_id)",
-  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_site_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end, coalesce(site_id, '__org__'))",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_org_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end) WHERE site_id IS NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_site_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id) WHERE site_id IS NOT NULL",
 ];
 
 export async function ensureIndexes() {

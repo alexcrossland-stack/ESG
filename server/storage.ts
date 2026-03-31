@@ -697,43 +697,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertMetricValue(value: InsertMetricValue) {
-    const result = await db.execute(sql`
-      INSERT INTO metric_values (
-        metric_id, period, value, previous_value, target_value, status, percent_change,
-        submitted_by, notes, locked, data_source_type, workflow_status, reviewed_by,
-        reviewed_at, review_comment, reporting_period_id, site_id, metric_definition_id,
-        reporting_period_start, reporting_period_end, value_numeric, value_text, value_boolean,
-        value_json, source_type, entered_by_user_id
-      ) VALUES (
-        ${value.metricId}, ${value.period}, ${value.value ?? null}, ${value.previousValue ?? null},
-        ${value.targetValue ?? null}, ${value.status ?? null}, ${value.percentChange ?? null},
-        ${value.submittedBy ?? null}, ${value.notes ?? null}, ${value.locked ?? false},
-        ${value.dataSourceType ?? "manual"}, ${value.workflowStatus ?? "draft"}, ${value.reviewedBy ?? null},
-        ${value.reviewedAt ?? null}, ${value.reviewComment ?? null}, ${value.reportingPeriodId ?? null},
-        ${value.siteId ?? null}, ${value.metricDefinitionId ?? null}, ${value.reportingPeriodStart ?? null},
-        ${value.reportingPeriodEnd ?? null}, ${value.valueNumeric ?? null}, ${value.valueText ?? null},
-        ${value.valueBoolean ?? null}, ${value.valueJson ?? null}, ${value.sourceType ?? null},
-        ${value.enteredByUserId ?? null}
-      )
-      ON CONFLICT (metric_id, period, coalesce(site_id, '__org__'))
-      DO UPDATE SET
-        value = EXCLUDED.value,
-        submitted_by = EXCLUDED.submitted_by,
-        submitted_at = NOW(),
-        notes = EXCLUDED.notes,
-        data_source_type = EXCLUDED.data_source_type,
-        site_id = EXCLUDED.site_id
-      WHERE metric_values.locked = false
-      RETURNING *
-    `);
-    const row = (result as any).rows?.[0];
-    if (row) return row as MetricValue;
+    return db.transaction(async (tx) => {
+      const lockKey = `metric_values:${value.metricId}:${value.period}:${value.siteId ?? "__org__"}`;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
-    const existing = await this.getMetricValueForPeriodSite(value.metricId, value.period, value.siteId ?? null);
-    if (!existing) {
-      throw new Error("Metric value upsert failed");
-    }
-    return existing;
+      const conditions: any[] = [eq(metricValues.metricId, value.metricId), eq(metricValues.period, value.period)];
+      if (value.siteId == null) {
+        conditions.push(isNull(metricValues.siteId));
+      } else {
+        conditions.push(eq(metricValues.siteId, value.siteId));
+      }
+
+      const [existing] = await tx.select().from(metricValues).where(and(...conditions)).limit(1);
+      if (existing) {
+        if (existing.locked) return existing;
+        const [updated] = await tx.update(metricValues)
+          .set({
+            value: value.value ?? null,
+            submittedBy: value.submittedBy ?? null,
+            submittedAt: new Date(),
+            notes: value.notes ?? null,
+            dataSourceType: value.dataSourceType ?? "manual",
+            siteId: value.siteId ?? null,
+          })
+          .where(eq(metricValues.id, existing.id))
+          .returning();
+        return updated;
+      }
+
+      const [inserted] = await tx.insert(metricValues).values(value).returning();
+      return inserted;
+    });
   }
 
   async updateMetricValue(id: string, data: Partial<MetricValue>) {
@@ -2426,46 +2420,37 @@ export class DatabaseStorage implements IStorage {
 
   async upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>) {
     const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
-    const result = await db.execute(sql`
-      INSERT INTO metric_definition_values (
-        business_id, site_id, metric_definition_id, reporting_period_start, reporting_period_end,
-        value_numeric, value_text, value_boolean, value_json, source_type, status, notes,
-        entered_by_user_id
-      ) VALUES (
-        ${businessId}, ${siteId}, ${metricDefinitionId}, ${periodStart}, ${periodEnd},
-        ${valueNumeric ?? null}, ${valueText ?? null}, ${valueBoolean ?? null}, ${valueJson ?? null},
-        ${sourceType ?? "manual"}, ${status ?? "draft"}, ${notes ?? null}, ${enteredByUserId ?? null}
-      )
-      ON CONFLICT (business_id, metric_definition_id, reporting_period_start, reporting_period_end, coalesce(site_id, '__org__'))
-      DO UPDATE SET
-        value_numeric = EXCLUDED.value_numeric,
-        value_text = EXCLUDED.value_text,
-        value_boolean = EXCLUDED.value_boolean,
-        value_json = EXCLUDED.value_json,
-        source_type = EXCLUDED.source_type,
-        status = EXCLUDED.status,
-        notes = EXCLUDED.notes,
-        entered_by_user_id = EXCLUDED.entered_by_user_id,
-        updated_at = NOW()
-      RETURNING *
-    `);
-    const row = (result as any).rows?.[0];
-    if (row) return row as MetricDefinitionValue;
+    return db.transaction(async (tx) => {
+      const lockKey = `metric_definition_values:${businessId}:${metricDefinitionId}:${periodStart.toISOString()}:${periodEnd.toISOString()}:${siteId ?? "__org__"}`;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
-    const conditions: any[] = [
-      eq(metricDefinitionValues.businessId, businessId),
-      eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
-      eq(metricDefinitionValues.reportingPeriodStart, periodStart),
-      eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
-    ];
-    if (siteId === null) {
-      conditions.push(isNull(metricDefinitionValues.siteId));
-    } else {
-      conditions.push(eq(metricDefinitionValues.siteId, siteId));
-    }
-    const [existing] = await db.select().from(metricDefinitionValues).where(and(...conditions)).limit(1);
-    if (!existing) throw new Error("Metric definition value upsert failed");
-    return existing;
+      const conditions: any[] = [
+        eq(metricDefinitionValues.businessId, businessId),
+        eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
+        eq(metricDefinitionValues.reportingPeriodStart, periodStart),
+        eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
+      ];
+      if (siteId === null) {
+        conditions.push(isNull(metricDefinitionValues.siteId));
+      } else {
+        conditions.push(eq(metricDefinitionValues.siteId, siteId));
+      }
+
+      const [existing] = await tx.select().from(metricDefinitionValues).where(and(...conditions)).limit(1);
+      if (existing) {
+        const [updated] = await tx.update(metricDefinitionValues)
+          .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId, updatedAt: new Date() })
+          .where(eq(metricDefinitionValues.id, existing.id))
+          .returning();
+        return updated;
+      }
+
+      const [inserted] = await tx.insert(metricDefinitionValues).values({
+        businessId, metricDefinitionId, siteId, reportingPeriodStart: periodStart, reportingPeriodEnd: periodEnd,
+        valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId,
+      }).returning();
+      return inserted;
+    });
   }
 
   async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null> {
