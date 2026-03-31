@@ -400,6 +400,12 @@ export const metricValues = pgTable("metric_values", {
 }, (table) => ({
   siteIdIdx: index("idx_metric_values_site_id").on(table.siteId),
   metricDefIdIdx: index("idx_metric_values_metric_def_id").on(table.metricDefinitionId),
+  naturalKeyIdx: uniqueIndex("idx_metric_values_metric_period_site_unique")
+    .on(
+      table.metricId,
+      table.period,
+      sql`coalesce(${table.siteId}, '__org__')`,
+    ),
 }));
 
 export const estimateConfidenceEnum = pgEnum("estimate_confidence", ["high", "medium", "low"]);
@@ -1228,7 +1234,16 @@ export const metricDefinitionValues = pgTable("metric_definition_values", {
   enteredByUserId: varchar("entered_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+  naturalKeyIdx: uniqueIndex("idx_metric_definition_values_business_metric_period_site_unique")
+    .on(
+      table.businessId,
+      table.metricDefinitionId,
+      table.reportingPeriodStart,
+      table.reportingPeriodEnd,
+      sql`coalesce(${table.siteId}, '__org__')`,
+    ),
+}));
 
 export const metricEvidence = pgTable("metric_evidence", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

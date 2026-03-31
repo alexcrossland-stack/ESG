@@ -127,11 +127,13 @@ export interface IStorage {
 
   // Metric Values
   getMetricValues(metricId: string): Promise<MetricValue[]>;
+  getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null): Promise<MetricValue | undefined>;
   getMetricValuesByPeriod(companyId: string, period: string): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
   hasAnyData(companyId: string): Promise<boolean>;
   countEstimatedValues(companyId: string): Promise<number>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   updateMetricValue(id: string, data: Partial<MetricValue>): Promise<MetricValue | undefined>;
+  upsertMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   lockPeriod(companyId: string, period: string): Promise<void>;
 
   // Raw Data Inputs
@@ -651,6 +653,17 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(metricValues).where(eq(metricValues.metricId, metricId)).orderBy(desc(metricValues.period));
   }
 
+  async getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null) {
+    const conditions: any[] = [eq(metricValues.metricId, metricId), eq(metricValues.period, period)];
+    if (siteId === null) {
+      conditions.push(isNull(metricValues.siteId));
+    } else {
+      conditions.push(eq(metricValues.siteId, siteId));
+    }
+    const [v] = await db.select().from(metricValues).where(and(...conditions)).limit(1);
+    return v;
+  }
+
   async getMetricValuesByPeriod(companyId: string, period: string) {
     const result = await db
       .select({
@@ -681,6 +694,46 @@ export class DatabaseStorage implements IStorage {
   async createMetricValue(value: InsertMetricValue) {
     const [v] = await db.insert(metricValues).values(value).returning();
     return v;
+  }
+
+  async upsertMetricValue(value: InsertMetricValue) {
+    const result = await db.execute(sql`
+      INSERT INTO metric_values (
+        metric_id, period, value, previous_value, target_value, status, percent_change,
+        submitted_by, notes, locked, data_source_type, workflow_status, reviewed_by,
+        reviewed_at, review_comment, reporting_period_id, site_id, metric_definition_id,
+        reporting_period_start, reporting_period_end, value_numeric, value_text, value_boolean,
+        value_json, source_type, entered_by_user_id
+      ) VALUES (
+        ${value.metricId}, ${value.period}, ${value.value ?? null}, ${value.previousValue ?? null},
+        ${value.targetValue ?? null}, ${value.status ?? null}, ${value.percentChange ?? null},
+        ${value.submittedBy ?? null}, ${value.notes ?? null}, ${value.locked ?? false},
+        ${value.dataSourceType ?? "manual"}, ${value.workflowStatus ?? "draft"}, ${value.reviewedBy ?? null},
+        ${value.reviewedAt ?? null}, ${value.reviewComment ?? null}, ${value.reportingPeriodId ?? null},
+        ${value.siteId ?? null}, ${value.metricDefinitionId ?? null}, ${value.reportingPeriodStart ?? null},
+        ${value.reportingPeriodEnd ?? null}, ${value.valueNumeric ?? null}, ${value.valueText ?? null},
+        ${value.valueBoolean ?? null}, ${value.valueJson ?? null}, ${value.sourceType ?? null},
+        ${value.enteredByUserId ?? null}
+      )
+      ON CONFLICT (metric_id, period, coalesce(site_id, '__org__'))
+      DO UPDATE SET
+        value = EXCLUDED.value,
+        submitted_by = EXCLUDED.submitted_by,
+        submitted_at = NOW(),
+        notes = EXCLUDED.notes,
+        data_source_type = EXCLUDED.data_source_type,
+        site_id = EXCLUDED.site_id
+      WHERE metric_values.locked = false
+      RETURNING *
+    `);
+    const row = (result as any).rows?.[0];
+    if (row) return row as MetricValue;
+
+    const existing = await this.getMetricValueForPeriodSite(value.metricId, value.period, value.siteId ?? null);
+    if (!existing) {
+      throw new Error("Metric value upsert failed");
+    }
+    return existing;
   }
 
   async updateMetricValue(id: string, data: Partial<MetricValue>) {
@@ -2372,6 +2425,33 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>) {
+    const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
+    const result = await db.execute(sql`
+      INSERT INTO metric_definition_values (
+        business_id, site_id, metric_definition_id, reporting_period_start, reporting_period_end,
+        value_numeric, value_text, value_boolean, value_json, source_type, status, notes,
+        entered_by_user_id
+      ) VALUES (
+        ${businessId}, ${siteId}, ${metricDefinitionId}, ${periodStart}, ${periodEnd},
+        ${valueNumeric ?? null}, ${valueText ?? null}, ${valueBoolean ?? null}, ${valueJson ?? null},
+        ${sourceType ?? "manual"}, ${status ?? "draft"}, ${notes ?? null}, ${enteredByUserId ?? null}
+      )
+      ON CONFLICT (business_id, metric_definition_id, reporting_period_start, reporting_period_end, coalesce(site_id, '__org__'))
+      DO UPDATE SET
+        value_numeric = EXCLUDED.value_numeric,
+        value_text = EXCLUDED.value_text,
+        value_boolean = EXCLUDED.value_boolean,
+        value_json = EXCLUDED.value_json,
+        source_type = EXCLUDED.source_type,
+        status = EXCLUDED.status,
+        notes = EXCLUDED.notes,
+        entered_by_user_id = EXCLUDED.entered_by_user_id,
+        updated_at = NOW()
+      RETURNING *
+    `);
+    const row = (result as any).rows?.[0];
+    if (row) return row as MetricDefinitionValue;
+
     const conditions: any[] = [
       eq(metricDefinitionValues.businessId, businessId),
       eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
@@ -2383,22 +2463,9 @@ export class DatabaseStorage implements IStorage {
     } else {
       conditions.push(eq(metricDefinitionValues.siteId, siteId));
     }
-    const [existing] = await db.select().from(metricDefinitionValues).where(and(...conditions));
-    if (existing) {
-      const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
-      const [r] = await db.update(metricDefinitionValues)
-        .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId, updatedAt: new Date() })
-        .where(eq(metricDefinitionValues.id, existing.id))
-        .returning();
-      return r;
-    } else {
-      const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
-      const [r] = await db.insert(metricDefinitionValues).values({
-        businessId, metricDefinitionId, siteId, reportingPeriodStart: periodStart, reportingPeriodEnd: periodEnd,
-        valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId,
-      }).returning();
-      return r;
-    }
+    const [existing] = await db.select().from(metricDefinitionValues).where(and(...conditions)).limit(1);
+    if (!existing) throw new Error("Metric definition value upsert failed");
+    return existing;
   }
 
   async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null> {
