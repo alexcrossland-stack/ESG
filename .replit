@@ -46,6 +46,14 @@ args = "test:e2e"
 task = "workflow.run"
 args = "regression"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test:smoke"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test:regression"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -98,6 +106,28 @@ args = "npx playwright test --grep 'REGR-'"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "test:smoke"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/api/auth.test.ts && npx tsx tests/api/dashboard.test.ts && npx tsx tests/api/permissions.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "test:regression"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/api-security.test.ts && npx playwright test --grep REGR-"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [agent]
 integrations = ["javascript_openai_ai_integrations:2.0.0"]
