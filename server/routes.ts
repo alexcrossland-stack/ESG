@@ -1329,12 +1329,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(company);
   });
 
-  app.put("/api/company", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.put("/api/company", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const before = await storage.getCompany(companyId);
-      const company = await storage.updateCompany(companyId, req.body);
+      const updateSchema = z.object({
+        name: z.string().min(1).max(200).optional(),
+        industry: z.string().min(1).max(120).optional(),
+        country: z.string().min(1).max(120).optional(),
+        employeeCount: z.coerce.number().int().nonnegative().optional(),
+        revenueBand: z.string().min(1).max(120).optional(),
+        locations: z.coerce.number().int().positive().optional(),
+        businessType: z.string().min(1).max(120).optional(),
+        hasVehicles: z.boolean().optional(),
+        operationalProfile: z.record(z.any()).optional(),
+        reportingYearStart: z.string().min(1).max(20).optional(),
+      }).strict();
+      const parsed = updateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid company profile update payload", details: parsed.error.errors });
+      }
+      const company = await storage.updateCompany(companyId, parsed.data);
       auditLog({
         companyId,
         userId,
@@ -4380,7 +4396,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/notifications/refresh", requireAuth, async (req, res) => {
+  app.post("/api/notifications/refresh", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const count = await generateReminders(companyId);
@@ -7835,7 +7851,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/esg/roadmap", requireAuth, async (req, res) => {
+  app.post("/api/esg/roadmap", requireAuth, requirePermission("policy_editing"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -8138,7 +8154,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
-  app.post("/api/billing/create-checkout", requireAuth, async (req, res) => {
+  app.post("/api/billing/create-checkout", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       if (!stripe) return res.status(503).json({ error: "Billing is not configured" });
       const companyId = (req.session as any).companyId;
@@ -9284,7 +9300,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // POST /api/sites — create site
-  app.post("/api/sites", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.post("/api/sites", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9325,7 +9341,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // PATCH /api/sites/:id — update site metadata (allowed even for archived)
-  app.patch("/api/sites/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.patch("/api/sites/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9352,7 +9368,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   // DELETE /api/sites/:id — archive site (soft delete)
-  app.delete("/api/sites/:id", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.delete("/api/sites/:id", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = req.session?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
@@ -9393,7 +9409,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // METRIC DEFINITIONS API
   // ============================================================
 
-  app.patch("/api/metric-definitions/:id/toggle", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.patch("/api/metric-definitions/:id/toggle", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Metric definition not found" });
@@ -9405,7 +9421,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/metric-definitions/seed", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.post("/api/metric-definitions/seed", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       const { ALL_METRIC_DEFINITIONS } = await import("./metric-definitions-seed");
       const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
@@ -9436,7 +9452,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.post("/api/metric-definition-values", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+  app.post("/api/metric-definition-values", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req as any)._auth?.companyId;
       const userId = (req as any)._auth?.userId;
@@ -9476,7 +9492,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.patch("/api/metric-definition-values/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+  app.patch("/api/metric-definition-values/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req as any)._auth?.companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
