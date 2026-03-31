@@ -34,6 +34,11 @@ function fail(name: string, detail?: string) {
   console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
+function numericTextEquals(actual: string | null, expected: number): boolean {
+  if (actual === null) return false;
+  return Math.abs(Number(actual) - expected) < 0.000001;
+}
+
 async function createDbClient(): Promise<Client> {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL env var not set");
@@ -116,8 +121,8 @@ async function countMetricDefinitionValues(
         AND reporting_period_start = $3::timestamp
         AND reporting_period_end = $4::timestamp
         AND (
-          ($5::uuid IS NULL AND site_id IS NULL)
-          OR site_id = $5::uuid
+          ($5::text IS NULL AND site_id IS NULL)
+          OR site_id = $5::text
         )
     `,
     [businessId, metricDefinitionId, periodStart, periodEnd, siteId],
@@ -146,7 +151,7 @@ async function testMetricValuesUpsert(adminToken: string, metricId: string, clie
 
   if ([200, 201].includes(first.status) && [200, 201].includes(second.status)) {
     const row = await countMetricValues(client, metricId, PERIOD, null);
-    if (row.count === 1 && row.value === "25") {
+    if (row.count === 1 && numericTextEquals(row.value, 25)) {
       pass("metric_values repeated submissions remain a single org-level row", `count=1 value=${row.value}`);
     } else {
       fail("metric_values repeated submissions should upsert", `count=${row.count} value=${row.value}`);
@@ -166,7 +171,12 @@ async function testMetricValuesUpsert(adminToken: string, metricId: string, clie
   if ([200, 201].includes(siteRes.status)) {
     const orgRow = await countMetricValues(client, metricId, PERIOD, null);
     const siteRow = await countMetricValues(client, metricId, PERIOD, siteId);
-    if (orgRow.count === 1 && siteRow.count === 1 && orgRow.value === "25" && siteRow.value === "33") {
+    if (
+      orgRow.count === 1 &&
+      siteRow.count === 1 &&
+      numericTextEquals(orgRow.value, 25) &&
+      numericTextEquals(siteRow.value, 33)
+    ) {
       pass("metric_values natural key stays distinct by site", `org=${orgRow.value} site=${siteRow.value}`);
     } else {
       fail("metric_values should allow a distinct row per site", `orgCount=${orgRow.count} siteCount=${siteRow.count}`);
@@ -230,7 +240,7 @@ async function testMetricDefinitionValuesUpsert(
       REPORTING_PERIOD_END,
       null,
     );
-    if (row.count === 1 && row.valueNumeric === "19.750000") {
+    if (row.count === 1 && numericTextEquals(row.valueNumeric, 19.75)) {
       pass("metric_definition_values repeated submissions remain a single org-level row", `count=1 value=${row.valueNumeric}`);
     } else {
       fail("metric_definition_values repeated submissions should upsert", `count=${row.count} value=${row.valueNumeric}`);
@@ -266,7 +276,12 @@ async function testMetricDefinitionValuesUpsert(
       REPORTING_PERIOD_END,
       siteId,
     );
-    if (orgRow.count === 1 && siteRow.count === 1 && orgRow.valueNumeric === "19.750000" && siteRow.valueNumeric === "44.250000") {
+    if (
+      orgRow.count === 1 &&
+      siteRow.count === 1 &&
+      numericTextEquals(orgRow.valueNumeric, 19.75) &&
+      numericTextEquals(siteRow.valueNumeric, 44.25)
+    ) {
       pass("metric_definition_values natural key stays distinct by site", `org=${orgRow.valueNumeric} site=${siteRow.valueNumeric}`);
     } else {
       fail("metric_definition_values should allow a distinct row per site", `orgCount=${orgRow.count} siteCount=${siteRow.count}`);
