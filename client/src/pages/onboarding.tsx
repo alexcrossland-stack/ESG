@@ -429,9 +429,6 @@ export default function Onboarding() {
   const completeMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/onboarding/complete", data),
     onSuccess: () => {
-      queryClient.setQueryData(["/api/auth/me"], (old: any) =>
-        old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
-      );
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
@@ -537,9 +534,6 @@ export default function Onboarding() {
 
   function startQuickStart() {
     apiRequest("POST", "/api/onboarding/complete", { path: "quick_start", onboardingVersion: 2 }).then(() => {
-      queryClient.setQueryData(["/api/auth/me"], (old: any) =>
-        old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
-      );
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
       completionFiredRef.current = true;
@@ -630,10 +624,20 @@ export default function Onboarding() {
             <p className="text-sm font-medium">What to do next</p>
             <p className="text-xs text-muted-foreground">Add your first real data point — it only takes a minute. Your electricity bill is the easiest place to start.</p>
             <div className="flex flex-col sm:flex-row gap-2 justify-center pt-1">
-              <Button onClick={() => setLocation("/data-entry")} data-testid="button-go-data-entry">
+              <Button onClick={() => {
+                queryClient.setQueryData(["/api/auth/me"], (old: any) =>
+                  old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
+                );
+                setLocation("/data-entry");
+              }} data-testid="button-go-data-entry">
                 Add your first data point <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
-              <Button variant="outline" onClick={() => setLocation("/")} data-testid="button-go-dashboard">
+              <Button variant="outline" onClick={() => {
+                queryClient.setQueryData(["/api/auth/me"], (old: any) =>
+                  old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
+                );
+                setLocation("/");
+              }} data-testid="button-go-dashboard">
                 Go to dashboard
               </Button>
             </div>
