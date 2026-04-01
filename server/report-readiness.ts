@@ -14,8 +14,8 @@ const ENV_CATEGORIES = ["environmental", "energy", "emissions", "waste", "water"
 const SOC_CATEGORIES = ["social", "people", "hr", "health", "safety", "diversity", "training"];
 const GOV_CATEGORIES = ["governance", "policy", "compliance", "risk", "board"];
 
-function classifyEsgCategory(cat: string): "env" | "soc" | "gov" | null {
-  const lower = cat.toLowerCase();
+function classifyEsgCategory(cat: unknown): "env" | "soc" | "gov" | null {
+  const lower = typeof cat === "string" ? cat.toLowerCase() : "";
   if (ENV_CATEGORIES.some(k => lower.includes(k))) return "env";
   if (SOC_CATEGORIES.some(k => lower.includes(k))) return "soc";
   if (GOV_CATEGORIES.some(k => lower.includes(k))) return "gov";

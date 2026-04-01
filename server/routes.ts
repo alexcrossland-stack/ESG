@@ -1630,6 +1630,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationNextStep,
       });
     } catch (e: any) {
+      console.error("[api/onboarding/status] failed", {
+        companyId: (req.session as any).companyId,
+        error: e?.message,
+        stack: e?.stack,
+      });
       res.status(500).json({ error: e.message });
     }
   });
@@ -2985,6 +2990,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { completeness, performance, managementMaturity: maturity, frameworkReadiness, scoreConfidenceLabel } = await getEsgScoreWithConfidence(companyId, period, siteId);
       res.json({ completeness, performance, maturity, frameworkReadiness, scoreConfidenceLabel });
     } catch (e: any) {
+      console.error("[api/esg-scores/all] failed", {
+        companyId: (req.session as any).companyId,
+        period: req.query.period,
+        siteId: req.query.siteId,
+        error: e?.message,
+        stack: e?.stack,
+      });
       res.status(500).json({ error: e.message });
     }
   });
@@ -3034,6 +3046,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await resolveDashboardActions(companyId);
       res.json(result);
     } catch (e: any) {
+      console.error("[api/dashboard/actions] failed", {
+        companyId: (req.session as any).companyId,
+        error: e?.message,
+        stack: e?.stack,
+      });
       res.status(500).json({ error: e.message });
     }
   });
@@ -3050,6 +3067,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ]);
       res.json({ scoreReadiness, reportReadiness });
     } catch (e: any) {
+      console.error("[api/dashboard/readiness] failed", {
+        companyId: (req.session as any).companyId,
+        error: e?.message,
+        stack: e?.stack,
+      });
       res.status(500).json({ error: e.message });
     }
   });

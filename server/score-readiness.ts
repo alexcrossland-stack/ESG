@@ -14,8 +14,12 @@ const ENV_CATEGORIES = ["environmental", "energy", "emissions", "waste", "water"
 const SOC_CATEGORIES = ["social", "people", "hr", "health", "safety", "diversity", "training"];
 const GOV_CATEGORIES = ["governance", "policy", "compliance", "risk", "board"];
 
-function isEsgCategory(cat: string): boolean {
-  const lower = cat.toLowerCase();
+function normaliseCategory(cat: unknown): string {
+  return typeof cat === "string" ? cat.toLowerCase() : "";
+}
+
+function isEsgCategory(cat: unknown): boolean {
+  const lower = normaliseCategory(cat);
   return (
     ENV_CATEGORIES.some(k => lower.includes(k)) ||
     SOC_CATEGORIES.some(k => lower.includes(k)) ||
@@ -41,15 +45,15 @@ export async function getScoreReadiness(companyId: string): Promise<ScoreReadine
 
   const esgEntries = rawData.filter(r => isEsgCategory(r.inputCategory));
   const envEntries = esgEntries.filter(r => {
-    const lower = r.inputCategory.toLowerCase();
+    const lower = normaliseCategory(r.inputCategory);
     return ENV_CATEGORIES.some(k => lower.includes(k));
   });
   const socEntries = esgEntries.filter(r => {
-    const lower = r.inputCategory.toLowerCase();
+    const lower = normaliseCategory(r.inputCategory);
     return SOC_CATEGORIES.some(k => lower.includes(k));
   });
   const govEntries = esgEntries.filter(r => {
-    const lower = r.inputCategory.toLowerCase();
+    const lower = normaliseCategory(r.inputCategory);
     return GOV_CATEGORIES.some(k => lower.includes(k));
   });
 

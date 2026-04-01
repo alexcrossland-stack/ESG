@@ -94,7 +94,8 @@ function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
       val,
     ]),
   ) as unknown as T;
-=======
+}
+
 function storageError(status: number, message: string) {
   return Object.assign(new Error(message), { status });
 }
@@ -115,7 +116,6 @@ async function anonymiseUserRecord(tx: any, userId: string): Promise<void> {
     identityProviderId: null,
     anonymisedAt: new Date(),
   }).where(eq(users.id, userId));
->>>>>>> c14b238 (Add super admin delete and archive actions)
 }
 
 export interface IStorage {
