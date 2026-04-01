@@ -73,6 +73,7 @@ function JobStatusBadge({ status }: { status: string }) {
 }
 
 function CompaniesTable() {
+  const { isSuperAdmin } = usePermissions();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "reactivate" | "impersonate" | "archive"; company: any } | null>(null);
@@ -169,7 +170,9 @@ function CompaniesTable() {
                 <th className="text-left px-4 py-3 font-medium">Status</th>
                 <th className="text-left px-4 py-3 font-medium">Users</th>
                 <th className="text-left px-4 py-3 font-medium">Created</th>
-                <th className="text-right px-4 py-3 font-medium">Actions</th>
+                {isSuperAdmin && (
+                  <th className="text-right px-4 py-3 font-medium whitespace-nowrap w-[220px]">Actions</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -187,41 +190,43 @@ function CompaniesTable() {
                   <td className="px-4 py-3 text-muted-foreground text-xs">
                     {c.created_at ? formatDistanceToNow(new Date(c.created_at), { addSuffix: true }) : "—"}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => navigate(`/admin/companies/${c.id}`)} data-testid={`button-view-${c.id}`}>
-                        <Eye className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "impersonate", company: c })} data-testid={`button-impersonate-${c.id}`}>
-                        <LogIn className="w-3.5 h-3.5" />
-                      </Button>
-                      {c.status === "suspended" ? (
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "reactivate", company: c })} data-testid={`button-reactivate-${c.id}`}>
-                          <ShieldCheck className="w-3.5 h-3.5 text-green-600" />
+                  {isSuperAdmin && (
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1 min-w-[210px]">
+                        <Button size="sm" variant="ghost" onClick={() => navigate(`/admin/companies/${c.id}`)} data-testid={`button-view-${c.id}`}>
+                          <Eye className="w-3.5 h-3.5" />
                         </Button>
-                      ) : c.status === "archived" ? (
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`} disabled>
-                          <Archive className="w-3.5 h-3.5 text-amber-600" />
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "impersonate", company: c })} data-testid={`button-impersonate-${c.id}`}>
+                          <LogIn className="w-3.5 h-3.5" />
                         </Button>
-                      ) : (
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "suspend", company: c })} data-testid={`button-suspend-${c.id}`}>
-                          <ShieldOff className="w-3.5 h-3.5 text-destructive" />
+                        {c.status === "suspended" ? (
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "reactivate", company: c })} data-testid={`button-reactivate-${c.id}`}>
+                            <ShieldCheck className="w-3.5 h-3.5 text-green-600" />
+                          </Button>
+                        ) : c.status === "archived" ? (
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`} disabled>
+                            <Archive className="w-3.5 h-3.5 text-amber-600" />
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "suspend", company: c })} data-testid={`button-suspend-${c.id}`}>
+                            <ShieldOff className="w-3.5 h-3.5 text-destructive" />
+                          </Button>
+                        )}
+                        {c.status !== "archived" && c.status !== "deleted" && (
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`}>
+                            <Archive className="w-3.5 h-3.5 text-amber-600" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => { setDeleteCompanyDialog(c); setDeleteCompanyInput(""); }} data-testid={`button-delete-company-${c.id}`}>
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
                         </Button>
-                      )}
-                      {c.status !== "archived" && c.status !== "deleted" && (
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`}>
-                          <Archive className="w-3.5 h-3.5 text-amber-600" />
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost" onClick={() => { setDeleteCompanyDialog(c); setDeleteCompanyInput(""); }} data-testid={`button-delete-company-${c.id}`}>
-                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                      </Button>
-                    </div>
-                  </td>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
               {companies.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">No companies found</td></tr>
+                <tr><td colSpan={isSuperAdmin ? 7 : 6} className="text-center py-8 text-muted-foreground">No companies found</td></tr>
               )}
             </tbody>
           </table>
@@ -321,6 +326,7 @@ function CompaniesTable() {
 }
 
 function UsersTable() {
+  const { isSuperAdmin } = usePermissions();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [deleteUserDialog, setDeleteUserDialog] = useState<any | null>(null);
@@ -379,7 +385,9 @@ function UsersTable() {
                 <th className="text-left px-4 py-3 font-medium">Company</th>
                 <th className="text-left px-4 py-3 font-medium">Company Status</th>
                 <th className="text-left px-4 py-3 font-medium">Joined</th>
-                <th className="text-right px-4 py-3 font-medium">Actions</th>
+                {isSuperAdmin && (
+                  <th className="text-right px-4 py-3 font-medium whitespace-nowrap w-[120px]">Actions</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -399,22 +407,24 @@ function UsersTable() {
                   <td className="px-4 py-3 text-muted-foreground text-xs">
                     {u.created_at ? formatDistanceToNow(new Date(u.created_at), { addSuffix: true }) : "—"}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => { setDeleteUserDialog(u); setDeleteUserInput(""); }}
-                        data-testid={`button-delete-user-${u.id}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                      </Button>
-                    </div>
-                  </td>
+                  {isSuperAdmin && (
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center justify-end min-w-[56px]">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => { setDeleteUserDialog(u); setDeleteUserInput(""); }}
+                          data-testid={`button-delete-user-${u.id}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
               {usersList.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">No users found</td></tr>
+                <tr><td colSpan={isSuperAdmin ? 7 : 6} className="text-center py-8 text-muted-foreground">No users found</td></tr>
               )}
             </tbody>
           </table>
