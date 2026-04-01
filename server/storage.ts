@@ -697,37 +697,93 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertMetricValue(value: InsertMetricValue) {
-    return db.transaction(async (tx) => {
-      const lockKey = `metric_values:${value.metricId}:${value.period}:${value.siteId ?? "__org__"}`;
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+    const lockKey = `metric_values:${value.metricId}:${value.period}:${value.siteId ?? "__org__"}`;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
 
-      const conditions: any[] = [eq(metricValues.metricId, value.metricId), eq(metricValues.period, value.period)];
-      if (value.siteId == null) {
-        conditions.push(isNull(metricValues.siteId));
-      } else {
-        conditions.push(eq(metricValues.siteId, value.siteId));
-      }
+      const selectSql = value.siteId == null
+        ? `
+            SELECT *
+            FROM metric_values
+            WHERE metric_id = $1
+              AND period = $2
+              AND site_id IS NULL
+            LIMIT 1
+            FOR UPDATE
+          `
+        : `
+            SELECT *
+            FROM metric_values
+            WHERE metric_id = $1
+              AND period = $2
+              AND site_id = $3
+            LIMIT 1
+            FOR UPDATE
+          `;
+      const selectParams = value.siteId == null
+        ? [value.metricId, value.period]
+        : [value.metricId, value.period, value.siteId];
+      const existingResult = await client.query(selectSql, selectParams);
+      const existing = existingResult.rows[0] as MetricValue | undefined;
 
-      const [existing] = await tx.select().from(metricValues).where(and(...conditions)).limit(1);
       if (existing) {
-        if (existing.locked) return existing;
-        const [updated] = await tx.update(metricValues)
-          .set({
-            value: value.value ?? null,
-            submittedBy: value.submittedBy ?? null,
-            submittedAt: new Date(),
-            notes: value.notes ?? null,
-            dataSourceType: value.dataSourceType ?? "manual",
-            siteId: value.siteId ?? null,
-          })
-          .where(eq(metricValues.id, existing.id))
-          .returning();
-        return updated;
+        if (existing.locked) {
+          await client.query("COMMIT");
+          return existing;
+        }
+        const updateResult = await client.query(
+          `
+            UPDATE metric_values
+            SET
+              value = $2,
+              submitted_by = $3,
+              submitted_at = NOW(),
+              notes = $4,
+              data_source_type = $5
+            WHERE id = $1
+            RETURNING *
+          `,
+          [
+            existing.id,
+            value.value ?? null,
+            value.submittedBy ?? null,
+            value.notes ?? null,
+            value.dataSourceType ?? "manual",
+          ],
+        );
+        await client.query("COMMIT");
+        return updateResult.rows[0] as MetricValue;
       }
 
-      const [inserted] = await tx.insert(metricValues).values(value).returning();
-      return inserted;
-    });
+      const insertResult = await client.query(
+        `
+          INSERT INTO metric_values (
+            metric_id, period, value, submitted_by, submitted_at, notes, locked, data_source_type, site_id
+          )
+          VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8)
+          RETURNING *
+        `,
+        [
+          value.metricId,
+          value.period,
+          value.value ?? null,
+          value.submittedBy ?? null,
+          value.notes ?? null,
+          value.locked ?? false,
+          value.dataSourceType ?? "manual",
+          value.siteId ?? null,
+        ],
+      );
+      await client.query("COMMIT");
+      return insertResult.rows[0] as MetricValue;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async updateMetricValue(id: string, data: Partial<MetricValue>) {
@@ -2420,37 +2476,78 @@ export class DatabaseStorage implements IStorage {
 
   async upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>) {
     const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
-    return db.transaction(async (tx) => {
-      const lockKey = `metric_definition_values:${businessId}:${metricDefinitionId}:${periodStart.toISOString()}:${periodEnd.toISOString()}:${siteId ?? "__org__"}`;
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+    const baseConditions: any[] = [
+      eq(metricDefinitionValues.businessId, businessId),
+      eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
+      eq(metricDefinitionValues.reportingPeriodStart, periodStart),
+      eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
+    ];
 
-      const conditions: any[] = [
-        eq(metricDefinitionValues.businessId, businessId),
-        eq(metricDefinitionValues.metricDefinitionId, metricDefinitionId),
-        eq(metricDefinitionValues.reportingPeriodStart, periodStart),
-        eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
-      ];
-      if (siteId === null) {
-        conditions.push(isNull(metricDefinitionValues.siteId));
-      } else {
-        conditions.push(eq(metricDefinitionValues.siteId, siteId));
-      }
+    if (siteId === null) {
+      const result = await db.execute(sql`
+        INSERT INTO metric_definition_values (
+          business_id, metric_definition_id, site_id, reporting_period_start, reporting_period_end,
+          value_numeric, value_text, value_boolean, value_json, source_type, notes, status, entered_by_user_id,
+          created_at, updated_at
+        )
+        VALUES (
+          ${businessId}, ${metricDefinitionId}, NULL, ${periodStart}, ${periodEnd},
+          ${valueNumeric ?? null}, ${valueText ?? null}, ${valueBoolean ?? null}, ${valueJson ?? null},
+          ${sourceType ?? "manual"}, ${notes ?? null}, ${status ?? "draft"}, ${enteredByUserId ?? null},
+          NOW(), NOW()
+        )
+        ON CONFLICT (business_id, metric_definition_id, reporting_period_start, reporting_period_end) WHERE site_id IS NULL
+        DO UPDATE SET
+          value_numeric = EXCLUDED.value_numeric,
+          value_text = EXCLUDED.value_text,
+          value_boolean = EXCLUDED.value_boolean,
+          value_json = EXCLUDED.value_json,
+          source_type = EXCLUDED.source_type,
+          notes = EXCLUDED.notes,
+          status = EXCLUDED.status,
+          entered_by_user_id = EXCLUDED.entered_by_user_id,
+          updated_at = NOW()
+        RETURNING *
+      `);
+      const rows = (result as any).rows ?? [];
+      if (rows[0]) return rows[0] as MetricDefinitionValue;
+      baseConditions.push(isNull(metricDefinitionValues.siteId));
+    } else {
+      const result = await db.execute(sql`
+        INSERT INTO metric_definition_values (
+          business_id, metric_definition_id, site_id, reporting_period_start, reporting_period_end,
+          value_numeric, value_text, value_boolean, value_json, source_type, notes, status, entered_by_user_id,
+          created_at, updated_at
+        )
+        VALUES (
+          ${businessId}, ${metricDefinitionId}, ${siteId}, ${periodStart}, ${periodEnd},
+          ${valueNumeric ?? null}, ${valueText ?? null}, ${valueBoolean ?? null}, ${valueJson ?? null},
+          ${sourceType ?? "manual"}, ${notes ?? null}, ${status ?? "draft"}, ${enteredByUserId ?? null},
+          NOW(), NOW()
+        )
+        ON CONFLICT (business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id) WHERE site_id IS NOT NULL
+        DO UPDATE SET
+          value_numeric = EXCLUDED.value_numeric,
+          value_text = EXCLUDED.value_text,
+          value_boolean = EXCLUDED.value_boolean,
+          value_json = EXCLUDED.value_json,
+          source_type = EXCLUDED.source_type,
+          notes = EXCLUDED.notes,
+          status = EXCLUDED.status,
+          entered_by_user_id = EXCLUDED.entered_by_user_id,
+          updated_at = NOW()
+        RETURNING *
+      `);
+      const rows = (result as any).rows ?? [];
+      if (rows[0]) return rows[0] as MetricDefinitionValue;
+      baseConditions.push(eq(metricDefinitionValues.siteId, siteId));
+    }
 
-      const [existing] = await tx.select().from(metricDefinitionValues).where(and(...conditions)).limit(1);
-      if (existing) {
-        const [updated] = await tx.update(metricDefinitionValues)
-          .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId, updatedAt: new Date() })
-          .where(eq(metricDefinitionValues.id, existing.id))
-          .returning();
-        return updated;
-      }
-
-      const [inserted] = await tx.insert(metricDefinitionValues).values({
-        businessId, metricDefinitionId, siteId, reportingPeriodStart: periodStart, reportingPeriodEnd: periodEnd,
-        valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId,
-      }).returning();
-      return inserted;
-    });
+    const [existing] = await db.select().from(metricDefinitionValues).where(and(...baseConditions)).limit(1);
+    if (!existing) {
+      throw new Error("metric_definition_values upsert did not return or persist a row");
+    }
+    return existing;
   }
 
   async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null> {

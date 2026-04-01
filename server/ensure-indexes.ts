@@ -71,15 +71,70 @@ const INDEXES = [
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_site_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id) WHERE site_id IS NOT NULL",
 ];
 
+const REQUIRED_UNIQUE_INDEXES = [
+  "idx_metric_values_metric_period_org_unique",
+  "idx_metric_values_metric_period_site_unique",
+  "idx_metric_definition_values_business_metric_period_org_unique",
+  "idx_metric_definition_values_business_metric_period_site_unique",
+];
+
+async function verifyRequiredUniqueIndexes() {
+  const result = await db.execute(sql`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname IN (
+        'idx_metric_values_metric_period_org_unique',
+        'idx_metric_values_metric_period_site_unique',
+        'idx_metric_definition_values_business_metric_period_org_unique',
+        'idx_metric_definition_values_business_metric_period_site_unique'
+      )
+  `);
+  const rows = (result as any).rows ?? [] as Array<{ indexname: string; indexdef: string }>;
+  const found = new Map(rows.map((row) => [row.indexname, row.indexdef]));
+  const missing = REQUIRED_UNIQUE_INDEXES.filter((name) => !found.has(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required metric upsert unique indexes: ${missing.join(", ")}. ` +
+      `Concurrent metric submissions are not safe until these indexes exist.`,
+    );
+  }
+
+  const expectedFragments: Record<string, string[]> = {
+    idx_metric_values_metric_period_org_unique: ["UNIQUE INDEX", "metric_values", "(metric_id, period)", "WHERE (site_id IS NULL)"],
+    idx_metric_values_metric_period_site_unique: ["UNIQUE INDEX", "metric_values", "(metric_id, period, site_id)", "WHERE (site_id IS NOT NULL)"],
+    idx_metric_definition_values_business_metric_period_org_unique: ["UNIQUE INDEX", "metric_definition_values", "(business_id, metric_definition_id, reporting_period_start, reporting_period_end)", "WHERE (site_id IS NULL)"],
+    idx_metric_definition_values_business_metric_period_site_unique: ["UNIQUE INDEX", "metric_definition_values", "(business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id)", "WHERE (site_id IS NOT NULL)"],
+  };
+
+  const mismatched = Object.entries(expectedFragments)
+    .filter(([indexName, fragments]) => {
+      const def = found.get(indexName) ?? "";
+      return fragments.some((fragment) => !def.includes(fragment));
+    })
+    .map(([indexName]) => indexName);
+
+  if (mismatched.length > 0) {
+    throw new Error(
+      `Metric upsert unique indexes exist but do not match expected semantics: ${mismatched.join(", ")}.`,
+    );
+  }
+}
+
 export async function ensureIndexes() {
   let created = 0;
   for (const idx of INDEXES) {
     try {
       await db.execute(sql.raw(idx));
       created++;
-    } catch {
+    } catch (error: any) {
+      const indexName = idx.match(/INDEX IF NOT EXISTS ([^\s]+)/)?.[1];
+      if (indexName && REQUIRED_UNIQUE_INDEXES.includes(indexName)) {
+        console.error(`[Indexes] Failed to ensure required index ${indexName}: ${error?.message ?? String(error)}`);
+      }
     }
   }
+  await verifyRequiredUniqueIndexes();
   console.log(`[Indexes] Ensured ${created}/${INDEXES.length} indexes`);
   try {
     await seedMetricDefinitions();
