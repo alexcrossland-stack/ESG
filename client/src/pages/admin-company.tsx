@@ -5,13 +5,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
   ArrowLeft, Building2, Users, FileText, BarChart2, ShieldCheck, ShieldOff,
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
   ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
-  ArrowRightLeft, PlayCircle, Eye, Link2, Activity, Database,
+  ArrowRightLeft, PlayCircle, Eye, Link2, Activity, Database, Archive, Trash2,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -179,6 +183,11 @@ function AdminMigrationPanel({ companyId }: { companyId: string }) {
 export default function AdminCompanyPage() {
   const { companyId } = useParams<{ companyId: string }>();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteCompanyInput, setDeleteCompanyInput] = useState("");
 
   const { data: diag, isLoading, error } = useQuery<any>({
     queryKey: ["/api/admin/company", companyId, "diagnostics"],
@@ -188,6 +197,37 @@ export default function AdminCompanyPage() {
       return res.json();
     },
     enabled: !!companyId,
+  });
+
+  const archiveMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/companies/${companyId}/archive`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Company archived", description: "The workspace is now inactive for normal users." });
+      setArchiveOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company", companyId, "diagnostics"] });
+      navigate("/admin");
+    },
+    onError: (e: any) => toast({ title: "Archive failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", `/api/admin/companies/${companyId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Company deleted", description: "The company has been anonymised and marked deleted." });
+      setDeleteOpen(false);
+      setDeleteCompanyInput("");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company", companyId, "diagnostics"] });
+      navigate("/admin");
+    },
+    onError: (e: any) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) {
@@ -229,6 +269,14 @@ export default function AdminCompanyPage() {
           <p className="text-sm text-muted-foreground">{diag.industry ?? "—"} · {diag.country ?? "—"}</p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => setArchiveOpen(true)} data-testid="button-archive-company-detail">
+            <Archive className="w-4 h-4 mr-1.5" />
+            Archive
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => { setDeleteOpen(true); setDeleteCompanyInput(""); }} data-testid="button-delete-company-detail">
+            <Trash2 className="w-4 h-4 mr-1.5" />
+            Delete
+          </Button>
           <Badge variant={statusActive ? "outline" : "destructive"} data-testid="badge-company-status">
             {statusActive ? <ShieldCheck className="w-3 h-3 mr-1" /> : <ShieldOff className="w-3 h-3 mr-1" />}
             {diag.status ?? "active"}
@@ -530,6 +578,84 @@ export default function AdminCompanyPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card className="border-destructive/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+            <AlertCircle className="w-4 h-4" />
+            Danger Zone
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>Archive keeps the company record for super-admin oversight but makes it inactive for normal users.</p>
+          <p>Delete is stronger: it revokes access, anonymises the company and its users, and cannot be undone.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setArchiveOpen(true)} data-testid="button-archive-company-danger">
+              <Archive className="w-4 h-4 mr-1.5" />
+              Archive company
+            </Button>
+            <Button variant="destructive" onClick={() => { setDeleteOpen(true); setDeleteCompanyInput(""); }} data-testid="button-delete-company-danger">
+              <Trash2 className="w-4 h-4 mr-1.5" />
+              Delete company
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive company</DialogTitle>
+            <DialogDescription>
+              Archiving will make this workspace inactive for normal users. Super admins will still be able to find it in admin views.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveOpen(false)}>Cancel</Button>
+            <Button
+              variant="default"
+              onClick={() => archiveMut.mutate()}
+              disabled={archiveMut.isPending}
+              data-testid="button-confirm-archive-company-detail"
+            >
+              Archive company
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={(open) => { setDeleteOpen(open); if (!open) setDeleteCompanyInput(""); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete company</DialogTitle>
+            <DialogDescription>
+              This is irreversible. The company will be anonymised, user access will be revoked, and historical references will be retained to keep the database consistent.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-muted-foreground">
+              Type <strong>{diag.name}</strong> to confirm permanent deletion.
+            </div>
+            <Input
+              value={deleteCompanyInput}
+              onChange={(e) => setDeleteCompanyInput(e.target.value)}
+              placeholder={diag.name}
+              data-testid="input-delete-company-detail-confirm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDeleteOpen(false); setDeleteCompanyInput(""); }}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteMut.mutate()}
+              disabled={deleteMut.isPending || deleteCompanyInput !== diag.name}
+              data-testid="button-confirm-delete-company-detail"
+            >
+              Delete company
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

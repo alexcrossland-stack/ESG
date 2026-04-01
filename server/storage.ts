@@ -86,6 +86,7 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool);
 
+
 function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
   return Object.fromEntries(
     Object.entries(row).map(([key, val]) => [
@@ -93,6 +94,28 @@ function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
       val,
     ]),
   ) as unknown as T;
+=======
+function storageError(status: number, message: string) {
+  return Object.assign(new Error(message), { status });
+}
+
+async function anonymiseUserRecord(tx: any, userId: string): Promise<void> {
+  const anonEmail = `deleted-${userId}@anonymised.local`;
+  const anonUsername = `deleted_${userId}`;
+  await tx.update(users).set({
+    email: anonEmail,
+    username: anonUsername,
+    password: "ANONYMISED",
+    role: "viewer",
+    companyId: null,
+    mfaSecretEncrypted: null,
+    mfaBackupCodesHash: null,
+    mfaEnabled: false,
+    externalId: null,
+    identityProviderId: null,
+    anonymisedAt: new Date(),
+  }).where(eq(users.id, userId));
+>>>>>>> c14b238 (Add super admin delete and archive actions)
 }
 
 export interface IStorage {
@@ -353,6 +376,9 @@ export interface IStorage {
   adminGetCompanyDetail(companyId: string): Promise<any>;
   adminSuspendCompany(companyId: string): Promise<void>;
   adminReactivateCompany(companyId: string): Promise<void>;
+  adminArchiveCompany(companyId: string): Promise<Company>;
+  adminDeleteCompany(companyId: string): Promise<Company>;
+  adminDeleteUser(userId: string, currentSuperAdminUserId: string): Promise<User>;
   createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">): Promise<SuperAdminAction>;
   getCompanyStatus(companyId: string): Promise<string | null>;
   adminGetCompanyDiagnostics(companyId: string): Promise<any>;
@@ -2092,6 +2118,115 @@ export class DatabaseStorage implements IStorage {
     await db.execute(sql`UPDATE companies SET status = 'active' WHERE id = ${companyId}`);
   }
 
+  async adminArchiveCompany(companyId: string): Promise<Company> {
+    return db.transaction(async (tx) => {
+      const [company] = await tx.select().from(companies).where(eq(companies.id, companyId));
+      if (!company) {
+        throw storageError(404, "Company not found");
+      }
+      const [updated] = await tx.update(companies).set({
+        status: "archived",
+        lifecycleState: "archived",
+      }).where(eq(companies.id, companyId)).returning();
+      return updated;
+    });
+  }
+
+  async adminDeleteCompany(companyId: string): Promise<Company> {
+    return db.transaction(async (tx) => {
+      const [company] = await tx.select().from(companies).where(eq(companies.id, companyId));
+      if (!company) {
+        throw storageError(404, "Company not found");
+      }
+
+      const now = new Date();
+      const companyUsers = await tx.select({
+        id: users.id,
+      }).from(users).where(eq(users.companyId, companyId));
+      const companyUserIds = companyUsers.map((user) => user.id);
+
+      if (companyUserIds.length > 0) {
+        await tx.update(userSessions)
+          .set({ revokedAt: now })
+          .where(and(inArray(userSessions.userId, companyUserIds), isNull(userSessions.revokedAt)));
+
+        await tx.delete(userGroupRoles)
+          .where(inArray(userGroupRoles.userId, companyUserIds));
+
+        await tx.update(accessGrants)
+          .set({ revokedAt: now, updatedAt: now })
+          .where(and(inArray(accessGrants.userId, companyUserIds), isNull(accessGrants.revokedAt)));
+
+        for (const userId of companyUserIds) {
+          await anonymiseUserRecord(tx, userId);
+        }
+      }
+
+      await tx.delete(groupCompanies).where(eq(groupCompanies.companyId, companyId));
+
+      await tx.update(accessGrants)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(accessGrants.companyId, companyId), isNull(accessGrants.revokedAt)));
+
+      await tx.update(organisationSites)
+        .set({ status: "archived", updatedAt: now })
+        .where(eq(organisationSites.companyId, companyId));
+
+      const [updated] = await tx.update(companies).set({
+        status: "deleted",
+        lifecycleState: "archived",
+        name: `deleted_${companyId}`,
+        deletionPendingAt: now,
+        deletionScheduledAt: now,
+      }).where(eq(companies.id, companyId)).returning();
+
+      return updated;
+    });
+  }
+
+  async adminDeleteUser(userId: string, currentSuperAdminUserId: string): Promise<User> {
+    return db.transaction(async (tx) => {
+      const [user] = await tx.select().from(users).where(eq(users.id, userId));
+      if (!user) {
+        throw storageError(404, "User not found");
+      }
+      if (user.id === currentSuperAdminUserId) {
+        throw storageError(400, "You cannot delete your own super admin account");
+      }
+
+      if (user.companyId && (user.role === "admin" || user.role === "super_admin")) {
+        const alternateAdmins = await tx.select({ id: users.id })
+          .from(users)
+          .where(and(
+            eq(users.companyId, user.companyId),
+            or(eq(users.role, "admin"), eq(users.role, "super_admin")),
+            isNull(users.anonymisedAt),
+            sql`${users.id} <> ${userId}`
+          ));
+
+        if (alternateAdmins.length === 0) {
+          throw storageError(409, "Cannot delete the only admin for this company");
+        }
+      }
+
+      const now = new Date();
+      await tx.update(userSessions)
+        .set({ revokedAt: now })
+        .where(and(eq(userSessions.userId, userId), isNull(userSessions.revokedAt)));
+
+      await tx.delete(userGroupRoles).where(eq(userGroupRoles.userId, userId));
+
+      await tx.update(accessGrants)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(accessGrants.userId, userId), isNull(accessGrants.revokedAt)));
+
+      await anonymiseUserRecord(tx, userId);
+
+      const [updated] = await tx.select().from(users).where(eq(users.id, userId));
+      return updated;
+    });
+  }
+
   async createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">) {
     const result = await db.execute(sql`
       INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata)
@@ -3289,18 +3424,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async anonymiseUser(userId: string): Promise<void> {
-    const anonEmail = `deleted-${userId}@anonymised.local`;
-    const anonUsername = `deleted_${userId}`;
-    await db.update(users).set({
-      email: anonEmail,
-      username: anonUsername,
-      password: "ANONYMISED",
-      mfaSecretEncrypted: null,
-      mfaBackupCodesHash: null,
-      mfaEnabled: false,
-      externalId: null,
-      anonymisedAt: new Date(),
-    }).where(eq(users.id, userId));
+    await anonymiseUserRecord(db, userId);
   }
 
   async deleteCompanyData(companyId: string): Promise<void> {

@@ -19,7 +19,7 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, ExternalLink, Crown, Shield, Key, Gift, Trash2,
+  DollarSign, ExternalLink, Crown, Shield, Key, Gift, Trash2, Archive,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,7 +75,9 @@ function JobStatusBadge({ status }: { status: string }) {
 function CompaniesTable() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "reactivate" | "impersonate"; company: any } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "reactivate" | "impersonate" | "archive"; company: any } | null>(null);
+  const [deleteCompanyDialog, setDeleteCompanyDialog] = useState<any | null>(null);
+  const [deleteCompanyInput, setDeleteCompanyInput] = useState("");
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const PAGE_SIZE = 50;
@@ -109,6 +111,31 @@ function CompaniesTable() {
       window.location.href = "/";
     },
     onError: (e: any) => toast({ title: "Impersonation failed", description: e.message, variant: "destructive" }),
+  });
+
+  const archiveMut = useMutation({
+    mutationFn: (companyId: string) => apiRequest("POST", `/api/admin/companies/${companyId}/archive`, {}),
+    onSuccess: () => {
+      toast({ title: "Company archived", description: "The company is now inactive for normal users." });
+      setConfirmAction(null);
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company"] });
+    },
+    onError: (e: any) => toast({ title: "Archive failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (companyId: string) => apiRequest("DELETE", `/api/admin/companies/${companyId}`),
+    onSuccess: () => {
+      toast({ title: "Company deleted", description: "The company has been anonymised and marked deleted." });
+      setDeleteCompanyDialog(null);
+      setDeleteCompanyInput("");
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company"] });
+    },
+    onError: (e: any) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const companies = data?.companies ?? [];
@@ -172,11 +199,23 @@ function CompaniesTable() {
                         <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "reactivate", company: c })} data-testid={`button-reactivate-${c.id}`}>
                           <ShieldCheck className="w-3.5 h-3.5 text-green-600" />
                         </Button>
+                      ) : c.status === "archived" ? (
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`} disabled>
+                          <Archive className="w-3.5 h-3.5 text-amber-600" />
+                        </Button>
                       ) : (
                         <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "suspend", company: c })} data-testid={`button-suspend-${c.id}`}>
                           <ShieldOff className="w-3.5 h-3.5 text-destructive" />
                         </Button>
                       )}
+                      {c.status !== "archived" && c.status !== "deleted" && (
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmAction({ type: "archive", company: c })} data-testid={`button-archive-${c.id}`}>
+                          <Archive className="w-3.5 h-3.5 text-amber-600" />
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => { setDeleteCompanyDialog(c); setDeleteCompanyInput(""); }} data-testid={`button-delete-company-${c.id}`}>
+                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -208,13 +247,17 @@ function CompaniesTable() {
           <DialogHeader>
             <DialogTitle>
               {confirmAction?.type === "impersonate" ? "Impersonate Company"
-                : confirmAction?.type === "suspend" ? "Suspend Company" : "Reactivate Company"}
+                : confirmAction?.type === "suspend" ? "Suspend Company"
+                : confirmAction?.type === "archive" ? "Archive Company"
+                : "Reactivate Company"}
             </DialogTitle>
             <DialogDescription>
               {confirmAction?.type === "impersonate"
                 ? `You will be viewing the platform as ${confirmAction?.company?.name}. You can exit impersonation at any time.`
                 : confirmAction?.type === "suspend"
                 ? `Suspending ${confirmAction?.company?.name} will block all logins and API calls for their users.`
+                : confirmAction?.type === "archive"
+                ? `Archiving ${confirmAction?.company?.name} will make the workspace inactive for normal users while keeping it visible to super admins.`
                 : `Reactivating ${confirmAction?.company?.name} will restore full access for their users.`}
             </DialogDescription>
           </DialogHeader>
@@ -226,13 +269,49 @@ function CompaniesTable() {
                 if (!confirmAction) return;
                 if (confirmAction.type === "impersonate") impersonateMut.mutate(confirmAction.company.id);
                 else if (confirmAction.type === "suspend") suspendMut.mutate(confirmAction.company.id);
+                else if (confirmAction.type === "archive") archiveMut.mutate(confirmAction.company.id);
                 else reactivateMut.mutate(confirmAction.company.id);
               }}
-              disabled={suspendMut.isPending || reactivateMut.isPending || impersonateMut.isPending}
+              disabled={suspendMut.isPending || reactivateMut.isPending || impersonateMut.isPending || archiveMut.isPending}
               data-testid="button-confirm-action"
             >
               {confirmAction?.type === "impersonate" ? "Start Impersonation"
-                : confirmAction?.type === "suspend" ? "Suspend" : "Reactivate"}
+                : confirmAction?.type === "suspend" ? "Suspend"
+                : confirmAction?.type === "archive" ? "Archive"
+                : "Reactivate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteCompanyDialog} onOpenChange={(open) => { if (!open) { setDeleteCompanyDialog(null); setDeleteCompanyInput(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete company</DialogTitle>
+            <DialogDescription>
+              This is irreversible. The company will be anonymised, all user access will be revoked, and normal users will lose access permanently.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-muted-foreground">
+              Type <strong>{deleteCompanyDialog?.name}</strong> to confirm permanent deletion.
+            </div>
+            <Input
+              value={deleteCompanyInput}
+              onChange={(e) => setDeleteCompanyInput(e.target.value)}
+              placeholder={deleteCompanyDialog?.name ?? ""}
+              data-testid="input-delete-company-confirm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDeleteCompanyDialog(null); setDeleteCompanyInput(""); }}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteCompanyDialog && deleteMut.mutate(deleteCompanyDialog.id)}
+              disabled={deleteMut.isPending || deleteCompanyInput !== deleteCompanyDialog?.name}
+              data-testid="button-confirm-delete-company"
+            >
+              Delete company
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -244,13 +323,29 @@ function CompaniesTable() {
 function UsersTable() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [deleteUserDialog, setDeleteUserDialog] = useState<any | null>(null);
+  const [deleteUserInput, setDeleteUserInput] = useState("");
   const PAGE_SIZE = 50;
+  const { toast } = useToast();
 
   const { data, isLoading, refetch } = useQuery<{ users: any[]; total: number }>({
     queryKey: ["/api/admin/users", search, page],
     queryFn: () =>
       fetch(`/api/admin/users?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}`, { credentials: "include" })
         .then(r => r.json()),
+  });
+
+  const deleteUserMut = useMutation({
+    mutationFn: (userId: string) => apiRequest("DELETE", `/api/admin/users/${userId}`),
+    onSuccess: () => {
+      toast({ title: "User deleted", description: "The user account has been anonymised and detached safely." });
+      setDeleteUserDialog(null);
+      setDeleteUserInput("");
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company"] });
+    },
+    onError: (e: any) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const usersList = data?.users ?? [];
@@ -284,6 +379,7 @@ function UsersTable() {
                 <th className="text-left px-4 py-3 font-medium">Company</th>
                 <th className="text-left px-4 py-3 font-medium">Company Status</th>
                 <th className="text-left px-4 py-3 font-medium">Joined</th>
+                <th className="text-right px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -303,10 +399,22 @@ function UsersTable() {
                   <td className="px-4 py-3 text-muted-foreground text-xs">
                     {u.created_at ? formatDistanceToNow(new Date(u.created_at), { addSuffix: true }) : "—"}
                   </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setDeleteUserDialog(u); setDeleteUserInput(""); }}
+                        data-testid={`button-delete-user-${u.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {usersList.length === 0 && (
-                <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">No users found</td></tr>
+                <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">No users found</td></tr>
               )}
             </tbody>
           </table>
@@ -326,6 +434,39 @@ function UsersTable() {
           </div>
         </div>
       )}
+
+      <Dialog open={!!deleteUserDialog} onOpenChange={(open) => { if (!open) { setDeleteUserDialog(null); setDeleteUserInput(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete user</DialogTitle>
+            <DialogDescription>
+              This will revoke access, remove group memberships, anonymise the user record, and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-muted-foreground">
+              Type <strong>DELETE</strong> to confirm deleting {deleteUserDialog?.email ?? deleteUserDialog?.username}.
+            </div>
+            <Input
+              value={deleteUserInput}
+              onChange={(e) => setDeleteUserInput(e.target.value)}
+              placeholder="DELETE"
+              data-testid="input-delete-user-confirm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDeleteUserDialog(null); setDeleteUserInput(""); }}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteUserDialog && deleteUserMut.mutate(deleteUserDialog.id)}
+              disabled={deleteUserMut.isPending || deleteUserInput !== "DELETE"}
+              data-testid="button-confirm-delete-user"
+            >
+              Delete user
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

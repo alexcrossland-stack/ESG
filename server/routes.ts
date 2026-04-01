@@ -223,8 +223,13 @@ async function requireAuth(req: Request, res: Response, next: Function) {
     const user = await storage.getUser(auth.userId);
     if (user && user.role !== "super_admin" && auth.companyId) {
       const companyStatus = await storage.getCompanyStatus(auth.companyId);
-      if (companyStatus === "suspended") {
-        return res.status(403).json({ error: "Your company account has been suspended. Please contact support." });
+      if (companyStatus === "suspended" || companyStatus === "archived" || companyStatus === "deleted") {
+        const message = companyStatus === "suspended"
+          ? "Your company account has been suspended. Please contact support."
+          : companyStatus === "archived"
+          ? "Your company account has been archived and is no longer active."
+          : "Your company account has been deleted and is no longer active.";
+        return res.status(403).json({ error: message });
       }
     }
     const consentExemptPaths = ["/api/auth/accept-terms", "/api/auth/logout", "/api/auth/me", "/api/auth/mfa/", "/api/auth/sessions", "/api/auth/step-up"];
@@ -9079,6 +9084,75 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/companies/:companyId/archive", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = z.object({ companyId: z.string().uuid() }).parse(req.params);
+      const company = await storage.adminArchiveCompany(companyId);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "archive_company",
+        targetCompanyId: companyId,
+        metadata: { companyName: company.name },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json({ success: true, companyId, status: company.status });
+    } catch (e: any) {
+      res.status(e?.status ?? 400).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/companies/:companyId", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = z.object({ companyId: z.string().uuid() }).parse(req.params);
+      const company = await storage.adminDeleteCompany(companyId);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "delete_company",
+        targetCompanyId: companyId,
+        metadata: {
+          deletionMode: "soft_delete",
+          companyName: company.name,
+          reason: "Hard delete is unsafe in the current schema because historical tenant-linked records do not have reliable cascades.",
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json({
+        success: true,
+        companyId,
+        deletionMode: "soft_delete",
+        message: "Company anonymised and marked deleted. Historical records were retained to avoid breaking dependent references.",
+      });
+    } catch (e: any) {
+      res.status(e?.status ?? 400).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/users/:userId", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { userId } = z.object({ userId: z.string().uuid() }).parse(req.params);
+      const deletedUser = await storage.adminDeleteUser(userId, adminUser.id);
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "delete_user",
+        targetUserId: userId,
+        metadata: {
+          previousCompanyId: deletedUser.companyId,
+          anonymisedAt: deletedUser.anonymisedAt,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+      res.json({ success: true, userId });
+    } catch (e: any) {
+      res.status(e?.status ?? 400).json({ error: e.message });
     }
   });
 
