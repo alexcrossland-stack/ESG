@@ -279,11 +279,11 @@ function ProtectedApp() {
 
   const isPortfolioUser = PORTFOLIO_ROLES.includes(data?.user?.role);
 
-  // Newly provisioned companies (lifecycleState = 'created' | 'onboarding_started') must complete onboarding.
-  // Also covers the legacy path where onboardingComplete is false.
-  const companyLifecycleState = data?.company?.lifecycleState as string | undefined;
-  const isNewlyProvisioned = companyLifecycleState === "created" || companyLifecycleState === "onboarding_started";
-  const needsOnboarding = !data?.company?.onboardingComplete || isNewlyProvisioned;
+  // A company needs onboarding when onboardingComplete is falsy.
+  // onboardingComplete is the authoritative flag — it is set to true (and lifecycleState
+  // updated to "active") by POST /api/onboarding/complete, so we do not let a stale
+  // lifecycleState override a completed flag.
+  const needsOnboarding = !data?.company?.onboardingComplete;
 
   if (data?.user?.role !== "super_admin" && !isPortfolioUser && needsOnboarding) {
     return <Onboarding />;

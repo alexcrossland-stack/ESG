@@ -429,6 +429,9 @@ export default function Onboarding() {
   const completeMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/onboarding/complete", data),
     onSuccess: () => {
+      queryClient.setQueryData(["/api/auth/me"], (old: any) =>
+        old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
@@ -534,6 +537,9 @@ export default function Onboarding() {
 
   function startQuickStart() {
     apiRequest("POST", "/api/onboarding/complete", { path: "quick_start", onboardingVersion: 2 }).then(() => {
+      queryClient.setQueryData(["/api/auth/me"], (old: any) =>
+        old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
       completionFiredRef.current = true;

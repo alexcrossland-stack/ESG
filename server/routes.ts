@@ -1450,6 +1450,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         onboardingProgressPercent: 100,
         onboardingStep: version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1,
         onboardingVersion: version,
+        lifecycleState: "active",
       };
       if (isManual || isQuickStart) {
         update.onboardingPath = path;
