@@ -702,6 +702,7 @@ export class DatabaseStorage implements IStorage {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
+      await client.query("LOCK TABLE metric_values IN SHARE ROW EXCLUSIVE MODE");
 
       const selectSql = value.siteId == null
         ? `
@@ -776,8 +777,34 @@ export class DatabaseStorage implements IStorage {
           value.siteId ?? null,
         ],
       );
+      const inserted = insertResult.rows[0] as MetricValue;
+      const dedupeSql = value.siteId == null
+        ? `
+            SELECT id
+            FROM metric_values
+            WHERE metric_id = $1
+              AND period = $2
+              AND site_id IS NULL
+            ORDER BY submitted_at DESC NULLS LAST, id DESC
+          `
+        : `
+            SELECT id
+            FROM metric_values
+            WHERE metric_id = $1
+              AND period = $2
+              AND site_id = $3
+            ORDER BY submitted_at DESC NULLS LAST, id DESC
+          `;
+      const dedupeParams = value.siteId == null
+        ? [value.metricId, value.period]
+        : [value.metricId, value.period, value.siteId];
+      const dupes = await client.query(dedupeSql, dedupeParams);
+      const duplicateIds = dupes.rows.slice(1).map((row: { id: string }) => row.id);
+      if (duplicateIds.length > 0) {
+        await client.query("DELETE FROM metric_values WHERE id = ANY($1::varchar[])", [duplicateIds]);
+      }
       await client.query("COMMIT");
-      return insertResult.rows[0] as MetricValue;
+      return inserted;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw error;

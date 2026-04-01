@@ -2287,48 +2287,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
 
-      const existing = await storage.getMetricValues(metricId);
       const resolvedSiteId = bodySiteId || null;
-      let existingForPeriod = existing.find(v =>
-        v.period === period &&
-        (resolvedSiteId ? v.siteId === resolvedSiteId : !v.siteId)
-      );
+      const existingForPeriod = await storage.getMetricValueForPeriodSite(metricId, period, resolvedSiteId);
 
       const isFirstInsert = !existingForPeriod;
       const isFirstEver = isFirstInsert ? !(await storage.hasAnyData(companyId)) : false;
 
-      let result;
-      if (existingForPeriod) {
-        if (existingForPeriod.locked) {
-          return res.status(400).json({ error: "This period is locked and cannot be edited" });
-        }
-        const updateData: any = { value, notes, submittedBy: userId };
-        if (dataSourceType) updateData.dataSourceType = dataSourceType;
-        if (bodySiteId !== undefined) updateData.siteId = bodySiteId || null;
-        result = await storage.updateMetricValue(existingForPeriod.id, updateData);
-      } else {
-        const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false, siteId: bodySiteId || null };
-        if (dataSourceType) createData.dataSourceType = dataSourceType;
-        try {
-          result = await storage.createMetricValue(createData);
-        } catch (e: any) {
-          // Another row for the same natural key may already exist due to seeded data
-          // or a concurrent submission. Recover by updating the existing row instead
-          // of surfacing a 500 to the user.
-          if (e?.code !== "23505") throw e;
-          existingForPeriod = (await storage.getMetricValues(metricId)).find(v =>
-            v.period === period &&
-            (resolvedSiteId ? v.siteId === resolvedSiteId : !v.siteId)
-          );
-          if (!existingForPeriod) throw e;
-          if (existingForPeriod.locked) {
-            return res.status(400).json({ error: "This period is locked and cannot be edited" });
-          }
-          const updateData: any = { value, notes, submittedBy: userId };
-          if (dataSourceType) updateData.dataSourceType = dataSourceType;
-          if (bodySiteId !== undefined) updateData.siteId = bodySiteId || null;
-          result = await storage.updateMetricValue(existingForPeriod.id, updateData);
-        }
+      if (existingForPeriod?.locked) {
+        return res.status(400).json({ error: "This period is locked and cannot be edited" });
+      }
+
+      const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false, siteId: bodySiteId || null };
+      if (dataSourceType) createData.dataSourceType = dataSourceType;
+      const result = await storage.upsertMetricValue(createData);
+      if (result.locked) {
+        return res.status(400).json({ error: "This period is locked and cannot be edited" });
       }
 
       auditLog({
