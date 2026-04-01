@@ -92,8 +92,8 @@ async function countMetricValues(client: Client, metricId: string, period: strin
       WHERE metric_id = $1
         AND period = $2
         AND (
-          ($3::uuid IS NULL AND site_id IS NULL)
-          OR site_id = $3::uuid
+          ($3::text IS NULL AND site_id IS NULL)
+          OR site_id = $3::text
         )
     `,
     [metricId, period, siteId],
