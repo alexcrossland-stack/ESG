@@ -86,6 +86,15 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool);
 
+function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
+  return Object.fromEntries(
+    Object.entries(row).map(([key, val]) => [
+      key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase()),
+      val,
+    ]),
+  ) as unknown as T;
+}
+
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
@@ -727,7 +736,9 @@ export class DatabaseStorage implements IStorage {
         ? [value.metricId, value.period]
         : [value.metricId, value.period, value.siteId];
       const existingResult = await client.query(selectSql, selectParams);
-      const existing = existingResult.rows[0] as MetricValue | undefined;
+      const existing = existingResult.rows[0]
+        ? pgRowToCamelCase<MetricValue>(existingResult.rows[0])
+        : undefined;
 
       if (existing) {
         if (existing.locked) {
@@ -755,7 +766,7 @@ export class DatabaseStorage implements IStorage {
           ],
         );
         await client.query("COMMIT");
-        return updateResult.rows[0] as MetricValue;
+        return pgRowToCamelCase<MetricValue>(updateResult.rows[0]);
       }
 
       const insertResult = await client.query(
@@ -777,7 +788,7 @@ export class DatabaseStorage implements IStorage {
           value.siteId ?? null,
         ],
       );
-      const inserted = insertResult.rows[0] as MetricValue;
+      const inserted = pgRowToCamelCase<MetricValue>(insertResult.rows[0]);
       const dedupeSql = value.siteId == null
         ? `
             SELECT id
