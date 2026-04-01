@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { format, subMonths } from "date-fns";
@@ -624,6 +624,7 @@ export default function Onboarding() {
             <p className="text-sm font-medium">What to do next</p>
             <p className="text-xs text-muted-foreground">Add your first real data point — it only takes a minute. Your electricity bill is the easiest place to start.</p>
             <div className="flex flex-col sm:flex-row gap-2 justify-center pt-1">
+
               <Button onClick={() => {
                 queryClient.setQueryData(["/api/auth/me"], (old: any) =>
                   old ? { ...old, company: { ...old.company, onboardingComplete: true, lifecycleState: "active" } } : old
@@ -640,6 +641,19 @@ export default function Onboarding() {
               }} data-testid="button-go-dashboard">
                 Go to dashboard
               </Button>
+
+              <Link href="/data-entry">
+                <Button asChild data-testid="button-go-data-entry">
+                  <a>
+                    Add your first data point <ArrowRight className="w-4 h-4 ml-1" />
+                  </a>
+                </Button>
+              </Link>
+              <Link href="/">
+                <Button asChild variant="outline" data-testid="button-go-dashboard">
+                  <a>Go to dashboard</a>
+                </Button>
+              </Link>
             </div>
           </div>
         </div>
