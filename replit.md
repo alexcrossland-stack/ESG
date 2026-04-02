@@ -77,6 +77,39 @@ The application is a full-stack SaaS web application.
 - **ESG Metric Definitions Engine:** 58 metric definitions across Environmental, Social, and Governance pillars, with core and advanced metrics.
 - **AI Advisor Upgrade:** `/api/chat/assist` now pulls live company context (missing submissions, overdue actions, policy status, framework readiness) before building the OpenAI prompt for more precise responses.
 
+## Demo Accounts
+
+A PE portfolio demo environment can be seeded on demand. Run:
+
+```
+npx tsx server/seed-pe-demo.ts
+```
+
+Or trigger via the super-admin API:
+
+```
+POST /api/admin/demo/pe-seed   (super_admin role required)
+```
+
+The script is fully idempotent — safe to run multiple times.
+
+### Demo Credentials (password: `DemoAdmin1!` for all)
+
+| Role | Email | Access |
+|------|-------|--------|
+| PE Firm Admin | `demo.pe.admin@simplyesg.demo` | `portfolio_owner` on group — sees Portfolio Dashboard |
+| Company Admin | `demo.co.admin@simplyesg.demo` | `admin` inside GreenTech Solutions (Demo) |
+| Contributor | `demo.contributor@simplyesg.demo` | `contributor` inside BuildRight Construction (Demo) |
+
+### Portfolio Companies
+
+| Company | ESG Maturity | Details |
+|---------|-------------|---------|
+| GreenTech Solutions (Demo) | High | All core metrics, 3 periods, evidence attached |
+| BuildRight Construction (Demo) | Partial | 50% metrics, 1 period, 1 evidence |
+| RetailCo Brands (Demo) | Low | 2 metrics, 1 period, no evidence |
+| Horizon Logistics (Demo) | Missing | Onboarding started, no metric values |
+
 ## Test Infrastructure
 
 - **API Security Tests** (`tests/api-security.test.ts`): 40-test suite covering 8 suites — input validation, unauthenticated tenant isolation, auth endpoints, dashboard endpoints, cross-tenant isolation (authenticated), RBAC enforcement, session lifecycle (revocation, fabricated tokens), and malformed payloads. Run via `npx tsx tests/api-security.test.ts` or the `test:api` workflow.

@@ -7,6 +7,26 @@
  * API:  POST /api/admin/demo/pe-seed  (super_admin only)
  *
  * Fully idempotent — subsequent runs produce "skipped" counts, never duplicates.
+ *
+ * Demo Credentials:
+ * -----------------
+ * PE Firm Admin (portfolio_owner, sees Portfolio Dashboard on login):
+ *   Email:    demo.pe.admin@simplyesg.demo
+ *   Password: DemoAdmin1!
+ *
+ * Company Admin (admin inside "GreenTech Solutions (Demo)"):
+ *   Email:    demo.co.admin@simplyesg.demo
+ *   Password: DemoAdmin1!
+ *
+ * Contributor (contributor inside "BuildRight Construction (Demo)"):
+ *   Email:    demo.contributor@simplyesg.demo
+ *   Password: DemoAdmin1!
+ *
+ * Portfolio Companies:
+ *   1. GreenTech Solutions (Demo)     — high completion (3 periods, all core metrics, evidence)
+ *   2. BuildRight Construction (Demo) — partial (1 period, 50% metrics, 1 evidence)
+ *   3. RetailCo Brands (Demo)         — low (1 period, 2 metrics, no evidence)
+ *   4. Horizon Logistics (Demo)       — missing data (onboarding started, no metric values)
  */
 
 import { db } from "./storage";
