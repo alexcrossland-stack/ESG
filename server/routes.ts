@@ -8363,6 +8363,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  app.post("/api/admin/demo/pe-seed", requireAuth, requireSuperAdmin, async (_req, res) => {
+    try {
+      const { seedPeDemo } = await import("./seed-pe-demo");
+      const result = await seedPeDemo();
+      res.json({ ok: true, summary: result.summary, counts: result.counts });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/health/client-error", async (req, res) => {
     try {
       const { message, stack, componentStack, url } = req.body;
