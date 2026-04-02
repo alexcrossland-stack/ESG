@@ -417,7 +417,7 @@ export default function PortfolioPage() {
   }
 
   if (!canAccessPortfolio) {
-    return <Redirect to="/" />;
+    return <Redirect to="/" replace />;
   }
 
   if (groups.length === 0) {

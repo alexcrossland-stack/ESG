@@ -350,7 +350,7 @@ function ProtectedApp() {
   }
 
   if (!data?.user) {
-    return <Redirect to="/auth" />;
+    return <Redirect to="/auth" replace />;
   }
 
   const isPortfolioUser = PORTFOLIO_ROLES.includes(data?.user?.role);
@@ -382,7 +382,7 @@ function ProtectedApp() {
     data?.defaultLandingContext === "portfolio" &&
     (data?.portfolioGroups?.length || 0) > 0
   ) {
-    return <Redirect to="/portfolio" />;
+    return <Redirect to="/portfolio" replace />;
   }
 
   return (

@@ -95,7 +95,6 @@ export default function Auth() {
         return;
       }
       if (data.token) setAuthToken(data.token);
-      queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
       setLocation("/");
     },
@@ -112,7 +111,6 @@ export default function Auth() {
     },
     onSuccess: async (data) => {
       if (data.token) setAuthToken(data.token);
-      queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
       setLocation("/");
     },
@@ -158,7 +156,6 @@ export default function Auth() {
     },
     onSuccess: async (data) => {
       if (data.token) setAuthToken(data.token);
-      queryClient.setQueryData(["/api/auth/me"], { user: data.user, company: data.company });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
       setLocation("/");
       toast({ title: "Welcome!", description: "Your ESG platform is ready." });

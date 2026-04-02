@@ -26,7 +26,9 @@ export function usePortfolioAccess() {
     retry: false,
   });
 
-  const canAccessPortfolio = !isLoading && data?.user && PORTFOLIO_ROLES.includes(data.user.role);
+  const canAccessPortfolio = !isLoading && !!data?.user && (
+    PORTFOLIO_ROLES.includes(data.user.role) || (data.portfolioGroups?.length ?? 0) > 0
+  );
 
   const groups: PortfolioGroup[] = useMemo(
     () => data?.portfolioGroups ?? [],
