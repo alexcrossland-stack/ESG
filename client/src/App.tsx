@@ -164,6 +164,72 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 }
 
+class SidebarErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message || "Sidebar error" };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    fetch("/api/health/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: `[Sidebar] ${error.message}`,
+        stack: error.stack,
+        componentStack: info.componentStack,
+        url: window.location.href,
+      }),
+    }).catch(() => {});
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-14 flex flex-col items-center py-4 border-r border-border bg-sidebar shrink-0" data-testid="sidebar-error-fallback">
+          <div className="w-8 h-8 rounded-md bg-destructive/10 flex items-center justify-center">
+            <TriangleAlert className="w-4 h-4 text-destructive" />
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+class SilentErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message || "Component error" };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    fetch("/api/health/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: `[SupportAssistant] ${error.message}`,
+        stack: error.stack,
+        componentStack: info.componentStack,
+        url: window.location.href,
+      }),
+    }).catch(() => {});
+  }
+
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   return (
@@ -313,7 +379,7 @@ function ProtectedApp() {
     <SiteProvider>
     <SidebarProvider style={{ "--sidebar-width": "14rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
       <div className="flex h-screen w-full bg-background">
-        <AppSidebar />
+        <SidebarErrorBoundary><AppSidebar /></SidebarErrorBoundary>
         <div className="flex flex-col flex-1 min-w-0">
           <ImpersonationBanner />
           <ConsentBanner />
@@ -376,7 +442,7 @@ function ProtectedApp() {
           <AppFooter />
         </div>
       </div>
-      <SupportAssistant />
+      <SilentErrorBoundary><SupportAssistant /></SilentErrorBoundary>
     </SidebarProvider>
     </SiteProvider>
   );

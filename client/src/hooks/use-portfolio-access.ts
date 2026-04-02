@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 
 export interface PortfolioGroup {
   id: string;
@@ -27,12 +27,18 @@ export function usePortfolioAccess() {
   });
 
   const canAccessPortfolio = !isLoading && data?.user && PORTFOLIO_ROLES.includes(data.user.role);
-  const groups: PortfolioGroup[] = data?.portfolioGroups || [];
+
+  const groups: PortfolioGroup[] = useMemo(
+    () => data?.portfolioGroups ?? [],
+    [data?.portfolioGroups],
+  );
+
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
 
   useEffect(() => {
     if (groups.length > 0 && !activeGroupId) {
-      setActiveGroupId(groups[0].id);
+      const targetId = groups[0].id;
+      setActiveGroupId(prev => (prev === targetId ? prev : targetId));
     }
   }, [groups, activeGroupId]);
 

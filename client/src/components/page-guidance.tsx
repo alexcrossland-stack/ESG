@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ChevronDown, ChevronUp, Info, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -13,18 +13,11 @@ interface PageGuidanceProps {
 
 export function PageGuidance({ pageKey, title, summary, goodLooksLike, steps, icon }: PageGuidanceProps) {
   const storageKey = `guidance_dismissed_${pageKey}`;
-  const [dismissed, setDismissed] = useState(false);
-  const [expanded, setExpanded] = useState(false);
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved === "true") {
-        setDismissed(true);
-        setExpanded(false);
-      }
-    } catch {}
-  }, [storageKey]);
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(storageKey) === "true"; } catch { return false; }
+  });
+  const [expanded, setExpanded] = useState(false);
 
   function dismiss() {
     try { localStorage.setItem(storageKey, "true"); } catch {}
