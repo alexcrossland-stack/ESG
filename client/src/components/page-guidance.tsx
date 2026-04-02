@@ -14,7 +14,7 @@ interface PageGuidanceProps {
 export function PageGuidance({ pageKey, title, summary, goodLooksLike, steps, icon }: PageGuidanceProps) {
   const storageKey = `guidance_dismissed_${pageKey}`;
   const [dismissed, setDismissed] = useState(false);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     try {
@@ -57,6 +57,7 @@ export function PageGuidance({ pageKey, title, summary, goodLooksLike, steps, ic
       <button
         className="w-full flex items-center gap-3 px-4 py-3 text-left"
         onClick={() => setExpanded(e => !e)}
+        aria-expanded={expanded}
         data-testid={`guidance-toggle-${pageKey}`}
       >
         <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
