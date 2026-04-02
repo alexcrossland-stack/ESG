@@ -495,7 +495,7 @@ function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weig
 }
 
 function ActionFeedCard() {
-  const { data: actions, isLoading } = useQuery<any[]>({ queryKey: ["/api/dashboard/actions"] });
+  const { data, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/actions"] });
 
   if (isLoading) return (
     <Card data-testid="card-action-feed">
@@ -508,13 +508,10 @@ function ActionFeedCard() {
     </Card>
   );
 
-  if (!actions || actions.length === 0) return null;
+  const actions: any[] = Array.isArray(data) ? data : (Array.isArray(data?.actions) ? data.actions : []);
 
-  const effortColors: Record<string, string> = {
-    low: "text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 dark:text-emerald-300",
-    medium: "text-amber-600 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300",
-    high: "text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-300",
-  };
+  if (actions.length === 0) return null;
+
   const impactColors: Record<string, string> = {
     low: "text-gray-500",
     medium: "text-blue-600 dark:text-blue-400",
@@ -531,36 +528,46 @@ function ActionFeedCard() {
         <CardDescription className="text-xs">Prioritised actions to improve your ESG performance</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
-        {actions.map((action: any, idx: number) => (
-          <div
-            key={action.id}
-            className="flex items-start gap-3 p-3 rounded-md border border-border hover:bg-muted/30 transition-colors"
-            data-testid={`action-card-${action.id}`}
-          >
-            <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
-              {idx + 1}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                <p className="text-sm font-medium">{action.title}</p>
-                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${effortColors[action.effort]}`}>
-                  {action.effort} effort
-                </span>
-                <span className={`text-[10px] font-medium ${impactColors[action.impact]}`}>
-                  {action.impact} impact
-                </span>
+        {actions.map((action: any, idx: number) => {
+          const explanation = action.explanation ?? action.description ?? "";
+          const whyItMatters = action.whyItMatters ?? action.reason ?? "";
+          const ctaUrl = action.ctaUrl ?? action.ctaHref ?? "/";
+          const effortLabel = action.effort ? `${action.effort} effort` : (action.effortLabel ?? "");
+          return (
+            <div
+              key={action.id}
+              className="flex items-start gap-3 p-3 rounded-md border border-border hover:bg-muted/30 transition-colors"
+              data-testid={`action-card-${action.id}`}
+            >
+              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                {idx + 1}
               </div>
-              <p className="text-xs text-muted-foreground leading-snug">{action.explanation}</p>
-              <p className="text-xs text-primary/70 italic mt-0.5">{action.whyItMatters}</p>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                  <p className="text-sm font-medium">{action.title}</p>
+                  {effortLabel && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded text-muted-foreground bg-muted">
+                      {effortLabel}
+                    </span>
+                  )}
+                  {action.impact && (
+                    <span className={`text-[10px] font-medium ${impactColors[action.impact] ?? "text-muted-foreground"}`}>
+                      {action.impact} impact
+                    </span>
+                  )}
+                </div>
+                {explanation && <p className="text-xs text-muted-foreground leading-snug">{explanation}</p>}
+                {whyItMatters && <p className="text-xs text-primary/70 italic mt-0.5">{whyItMatters}</p>}
+              </div>
+              <Link href={ctaUrl}>
+                <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" data-testid={`button-action-cta-${action.id}`}>
+                  {action.ctaLabel}
+                  <ArrowRight className="w-3 h-3 ml-1" />
+                </Button>
+              </Link>
             </div>
-            <Link href={action.ctaUrl}>
-              <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" data-testid={`button-action-cta-${action.id}`}>
-                {action.ctaLabel}
-                <ArrowRight className="w-3 h-3 ml-1" />
-              </Button>
-            </Link>
-          </div>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );
