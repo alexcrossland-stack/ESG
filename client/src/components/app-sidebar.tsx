@@ -22,7 +22,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { logout } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
@@ -207,56 +206,41 @@ export function AppSidebar() {
 
               {/* Dashboard */}
               <SidebarMenuItem>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <SidebarMenuButton asChild data-active={isActive(location, "/")}>
-                      <Link href="/" data-testid="nav-dashboard">
-                        <LayoutDashboard className="w-4 h-4 shrink-0" />
-                        <span>Dashboard</span>
-                        {isActive(location, "/") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                      </Link>
-                    </SidebarMenuButton>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">See your ESG progress and next actions</TooltipContent>
-                </Tooltip>
+                <SidebarMenuButton asChild data-active={isActive(location, "/")}>
+                  <Link href="/" data-testid="nav-dashboard">
+                    <LayoutDashboard className="w-4 h-4 shrink-0" />
+                    <span>Dashboard</span>
+                    {isActive(location, "/") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                  </Link>
+                </SidebarMenuButton>
               </SidebarMenuItem>
 
               {/* Portfolio — visible to portfolio users */}
               {canAccessPortfolio && (
                 <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <SidebarMenuButton asChild data-active={isActive(location, "/portfolio")}>
-                        <Link href="/portfolio" data-testid="nav-portfolio">
-                          <BarChart3 className="w-4 h-4 shrink-0" />
-                          <span>Portfolio</span>
-                          {isActive(location, "/portfolio") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                        </Link>
-                      </SidebarMenuButton>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">Portfolio Dashboard — monitor all your companies</TooltipContent>
-                  </Tooltip>
+                  <SidebarMenuButton asChild data-active={isActive(location, "/portfolio")}>
+                    <Link href="/portfolio" data-testid="nav-portfolio">
+                      <BarChart3 className="w-4 h-4 shrink-0" />
+                      <span>Portfolio</span>
+                      {isActive(location, "/portfolio") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                    </Link>
+                  </SidebarMenuButton>
                 </SidebarMenuItem>
               )}
 
               {/* ESG Setup */}
-              <Collapsible open={esgOpen} onOpenChange={setEsgOpen} asChild>
-                <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          data-active={isGroupActive(location, ESG_SETUP_ROUTES) && !esgOpen}
-                          data-testid="nav-group-esg-setup"
-                        >
-                          <FileText className="w-4 h-4 shrink-0" />
-                          <span>ESG Setup</span>
-                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${esgOpen ? "rotate-180" : ""}`} />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">Set up your ESG framework</TooltipContent>
-                  </Tooltip>
+              <SidebarMenuItem>
+                <Collapsible open={esgOpen} onOpenChange={setEsgOpen}>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      data-active={isGroupActive(location, ESG_SETUP_ROUTES) && !esgOpen}
+                      data-testid="nav-group-esg-setup"
+                    >
+                      <FileText className="w-4 h-4 shrink-0" />
+                      <span>ESG Setup</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${esgOpen ? "rotate-180" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
@@ -295,27 +279,22 @@ export function AppSidebar() {
                       )}
                     </SidebarMenuSub>
                   </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+                </Collapsible>
+              </SidebarMenuItem>
 
               {/* ESG Management */}
-              <Collapsible open={mgmtOpen} onOpenChange={setMgmtOpen} asChild>
-                <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          data-active={isGroupActive(location, ESG_MANAGEMENT_ROUTES) && !mgmtOpen}
-                          data-testid="nav-group-esg-management"
-                        >
-                          <Shield className="w-4 h-4 shrink-0" />
-                          <span>ESG Management</span>
-                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${mgmtOpen ? "rotate-180" : ""}`} />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">Manage materiality, policies, targets and risks</TooltipContent>
-                  </Tooltip>
+              <SidebarMenuItem>
+                <Collapsible open={mgmtOpen} onOpenChange={setMgmtOpen}>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      data-active={isGroupActive(location, ESG_MANAGEMENT_ROUTES) && !mgmtOpen}
+                      data-testid="nav-group-esg-management"
+                    >
+                      <Shield className="w-4 h-4 shrink-0" />
+                      <span>ESG Management</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${mgmtOpen ? "rotate-180" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
@@ -352,27 +331,22 @@ export function AppSidebar() {
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+                </Collapsible>
+              </SidebarMenuItem>
 
               {/* Data & Evidence */}
-              <Collapsible open={dataOpen} onOpenChange={setDataOpen} asChild>
-                <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          data-active={isGroupActive(location, DATA_EVIDENCE_ROUTES) && !dataOpen}
-                          data-testid="nav-group-data-evidence"
-                        >
-                          <ClipboardList className="w-4 h-4 shrink-0" />
-                          <span>Data &amp; Evidence</span>
-                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${dataOpen ? "rotate-180" : ""}`} />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">Enter data and upload supporting documents</TooltipContent>
-                  </Tooltip>
+              <SidebarMenuItem>
+                <Collapsible open={dataOpen} onOpenChange={setDataOpen}>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      data-active={isGroupActive(location, DATA_EVIDENCE_ROUTES) && !dataOpen}
+                      data-testid="nav-group-data-evidence"
+                    >
+                      <ClipboardList className="w-4 h-4 shrink-0" />
+                      <span>Data &amp; Evidence</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${dataOpen ? "rotate-180" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
@@ -415,43 +389,33 @@ export function AppSidebar() {
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+                </Collapsible>
+              </SidebarMenuItem>
 
               {/* Reports */}
               <SidebarMenuItem>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <SidebarMenuButton asChild data-active={isActive(location, "/reports")}>
-                      <Link href="/reports" data-testid="nav-reports">
-                        <Download className="w-4 h-4 shrink-0" />
-                        <span>Reports</span>
-                        {isActive(location, "/reports") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                      </Link>
-                    </SidebarMenuButton>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">Generate ESG reports for stakeholders</TooltipContent>
-                </Tooltip>
+                <SidebarMenuButton asChild data-active={isActive(location, "/reports")}>
+                  <Link href="/reports" data-testid="nav-reports">
+                    <Download className="w-4 h-4 shrink-0" />
+                    <span>Reports</span>
+                    {isActive(location, "/reports") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                  </Link>
+                </SidebarMenuButton>
               </SidebarMenuItem>
 
               {/* Frameworks */}
-              <Collapsible open={frameworkOpen} onOpenChange={setFrameworkOpen} asChild>
-                <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          data-active={isGroupActive(location, FRAMEWORK_ROUTES) && !frameworkOpen}
-                          data-testid="nav-group-frameworks"
-                        >
-                          <Globe className="w-4 h-4 shrink-0" />
-                          <span>Frameworks</span>
-                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${frameworkOpen ? "rotate-180" : ""}`} />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">ESG framework readiness and alignment</TooltipContent>
-                  </Tooltip>
+              <SidebarMenuItem>
+                <Collapsible open={frameworkOpen} onOpenChange={setFrameworkOpen}>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      data-active={isGroupActive(location, FRAMEWORK_ROUTES) && !frameworkOpen}
+                      data-testid="nav-group-frameworks"
+                    >
+                      <Globe className="w-4 h-4 shrink-0" />
+                      <span>Frameworks</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${frameworkOpen ? "rotate-180" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
@@ -474,43 +438,33 @@ export function AppSidebar() {
                       )}
                     </SidebarMenuSub>
                   </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+                </Collapsible>
+              </SidebarMenuItem>
 
               {/* Help */}
               <SidebarMenuItem>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <SidebarMenuButton asChild data-active={isActive(location, "/help")}>
-                      <Link href="/help" data-testid="nav-help">
-                        <HelpCircle className="w-4 h-4 shrink-0" />
-                        <span>Help</span>
-                        {isActive(location, "/help") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                      </Link>
-                    </SidebarMenuButton>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">Guidance and support</TooltipContent>
-                </Tooltip>
+                <SidebarMenuButton asChild data-active={isActive(location, "/help")}>
+                  <Link href="/help" data-testid="nav-help">
+                    <HelpCircle className="w-4 h-4 shrink-0" />
+                    <span>Help</span>
+                    {isActive(location, "/help") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                  </Link>
+                </SidebarMenuButton>
               </SidebarMenuItem>
 
               {/* Settings */}
-              <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen} asChild>
-                <SidebarMenuItem>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton
-                          data-active={isGroupActive(location, SETTINGS_ROUTES) && !settingsOpen}
-                          data-testid="nav-group-settings"
-                        >
-                          <Settings className="w-4 h-4 shrink-0" />
-                          <span>Settings</span>
-                          <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${settingsOpen ? "rotate-180" : ""}`} />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">Manage company and account settings</TooltipContent>
-                  </Tooltip>
+              <SidebarMenuItem>
+                <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      data-active={isGroupActive(location, SETTINGS_ROUTES) && !settingsOpen}
+                      data-testid="nav-group-settings"
+                    >
+                      <Settings className="w-4 h-4 shrink-0" />
+                      <span>Settings</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${settingsOpen ? "rotate-180" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
@@ -583,8 +537,8 @@ export function AppSidebar() {
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+                </Collapsible>
+              </SidebarMenuItem>
 
               {/* Admin — super admins only */}
               {isSuperAdmin && (

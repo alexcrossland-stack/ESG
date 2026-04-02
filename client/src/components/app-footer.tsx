@@ -6,14 +6,14 @@ export function AppFooter() {
       <div className="max-w-screen-xl mx-auto flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground">
         <p>ESG Manager &copy; {new Date().getFullYear()}</p>
         <nav className="flex flex-wrap gap-x-4 gap-y-1 items-center">
-          <Link href="/terms"><a className="hover:underline hover:text-foreground transition-colors">Terms of Service</a></Link>
-          <Link href="/privacy"><a className="hover:underline hover:text-foreground transition-colors">Privacy Policy</a></Link>
-          <Link href="/cookies"><a className="hover:underline hover:text-foreground transition-colors">Cookie Policy</a></Link>
-          <Link href="/dpa"><a className="hover:underline hover:text-foreground transition-colors">DPA</a></Link>
+          <Link href="/terms" className="hover:underline hover:text-foreground transition-colors">Terms of Service</Link>
+          <Link href="/privacy" className="hover:underline hover:text-foreground transition-colors">Privacy Policy</Link>
+          <Link href="/cookies" className="hover:underline hover:text-foreground transition-colors">Cookie Policy</Link>
+          <Link href="/dpa" className="hover:underline hover:text-foreground transition-colors">DPA</Link>
           <span className="hidden sm:inline text-border">|</span>
-          <Link href="/help"><a className="hover:underline hover:text-foreground transition-colors">Help &amp; Support</a></Link>
+          <Link href="/help" className="hover:underline hover:text-foreground transition-colors">Help &amp; Support</Link>
           <a href="mailto:support@esgmanager.com" className="hover:underline hover:text-foreground transition-colors">support@esgmanager.com</a>
-          <Link href="/settings?tab=privacy"><a className="hover:underline hover:text-foreground transition-colors">Privacy &amp; Data Rights</a></Link>
+          <Link href="/settings?tab=privacy" className="hover:underline hover:text-foreground transition-colors">Privacy &amp; Data Rights</Link>
         </nav>
       </div>
     </footer>
