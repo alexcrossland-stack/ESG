@@ -201,7 +201,7 @@ class SidebarErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
   }
 }
 
-class SilentErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+class SupportAssistantErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
   constructor(props: { children: ReactNode }) {
     super(props);
     this.state = { hasError: false, message: "" };
@@ -225,7 +225,17 @@ class SilentErrorBoundary extends Component<{ children: ReactNode }, ErrorBounda
   }
 
   render() {
-    if (this.state.hasError) return null;
+    if (this.state.hasError) {
+      return (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 shadow-md" data-testid="support-assistant-error">
+          <TriangleAlert className="w-4 h-4 text-destructive shrink-0" />
+          <span className="text-xs text-destructive font-medium">Something went wrong</span>
+          <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => window.location.reload()} data-testid="button-support-reload">
+            Reload page
+          </Button>
+        </div>
+      );
+    }
     return this.props.children;
   }
 }
@@ -442,7 +452,7 @@ function ProtectedApp() {
           <AppFooter />
         </div>
       </div>
-      <SilentErrorBoundary><SupportAssistant /></SilentErrorBoundary>
+      <SupportAssistantErrorBoundary><SupportAssistant /></SupportAssistantErrorBoundary>
     </SidebarProvider>
     </SiteProvider>
   );
