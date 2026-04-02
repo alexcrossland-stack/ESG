@@ -178,6 +178,14 @@ async function ensureUserGroupRole(
 /**
  * Creates the full platform-canonical set of 28 metrics for a company.
  * Uses DEFAULT_METRICS from server/default-metrics.ts — no private list.
+ *
+ * ⚠ Operator note — destructive cleanup on rerun:
+ * If any existing metric for this company has a name that is NOT in DEFAULT_METRIC_NAMES
+ * (e.g. a legacy alias or an ad-hoc metric added during testing), this function will
+ * DELETE that metric and all of its associated metric_values before inserting the
+ * canonical set. This is intentional "demo reset" behaviour: reruns always converge
+ * the company to the canonical 28-metric state. Do NOT rely on custom per-demo-company
+ * metrics persisting across seed reruns.
  */
 async function ensureMetrics(companyId: string, counts: ReturnType<typeof counter>) {
   const canonicalNameSet = new Set(DEFAULT_METRIC_NAMES);
