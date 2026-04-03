@@ -54,7 +54,9 @@ async function throwIfResNotOk(res: Response) {
     if (res.status === 429) {
       message = "Too many attempts. Please wait a few minutes before trying again.";
     }
-    throw new Error(message);
+    const err = new Error(message) as Error & { code?: string };
+    if (code) err.code = code;
+    throw err;
   }
 }
 
@@ -95,7 +97,9 @@ export async function apiRequest(
     if (res.status === 429) {
       message = "Too many attempts. Please wait a few minutes before trying again.";
     }
-    throw new Error(message);
+    const apiErr = new Error(message) as Error & { code?: string };
+    if (code) apiErr.code = code;
+    throw apiErr;
   }
 
   return res;

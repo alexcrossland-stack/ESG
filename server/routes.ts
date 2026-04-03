@@ -3552,6 +3552,63 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── Report eligibility helper (shared by preflight + generate) ──────────────
+  async function checkReportEligibility(
+    companyId: string,
+    period: string | undefined,
+    siteId: string | null | undefined,
+  ): Promise<{
+    canGenerate: boolean;
+    code?: "no_metrics_configured" | "no_reporting_period_data";
+    message?: string;
+    metricsWithData: number;
+    totalMetrics: number;
+    resolvedPeriod: string;
+  }> {
+    const now = new Date();
+    const resolvedPeriod = period || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    const allMetrics = await storage.getMetrics(companyId);
+    const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+    const totalMetrics = enabledMetrics.length;
+
+    if (totalMetrics === 0) {
+      return {
+        canGenerate: false,
+        code: "no_metrics_configured",
+        message: "No metrics are enabled. Contact your administrator to configure metrics before generating a report.",
+        metricsWithData: 0,
+        totalMetrics: 0,
+        resolvedPeriod,
+      };
+    }
+
+    const allPeriodValues = await storage.getMetricValuesByPeriod(companyId, resolvedPeriod);
+    let values: typeof allPeriodValues;
+    if (siteId) {
+      values = allPeriodValues.filter((v: any) => v.siteId === siteId);
+    } else {
+      const activeSitesList = await storage.getSites(companyId, false);
+      const activeSiteIds = new Set(activeSitesList.map((s: any) => s.id));
+      values = allPeriodValues.filter((v: any) => v.siteId === null || activeSiteIds.has(v.siteId));
+    }
+
+    const metricsWithData = new Set(values.map((v: any) => v.metricId)).size;
+
+    if (metricsWithData === 0) {
+      return {
+        canGenerate: false,
+        code: "no_reporting_period_data",
+        message: `No data found for ${resolvedPeriod}. Go to Data Entry and add figures for this period first.`,
+        metricsWithData: 0,
+        totalMetrics,
+        resolvedPeriod,
+      };
+    }
+
+    return { canGenerate: true, metricsWithData, totalMetrics, resolvedPeriod };
+  }
+
   // Reports
   app.get("/api/reports", requireAuth, async (req, res) => {
     try {
@@ -3564,6 +3621,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const reports = await storage.getReportRuns(companyId, siteId);
       res.json(reports);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/reports/preflight", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const period = req.query.period as string | undefined;
+      const rawSiteId = req.query.siteId as string | undefined;
+      const siteId = rawSiteId === "null" || rawSiteId === "__org__" ? null : rawSiteId || null;
+      const eligibility = await checkReportEligibility(companyId, period, siteId);
+      res.json(eligibility);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -3588,6 +3658,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Reports can be generated for archived sites (historical reporting) — read-only ownership check (no write restriction)
         const rptOwnership = await validateSiteOwnership(bodySiteId, companyId);
         if (!rptOwnership.valid) return res.status(rptOwnership.status).json({ error: rptOwnership.message });
+      }
+
+      // ── Eligibility pre-flight (shared helper — fails fast before heavy work) ──
+      const eligibility = await checkReportEligibility(companyId, period, bodySiteId ?? null);
+      if (!eligibility.canGenerate) {
+        return res.status(400).json({ error: eligibility.message, code: eligibility.code });
       }
 
       const company = await storage.getCompany(companyId);

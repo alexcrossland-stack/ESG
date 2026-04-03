@@ -1254,6 +1254,26 @@ export default function Reports() {
   const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
   const { data: complianceStatus } = useQuery<any>({ queryKey: ["/api/compliance/status"] });
   const { data: evidenceCoverageData } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
+  const { data: preflight } = useQuery<{
+    canGenerate: boolean;
+    code?: string;
+    message?: string;
+    metricsWithData: number;
+    totalMetrics: number;
+    resolvedPeriod: string;
+  }>({
+    queryKey: ["/api/reports/preflight", selectedPeriod, effectiveSiteId ?? "all"],
+    queryFn: async () => {
+      const params = new URLSearchParams({ period: selectedPeriod });
+      if (effectiveSiteId) params.set("siteId", effectiveSiteId);
+      const res = await authFetch(`/api/reports/preflight?${params}`);
+      if (!res.ok) throw new Error("preflight check failed");
+      return res.json();
+    },
+    enabled: activation.hasAddedData,
+    staleTime: 10_000,
+  });
+  const canGenerate = !activation.hasAddedData ? false : !preflight || preflight.canGenerate;
   const { data: actionsData = [] } = useQuery<any[]>({ queryKey: ["/api/actions"] });
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const [exportingAssurance, setExportingAssurance] = useState(false);
@@ -1285,13 +1305,16 @@ export default function Reports() {
       }
       toast({ title: "Report generated", description: `${templateConfig.label} is ready to preview and export.` });
     },
-    onError: (e: any) => toast({
-      title: "Report generation failed",
-      description: e?.message?.includes("data") || e?.message?.includes("metric")
-        ? "Not enough data to generate a report. Add at least one month of data in Data Entry first."
-        : "Something went wrong generating the report. Try selecting a different period or report type.",
-      variant: "destructive",
-    }),
+    onError: (e: any) => {
+      const code = (e as any)?.code as string | undefined;
+      const description =
+        code === "no_reporting_period_data"
+          ? `No data entered for ${selectedPeriod}. Go to Data Entry and add figures for this period first.`
+          : code === "no_metrics_configured"
+          ? "No metrics are enabled. Contact your administrator to configure metrics before generating a report."
+          : "Something went wrong generating the report. Try selecting a different period or report type.";
+      toast({ title: "Report generation failed", description, variant: "destructive" });
+    },
   });
 
   const exportReport = () => {
@@ -1907,12 +1930,28 @@ export default function Reports() {
                       <Link href="/data-entry" className="underline font-medium">Go to Data Entry →</Link>
                     </p>
                   )}
+                  {activation.hasAddedData && preflight && !preflight.canGenerate && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2" data-testid="warning-preflight">
+                      {preflight.code === "no_metrics_configured" ? (
+                        <><strong>No metrics configured.</strong> Contact your administrator to enable metrics before generating a report.</>
+                      ) : (
+                        <><strong>No data for {preflight.resolvedPeriod}.</strong> Select a period that has data, or{" "}
+                        <Link href="/data-entry" className="underline font-medium">go to Data Entry</Link> and add figures for this period.</>
+                      )}
+                    </p>
+                  )}
                   <Button
                     className="w-full"
                     onClick={() => generateMutation.mutate()}
-                    disabled={generateMutation.isPending || activation.isLoading || !activation.hasAddedData}
+                    disabled={generateMutation.isPending || activation.isLoading || !canGenerate}
                     data-testid="button-generate-report"
-                    title={!activation.isLoading && !activation.hasAddedData ? "Add data in Data Entry first" : undefined}
+                    title={
+                      !activation.isLoading && !activation.hasAddedData
+                        ? "Add data in Data Entry first"
+                        : preflight && !preflight.canGenerate
+                        ? `No data for ${preflight.resolvedPeriod} — select a different period`
+                        : undefined
+                    }
                   >
                     <FileText className="w-3.5 h-3.5 mr-1.5" />
                     {generateMutation.isPending ? "Generating..." : "Generate Report"}
@@ -2039,7 +2078,7 @@ export default function Reports() {
                       variant="default"
                       className="mt-3"
                       data-testid="button-report-empty-generate"
-                      disabled={generateMutation.isPending}
+                      disabled={generateMutation.isPending || !canGenerate}
                       onClick={() => generateMutation.mutate()}
                     >
                       {generateMutation.isPending ? "Generating..." : "Generate report now"}

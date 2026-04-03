@@ -25,6 +25,31 @@ function readSeedInfo() {
 test.describe("REGR-RG: Report generation", () => {
   let generatedReportId: string | null = null;
 
+  test.beforeAll(async ({ request }) => {
+    const { tenantA } = readSeedInfo();
+
+    // Fetch the first available metric for tenant A
+    const metricsRes = await request.get("/api/metrics", {
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+    if (metricsRes.status() !== 200) return;
+    const metrics = await metricsRes.json() as Array<{ id: string }>;
+    if (!Array.isArray(metrics) || metrics.length === 0) return;
+    const metricId = metrics[0].id;
+
+    // Seed data for 2024-04 (used by first generate test)
+    await request.post("/api/data-entry", {
+      data: { metricId, period: "2024-04", value: 10, notes: "seed for report-gen test" },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+
+    // Seed data for 2024-03 (used by csv format test)
+    await request.post("/api/data-entry", {
+      data: { metricId, period: "2024-03", value: 10, notes: "seed for report-gen test" },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+  });
+
   test("admin POST /api/reports/generate returns 200 with id (no 500)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
