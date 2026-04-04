@@ -34,6 +34,7 @@ import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
+import { getNextAction } from "@/lib/get-next-action";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -493,6 +494,112 @@ function DataQualityCard() {
   );
 }
 
+function PrimaryActionCard({ readiness, isLoading }: { readiness: any; isLoading: boolean }) {
+  if (isLoading) return <Skeleton className="h-24 w-full" data-testid="card-primary-action" />;
+
+  const action = getNextAction(readiness);
+
+  return (
+    <Card
+      className="border-primary/40 bg-gradient-to-r from-primary/10 to-primary/5"
+      data-testid="card-primary-action"
+    >
+      <CardContent className="p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="flex-1 min-w-0">
+          <p className="text-base font-semibold text-foreground">{action.title}</p>
+          <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{action.description}</p>
+        </div>
+        <Link href={action.href} className="shrink-0">
+          <Button size="default" className="w-full sm:w-auto" data-testid="button-primary-action-cta">
+            {action.ctaLabel}
+            <ArrowRight className="w-4 h-4 ml-2" />
+          </Button>
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+type MissingPanelItem = {
+  label: string;
+  priority: number;
+  href: string;
+};
+
+function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!readiness) return null;
+
+  const missingMetricNames: string[] = readiness?.esgStatus?.missingItems ?? [];
+  const estimatedPct: number = readiness?.estimatedPercent ?? 0;
+  const evidenceCoverage: number = readiness?.evidenceCoveragePercent ?? 0;
+  const reportingReadiness: boolean = readiness?.reportingReadiness ?? false;
+
+  const items: MissingPanelItem[] = [];
+
+  missingMetricNames.forEach(name => {
+    items.push({ label: `Add data for: ${name}`, priority: 1, href: "/data-entry" });
+  });
+
+  if (!reportingReadiness && missingMetricNames.length === 0) {
+    items.push({ label: "More data needed before generating a report", priority: 2, href: "/data-entry" });
+  }
+
+  if (estimatedPct > 10) {
+    items.push({ label: `Replace estimated data with real figures (${estimatedPct}% estimated)`, priority: 3, href: "/data-entry?highlight=estimated" });
+  }
+
+  if (evidenceCoverage < 60) {
+    items.push({ label: `Upload supporting documents (${evidenceCoverage}% evidence coverage)`, priority: 4, href: "/evidence" });
+  }
+
+  if (items.length === 0) return null;
+
+  const limit = esgState === "IN_PROGRESS" ? 3 : esgState === "DRAFT" ? 6 : undefined;
+  const showExpand = limit !== undefined && items.length > limit;
+  const visibleItems = !expanded && limit ? items.slice(0, limit) : items;
+
+  return (
+    <div data-testid="section-whats-missing" className="space-y-2">
+      <div className="flex items-center gap-2">
+        <AlertCircle className="w-4 h-4 text-amber-500" />
+        <h3 className="text-sm font-medium">What's still missing</h3>
+        <Badge variant="secondary" className="text-xs">{items.length}</Badge>
+      </div>
+      <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+        {visibleItems.map((item, i) => (
+          <Link key={i} href={item.href}>
+            <div
+              className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors cursor-pointer"
+              data-testid={`missing-item-${i}`}
+            >
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                item.priority === 1 ? "bg-red-500" :
+                item.priority === 2 ? "bg-amber-500" :
+                item.priority === 3 ? "bg-amber-400" :
+                "bg-blue-400"
+              }`} />
+              <p className="text-xs text-foreground flex-1 leading-snug">{item.label}</p>
+              <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+            </div>
+          </Link>
+        ))}
+      </div>
+      {showExpand && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="button-missing-expand"
+        >
+          {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {expanded ? "Show less" : `Show ${items.length - limit!} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weightedScore: any }) {
   const { data: readiness, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
 
@@ -929,6 +1036,11 @@ export default function Dashboard() {
 
   const hasAlerts = missingDataAlerts.length > 0 || overdueActions.length > 0 || upcomingPolicyReviews.length > 0;
 
+  const esgState: string = readiness?.esgStatus?.state ?? "IN_PROGRESS";
+  const showDraft = esgState === "DRAFT" || esgState === "PROVISIONAL" || esgState === "CONFIRMED";
+  const showProvisional = esgState === "PROVISIONAL" || esgState === "CONFIRMED";
+  const showConfirmed = esgState === "CONFIRMED";
+
   const handleDismissMilestone = () => {
     setMilestoneDismissed(true);
     try { localStorage.setItem("milestone_first_report_dismissed", "true"); } catch {}
@@ -990,11 +1102,15 @@ export default function Dashboard() {
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 
+      <PrimaryActionCard readiness={readiness} isLoading={!readiness} />
+
       <DashboardHeroCard esgScore={esgScore} weightedScore={weightedScore} />
 
-      <ActionFeedCard />
+      <WhatsMissingPanel readiness={readiness} esgState={esgState} />
 
-      {hasAlerts && (
+      {showDraft && <ActionFeedCard />}
+
+      {showDraft && hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">
           {overdueActions.length > 0 && (
             <Alert variant="destructive" data-testid="alert-overdue-actions">
@@ -1034,7 +1150,7 @@ export default function Dashboard() {
       )}
 
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {showDraft && <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card data-testid="stat-esg-score" className="col-span-2 sm:col-span-1 row-span-2">
           <CardContent className="p-4 flex flex-col items-center justify-center h-full gap-1">
             <p className="text-xs font-medium text-muted-foreground text-center flex items-center gap-1 justify-center">ESG Position <EsgTooltip term="esg" /></p>
@@ -1084,18 +1200,18 @@ export default function Dashboard() {
             <p className="text-2xl font-bold text-red-600">{statusCounts.red}</p>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <MultiDimensionalScoreCards period={scorePeriod} siteId={activeSiteId} />
+      {showProvisional && <MultiDimensionalScoreCards period={scorePeriod} siteId={activeSiteId} />}
 
-      <ProgrammeStatusCard />
+      {showProvisional && <ProgrammeStatusCard />}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {showDraft && <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <EvidenceCoverageCard />
         <EsgMaturityProgress />
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {showProvisional && <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="md:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Category Performance</CardTitle>
@@ -1175,9 +1291,9 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {showConfirmed && <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -1241,9 +1357,9 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {showConfirmed && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -1346,9 +1462,9 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {showConfirmed && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Card data-testid="card-data-completeness">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
@@ -1453,20 +1569,22 @@ export default function Dashboard() {
             })()}
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <DataQualityCard />
-        <BenchmarkSummaryCard />
-      </div>
+      {showDraft && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <DataQualityCard />
+          {showProvisional && <BenchmarkSummaryCard />}
+        </div>
+      )}
 
-      <SiteBreakdownCard period={enhanced?.latestPeriod} />
+      {showProvisional && <SiteBreakdownCard period={enhanced?.latestPeriod} />}
 
-      <RecommendationsWidget />
+      {showConfirmed && <RecommendationsWidget />}
 
-      <ActivityFeed />
+      {showConfirmed && <ActivityFeed />}
 
-      <NotificationsPanel />
+      {showConfirmed && <NotificationsPanel />}
     </div>
   );
 }
