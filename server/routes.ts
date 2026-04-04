@@ -8358,7 +8358,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       auditLog({
         userId: actorId,
         companyId: parsed.data.companyId || undefined,
-        eventName: "access_grant_created",
+        action: "access_grant_created",
+        actorType: "super_admin",
         entityType: "access_grant",
         entityId: grant.id,
         details: {
@@ -8378,8 +8379,22 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.get("/api/admin/access-grants", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
+      const actor = (req as any)._superAdmin || (req.session as any).userId;
+      const actorId = typeof actor === "string" ? actor : actor?.id;
       const status = req.query.status as "active" | "expired" | "revoked" | undefined;
       const grants = await storage.listAccessGrants(status ? { status } : undefined);
+      try {
+        auditLog({
+          userId: actorId,
+          action: "access_grants_viewed",
+          actorType: "super_admin",
+          entityType: "access_grant",
+          details: { statusFilter: status ?? null, resultCount: grants.length },
+          req,
+        });
+      } catch (auditErr: any) {
+        console.error("[audit] Failed to enqueue access grants view log:", auditErr?.message ?? auditErr);
+      }
       res.json(grants);
     } catch (e: any) {
       sendServerError(res, e);
@@ -8403,7 +8418,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       auditLog({
         userId: actorId,
         companyId: existing.companyId || undefined,
-        eventName: "access_grant_revoked",
+        action: "access_grant_revoked",
+        actorType: "super_admin",
         entityType: "access_grant",
         entityId: id,
         details: {

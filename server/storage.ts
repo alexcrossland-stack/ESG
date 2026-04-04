@@ -4027,8 +4027,8 @@ export class DatabaseStorage implements IStorage {
       SELECT
         ag.*,
         c.name AS company_name,
-        u.name AS user_name,
-        cu.name AS created_by_name
+        u.username AS user_name,
+        cu.username AS created_by_name
       FROM access_grants ag
       LEFT JOIN companies c ON c.id = ag.company_id
       LEFT JOIN users u ON u.id = ag.user_id
