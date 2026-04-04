@@ -1110,11 +1110,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {showConfirmed && <PostWizardPanel />}
-      {showConfirmed && <NextStepBanner />}
-      {showConfirmed && <ActivationCard />}
+      <PostWizardPanel />
+      <NextStepBanner />
+      <ActivationCard />
 
-      {showProvisional && showMilestone && (
+      {showMilestone && (
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 
