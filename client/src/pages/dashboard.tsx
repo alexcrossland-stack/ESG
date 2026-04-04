@@ -1065,7 +1065,7 @@ export default function Dashboard() {
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
       <BackToPortfolioBanner />
-      {showDraft && (
+      {showProvisional && (
         <PageGuidance
           pageKey="dashboard"
           title="ESG Dashboard — what the numbers mean"
@@ -1079,7 +1079,7 @@ export default function Dashboard() {
           ]}
         />
       )}
-      {showDraft && <ActionPlanBanner company={company} />}
+      {showProvisional && <ActionPlanBanner company={company} />}
 
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -1112,11 +1112,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {showDraft && <PostWizardPanel />}
-      {showDraft && <NextStepBanner />}
-      {showDraft && <ActivationCard />}
+      {showProvisional && <PostWizardPanel />}
+      {showProvisional && <NextStepBanner />}
+      {showProvisional && <ActivationCard />}
 
-      {showDraft && showMilestone && (
+      {showProvisional && showMilestone && (
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 
