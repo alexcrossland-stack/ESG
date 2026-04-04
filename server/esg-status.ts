@@ -5,6 +5,7 @@ export type EsgState = "IN_PROGRESS" | "DRAFT" | "PROVISIONAL" | "CONFIRMED";
 export interface EsgStatusResult {
   state: EsgState;
   label: string;
+  plainMeaning: string;
   explanation: string;
   completenessPercentage: number;
   missingItems: string[];
@@ -18,22 +19,26 @@ export interface EsgStatusResult {
   minViableThresholdMet: boolean;
 }
 
-const STATE_META: Record<EsgState, { label: string; shortLabel: string }> = {
+const STATE_META: Record<EsgState, { label: string; shortLabel: string; plainMeaning: string }> = {
   IN_PROGRESS: {
     label: "Score in progress",
     shortLabel: "In progress",
+    plainMeaning: "Add your first figures to generate your ESG score.",
   },
   DRAFT: {
-    label: "Baseline ESG Score — Draft",
+    label: "Your ESG Score — Draft",
     shortLabel: "Draft",
+    plainMeaning: "Most of your figures are estimates — replace them with real data to improve confidence.",
   },
   PROVISIONAL: {
-    label: "Baseline ESG Score — Provisional",
+    label: "Your ESG Score — Provisional",
     shortLabel: "Provisional",
+    plainMeaning: "Your score is taking shape. Fill in more data or swap estimates for real figures to reach Confirmed.",
   },
   CONFIRMED: {
-    label: "Baseline ESG Score — Confirmed",
+    label: "Your ESG Score — Confirmed",
     shortLabel: "Confirmed",
+    plainMeaning: "Your score is based on real data and is ready to share.",
   },
 };
 
@@ -44,15 +49,15 @@ function buildExplanation(
 ): string {
   switch (state) {
     case "IN_PROGRESS":
-      return "Add your first data point to generate a Baseline ESG Score.";
+      return "Add your first figures to generate your ESG score.";
     case "DRAFT":
-      return `${estimatedPercent}% of your data is estimated. Replace estimated values with actual figures to move to Provisional.`;
+      return `${estimatedPercent}% of your figures are estimates — replace them with real data to improve confidence.`;
     case "PROVISIONAL":
       return completenessPercentage < 60
-        ? `Your score covers ${completenessPercentage}% of metrics. Fill in more data to reach Confirmed status.`
-        : "Some estimated data remains. Replace estimates with measured values to reach Confirmed status.";
+        ? `Your score covers ${completenessPercentage}% of your metrics. Fill in more to reach Confirmed.`
+        : "Looking good. A few figures are still estimated — swap them for real data to reach Confirmed.";
     case "CONFIRMED":
-      return "Your score is based on measured data and is ready for reporting.";
+      return "Your score is based on real data and is ready to share.";
   }
 }
 
@@ -63,20 +68,20 @@ function buildNextAction(
 ): string {
   switch (state) {
     case "IN_PROGRESS":
-      return "Enter your first metric value — start with electricity or headcount.";
+      return "Enter your first figures — start with electricity use or headcount.";
     case "DRAFT":
       if (missingItems.length > 0) {
-        return `Enter actual data for: ${missingItems.slice(0, 3).join(", ")}${missingItems.length > 3 ? ` and ${missingItems.length - 3} more` : ""}.`;
+        return `Enter real data for: ${missingItems.slice(0, 3).join(", ")}${missingItems.length > 3 ? ` and ${missingItems.length - 3} more` : ""}.`;
       }
-      return "Replace estimated values with actual measured data to improve score confidence.";
+      return "Replace estimated figures with real data to build confidence in your score.";
     case "PROVISIONAL":
       if (evidenceCoverage < 50) {
-        return "Upload supporting documents (bills, statements) as evidence for your data entries.";
+        return "Upload supporting documents — energy bills, invoices, or HR records — to back up your figures.";
       }
       if (missingItems.length > 0) {
         return `Fill in ${missingItems.length} remaining metric${missingItems.length === 1 ? "" : "s"} to strengthen your score.`;
       }
-      return "Replace remaining estimated values with actual data to reach Confirmed status.";
+      return "Replace remaining estimates with real data to reach Confirmed.";
     case "CONFIRMED":
       return "Keep your data up to date and generate your ESG report.";
   }
@@ -147,12 +152,14 @@ export async function evaluateEsgStatus(
   }
 
   const label = STATE_META[state].label;
+  const plainMeaning = STATE_META[state].plainMeaning;
   const explanation = buildExplanation(state, estimatedPercent, completenessPercentage);
   const nextRecommendedAction = buildNextAction(state, missingMetricNames.slice(0, 5), evidenceCoverage);
 
   return {
     state,
     label,
+    plainMeaning,
     explanation,
     completenessPercentage,
     missingItems: missingMetricNames,

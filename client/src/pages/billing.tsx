@@ -257,7 +257,7 @@ export default function BillingPage() {
                 <span className="text-xs text-muted-foreground">/mo</span>
               </div>
             </div>
-            <CardDescription>Full AI-powered suite for serious sustainability programmes.</CardDescription>
+            <CardDescription>Everything you need to run a proper ESG programme — without the corporate price tag.</CardDescription>
           </CardHeader>
           <CardContent>
             {!isPro ? (
@@ -342,9 +342,9 @@ export default function BillingPage() {
         <div className="flex items-start gap-3 p-4 rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800" data-testid="banner-comped-access">
           <Crown className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">You have Complimentary Pro access.</p>
+            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">You have complimentary Pro access — enjoy all features at no cost.</p>
             {compedExpiry && (
-              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">This complimentary access expires on {compedExpiry}.</p>
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">Your complimentary access runs until {compedExpiry}.</p>
             )}
           </div>
         </div>
@@ -354,9 +354,9 @@ export default function BillingPage() {
         <div className="flex items-start gap-3 p-4 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800" data-testid="banner-beta-access">
           <Crown className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">You currently have beta access to Pro features.</p>
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">You're on beta access — all Pro features are unlocked for you.</p>
             {betaExpiry && (
-              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">This access expires on {betaExpiry}.</p>
+              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">Your beta access runs until {betaExpiry}.</p>
             )}
           </div>
         </div>

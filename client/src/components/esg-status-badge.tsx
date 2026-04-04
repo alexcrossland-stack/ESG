@@ -9,6 +9,7 @@ export type EsgState = "IN_PROGRESS" | "DRAFT" | "PROVISIONAL" | "CONFIRMED";
 export interface EsgStatusData {
   state: EsgState;
   label: string;
+  plainMeaning?: string;
   explanation: string;
   completenessPercentage: number;
   missingItems?: string[];
@@ -123,6 +124,9 @@ export function EsgStatusBadge({
         <TooltipContent side="bottom" className="max-w-xs" data-testid="tooltip-esg-status">
           <div className="space-y-2 text-sm">
             <p className="font-semibold">{status.label}</p>
+            {status.plainMeaning && (
+              <p className="text-foreground font-medium text-xs">{status.plainMeaning}</p>
+            )}
             <p className="text-muted-foreground">{status.explanation}</p>
             {status.nextRecommendedAction && (
               <p className="text-foreground">
@@ -132,7 +136,7 @@ export function EsgStatusBadge({
             )}
             {status.missingItems && status.missingItems.length > 0 && (
               <div>
-                <p className="font-medium text-muted-foreground">Missing metrics:</p>
+                <p className="font-medium text-muted-foreground">What's still missing:</p>
                 <ul className="mt-1 space-y-0.5">
                   {status.missingItems.slice(0, 4).map((item, i) => (
                     <li key={i} className="text-xs text-muted-foreground">• {item}</li>

@@ -366,8 +366,8 @@ function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId
         icon={FileCheck}
         title={viewedSite ? "No evidence for this site yet" : "No evidence files yet"}
         description={viewedSite
-          ? `Upload documents that support the ESG data for ${viewedSite.name}. Evidence strengthens your data quality score and builds trust with customers, lenders, and supply chain partners.`
-          : "Evidence files (invoices, certificates, HR records) prove your ESG data is accurate. They improve your data quality score and are often requested by customers and lenders."}
+          ? `Upload documents that back up the ESG data for ${viewedSite.name}. The more you add, the more credible your reports become.`
+          : "Add documents like energy bills, certificates, or HR records to show your ESG figures are based on real data. Customers, banks, and buyers often ask for this."}
         helpText={isArchivedSiteSelected
           ? "This site is archived. Historical records are available but new uploads are disabled."
           : "Good starting documents: your most recent electricity bill, last month's gas invoice, or an HR headcount record."}
@@ -494,20 +494,20 @@ export default function Evidence() {
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <PageGuidance
         pageKey="evidence"
-        title="Evidence Management — what this page does"
-        summary="This page is where you store and manage the documents that support your ESG data — things like energy invoices, training records, board minutes, and third-party certificates. Evidence strengthens the credibility of your ESG reports."
-        goodLooksLike="At least one piece of evidence linked to each active metric or policy, with documents reviewed and marked as approved."
+        title="Supporting Documents — what this page does"
+        summary="This is where you keep the documents that back up your ESG data — things like energy bills, payroll records, board minutes, and certificates. The more documents you add, the more trustworthy your reports become."
+        goodLooksLike="At least one document linked to each metric or policy, with files reviewed and confirmed."
         steps={[
           "Upload key documents — energy invoices, payroll data, policy certificates",
-          "Link each file to the relevant metric, policy, or questionnaire",
-          "Check the Coverage tab to see which metrics still lack supporting evidence",
+          "Link each file to the relevant metric, policy, or data entry",
+          "Check the Coverage tab to see which metrics still need a supporting document",
           "Use evidence requests to ask team members to submit documents",
         ]}
       />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Evidence Management <EsgTooltip term="evidence" /></h1>
-          <p className="text-sm text-muted-foreground mt-1">Upload, track, and review supporting documents for your ESG data</p>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Supporting Documents <EsgTooltip term="evidence" /></h1>
+          <p className="text-sm text-muted-foreground mt-1">Keep the documents that back up your ESG data in one place</p>
         </div>
         {canUpload && (
           <UploadEvidenceDialog forceOpen={uploadOpen} onOpenChange={setUploadOpen} />

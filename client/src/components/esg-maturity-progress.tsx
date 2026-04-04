@@ -5,9 +5,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TrendingUp, CheckCircle2 } from "lucide-react";
 
 const STAGES = [
-  { key: "starter", label: "Starter", description: "Beginning your ESG journey" },
-  { key: "developing", label: "Developing", description: "Building ESG capabilities" },
-  { key: "established", label: "Established", description: "Mature ESG programme" },
+  { key: "starter", label: "Starter", description: "Getting started with ESG" },
+  { key: "developing", label: "Developing", description: "Building your ESG practices" },
+  { key: "established", label: "Established", description: "Running a solid ESG programme" },
 ] as const;
 
 function getNextStepMessage(stage: string, details: any): string {
@@ -29,7 +29,7 @@ function getNextStepMessage(stage: string, details: any): string {
     if (coverageNeeded) parts.push("improve evidence coverage above 50%");
     return parts.length > 0 ? `To reach Established: ${parts.join(", ")}.` : "Almost at Established level!";
   }
-  return "You've reached the highest maturity stage. Keep maintaining your programme.";
+  return "You're running a solid ESG programme. Keep your data and policies up to date.";
 }
 
 export function EsgMaturityProgress({ compact = false }: { compact?: boolean }) {
@@ -47,7 +47,7 @@ export function EsgMaturityProgress({ compact = false }: { compact?: boolean }) 
         <TrendingUp className="w-4 h-4 text-primary shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <p className="text-xs font-medium">Maturity</p>
+            <p className="text-xs font-medium">ESG Progress</p>
             <Badge variant={stageIndex >= 2 ? "default" : "secondary"} className="text-[10px]" data-testid="badge-maturity-compact">
               {STAGES[stageIndex]?.label || data.stage}
             </Badge>
@@ -62,7 +62,7 @@ export function EsgMaturityProgress({ compact = false }: { compact?: boolean }) 
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-primary" />
-          ESG Maturity Progress
+          Your ESG Progress
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">

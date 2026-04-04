@@ -1640,7 +1640,7 @@ function MultiDimensionalScoreCards({ period, siteId }: { period?: string; siteI
         />
 
         <ScoreDimensionCard
-          title="Management Maturity"
+          title="ESG Management"
           icon={BookOpen}
           score={maturity?.score ?? 0}
           description="Policy, ownership, targets, evidence & review cycles"

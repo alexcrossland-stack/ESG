@@ -122,7 +122,7 @@ export default function Policy() {
       <PageGuidance
         pageKey="policy"
         title="ESG Policy — what this page does"
-        summary="This page is your central ESG policy editor. Use it to create, maintain, and publish a comprehensive written ESG policy that covers your commitments on environment, social responsibility, and governance."
+        summary="This is where you write and maintain your ESG policy — your company's written commitments on the environment, your people, and how you're governed. A clear, published policy builds trust with customers, suppliers, and investors."
         goodLooksLike="A published policy with at least 4 sections completed, reviewed within the last 12 months, and approved by a senior member of your team."
         steps={[
           "Work through each section — add your company's commitments and context",
@@ -150,7 +150,7 @@ export default function Policy() {
             ESG Policy
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Build and maintain your company's ESG policy
+            Create and keep your ESG policy up to date
           </p>
           {policy?.id && (
             <div className="mt-1">

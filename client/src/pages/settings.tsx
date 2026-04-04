@@ -23,7 +23,7 @@ import {
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
   Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon, UserPlus,
   Key, KeyRound, Trash2, Plus, AlertCircle, CheckCircle, XCircle,
-  Monitor, Smartphone, Globe, RefreshCw, LogOut,
+  Monitor, Smartphone, Globe, RefreshCw, LogOut, Crown,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -218,6 +218,8 @@ export default function Settings() {
             </CardContent>
           </Card>
 
+          <YourPlanCard />
+
           <PasswordChangeCard />
 
           <MfaCard />
@@ -338,7 +340,74 @@ export function StepUpDialog({ open, onClose, onSuccess, actionLabel }: {
 }
 
 // ============================================================
-// SESSION MANAGEMENT CARD
+// YOUR PLAN CARD
+// ============================================================
+
+function YourPlanCard() {
+  const { data: billing, isLoading } = useQuery<any>({ queryKey: ["/api/billing/status"] });
+
+  const isPro = billing?.planTier === "pro";
+  const isBeta = billing?.isBeta;
+  const isComped = billing?.isComped;
+
+  let planName = "Free";
+  let planDescription = "Basic ESG tracking across 1 site";
+  let badgeVariant: "default" | "secondary" | "outline" = "secondary";
+
+  if (isPro && isBeta) {
+    planName = "Pro (Beta)";
+    planDescription = "All Pro features unlocked as a beta participant";
+    badgeVariant = "default";
+  } else if (isPro && isComped) {
+    planName = "Pro (Complimentary)";
+    planDescription = "All Pro features at no cost";
+    badgeVariant = "default";
+  } else if (isPro) {
+    planName = "Pro";
+    planDescription = "Full ESG management — unlimited sites, AI, and advanced reporting";
+    badgeVariant = "default";
+  }
+
+  return (
+    <Card data-testid="card-your-plan">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Crown className="w-4 h-4 text-primary" />
+          Your Plan
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Your current subscription and what it includes
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-4 w-48" />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm" data-testid="text-plan-name">{planName}</span>
+                <Badge variant={badgeVariant} className="text-[10px]" data-testid="badge-plan-tier">
+                  {isPro ? "Pro" : "Free"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-plan-description">{planDescription}</p>
+            </div>
+            <Link href="/billing">
+              <Button variant="outline" size="sm" data-testid="button-manage-plan">
+                {isPro ? "Manage plan" : "Upgrade to Pro"}
+              </Button>
+            </Link>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ============================================================
 
 function SessionManagementCard() {

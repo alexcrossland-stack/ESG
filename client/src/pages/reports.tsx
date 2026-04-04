@@ -39,42 +39,42 @@ const ESG_EXPORT_TYPES = [
   {
     id: "esg_metrics_summary",
     label: "ESG Metrics Summary",
-    description: "All tracked metrics with measured/derived/estimated/missing labels by category",
+    description: "A full breakdown of all your tracked metrics, showing which are measured, estimated, or missing",
     icon: BarChart3,
     color: "text-green-600",
   },
   {
     id: "framework_readiness_summary",
     label: "Framework Readiness Summary",
-    description: "Alignment/readiness assessment against selected ESG frameworks (no certification implied)",
+    description: "See how your data lines up with common ESG frameworks — no certification required",
     icon: Network,
     color: "text-blue-600",
   },
   {
     id: "target_progress_summary",
     label: "Target Progress Summary",
-    description: "Progress against all ESG targets by pillar with status and completion rate",
+    description: "See how you're progressing against your ESG targets across environment, social, and governance",
     icon: Target,
     color: "text-purple-600",
   },
   {
     id: "policy_register_summary",
     label: "Policy Register Summary",
-    description: "All policy records with type, owner, status, and review dates",
+    description: "A list of all your ESG policies with their status, owner, and when they were last reviewed",
     icon: FileText,
     color: "text-amber-600",
   },
   {
     id: "risk_register_summary",
     label: "Risk Register Summary",
-    description: "ESG risk register with likelihood, impact, score, and mitigation status",
+    description: "Your ESG risks in one place — with likelihood, impact, and what you're doing to manage them",
     icon: AlertOctagon,
     color: "text-red-600",
   },
   {
     id: "site_comparison_summary",
     label: "Site Comparison Summary",
-    description: "Side-by-side comparison of ESG data across all active sites",
+    description: "Compare ESG performance across all your sites in one view",
     icon: Building2,
     color: "text-indigo-600",
   },
@@ -311,7 +311,7 @@ const REPORT_TEMPLATES = [
   {
     id: "board",
     label: "Board Summary",
-    description: "One-page executive overview for board meetings and investor briefings",
+    description: "A concise overview of your ESG performance for your board or investors",
     audience: "Board, investors, executives",
     timeEstimate: "~2 min",
     icon: "🏛️",
@@ -320,7 +320,7 @@ const REPORT_TEMPLATES = [
   {
     id: "customer",
     label: "Customer Response Pack",
-    description: "Concise ESG summary for responding to supply chain or procurement requests",
+    description: "A quick ESG summary for customers or procurement teams asking about your sustainability",
     audience: "Customers, procurement teams",
     timeEstimate: "~2 min",
     icon: "📦",
@@ -329,7 +329,7 @@ const REPORT_TEMPLATES = [
   {
     id: "compliance",
     label: "Compliance Summary",
-    description: "Detailed mapping against reporting frameworks for regulatory or audit purposes",
+    description: "A detailed report for auditors or anyone with legal or regulatory requirements",
     audience: "Regulators, auditors, legal",
     timeEstimate: "~3 min",
     icon: "⚖️",
@@ -338,7 +338,7 @@ const REPORT_TEMPLATES = [
   {
     id: "management",
     label: "Full ESG Report",
-    description: "Comprehensive report covering all ESG areas for internal stakeholders",
+    description: "A full report covering everything — environmental, social, and governance",
     audience: "Management, sustainability team",
     timeEstimate: "~3 min",
     icon: "📋",
@@ -1070,7 +1070,7 @@ function buildTextExport(data: any, sections: Record<string, boolean>, esgMeta?:
   lines.push(`Evidence Coverage: ${evidencePercent}%`);
   lines.push(`Estimated Values: ${estimatedPercent}%`);
   if (esgState === "CONFIRMED") {
-    lines.push(`Confidence: Data quality is sufficient for stakeholder reporting. All material metrics are measured and evidenced.`);
+    lines.push(`Confidence: Your data is solid and ready to share. All key metrics are based on real, evidenced figures.`);
   } else if (esgState === "PROVISIONAL") {
     lines.push(`Confidence: Results should be treated as indicative. ${estimatedPercent}% of values are estimated. Pending further data collection.`);
   } else {
@@ -1319,6 +1319,8 @@ export default function Reports() {
   const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
   const { data: complianceStatus } = useQuery<any>({ queryKey: ["/api/compliance/status"] });
   const { data: evidenceCoverageData } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
+  const activation = useActivationState();
+
   const { data: preflight } = useQuery<{
     canGenerate: boolean;
     code?: string;
@@ -1343,8 +1345,6 @@ export default function Reports() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const [exportingAssurance, setExportingAssurance] = useState(false);
   const [showFirstReportMilestone, setShowFirstReportMilestone] = useState(false);
-
-  const activation = useActivationState();
   const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
   const { data: readinessDetail } = useQuery<any>({ queryKey: ["/api/reports/readiness-detail"], staleTime: 30_000 });
 
@@ -1768,13 +1768,13 @@ export default function Reports() {
       <PageGuidance
         pageKey="reports"
         title="ESG Reports — what this page does"
-        summary="This page generates structured ESG reports from your data, policies, and evidence. Use them for board meetings, bank or investor requests, procurement questionnaires, or public sustainability disclosures."
+        summary="This is where you generate ESG reports from your data, policies, and documents. Use them for board meetings, bank or investor requests, procurement questionnaires, or to share your sustainability progress publicly."
         goodLooksLike="At least one report generated and shared per quarter, covering the metrics and policies most relevant to your audience."
         steps={[
-          "Choose the report template that matches your audience (board, supply chain, etc.)",
+          "Choose the report template that matches your audience (board, supply chain, auditor, etc.)",
           "Select the time period and the data you want to include",
           "Generate the report and review it before sharing",
-          "Download as PDF or share a link directly with stakeholders",
+          "Download as PDF or send the link to whoever needs it",
         ]}
       />
       <div>
@@ -1783,7 +1783,7 @@ export default function Reports() {
           ESG Reports
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Generate structured ESG reports for internal review or external stakeholders
+          Generate reports to share with your board, investors, or customers
         </p>
       </div>
 
@@ -1938,10 +1938,10 @@ export default function Reports() {
                   {activation.hasAddedData && preflight && !preflight.canGenerate && (
                     <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2" data-testid="warning-preflight">
                       {preflight.code === "no_metrics_configured" ? (
-                        <><strong>No metrics configured.</strong> Contact your administrator to enable metrics before generating a report.</>
+                        <><strong>No metrics are set up yet.</strong> Ask your administrator to enable metrics before generating a report.</>
                       ) : (
-                        <><strong>No data for {preflight.resolvedPeriod}.</strong> Select a period that has data, or{" "}
-                        <Link href="/data-entry" className="underline font-medium">go to Data Entry</Link> and add figures for this period.</>
+                        <><strong>No data for {preflight.resolvedPeriod}.</strong> Choose a period that has data, or{" "}
+                        <Link href="/data-entry" className="underline font-medium">go to Data Entry</Link> and add your figures first.</>
                       )}
                     </p>
                   )}
@@ -2066,8 +2066,8 @@ export default function Reports() {
                 ) : !activation.hasAddedData ? (
                   <>
                     <p className="text-xs text-muted-foreground mt-1">
-                      <strong>Missing: data entry</strong> — you need at least one month of figures before you can generate a report.
-                      {!activation.hasUploadedEvidence && " Once you've added data, also upload an evidence file to improve report quality."}
+                      <strong>No data yet.</strong> Add at least one month of figures first, then come back to generate your report.
+                      {!activation.hasUploadedEvidence && " Adding a supporting document will also make your report more credible."}
                     </p>
                     <Link href="/data-entry">
                       <Button size="sm" variant="outline" className="mt-3" data-testid="button-report-empty-add-data">
@@ -2077,7 +2077,7 @@ export default function Reports() {
                   </>
                 ) : (
                   <>
-                    <p className="text-xs text-muted-foreground mt-1">Your data is ready. Select a template on the left and click Generate Report to create your first ESG report.</p>
+                    <p className="text-xs text-muted-foreground mt-1">You're all set. Pick a template on the left and click Generate Report to create your first ESG report.</p>
                     <Button
                       size="sm"
                       variant="default"
@@ -2110,8 +2110,8 @@ export default function Reports() {
           <EmptyState
             icon={FileText}
             title={activeSite ? `No reports for ${activeSite.name} yet` : "No reports generated yet"}
-            description="Generate your first ESG report using the form above. Reports summarise your performance and can be shared with customers, lenders, or your own team."
-            helpText="Tip: you need at least one period of data entered before you can generate a meaningful report."
+            description="Generate your first report using the form above. Once done, you can download it as a PDF or share it directly with whoever needs it."
+            helpText="You'll need at least one period of data entered before your report will have meaningful figures."
           />
         ) : (
           <div className="space-y-2">

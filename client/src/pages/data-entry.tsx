@@ -203,7 +203,7 @@ export default function DataEntry() {
       toast({
         title: "Data saved",
         description: isFirstData
-          ? "Great first entry! Next: upload an evidence file to back up this data."
+          ? "Great start — add a supporting document to back this up."
           : "Your figures have been saved and metrics recalculated.",
       });
     },
@@ -1132,9 +1132,9 @@ export default function DataEntry() {
             <EmptyState
               icon={ClipboardList}
               title="No data entered for this site"
-              description="No metric values have been recorded for this site in the selected period."
+              description="You haven't added any figures for this site in the selected period yet."
               helpText={canEdit
-                ? "Use the metric cards above to add values for this site."
+                ? "Use the metric cards above to start entering your data."
                 : "Ask an admin or data entry user to add data for this site"}
             />
           )}
