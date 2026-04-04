@@ -2449,17 +2449,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let rawSaved = 0;
       let metricSaved = 0;
-      let skipped = 0;
+      const rejected: { name: string; period: string; reason: string }[] = [];
       const periodsAffected = new Set<string>();
 
       for (const row of rows) {
         if (row.value === null || row.value === undefined || isNaN(Number(row.value))) {
-          skipped++;
+          rejected.push({ name: row.name, period: row.period, reason: "Invalid or missing value — must be a number" });
           continue;
         }
 
         if (lockedPeriods.has(row.period)) {
-          skipped++;
+          rejected.push({ name: row.name, period: row.period, reason: `Period ${row.period} is locked and cannot be edited` });
           continue;
         }
 
@@ -2482,14 +2482,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               if (!existingForPeriod.locked) {
                 await storage.updateMetricValue(existingForPeriod.id, { value: String(row.value), notes: "Bulk upload", submittedBy: userId });
                 metricSaved++;
-              } else { skipped++; }
+              } else {
+                rejected.push({ name: row.name, period: row.period, reason: `Period ${row.period} is locked for this metric` });
+              }
             } else {
               await storage.createMetricValue({ metricId: metric.id, period: row.period, value: String(row.value), notes: "Bulk upload", submittedBy: userId, locked: false });
               metricSaved++;
             }
             periodsAffected.add(row.period);
           } else {
-            skipped++;
+            rejected.push({ name: row.name, period: row.period, reason: `"${row.name}" does not match any known metric or raw data field` });
           }
         }
       }
@@ -2542,10 +2544,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         action: "Bulk data uploaded",
         entityType: "bulk_upload",
         entityId: "excel",
-        details: { rawSaved, metricSaved, skipped, periods: [...periodsAffected] },
+        details: { rawSaved, metricSaved, rejected: rejected.length, periods: [...periodsAffected] },
       });
 
-      res.json({ rawSaved, metricSaved, skipped, periodsRecalculated: periodsAffected.size });
+      res.json({ rawSaved, metricSaved, rejected, periodsRecalculated: periodsAffected.size });
     } catch (e: any) {
       try {
         const csvFailureEvent = {

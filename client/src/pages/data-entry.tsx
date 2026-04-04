@@ -36,6 +36,8 @@ import { ContextualHelpLink } from "@/components/help";
 import { Link } from "wouter";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { useSearch } from "wouter";
+import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
+import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -838,28 +840,43 @@ export default function DataEntry() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {fields.map(field => (
-                      <div key={field.key} className="space-y-1.5" data-testid={`raw-field-${field.key}`}>
-                        <Label className="text-sm flex items-center gap-1.5">
-                          {field.label}
-                          <span className="text-xs text-muted-foreground">({field.unit})</span>
-                          {rawData?.find((d: any) => d.inputName === field.key)?.dataSourceType && (
-                            <DataSourceBadge type={rawData.find((d: any) => d.inputName === field.key)?.dataSourceType} />
+                    {fields.map(field => {
+                      const fieldPriority = getRawFieldPriority(field.key);
+                      const pc = PRIORITY_LABELS[fieldPriority];
+                      const existingRaw = rawData?.find((d: any) => d.inputName === field.key);
+                      const fieldPrompts = CONTEXTUAL_PROMPTS[field.key];
+                      return (
+                        <div key={field.key} className="space-y-1.5" data-testid={`raw-field-${field.key}`}>
+                          <Label className="text-sm flex items-center gap-1.5 flex-wrap">
+                            {field.label}
+                            <span className="text-xs text-muted-foreground">({field.unit})</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${pc.color}`} data-testid={`badge-priority-${field.key}`}>{pc.label}</span>
+                            {existingRaw?.dataSourceType && <DataSourceBadge type={existingRaw.dataSourceType} />}
+                          </Label>
+                          <Input
+                            type="number"
+                            step="any"
+                            value={rawInputs[field.key] || ""}
+                            onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            placeholder={`Enter ${field.unit}`}
+                            disabled={editDisabled}
+                            className="h-8 text-sm"
+                            data-testid={`input-raw-${field.key}`}
+                          />
+                          <p className="text-xs text-muted-foreground">{field.help}</p>
+                          {fieldPrompts && (
+                            <div className="space-y-0.5">
+                              {fieldPrompts.map((prompt, i) => (
+                                <p key={i} className="text-[11px] text-muted-foreground/70 flex items-center gap-1">
+                                  <span className="text-primary/50">›</span> {prompt}
+                                </p>
+                              ))}
+                            </div>
                           )}
-                        </Label>
-                        <Input
-                          type="number"
-                          step="any"
-                          value={rawInputs[field.key] || ""}
-                          onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
-                          placeholder={`Enter ${field.unit}`}
-                          disabled={editDisabled}
-                          className="h-8 text-sm"
-                          data-testid={`input-raw-${field.key}`}
-                        />
-                        <p className="text-xs text-muted-foreground">{field.help}</p>
-                      </div>
-                    ))}
+                          <InlineGuidanceTrigger metricKey={field.key} />
+                        </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -927,10 +944,11 @@ export default function DataEntry() {
         </TabsContent>
 
         <TabsContent value="manual" className="mt-4 space-y-4">
-          <Alert>
-            <Info className="w-4 h-4" />
+          <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
+            <Sparkles className="w-4 h-4 text-emerald-600" />
             <AlertDescription className="text-sm">
-              These are manual metrics that cannot be auto-calculated. Enter values directly below.
+              <span className="font-medium text-emerald-800 dark:text-emerald-300">You can start with estimates.</span>{" "}
+              <span className="text-emerald-700 dark:text-emerald-400">Set &ldquo;Type of data&rdquo; to <strong>Estimated</strong> when you don&apos;t have an exact figure yet. You can replace it with an actual value later — every data point improves your baseline.</span>
             </AlertDescription>
           </Alert>
 
@@ -944,7 +962,13 @@ export default function DataEntry() {
           )}
 
           {(["environmental", "social", "governance"] as const).map(cat => {
-            const catMetrics = manualMetrics.filter((m: any) => m.category === cat);
+            const PRIORITY_ORDER: Record<string, number> = { essential: 0, recommended: 1, optional: 2 };
+            const catMetrics = (manualMetrics as any[])
+              .filter((m: any) => m.category === cat)
+              .sort((a: any, b: any) =>
+                (PRIORITY_ORDER[getManualMetricPriority(a.name)] ?? 2) -
+                (PRIORITY_ORDER[getManualMetricPriority(b.name)] ?? 2)
+              );
             if (catMetrics.length === 0) return null;
             const config = CATEGORY_ICONS[cat];
             const Icon = config.icon;
@@ -964,6 +988,10 @@ export default function DataEntry() {
                     const localVal = manualValues[metric.metricId] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
                     const metricValue = existingValues.find((v: any) => v.metricId === metric.metricId);
+                    const metricPriority = getManualMetricPriority(metric.name);
+                    const mpc = PRIORITY_LABELS[metricPriority];
+                    const currentSourceType = manualDataSourceTypes[metric.metricId] || metricValue?.dataSourceType || "manual";
+                    const isCurrentlyEstimated = currentSourceType === "estimated";
 
                     return (
                       <div
@@ -975,6 +1003,7 @@ export default function DataEntry() {
                           <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${mpc.color}`} data-testid={`badge-priority-metric-${metric.metricId}`}>{mpc.label}</span>
                             <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
                             <DataSourceBadge type={metricValue?.dataSourceType} />
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
@@ -999,6 +1028,12 @@ export default function DataEntry() {
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
                           )}
+                          {isCurrentlyEstimated && (
+                            <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1" data-testid={`hint-estimated-${metric.metricId}`}>
+                              <span className="text-amber-500">›</span> You can update this with an actual value when you have it — every improvement counts.
+                            </p>
+                          )}
+                          <InlineGuidanceTrigger metricName={metric.name} />
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Value</Label>
@@ -1376,6 +1411,8 @@ function ExcelUploadTab() {
   const [previewPeriods, setPreviewPeriods] = useState<string[]>([]);
   const [fileName, setFileName] = useState<string>("");
   const [unmatchedNames, setUnmatchedNames] = useState<string[]>([]);
+  const [uploadResult, setUploadResult] = useState<{ rawSaved: number; metricSaved: number; rejected: { name: string; period: string; reason: string }[]; periodsRecalculated: number } | null>(null);
+  const [showRejected, setShowRejected] = useState(false);
 
   const { data: templateData } = useQuery<{ rows: string[]; periods: string[]; categories: { raw: string[]; manual: string[] } }>({
     queryKey: ["/api/data-entry/template"],
@@ -1389,17 +1426,15 @@ function ExcelUploadTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      toast({
-        title: "Upload complete",
-        description: `${data.rawSaved} raw inputs, ${data.metricSaved} metrics saved. ${data.skipped} skipped. ${data.periodsRecalculated} periods recalculated.`,
-      });
+      setUploadResult(data);
       setParsedData(null);
       setPreviewRows({});
       setPreviewPeriods([]);
       setFileName("");
       setUnmatchedNames([]);
+      setShowRejected(false);
     },
-    onError: (e: any) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => { const r = resolveApiError(e); toast({ title: r.title || "Upload failed", description: r.description, variant: "destructive" }); },
   });
 
   const handleDownloadTemplate = () => {
@@ -1514,6 +1549,66 @@ function ExcelUploadTab() {
           This allows you to upload historical and ongoing data in bulk.
         </AlertDescription>
       </Alert>
+
+      {uploadResult && (
+        <Card className={`border ${uploadResult.rejected.length > 0 ? "border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700" : "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-700"}`} data-testid="upload-result-card">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <div className="flex items-center justify-between">
+              <CardTitle className={`text-sm flex items-center gap-2 ${uploadResult.rejected.length > 0 ? "text-amber-800 dark:text-amber-200" : "text-emerald-800 dark:text-emerald-200"}`}>
+                {uploadResult.rejected.length > 0 ? <AlertCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                Upload {uploadResult.rejected.length > 0 ? "Completed with Issues" : "Successful"}
+              </CardTitle>
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setUploadResult(null)} data-testid="button-dismiss-result">Dismiss</Button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 space-y-3">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300" data-testid="upload-result-saved">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span><strong>{uploadResult.rawSaved + uploadResult.metricSaved}</strong> data points saved</span>
+              </div>
+              <div className="text-muted-foreground text-xs flex items-center gap-1">
+                <span>{uploadResult.rawSaved} raw inputs</span>
+                <span>·</span>
+                <span>{uploadResult.metricSaved} metrics</span>
+                <span>·</span>
+                <span>{uploadResult.periodsRecalculated} periods recalculated</span>
+              </div>
+              {uploadResult.rejected.length > 0 && (
+                <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300" data-testid="upload-result-rejected">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span><strong>{uploadResult.rejected.length}</strong> rows rejected</span>
+                  <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[11px]" onClick={() => setShowRejected(v => !v)} data-testid="button-toggle-rejected">
+                    {showRejected ? "Hide" : "Show"} details
+                  </Button>
+                </div>
+              )}
+            </div>
+            {showRejected && uploadResult.rejected.length > 0 && (
+              <div className="rounded-md border border-amber-200 dark:border-amber-700 overflow-hidden" data-testid="upload-rejected-table">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-amber-100 dark:bg-amber-900/40 border-b border-amber-200 dark:border-amber-700">
+                      <th className="text-left p-2 font-medium text-amber-800 dark:text-amber-200">Row / Metric</th>
+                      <th className="text-left p-2 font-medium text-amber-800 dark:text-amber-200">Period</th>
+                      <th className="text-left p-2 font-medium text-amber-800 dark:text-amber-200">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadResult.rejected.map((r, i) => (
+                      <tr key={i} className="border-b last:border-0 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                        <td className="p-2 font-medium truncate max-w-[180px]" title={r.name}>{r.name}</td>
+                        <td className="p-2 tabular-nums">{r.period}</td>
+                        <td className="p-2 text-muted-foreground">{r.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-wrap gap-2">
         <Button
