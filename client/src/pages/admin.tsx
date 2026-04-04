@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 import { Link } from "wouter";
 
 function StatCard({ label, value, icon: Icon, variant = "default" }: {
@@ -1299,6 +1299,9 @@ export default function AdminPage() {
           <TabsTrigger value="beta-access" data-testid="tab-beta-access">
             <Crown className="w-4 h-4 mr-2" /> Beta Access
           </TabsTrigger>
+          <TabsTrigger value="activation" data-testid="tab-activation">
+            <Activity className="w-4 h-4 mr-2" /> Activation
+          </TabsTrigger>
           <TabsTrigger value="access-grants" data-testid="tab-access-grants">
             <Gift className="w-4 h-4 mr-2" /> Access Grants
           </TabsTrigger>
@@ -1321,6 +1324,9 @@ export default function AdminPage() {
         <TabsContent value="beta-access" className="mt-4">
           <BetaAccessTab />
         </TabsContent>
+        <TabsContent value="activation" className="mt-4">
+          <ActivationDashboardTab />
+        </TabsContent>
         <TabsContent value="access-grants" className="mt-4">
           <AccessGrantsTab />
         </TabsContent>
@@ -1328,6 +1334,175 @@ export default function AdminPage() {
           <SecurityAuditTab />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function ActivationDashboardTab() {
+  const [search, setSearch] = useState("");
+
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/activation-dashboard"],
+    queryFn: () => fetch("/api/admin/activation-dashboard", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+  });
+
+  const esgStateColor: Record<string, string> = {
+    IN_PROGRESS: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    DRAFT: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    PROVISIONAL: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
+    CONFIRMED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    unknown: "bg-muted text-muted-foreground",
+  };
+  const esgStateLabel: Record<string, string> = {
+    IN_PROGRESS: "In Progress", DRAFT: "Draft", PROVISIONAL: "Provisional",
+    CONFIRMED: "Confirmed", unknown: "—",
+  };
+
+  function milestonesCount(m: any) {
+    return [m?.firstDataAt, m?.firstEvidenceAt, m?.firstReportAt].filter(Boolean).length;
+  }
+
+  function MilestoneDot({ date, label }: { date: string | null; label: string }) {
+    return (
+      <div className={`w-5 h-5 rounded-full flex items-center justify-center border ${date ? "bg-emerald-100 border-emerald-400 text-emerald-700" : "bg-muted border-muted-foreground/30 text-muted-foreground"}`} title={label + (date ? `: ${format(new Date(date), "d MMM yyyy")}` : ": not yet")}>
+        {date ? <CheckCircle className="w-3.5 h-3.5" /> : <XCircle className="w-3 h-3" />}
+      </div>
+    );
+  }
+
+  const filtered = (Array.isArray(rows) ? rows : []).filter((r: any) =>
+    !search || r.name?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const totalRows = filtered.length;
+  const fullyActivated = filtered.filter((r: any) => milestonesCount(r.milestones) === 3).length;
+  const onboarded = filtered.filter((r: any) => r.onboardingComplete).length;
+  const stuck = filtered.filter((r: any) => !r.onboardingComplete && milestonesCount(r.milestones) === 0).length;
+
+  return (
+    <div className="space-y-4" data-testid="activation-dashboard">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="font-semibold text-sm">Customer Activation Tracking</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Track every company's activation milestones: data entered, evidence uploaded, first report generated.
+          </p>
+        </div>
+        <div className="relative w-56">
+          <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-muted-foreground" />
+          <input
+            className="pl-8 pr-3 py-1.5 text-xs border rounded-md w-full bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            placeholder="Search companies…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            data-testid="input-activation-search"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: "Total Companies", value: totalRows, color: "text-primary" },
+          { label: "Onboarded", value: onboarded, color: "text-emerald-600" },
+          { label: "Fully Activated", value: fullyActivated, color: "text-violet-600" },
+          { label: "Stuck (no activity)", value: stuck, color: "text-amber-600" },
+        ].map(({ label, value, color }) => (
+          <Card key={label} data-testid={`act-stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+            <CardContent className="pt-4 pb-3">
+              <p className={`text-2xl font-bold ${color}`}>{value}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : filtered.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground text-sm">No companies found</div>
+      ) : (
+        <div className="rounded-lg border overflow-x-auto">
+          <table className="w-full text-xs min-w-[900px]">
+            <thead>
+              <tr className="bg-muted/50 border-b text-[11px] font-medium text-muted-foreground">
+                <th className="px-4 py-2.5 text-left">Company</th>
+                <th className="px-4 py-2.5 text-left">Plan</th>
+                <th className="px-4 py-2.5 text-left">Onboarded</th>
+                <th className="px-4 py-2.5 text-left">Milestones</th>
+                <th className="px-4 py-2.5 text-left">ESG State</th>
+                <th className="px-4 py-2.5 text-left">Last Active</th>
+                <th className="px-4 py-2.5 text-left">Users</th>
+                <th className="px-4 py-2.5 text-left"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r: any) => {
+                const mc = milestonesCount(r.milestones);
+                const isStuck = !r.onboardingComplete && mc === 0;
+                return (
+                  <tr key={r.id} className={`border-b last:border-b-0 hover:bg-muted/20 ${isStuck ? "bg-amber-50/30 dark:bg-amber-950/10" : ""}`} data-testid={`act-row-${r.id}`}>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-foreground">{r.name}</div>
+                      <div className="text-muted-foreground text-[10px]">{r.industry ?? "—"}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={r.planTier === "pro" ? "default" : "secondary"} className="text-[10px] capitalize">
+                        {r.planTier}
+                      </Badge>
+                      {r.isBetaCompany && (
+                        <Badge variant="outline" className="text-[10px] ml-1 border-blue-300 text-blue-700">Beta</Badge>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.onboardingComplete ? (
+                        <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <div className="text-amber-600 flex items-center gap-1">
+                          <XCircle className="w-4 h-4" />
+                          <span className="text-[10px]">Incomplete</span>
+                        </div>
+                      )}
+                      {r.onboardingCompletedAt && (
+                        <div className="text-muted-foreground text-[10px] mt-0.5">{format(new Date(r.onboardingCompletedAt), "d MMM yy")}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <MilestoneDot date={r.milestones?.firstDataAt} label="Data entered" />
+                        <MilestoneDot date={r.milestones?.firstEvidenceAt} label="Evidence uploaded" />
+                        <MilestoneDot date={r.milestones?.firstReportAt} label="Report generated" />
+                        <span className={`ml-1 text-[10px] font-medium ${mc === 3 ? "text-emerald-600" : mc > 0 ? "text-amber-600" : "text-muted-foreground"}`}>{mc}/3</span>
+                      </div>
+                      {mc > 0 && r.milestones?.firstDataAt && (
+                        <div className="text-muted-foreground text-[10px] mt-0.5">First data: {format(new Date(r.milestones.firstDataAt), "d MMM yy")}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge className={`${esgStateColor[r.esgState] ?? esgStateColor.unknown} text-[10px]`}>
+                        {esgStateLabel[r.esgState] ?? r.esgState}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {r.milestones?.lastActiveAt
+                        ? formatDistanceToNow(new Date(r.milestones.lastActiveAt), { addSuffix: true })
+                        : "Never"}
+                    </td>
+                    <td className="px-4 py-3 text-center">{r.userCount}</td>
+                    <td className="px-4 py-3">
+                      <Link href={`/admin/companies/${r.id}`}>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid={`act-link-${r.id}`}>
+                          <ExternalLink className="w-3 h-3 mr-1" />
+                          View
+                        </Button>
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

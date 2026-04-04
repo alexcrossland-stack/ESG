@@ -506,6 +506,7 @@ function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weig
   const estimatedPct = readiness?.estimatedPercent ?? 0;
   const missingPct = readiness?.missingPercent ?? 0;
   const plainSummary = readiness?.plainEnglishSummary || "";
+  const explanation = readiness?.explanation || "";
 
   return (
     <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-background" data-testid="card-dashboard-hero">

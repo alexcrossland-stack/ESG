@@ -6,6 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -16,8 +20,9 @@ import {
   BotMessageSquare, Calendar, AlertCircle, CheckCircle2, XCircle,
   ClipboardList, TrendingUp, Upload, Bot, LogIn, LineChart, Crown,
   ArrowRightLeft, PlayCircle, Eye, Link2, Activity, Database, Archive, Trash2,
+  Gauge, Key, RefreshCw, Mail, RotateCcw, BarChart, LogOut,
 } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow, format, isPast } from "date-fns";
 
 function SeverityBadge({ severity }: { severity: string }) {
   const map: Record<string, string> = {
@@ -180,6 +185,33 @@ function AdminMigrationPanel({ companyId }: { companyId: string }) {
   );
 }
 
+function esgStateBadge(state: string) {
+  const map: Record<string, string> = {
+    IN_PROGRESS: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    DRAFT: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    PROVISIONAL: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
+    CONFIRMED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    unknown: "bg-muted text-muted-foreground",
+  };
+  const label: Record<string, string> = {
+    IN_PROGRESS: "In Progress", DRAFT: "Draft", PROVISIONAL: "Provisional",
+    CONFIRMED: "Confirmed", unknown: "Unknown",
+  };
+  return (
+    <Badge className={`${map[state] ?? map.unknown} font-medium`}>
+      {label[state] ?? state}
+    </Badge>
+  );
+}
+
+function GrantStatusBadge({ grant }: { grant: any }) {
+  const now = new Date();
+  if (grant.revoked_at) return <Badge variant="destructive" className="text-[10px]">Revoked</Badge>;
+  if (isPast(new Date(grant.ends_at))) return <Badge variant="secondary" className="text-[10px]">Expired</Badge>;
+  if (new Date(grant.starts_at) > now) return <Badge variant="outline" className="text-[10px]">Scheduled</Badge>;
+  return <Badge className="text-[10px] bg-emerald-600 hover:bg-emerald-700">Active</Badge>;
+}
+
 export default function AdminCompanyPage() {
   const { companyId } = useParams<{ companyId: string }>();
   const [, navigate] = useLocation();
@@ -188,6 +220,10 @@ export default function AdminCompanyPage() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteCompanyInput, setDeleteCompanyInput] = useState("");
+  const [preflightResult, setPreflightResult] = useState<any>(null);
+  const [resendInviteOpen, setResendInviteOpen] = useState(false);
+  const [resendUserId, setResendUserId] = useState("");
+  const [resetOnboardingOpen, setResetOnboardingOpen] = useState(false);
 
   const { data: diag, isLoading, error } = useQuery<any>({
     queryKey: ["/api/admin/company", companyId, "diagnostics"],
@@ -230,6 +266,53 @@ export default function AdminCompanyPage() {
     onError: (e: any) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
+  const impersonateMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/impersonate/${companyId}`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Support mode active", description: `Viewing as ${data.impersonatingAs?.companyName}` });
+      window.location.href = "/dashboard";
+    },
+    onError: (e: any) => toast({ title: "Impersonation failed", description: e.message, variant: "destructive" }),
+  });
+
+  const preflightMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/company/${companyId}/support/preflight`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => { setPreflightResult(data); },
+    onError: (e: any) => toast({ title: "Preflight failed", description: e.message, variant: "destructive" }),
+  });
+
+  const resendInviteMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/company/${companyId}/support/resend-invite`, { userId: resendUserId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Invite resent", description: data.message });
+      setResendInviteOpen(false);
+      setResendUserId("");
+    },
+    onError: (e: any) => toast({ title: "Resend failed", description: e.message, variant: "destructive" }),
+  });
+
+  const resetOnboardingMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/company/${companyId}/support/reset-onboarding`, { toStep: 1 });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Onboarding reset", description: data.message });
+      setResetOnboardingOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/company", companyId, "diagnostics"] });
+    },
+    onError: (e: any) => toast({ title: "Reset failed", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-4 max-w-5xl mx-auto">
@@ -269,6 +352,16 @@ export default function AdminCompanyPage() {
           <p className="text-sm text-muted-foreground">{diag.industry ?? "—"} · {diag.country ?? "—"}</p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => impersonateMut.mutate()}
+            disabled={impersonateMut.isPending}
+            data-testid="button-view-as-user"
+          >
+            <LogOut className="w-4 h-4 mr-1.5" />
+            {impersonateMut.isPending ? "Entering..." : "View as User"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setArchiveOpen(true)} data-testid="button-archive-company-detail">
             <Archive className="w-4 h-4 mr-1.5" />
             Archive
@@ -536,6 +629,199 @@ export default function AdminCompanyPage() {
         </Card>
       )}
 
+      {/* ESG Readiness Section */}
+      {diag.esgReadiness && (
+        <Card data-testid="esg-readiness-section">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Gauge className="w-4 h-4" />
+              ESG Readiness
+              <span className="ml-auto">{esgStateBadge(diag.esgReadiness.state)}</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Completeness</span>
+                  <span className="font-medium text-foreground">{diag.esgReadiness.completenessPercent}%</span>
+                </div>
+                <Progress value={diag.esgReadiness.completenessPercent} className="h-2" data-testid="progress-completeness" />
+                <p className="text-[11px] text-muted-foreground">{diag.esgReadiness.filledMetrics}/{diag.esgReadiness.totalMetrics} metrics with data</p>
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Evidence Coverage</span>
+                  <span className="font-medium text-foreground">{diag.esgReadiness.evidenceCoveragePercent}%</span>
+                </div>
+                <Progress value={diag.esgReadiness.evidenceCoveragePercent} className="h-2" data-testid="progress-evidence" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Estimated Data</span>
+                  <span className={`font-medium ${diag.esgReadiness.estimatedPercent > 50 ? "text-destructive" : diag.esgReadiness.estimatedPercent > 20 ? "text-amber-600" : "text-foreground"}`}>{diag.esgReadiness.estimatedPercent}%</span>
+                </div>
+                <Progress value={diag.esgReadiness.estimatedPercent} className="h-2" data-testid="progress-estimated" />
+                <p className="text-[11px] text-muted-foreground">Policy: {diag.esgReadiness.policyPublished ? "Published" : "Not published"} · Overdue actions: {diag.esgReadiness.overdueActions}</p>
+              </div>
+            </div>
+            {diag.esgReadiness.blockingFactors.length > 0 && (
+              <div className="space-y-1.5" data-testid="blocking-factors">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Blocking Factors</p>
+                {diag.esgReadiness.blockingFactors.map((f: string, i: number) => (
+                  <div key={i} className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400" data-testid={`blocker-${i}`}>
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {f}
+                  </div>
+                ))}
+              </div>
+            )}
+            {diag.esgReadiness.missingMetrics.length > 0 && (
+              <div className="space-y-1" data-testid="missing-metrics">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Top Missing Metrics</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {diag.esgReadiness.missingMetrics.map((m: string, i: number) => (
+                    <Badge key={i} variant="outline" className="text-[10px] font-normal">{m}</Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Activation Milestones */}
+      {diag.activationMilestones && (
+        <Card data-testid="activation-milestones">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <BarChart className="w-4 h-4" />
+              Activation Milestones
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: "First Data Entered", date: diag.activationMilestones.firstDataAt, icon: TrendingUp },
+                { label: "First Evidence Uploaded", date: diag.activationMilestones.firstEvidenceAt, icon: Upload },
+                { label: "First Report Generated", date: diag.activationMilestones.firstReportAt, icon: FileText },
+                { label: "Last Active", date: diag.activationMilestones.lastActiveAt, icon: Activity },
+              ].map(({ label, date, icon: Icon }) => (
+                <div
+                  key={label}
+                  className={`flex flex-col gap-1 p-3 rounded border text-xs text-center ${date ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800" : "border-muted bg-muted/20"}`}
+                  data-testid={`milestone-${label.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  {date
+                    ? <CheckCircle2 className="w-5 h-5 text-emerald-500 mx-auto" />
+                    : <XCircle className="w-5 h-5 text-muted-foreground mx-auto" />}
+                  <span className={date ? "text-emerald-700 dark:text-emerald-300 font-medium" : "text-muted-foreground"}>{label}</span>
+                  {date
+                    ? <span className="text-muted-foreground text-[10px]">{format(new Date(date), "d MMM yyyy")}</span>
+                    : <span className="text-muted-foreground text-[10px]">Not yet</span>}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Company Access Grants */}
+      {diag.accessGrants && (
+        <Card data-testid="company-access-grants">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Key className="w-4 h-4" />
+              Access Grants ({diag.accessGrants.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {diag.accessGrants.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No access grants for this company</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {diag.accessGrants.map((g: any, i: number) => (
+                  <div key={g.id ?? i} className="flex flex-wrap items-center gap-2 p-2 rounded border text-xs" data-testid={`grant-row-${i}`}>
+                    <GrantStatusBadge grant={g} />
+                    <Badge variant="outline" className="text-[10px] capitalize">{g.grant_type?.replace(/_/g, " ")}</Badge>
+                    <span className="font-medium">{g.plan_type?.toUpperCase()}</span>
+                    <span className="text-muted-foreground">
+                      {g.starts_at ? format(new Date(g.starts_at), "d MMM yy") : "?"} – {g.ends_at ? format(new Date(g.ends_at), "d MMM yy") : "?"}
+                    </span>
+                    {g.created_by_name && <span className="text-muted-foreground ml-auto">by {g.created_by_name}</span>}
+                    {g.reason && <p className="w-full text-muted-foreground italic">{g.reason}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Support Actions */}
+      <Card data-testid="support-actions-panel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <RefreshCw className="w-4 h-4" />
+            Support Actions
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => preflightMut.mutate()}
+              disabled={preflightMut.isPending}
+              data-testid="button-run-preflight"
+            >
+              <BarChart2 className="w-3.5 h-3.5 mr-1.5" />
+              {preflightMut.isPending ? "Checking..." : "Run Preflight Check"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setResendInviteOpen(true)}
+              disabled={(diag.users ?? []).length === 0}
+              data-testid="button-resend-invite"
+            >
+              <Mail className="w-3.5 h-3.5 mr-1.5" />
+              Resend Invite Email
+            </Button>
+            {!diag.onboardingComplete && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setResetOnboardingOpen(true)}
+                data-testid="button-reset-onboarding"
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                Reset Stuck Onboarding
+              </Button>
+            )}
+          </div>
+
+          {preflightResult && (
+            <div className={`rounded-md border p-3 text-xs space-y-2 ${preflightResult.eligible ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30" : "border-amber-200 bg-amber-50 dark:bg-amber-950/30"}`} data-testid="preflight-result">
+              <div className="flex items-center gap-2 font-semibold">
+                {preflightResult.eligible
+                  ? <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  : <AlertCircle className="w-4 h-4 text-amber-600" />}
+                <span className={preflightResult.eligible ? "text-emerald-800 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}>
+                  {preflightResult.eligible ? "Report generation eligible" : "Not yet eligible for report generation"}
+                </span>
+                <Button size="sm" variant="ghost" className="ml-auto h-6 text-xs" onClick={() => setPreflightResult(null)}>Dismiss</Button>
+              </div>
+              {(preflightResult.reasons ?? []).length > 0 && (
+                <ul className="space-y-1 text-muted-foreground list-disc list-inside">
+                  {preflightResult.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
@@ -601,6 +887,67 @@ export default function AdminCompanyPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Resend Invite Dialog */}
+      <Dialog open={resendInviteOpen} onOpenChange={setResendInviteOpen}>
+        <DialogContent data-testid="modal-resend-invite">
+          <DialogHeader>
+            <DialogTitle>Resend Invite Email</DialogTitle>
+            <DialogDescription>Select a user to send a fresh invitation link to their email address.</DialogDescription>
+          </DialogHeader>
+          <Select value={resendUserId} onValueChange={setResendUserId}>
+            <SelectTrigger data-testid="select-resend-user">
+              <SelectValue placeholder="Select a user…" />
+            </SelectTrigger>
+            <SelectContent>
+              {(diag.users ?? []).map((u: any) => (
+                <SelectItem key={u.id} value={u.id} data-testid={`option-user-${u.id}`}>
+                  {u.username} ({u.email})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResendInviteOpen(false); setResendUserId(""); }}>Cancel</Button>
+            <Button
+              onClick={() => resendInviteMut.mutate()}
+              disabled={!resendUserId || resendInviteMut.isPending}
+              data-testid="button-confirm-resend-invite"
+            >
+              <Mail className="w-4 h-4 mr-1.5" />
+              {resendInviteMut.isPending ? "Sending..." : "Send Invite"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Onboarding Dialog */}
+      <Dialog open={resetOnboardingOpen} onOpenChange={setResetOnboardingOpen}>
+        <DialogContent data-testid="modal-reset-onboarding">
+          <DialogHeader>
+            <DialogTitle>Reset Stuck Onboarding</DialogTitle>
+            <DialogDescription>
+              This resets the company's onboarding progress back to step 1. Only use if the wizard is stuck or corrupted.
+              Onboarding data (metrics, policies, etc.) is not deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
+            This will reset <strong>{diag.name}</strong>'s onboarding step to 1. The user will need to re-complete the wizard.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetOnboardingOpen(false)}>Cancel</Button>
+            <Button
+              variant="default"
+              onClick={() => resetOnboardingMut.mutate()}
+              disabled={resetOnboardingMut.isPending}
+              data-testid="button-confirm-reset-onboarding"
+            >
+              <RotateCcw className="w-4 h-4 mr-1.5" />
+              {resetOnboardingMut.isPending ? "Resetting..." : "Reset Onboarding"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
         <DialogContent>

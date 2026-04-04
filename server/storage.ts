@@ -2290,35 +2290,78 @@ export class DatabaseStorage implements IStorage {
 
     const companySites = await this.getSites(companyId, true);
 
-    const migrationHistoryR = await db.execute(sql`
-      SELECT id, user_id, action, entity_id, details, created_at
-      FROM audit_logs
-      WHERE company_id = ${companyId} AND action = 'legacy_site_migration'
-      ORDER BY created_at DESC LIMIT 20
-    `);
+    const [migrationHistoryR, groupMembershipsR, provisioningEventsR, milestonesR, grantsR] = await Promise.all([
+      db.execute(sql`
+        SELECT id, user_id, action, entity_id, details, created_at
+        FROM audit_logs
+        WHERE company_id = ${companyId} AND action = 'legacy_site_migration'
+        ORDER BY created_at DESC LIMIT 20
+      `),
+      db.execute(sql`
+        SELECT g.id, g.name, g.slug, g.type, gc.created_at AS linked_at
+        FROM group_companies gc
+        JOIN groups g ON g.id = gc.group_id
+        WHERE gc.company_id = ${companyId}
+        ORDER BY gc.created_at ASC
+      `),
+      db.execute(sql`
+        SELECT action, entity_type, entity_id, details, created_at, user_id
+        FROM audit_logs
+        WHERE company_id = ${companyId}
+          AND action IN ('company_created', 'company_linked_to_group', 'user_invited', 'user_role_changed',
+                         'onboarding_completed', 'first_report_generated')
+        ORDER BY created_at ASC
+      `),
+      // Activation milestones — use MIN to get the first-ever occurrence
+      db.execute(sql`
+        SELECT
+          MIN(CASE WHEN event_name IN ('first_data_added','metric_value_submitted','FIRST_DATA_ADDED') THEN recorded_at END) AS first_data_at,
+          MIN(CASE WHEN event_name IN ('first_evidence_uploaded','evidence_uploaded','EVIDENCE_UPLOADED') THEN recorded_at END) AS first_evidence_at,
+          MIN(CASE WHEN event_name IN ('first_report_generated','report_generated','REPORT_GENERATED','FIRST_REPORT_GENERATED') THEN recorded_at END) AS first_report_at,
+          MAX(recorded_at) AS last_event_at
+        FROM telemetry_events
+        WHERE company_id = ${companyId}
+      `),
+      // Access grants for this company
+      db.execute(sql`
+        SELECT
+          ag.id, ag.plan_type, ag.grant_type, ag.starts_at, ag.ends_at,
+          ag.revoked_at, ag.reason, ag.created_at,
+          c.name AS company_name,
+          cu.username AS created_by_name, cu.email AS created_by_email
+        FROM access_grants ag
+        LEFT JOIN companies c ON c.id = ag.company_id
+        LEFT JOIN users cu ON cu.id = ag.created_by
+        WHERE ag.company_id = ${companyId}
+        ORDER BY ag.created_at DESC
+      `),
+    ]);
 
     const migrationHistory = (migrationHistoryR as any).rows ?? [];
-
-    // Load group memberships for this company (provisioning health)
-    const groupMembershipsR = await db.execute(sql`
-      SELECT g.id, g.name, g.slug, g.type, gc.created_at AS linked_at
-      FROM group_companies gc
-      JOIN groups g ON g.id = gc.group_id
-      WHERE gc.company_id = ${companyId}
-      ORDER BY gc.created_at ASC
-    `);
     const groupMemberships = (groupMembershipsR as any).rows ?? [];
+    const provisioningEvents = (provisioningEventsR as any).rows ?? [];
 
-    // Load provisioning audit events
-    const provisioningEventsR = await db.execute(sql`
-      SELECT action, entity_type, entity_id, details, created_at, user_id
+    // Activation milestones: fallback to audit_logs if telemetry doesn't have them
+    const milestoneRow = ((milestonesR as any).rows ?? [])[0] ?? {};
+    const accessGrantsForCompany = (grantsR as any).rows ?? [];
+
+    const auditMilestonesR = await db.execute(sql`
+      SELECT
+        MIN(CASE WHEN action IN ('metric_entered','metric_value_submitted') THEN created_at END) AS first_data_at,
+        MIN(CASE WHEN action IN ('evidence_uploaded','evidence_linked') THEN created_at END) AS first_evidence_at,
+        MIN(CASE WHEN action IN ('report_generated','first_report_generated') THEN created_at END) AS first_report_at,
+        MAX(created_at) AS last_activity_at
       FROM audit_logs
       WHERE company_id = ${companyId}
-        AND action IN ('company_created', 'company_linked_to_group', 'user_invited', 'user_role_changed',
-                       'onboarding_completed', 'first_report_generated')
-      ORDER BY created_at ASC
     `);
-    const provisioningEvents = (provisioningEventsR as any).rows ?? [];
+    const auditMilestone = ((auditMilestonesR as any).rows ?? [])[0] ?? {};
+
+    const activationMilestones = {
+      firstDataAt: milestoneRow.first_data_at ?? auditMilestone.first_data_at ?? null,
+      firstEvidenceAt: milestoneRow.first_evidence_at ?? auditMilestone.first_evidence_at ?? null,
+      firstReportAt: milestoneRow.first_report_at ?? auditMilestone.first_report_at ?? null,
+      lastActiveAt: milestoneRow.last_event_at ?? auditMilestone.last_activity_at ?? null,
+    };
 
     // Determine data readiness flags
     const hasMetricData = r(mvR)[0]?.last_entry != null;
@@ -2368,6 +2411,8 @@ export class DatabaseStorage implements IStorage {
       migrationHistory,
       recentErrors: r(errorsR),
       activityTimeline: r(activityR),
+      activationMilestones,
+      accessGrants: accessGrantsForCompany,
     };
   }
 

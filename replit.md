@@ -34,6 +34,9 @@ The application is a full-stack SaaS web application.
     - **Workflow Management:** Enforced state transitions and audit trails.
     - **AI Safety/Governance:** AI-generated outputs require human review.
     - **Admin Controls:** Management of users, roles, configuration, scoring, metrics, templates, emission factors, and audit logs.
+    - **Super Admin Support Tools (Task #80):** Company diagnostics with ESG readiness (completeness, evidence, estimated %, blocking factors), activation milestones timeline (first data/evidence/report dates), company access grants view, and support action panel (preflight check, resend invite, reset onboarding). Audit-trailed via super_admin_actions table.
+    - **Customer Activation Dashboard (Task #80):** `/api/admin/activation-dashboard` endpoint; "Activation" tab in admin panel showing all companies with milestone progress dots, ESG state badges, stuck-company detection (amber >30d), summary stats. Single JOIN query (no N+1 array binding).
+    - **Read-Only Support Mode (Task #80):** `session.supportMode = "read_only"` set on impersonation; impersonation banner redesigned with prominent "Read-Only Support Mode" badge, "— changes made here are not saved" note, and "Exit Support Mode" button.
     - **Notifications & Reminders:** Auto-generated for due dates, reviews, expiry.
     - **Reporting Periods:** Management of data entry and reporting cycles.
     - **Data Quality Score System:** Per-metric quality scores.

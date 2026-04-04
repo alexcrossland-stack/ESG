@@ -280,7 +280,7 @@ function SuperAdminRoute({ component: Component }: { component: ComponentType<an
 }
 
 function ImpersonationBanner() {
-  const { data } = useQuery<{ isImpersonating: boolean; companyId?: string; companyName?: string }>({
+  const { data } = useQuery<{ isImpersonating: boolean; companyId?: string; companyName?: string; supportMode?: string }>({
     queryKey: ["/api/admin/impersonation/status"],
     refetchInterval: 30000,
   });
@@ -292,13 +292,24 @@ function ImpersonationBanner() {
     window.location.href = "/admin";
   };
 
+  const isReadOnly = !data.supportMode || data.supportMode === "read_only";
+
   return (
-    <div className="bg-amber-500 text-white text-sm px-4 py-2 flex items-center justify-between shrink-0" data-testid="banner-impersonation">
-      <span>
-        Viewing as <strong>{data.companyName}</strong> (Impersonation Mode)
-      </span>
+    <div
+      className="bg-amber-600 text-white text-sm px-4 py-2 flex items-center justify-between shrink-0 border-b-2 border-amber-800"
+      data-testid="banner-impersonation"
+    >
+      <div className="flex items-center gap-3">
+        <span className="bg-amber-800/50 text-white text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded" data-testid="badge-support-mode">
+          {isReadOnly ? "Read-Only Support Mode" : "Support Mode"}
+        </span>
+        <span>
+          Viewing <strong>{data.companyName}</strong> as admin
+          {isReadOnly && <span className="text-amber-200 ml-2 text-xs">— changes made here are not saved</span>}
+        </span>
+      </div>
       <Button size="sm" variant="secondary" onClick={exit} data-testid="button-exit-impersonation">
-        Return to Admin
+        Exit Support Mode
       </Button>
     </div>
   );

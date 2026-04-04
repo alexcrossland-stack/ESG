@@ -8829,6 +8829,50 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { companyId } = req.params;
       const diag = await storage.adminGetCompanyDiagnostics(companyId);
       if (!diag) return res.status(404).json({ error: "Company not found" });
+
+      // Augment with ESG status + readiness blockers (non-fatal — if it fails, return rest of diag)
+      let esgReadiness: any = null;
+      try {
+        const { evaluateEsgStatus } = await import("./esg-status");
+        const [esgStatus, policy, actions] = await Promise.all([
+          evaluateEsgStatus(companyId),
+          storage.getPolicy(companyId).catch(() => null),
+          storage.getActionPlans(companyId).catch(() => []),
+        ]);
+
+        const estimatedPercent = esgStatus.totalMetrics > 0
+          ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100) : 0;
+        const policyNotPublished = !policy || (policy as any).workflowStatus !== "published";
+        const now = new Date();
+        const overdueActions = (Array.isArray(actions) ? actions : []).filter((a: any) =>
+          a.status !== "complete" && a.status !== "completed" && a.dueDate && new Date(a.dueDate) < now
+        ).length;
+
+        const blockingFactors: string[] = [];
+        if (esgStatus.filledMetrics === 0) blockingFactors.push("No metric data entered");
+        if (estimatedPercent > 50) blockingFactors.push(`${estimatedPercent}% of data is estimated (high)`);
+        else if (estimatedPercent > 20) blockingFactors.push(`${estimatedPercent}% of data is estimated`);
+        if (esgStatus.completenessPercentage < 60) blockingFactors.push(`Only ${esgStatus.completenessPercentage}% of metrics have data`);
+        if (esgStatus.evidenceCoverage < 30) blockingFactors.push("Evidence coverage below 30%");
+        if (policyNotPublished) blockingFactors.push("ESG policy not published");
+        if (overdueActions > 0) blockingFactors.push(`${overdueActions} overdue action${overdueActions === 1 ? "" : "s"}`);
+
+        esgReadiness = {
+          state: esgStatus.status,
+          completenessPercent: esgStatus.completenessPercentage,
+          evidenceCoveragePercent: esgStatus.evidenceCoverage,
+          estimatedPercent,
+          totalMetrics: esgStatus.totalMetrics,
+          filledMetrics: esgStatus.filledMetrics,
+          missingMetrics: esgStatus.missingItems?.slice(0, 10) ?? [],
+          blockingFactors,
+          policyPublished: !policyNotPublished,
+          overdueActions,
+        };
+      } catch (esgErr: any) {
+        console.error("[admin-diag] ESG status evaluation failed (non-fatal):", esgErr?.message);
+      }
+
       await storage.createSuperAdminAction({
         adminUserId: adminUser.id,
         action: "view_company_diagnostics",
@@ -8836,7 +8880,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
       });
-      res.json(diag);
+      res.json({ ...diag, esgReadiness });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -8918,6 +8962,209 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         metadata: { siteId, siteName, tablesUpdated },
       } as any);
       res.json({ dryRun: false, siteId, siteName, tablesUpdated });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  // ── Activation Dashboard ──────────────────────────────────────────────────
+  app.get("/api/admin/activation-dashboard", requireSuperAdmin, async (req, res) => {
+    try {
+      // Single comprehensive query with JOINs for all milestone data
+      const dashboardR = await db.execute(sql`
+        SELECT
+          c.id, c.name, c.industry, c.country, c.plan_tier, c.plan_status,
+          c.lifecycle_state, c.status, c.onboarding_complete, c.onboarding_completed_at,
+          c.created_at, c.is_beta_company, c.onboarding_answers,
+          COUNT(DISTINCT u.id)::int AS user_count,
+          -- Audit log milestones
+          al_agg.first_data_at AS al_first_data_at,
+          al_agg.first_evidence_at AS al_first_evidence_at,
+          al_agg.first_report_at AS al_first_report_at,
+          al_agg.last_activity_at,
+          -- Telemetry milestones
+          te_agg.first_data_at AS te_first_data_at,
+          te_agg.first_evidence_at AS te_first_evidence_at,
+          te_agg.first_report_at AS te_first_report_at,
+          te_agg.last_telemetry_at
+        FROM companies c
+        LEFT JOIN users u ON u.company_id = c.id AND u.role != 'super_admin'
+        LEFT JOIN (
+          SELECT
+            company_id,
+            MIN(CASE WHEN action IN ('metric_entered','metric_value_submitted') THEN created_at END) AS first_data_at,
+            MIN(CASE WHEN action IN ('evidence_uploaded','evidence_linked') THEN created_at END) AS first_evidence_at,
+            MIN(CASE WHEN action IN ('report_generated','first_report_generated') THEN created_at END) AS first_report_at,
+            MAX(created_at) AS last_activity_at
+          FROM audit_logs
+          GROUP BY company_id
+        ) al_agg ON al_agg.company_id = c.id
+        LEFT JOIN (
+          SELECT
+            company_id,
+            MIN(CASE WHEN event_name IN ('first_data_added','metric_value_submitted','FIRST_DATA_ADDED') THEN recorded_at END) AS first_data_at,
+            MIN(CASE WHEN event_name IN ('first_evidence_uploaded','evidence_uploaded','EVIDENCE_UPLOADED') THEN recorded_at END) AS first_evidence_at,
+            MIN(CASE WHEN event_name IN ('first_report_generated','report_generated','FIRST_REPORT_GENERATED') THEN recorded_at END) AS first_report_at,
+            MAX(recorded_at) AS last_telemetry_at
+          FROM telemetry_events
+          GROUP BY company_id
+        ) te_agg ON te_agg.company_id = c.id
+        GROUP BY c.id, al_agg.first_data_at, al_agg.first_evidence_at, al_agg.first_report_at,
+                 al_agg.last_activity_at, te_agg.first_data_at, te_agg.first_evidence_at,
+                 te_agg.first_report_at, te_agg.last_telemetry_at
+        ORDER BY c.created_at DESC
+        LIMIT 200
+      `);
+      const companiesList = (dashboardR as any).rows ?? [];
+
+      if (companiesList.length === 0) return res.json([]);
+
+      // ESG state — evaluate in parallel with Promise.allSettled (non-fatal per company)
+      const { evaluateEsgStatus } = await import("./esg-status");
+      const esgResults = await Promise.allSettled(
+        companiesList.map((c: any) => evaluateEsgStatus(c.id))
+      );
+      const esgMap: Record<string, string> = {};
+      companiesList.forEach((c: any, i: number) => {
+        const r = esgResults[i];
+        esgMap[c.id] = r.status === "fulfilled" ? (r.value as any).status : "unknown";
+      });
+
+      const result = companiesList.map((c: any) => {
+        const answers = typeof c.onboarding_answers === "object" ? (c.onboarding_answers ?? {}) : {};
+        return {
+          id: c.id,
+          name: c.name,
+          industry: c.industry,
+          planTier: c.plan_tier,
+          planStatus: c.plan_status,
+          lifecycleState: c.lifecycle_state,
+          status: c.status ?? "active",
+          onboardingComplete: c.onboarding_complete ?? false,
+          onboardingCompletedAt: c.onboarding_completed_at ?? null,
+          isBetaCompany: c.is_beta_company ?? false,
+          userCount: c.user_count ?? 0,
+          createdAt: c.created_at,
+          esgState: esgMap[c.id] ?? "unknown",
+          milestones: {
+            firstDataAt: c.te_first_data_at ?? c.al_first_data_at ?? answers.milestone_first_data_added ?? null,
+            firstEvidenceAt: c.te_first_evidence_at ?? c.al_first_evidence_at ?? null,
+            firstReportAt: c.te_first_report_at ?? c.al_first_report_at ?? answers.milestone_first_report_generated ?? null,
+            lastActiveAt: c.last_telemetry_at ?? c.last_activity_at ?? null,
+          },
+        };
+      });
+
+      res.json(result);
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  // ── Support Actions ───────────────────────────────────────────────────────
+  // Run preflight check for a specific company (admin support context)
+  app.post("/api/admin/company/:companyId/support/preflight", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const eligibility = await checkReportEligibility(companyId, undefined, null);
+
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "support_preflight_check",
+        targetCompanyId: companyId,
+        metadata: { eligible: eligibility.eligible, reasons: eligibility.reasons },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+
+      res.json({ companyId, companyName: company.name, ...eligibility });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  // Resend invite email for an existing user in a company
+  app.post("/api/admin/company/:companyId/support/resend-invite", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const bodySchema = z.object({ userId: z.string().min(1) });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "userId required" });
+
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const targetUser = await storage.getUser(parsed.data.userId);
+      if (!targetUser || targetUser.companyId !== companyId) {
+        return res.status(404).json({ error: "User not found in this company" });
+      }
+      if (!targetUser.email) return res.status(400).json({ error: "User has no email address" });
+
+      const { plaintext, hash } = generateSecureToken();
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email: targetUser.email, expiresAt });
+
+      const emailPayload = buildInvitationEmail({
+        inviteeName: targetUser.username || targetUser.email,
+        companyName: company.name,
+        inviterName: adminUser.username || adminUser.email || "SimplyESG Support",
+        token: plaintext,
+      });
+      emailPayload.to = targetUser.email;
+      await sendEmail(emailPayload);
+
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "support_resend_invite",
+        targetCompanyId: companyId,
+        targetUserId: targetUser.id,
+        metadata: { email: targetUser.email },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+
+      res.json({ ok: true, message: `Invitation resent to ${targetUser.email}` });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  // Reset stuck onboarding step for a company
+  app.post("/api/admin/company/:companyId/support/reset-onboarding", requireSuperAdmin, async (req, res) => {
+    try {
+      const adminUser = (req as any)._superAdmin;
+      const { companyId } = req.params;
+      const bodySchema = z.object({ toStep: z.number().int().min(1).max(6).default(1) });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid toStep" });
+
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (company.onboardingComplete) {
+        return res.status(409).json({ error: "Onboarding already complete — cannot reset" });
+      }
+
+      await db.execute(sql`
+        UPDATE companies
+        SET onboarding_step = ${parsed.data.toStep}, updated_at = NOW()
+        WHERE id = ${companyId}
+      `);
+
+      await storage.createSuperAdminAction({
+        adminUserId: adminUser.id,
+        action: "support_reset_onboarding",
+        targetCompanyId: companyId,
+        metadata: { toStep: parsed.data.toStep, prevStep: company.onboardingStep },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+      });
+
+      res.json({ ok: true, message: `Onboarding reset to step ${parsed.data.toStep}` });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -9173,6 +9420,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       session.originalSuperAdminRole = adminUser.role;
       session.isImpersonating = true;
       session.impersonatedCompanyId = companyId;
+      session.supportMode = "read_only";
       session.userId = targetUser.id;
       session.companyId = companyId;
 
@@ -9231,6 +9479,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       delete session.originalSuperAdminCompanyId;
       delete session.originalSuperAdminRole;
       delete session.impersonatedCompanyId;
+      delete session.supportMode;
 
       await storage.createSuperAdminAction({
         adminUserId: originalAdminUserId,
@@ -9262,6 +9511,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         isImpersonating: true,
         companyId: session.impersonatedCompanyId,
         companyName: company?.name ?? "Unknown",
+        supportMode: session.supportMode ?? "read_only",
       });
     } catch (e: any) {
       sendServerError(res, e);
