@@ -25,6 +25,7 @@ import { format, subMonths } from "date-fns";
 import { Link } from "wouter";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
+import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { EmptyState } from "@/components/empty-state";
@@ -1922,6 +1923,14 @@ export default function Reports() {
                 ))}
               </div>
 
+              {!can("report_generation") && (
+                <PermissionBanner
+                  module="report_generation"
+                  action="generate or approve reports"
+                  data-testid="banner-report-permission"
+                />
+              )}
+
               {can("report_generation") && (
                 <>
                   {!activation.isLoading && !activation.isError && !activation.hasAddedData && (
@@ -2092,10 +2101,13 @@ export default function Reports() {
       </div>
 
       <div>
-        <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-          <Clock className="w-4 h-4" />
-          Report History
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Clock className="w-4 h-4" />
+            Report History
+          </h2>
+          <OwnershipHint owner="Approvers or Company Admins" action="Final sign-off" />
+        </div>
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : reports.length === 0 ? (

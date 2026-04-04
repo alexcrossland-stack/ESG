@@ -67,8 +67,8 @@ const RESOLUTIONS: Record<string, ErrorResolution> = {
   // ── Permissions & Access ─────────────────────────────────────────────────
   PERMISSION_DENIED: {
     title: "Access not allowed",
-    description: "You don't have permission to do this.",
-    nextStep: "Ask your Company Admin if you need access.",
+    description: "Your current role does not permit this action.",
+    nextStep: "Ask your Company Admin to update your role if you need access. Editors can enter data; Approvers can generate and sign off reports.",
     role: "Company Admin",
     dataSaved: false,
   },

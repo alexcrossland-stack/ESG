@@ -38,6 +38,7 @@ import { ValueSourceBadge } from "@/components/value-source-badge";
 import { useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
+import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -768,6 +769,18 @@ export default function DataEntry() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {!canEdit && (
+        <PermissionBanner
+          module="metrics_data_entry"
+          action="enter or edit data"
+          data-testid="banner-data-entry-permission"
+        />
+      )}
+
+      {canEdit && (
+        <OwnershipHint owner="Finance, Operations, or HR — depending on the metric" action="Data entry" />
       )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>

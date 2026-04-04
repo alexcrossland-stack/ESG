@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePermissions } from "@/lib/permissions";
 import { ListChecks, Inbox, Check, X, CheckCheck, XCircle } from "lucide-react";
+import { PermissionBlockedCard } from "@/components/permission-gate";
 
 const ENTITY_LABELS: Record<string, string> = {
   metricValues: "Metric Values",
@@ -227,11 +228,19 @@ export default function MyApprovals() {
   if (!can("report_generation")) {
     return (
       <div className="p-6 max-w-4xl mx-auto" data-testid="page-my-approvals">
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <p className="text-muted-foreground">You don't have approval permissions</p>
-          </CardContent>
-        </Card>
+        <div className="mb-5">
+          <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
+            <ListChecks className="w-5 h-5 text-primary" />
+            My Approvals
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Review and approve submitted data</p>
+        </div>
+        <PermissionBlockedCard
+          module="report_generation"
+          pageName="Approvals"
+          customTitle="Approval access required"
+          customDescription="Reviewing and approving submissions is reserved for Approvers and Company Admins. Your current role does not include this capability."
+        />
       </div>
     );
   }

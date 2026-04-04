@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Target, Leaf, Users, Shield } from "lucide-react";
 import { usePermissions } from "@/lib/permissions";
+import { PermissionBanner, PermissionTooltip } from "@/components/permission-gate";
 
 type Topic = {
   id: string;
@@ -107,6 +108,14 @@ export default function Topics() {
         Select the topics that are most relevant to your business and stakeholders.
       </p>
 
+      {!can("settings_admin") && (
+        <PermissionBanner
+          module="settings_admin"
+          action="change topic selections"
+          data-testid="banner-topics-permission"
+        />
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {(Object.entries(grouped) as [keyof typeof CATEGORY_CONFIG, Topic[]][]).map(([cat, catTopics]) => {
           const config = CATEGORY_CONFIG[cat];
@@ -140,12 +149,18 @@ export default function Topics() {
                     <span className={`text-sm flex-1 ${topic.selected ? "font-medium" : "text-muted-foreground"}`}>
                       {topic.topic}
                     </span>
-                    <Switch
-                      checked={topic.selected}
-                      onCheckedChange={(checked) => updateMutation.mutate({ id: topic.id, selected: checked })}
+                    <PermissionTooltip
+                      module="settings_admin"
+                      action="change topic selections"
                       disabled={!can("settings_admin")}
-                      data-testid={`switch-topic-${topic.id}`}
-                    />
+                    >
+                      <Switch
+                        checked={topic.selected}
+                        onCheckedChange={(checked) => updateMutation.mutate({ id: topic.id, selected: checked })}
+                        disabled={!can("settings_admin")}
+                        data-testid={`switch-topic-${topic.id}`}
+                      />
+                    </PermissionTooltip>
                   </div>
                 ))}
               </CardContent>

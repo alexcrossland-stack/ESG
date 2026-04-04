@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { CarbonCalculation, EmissionFactor } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
+import { PermissionBanner } from "@/components/permission-gate";
 
 type CarbonInputs = {
   electricity: string;
@@ -276,6 +277,9 @@ export default function CarbonCalculator() {
           Factor Year: {(factors as any)?.[0]?.factorYear || 2024}
         </Badge>
       </div>
+      {!canEdit && (
+        <PermissionBanner module="metrics_data_entry" action="save carbon calculations" data-testid="banner-carbon-permission" />
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="space-y-1">

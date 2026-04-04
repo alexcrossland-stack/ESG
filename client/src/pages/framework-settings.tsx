@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/permissions";
+import { PermissionBanner } from "@/components/permission-gate";
 import { Shield, Globe, BookOpen, Leaf, Building2, Flag, Info, CheckCircle } from "lucide-react";
 
 const FRAMEWORK_META: Record<string, { icon: any; color: string; tagline: string }> = {
@@ -125,6 +126,10 @@ export default function FrameworkSettingsPage() {
           Choose which reporting frameworks you want to track readiness against. Enabling a framework adds it to your Readiness view.
         </p>
       </div>
+
+      {!canEdit && (
+        <PermissionBanner module="settings_admin" action="change framework selections" data-testid="banner-framework-settings-permission" />
+      )}
 
       <Card className="border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/20">
         <CardContent className="pt-4 pb-3">

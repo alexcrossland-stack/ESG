@@ -16,6 +16,7 @@ import { FileText, Save, CheckCircle, Clock, History, Download, Eye, ChevronDown
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { OwnerAssignment } from "@/components/owner-assignment";
+import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 
 const SECTIONS = [
   { key: "purpose", label: "Purpose & Scope", placeholder: "Describe the purpose and scope of your ESG policy..." },
@@ -130,6 +131,18 @@ export default function Policy() {
           "Share the published policy with staff, customers, and suppliers",
         ]}
       />
+      {!canEditPolicy && (
+        <PermissionBanner
+          module="policy_editing"
+          action="edit this policy"
+          data-testid="banner-policy-permission"
+        />
+      )}
+
+      {canEditPolicy && (
+        <OwnershipHint owner="your designated Policy Owner or Company Admin" action="Policy editing" />
+      )}
+
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">

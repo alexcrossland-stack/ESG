@@ -110,6 +110,20 @@ The script is fully idempotent — safe to run multiple times.
 | RetailCo Brands (Demo) | Low | 2 metrics, 1 period, no evidence |
 | Horizon Logistics (Demo) | Missing | Onboarding started, no metric values |
 
+## Task #81 — Role Permissions UX Audit & Forbidden State Improvements (COMPLETE)
+
+- **`client/src/components/permission-gate.tsx`** — NEW: `PermissionBanner` (contextual role banner with who-can-do hint), `PermissionTooltip` (wraps disabled buttons), `PermissionBlockedCard` (full-page blank-screen replacement), `OwnershipHint` (inline "owned by X" chip), `RoleChip` (compact role badge).
+- **`client/src/lib/permissions.ts`** — Extended: `getRoleLabel()`, `whoCanDo()`, `getNextStepForModule()`, `getPermissionContext()` helpers.
+- **Pages updated**:
+  - `my-approvals.tsx` — blank card → `PermissionBlockedCard` for non-approvers
+  - `topics.tsx` — `PermissionBanner` + `PermissionTooltip` on disabled switches
+  - `policy.tsx` — `PermissionBanner` + `OwnershipHint` when user can't edit
+  - `data-entry.tsx` — `PermissionBanner` + `OwnershipHint` for viewer/non-editor roles
+  - `reports.tsx` — `PermissionBanner` for non-approvers; `OwnershipHint` on Report History sign-off section
+  - `framework-settings.tsx` — `PermissionBanner` for non-admin roles
+  - `carbon-calculator.tsx` — `PermissionBanner` for viewer roles
+- **`client/src/lib/errorResolver.ts`** — `PERMISSION_DENIED` resolution message updated with role-specific guidance text.
+
 ## Test Infrastructure
 
 - **API Security Tests** (`tests/api-security.test.ts`): 40-test suite covering 8 suites — input validation, unauthenticated tenant isolation, auth endpoints, dashboard endpoints, cross-tenant isolation (authenticated), RBAC enforcement, session lifecycle (revocation, fabricated tokens), and malformed payloads. Run via `npx tsx tests/api-security.test.ts` or the `test:api` workflow.
