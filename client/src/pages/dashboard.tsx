@@ -1065,19 +1065,21 @@ export default function Dashboard() {
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
       <BackToPortfolioBanner />
-      <PageGuidance
-        pageKey="dashboard"
-        title="ESG Dashboard — what the numbers mean"
-        summary="This dashboard shows your overall ESG (Environmental, Social and Governance) performance. The score is calculated from the data you enter and the policies/evidence you have in place. A higher score means better data coverage and performance — it is not a regulatory rating."
-        goodLooksLike="ESG score above 60%, all key metrics showing data for the current month, and the activation checklist fully complete."
-        steps={[
-          "Check the 'Get up and running' checklist if it is visible — complete those steps first",
-          "Go to Data Entry to add your monthly/quarterly metric values (energy, headcount, waste, etc.)",
-          "Once data is entered, your score and charts will update automatically",
-          "Use the Reports page to generate a summary for customers, investors, or your own team",
-        ]}
-      />
-      <ActionPlanBanner company={company} />
+      {showDraft && (
+        <PageGuidance
+          pageKey="dashboard"
+          title="ESG Dashboard — what the numbers mean"
+          summary="This dashboard shows your overall ESG (Environmental, Social and Governance) performance. The score is calculated from the data you enter and the policies/evidence you have in place. A higher score means better data coverage and performance — it is not a regulatory rating."
+          goodLooksLike="ESG score above 60%, all key metrics showing data for the current month, and the activation checklist fully complete."
+          steps={[
+            "Check the 'Get up and running' checklist if it is visible — complete those steps first",
+            "Go to Data Entry to add your monthly/quarterly metric values (energy, headcount, waste, etc.)",
+            "Once data is entered, your score and charts will update automatically",
+            "Use the Reports page to generate a summary for customers, investors, or your own team",
+          ]}
+        />
+      )}
+      {showDraft && <ActionPlanBanner company={company} />}
 
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -1110,11 +1112,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <PostWizardPanel />
-      <NextStepBanner />
-      <ActivationCard />
+      {showDraft && <PostWizardPanel />}
+      {showDraft && <NextStepBanner />}
+      {showDraft && <ActivationCard />}
 
-      {showMilestone && (
+      {showDraft && showMilestone && (
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 

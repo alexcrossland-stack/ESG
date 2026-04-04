@@ -14,26 +14,19 @@ export function getNextAction(readiness: any): NextAction {
   const missingItems: string[] = readiness?.esgStatus?.missingItems ?? [];
   const missingPercent: number = readiness?.missingPercent ?? 0;
 
-  if (state === "IN_PROGRESS") {
-    return {
-      title: "Get your first ESG score",
-      description: "Add a few key figures to see your first result.",
-      ctaLabel: "Add your first data",
-      href: "/data-entry",
-    };
-  }
+  // Strict 5-step precedence across all states:
 
-  // Strict 5-step precedence for DRAFT, PROVISIONAL, CONFIRMED:
-
-  // Step 1: Missing core data
+  // Step 1: Missing core data (IN_PROGRESS uses a motivational first-score label)
   if (missingItems.length > 0 || missingPercent > 0) {
+    const isFirstScore = state === "IN_PROGRESS";
     return {
-      title: "Complete your ESG data",
-      description:
-        missingItems.length > 0
+      title: isFirstScore ? "Get your first ESG score" : "Complete your ESG data",
+      description: isFirstScore
+        ? "Add a few key figures to see your first result."
+        : missingItems.length > 0
           ? `${missingItems.length} key metric${missingItems.length > 1 ? "s are" : " is"} still missing.`
           : "Some required data is still missing.",
-      ctaLabel: "Add missing data",
+      ctaLabel: isFirstScore ? "Add your first data" : "Add missing data",
       href: "/data-entry",
     };
   }
