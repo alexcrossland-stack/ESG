@@ -23,93 +23,56 @@ export function getNextAction(readiness: any): NextAction {
     };
   }
 
-  if (state === "DRAFT") {
-    if (missingPercent > 0 || missingItems.length > 0) {
-      return {
-        title: "Complete your data",
-        description: "Add missing key metrics to build your ESG score.",
-        ctaLabel: "Add missing data",
-        href: "/data-entry",
-      };
-    }
-    if (estimatedPct > 20) {
-      return {
-        title: "Improve your ESG score",
-        description: `${estimatedPct}% of your data is estimated. Replace those values with real figures to build confidence.`,
-        ctaLabel: "Update your data",
-        href: "/data-entry",
-      };
-    }
-    if (evidenceCoverage < 50) {
-      return {
-        title: "Add supporting documents",
-        description: "Upload proof to strengthen your data and improve your score confidence.",
-        ctaLabel: "Upload documents",
-        href: "/evidence",
-      };
-    }
+  // Strict 5-step precedence for DRAFT, PROVISIONAL, CONFIRMED:
+
+  // Step 1: Missing core data
+  if (missingItems.length > 0 || missingPercent > 0) {
     return {
-      title: "Complete your data",
-      description: "Keep adding data to build your ESG score.",
-      ctaLabel: "Enter data",
+      title: "Complete your ESG data",
+      description:
+        missingItems.length > 0
+          ? `${missingItems.length} key metric${missingItems.length > 1 ? "s are" : " is"} still missing.`
+          : "Some required data is still missing.",
+      ctaLabel: "Add missing data",
       href: "/data-entry",
     };
   }
 
-  if (state === "PROVISIONAL") {
-    if (missingPercent > 0 || missingItems.length > 0) {
-      return {
-        title: "Complete your data",
-        description: "Add missing key metrics to strengthen your report.",
-        ctaLabel: "Add missing data",
-        href: "/data-entry",
-      };
-    }
-    if (evidenceCoverage < 60) {
-      return {
-        title: "Make your report ready to share",
-        description: "Upload supporting documents to confirm your data and build credibility.",
-        ctaLabel: "Upload documents",
-        href: "/evidence",
-      };
-    }
-    if (reportingReadiness && !hasGeneratedReport) {
-      return {
-        title: "Generate your first report",
-        description: "You have enough data to create an ESG report.",
-        ctaLabel: "Generate report",
-        href: "/reports",
-      };
-    }
+  // Step 2: Replace estimated values with real data
+  if (estimatedPct > 20) {
     return {
-      title: "Your ESG score is taking shape",
-      description: "Keep adding data to reach Confirmed status.",
-      ctaLabel: "Update data",
-      href: "/data-entry",
+      title: "Replace estimated data with real figures",
+      description: `${estimatedPct}% of your data is estimated. Real values improve your score confidence.`,
+      ctaLabel: "Update your data",
+      href: "/data-entry?highlight=estimated",
     };
   }
 
-  if (state === "CONFIRMED") {
-    if (!hasGeneratedReport) {
-      return {
-        title: "Generate your first report",
-        description: "Your score is confirmed. Create your ESG report to share with stakeholders.",
-        ctaLabel: "Generate report",
-        href: "/reports",
-      };
-    }
+  // Step 3: Upload supporting documents
+  if (evidenceCoverage < 50) {
     return {
-      title: "Keep your ESG data up to date",
-      description: "Add new data and track changes over time to maintain your confirmed status.",
-      ctaLabel: "Update data",
-      href: "/data-entry",
+      title: "Add supporting documents",
+      description: "Upload proof to strengthen your data and improve score confidence.",
+      ctaLabel: "Upload documents",
+      href: "/evidence",
     };
   }
 
+  // Step 4: Generate first report (applies once reporting is ready or confirmed)
+  if (!hasGeneratedReport) {
+    return {
+      title: "Generate your first ESG report",
+      description: "You have enough data to create an ESG report to share with stakeholders.",
+      ctaLabel: "Generate report",
+      href: "/reports",
+    };
+  }
+
+  // Step 5: Keep up to date
   return {
-    title: "Get started with your ESG data",
-    description: "Add your first figures to see your ESG score.",
-    ctaLabel: "Add data",
+    title: "Keep your ESG data up to date",
+    description: "Add new data and track changes over time.",
+    ctaLabel: "Review latest data",
     href: "/data-entry",
   };
 }

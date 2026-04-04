@@ -556,9 +556,11 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
 
   if (items.length === 0) return null;
 
-  const limit = esgState === "IN_PROGRESS" ? 3 : esgState === "DRAFT" ? 6 : undefined;
-  const showExpand = limit !== undefined && items.length > limit;
-  const visibleItems = !expanded && limit ? items.slice(0, limit) : items;
+  items.sort((a, b) => a.priority - b.priority);
+
+  const limit = esgState === "IN_PROGRESS" ? 3 : esgState === "DRAFT" ? 6 : 10;
+  const showExpand = items.length > limit;
+  const visibleItems = expanded ? items : items.slice(0, limit);
 
   return (
     <div data-testid="section-whats-missing" className="space-y-2">
@@ -1094,11 +1096,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <PostWizardPanel />
-      <NextStepBanner />
+      {showDraft && <PostWizardPanel />}
       <ActivationCard />
 
-      {showMilestone && (
+      {showDraft && showMilestone && (
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 
