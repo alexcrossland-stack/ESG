@@ -342,9 +342,11 @@ export default function BillingPage() {
         <div className="flex items-start gap-3 p-4 rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800" data-testid="banner-comped-access">
           <Crown className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">You have complimentary Pro access — enjoy all features at no cost.</p>
-            {compedExpiry && (
-              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">Your complimentary access runs until {compedExpiry}.</p>
+            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">You have complimentary Pro access — all features are available at no cost.</p>
+            {compedExpiry ? (
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">Your complimentary access runs until {compedExpiry}. After that, you'll move to the Free plan unless you subscribe.</p>
+            ) : (
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">All Pro features are available to you. If your access expires, your account will move to the Free plan.</p>
             )}
           </div>
         </div>
@@ -355,8 +357,10 @@ export default function BillingPage() {
           <Crown className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-medium text-blue-800 dark:text-blue-300">You're on beta access — all Pro features are unlocked for you.</p>
-            {betaExpiry && (
-              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">Your beta access runs until {betaExpiry}.</p>
+            {betaExpiry ? (
+              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">Your beta access runs until {betaExpiry}. After that, you'll move to the Free plan unless you subscribe.</p>
+            ) : (
+              <p className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">All Pro features are available to you. If your beta access expires, your account will move to the Free plan.</p>
             )}
           </div>
         </div>

@@ -349,22 +349,53 @@ function YourPlanCard() {
   const isPro = billing?.planTier === "pro";
   const isBeta = billing?.isBeta;
   const isComped = billing?.isComped;
+  const planStatus = billing?.planStatus;
+  const isCancelled = planStatus === "cancelled";
+  const periodEnd = billing?.currentPeriodEnd
+    ? format(new Date(billing.currentPeriodEnd), "d MMM yyyy")
+    : null;
+  const betaExpiry = billing?.betaExpiresAt
+    ? format(new Date(billing.betaExpiresAt), "d MMM yyyy")
+    : null;
+  const compedExpiry = billing?.compedUntil
+    ? format(new Date(billing.compedUntil), "d MMM yyyy")
+    : null;
 
   let planName = "Free";
   let planDescription = "Basic ESG tracking across 1 site";
+  let statusLabel = "Active";
+  let statusNote: string | null = null;
   let badgeVariant: "default" | "secondary" | "outline" = "secondary";
 
   if (isPro && isBeta) {
-    planName = "Pro (Beta)";
+    planName = "Pro";
     planDescription = "All Pro features unlocked as a beta participant";
+    statusLabel = "Beta access";
+    statusNote = betaExpiry
+      ? `Your beta access runs until ${betaExpiry}. After that, you'll move to the Free plan unless you subscribe.`
+      : "You have beta access to all Pro features.";
     badgeVariant = "default";
   } else if (isPro && isComped) {
-    planName = "Pro (Complimentary)";
+    planName = "Pro";
     planDescription = "All Pro features at no cost";
+    statusLabel = "Complimentary";
+    statusNote = compedExpiry
+      ? `Your complimentary access runs until ${compedExpiry}. After that, you'll move to the Free plan unless you subscribe.`
+      : "You have complimentary access to all Pro features.";
+    badgeVariant = "default";
+  } else if (isPro && isCancelled) {
+    planName = "Pro";
+    planDescription = "Full ESG management — unlimited sites, AI, and advanced reporting";
+    statusLabel = "Cancelled";
+    statusNote = periodEnd
+      ? `Your Pro access continues until ${periodEnd}, then you'll move to the Free plan.`
+      : "Your subscription has been cancelled and will revert to Free at the end of the billing period.";
     badgeVariant = "default";
   } else if (isPro) {
     planName = "Pro";
     planDescription = "Full ESG management — unlimited sites, AI, and advanced reporting";
+    statusLabel = "Active";
+    statusNote = periodEnd ? `Next billing date: ${periodEnd}` : null;
     badgeVariant = "default";
   }
 
@@ -386,21 +417,29 @@ function YourPlanCard() {
             <Skeleton className="h-4 w-48" />
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-sm" data-testid="text-plan-name">{planName}</span>
-                <Badge variant={badgeVariant} className="text-[10px]" data-testid="badge-plan-tier">
-                  {isPro ? "Pro" : "Free"}
-                </Badge>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm" data-testid="text-plan-name">{planName}</span>
+                  <Badge variant={badgeVariant} className="text-[10px]" data-testid="badge-plan-tier">
+                    {isPro ? "Pro" : "Free"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground" data-testid="text-plan-status">{statusLabel}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-plan-description">{planDescription}</p>
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-plan-description">{planDescription}</p>
+              <Link href="/billing">
+                <Button variant="outline" size="sm" data-testid="button-manage-plan">
+                  {isPro ? "Manage plan" : "Upgrade to Pro"}
+                </Button>
+              </Link>
             </div>
-            <Link href="/billing">
-              <Button variant="outline" size="sm" data-testid="button-manage-plan">
-                {isPro ? "Manage plan" : "Upgrade to Pro"}
-              </Button>
-            </Link>
+            {statusNote && (
+              <p className="text-xs text-muted-foreground border-t border-border pt-2" data-testid="text-plan-status-note">
+                {statusNote}
+              </p>
+            )}
           </div>
         )}
       </CardContent>
