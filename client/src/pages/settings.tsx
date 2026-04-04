@@ -351,9 +351,13 @@ function YourPlanCard() {
   const isComped = billing?.isComped;
   const planStatus = billing?.planStatus;
   const isCancelled = planStatus === "cancelled";
-  const periodEnd = billing?.currentPeriodEnd
-    ? format(new Date(billing.currentPeriodEnd), "d MMM yyyy")
+  const isPastDue = planStatus === "past_due";
+  const periodEndDate = billing?.currentPeriodEnd ? new Date(billing.currentPeriodEnd) : null;
+  const daysUntilRenewal = periodEndDate
+    ? Math.ceil((periodEndDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
     : null;
+  const isExpiringSoon = isPro && !isBeta && !isComped && !isCancelled && daysUntilRenewal !== null && daysUntilRenewal <= 14 && daysUntilRenewal >= 0;
+  const periodEnd = periodEndDate ? format(periodEndDate, "d MMM yyyy") : null;
   const betaExpiry = billing?.betaExpiresAt
     ? format(new Date(billing.betaExpiresAt), "d MMM yyyy")
     : null;
@@ -378,9 +382,9 @@ function YourPlanCard() {
   } else if (isPro && isComped) {
     planName = "Pro";
     planDescription = "All Pro features at no cost";
-    statusLabel = "Complimentary";
+    statusLabel = "Grant access";
     statusNote = compedExpiry
-      ? `Your complimentary access runs until ${compedExpiry}. After that, you'll move to the Free plan unless you subscribe.`
+      ? `Your grant access runs until ${compedExpiry}. After that, you'll move to the Free plan unless you subscribe.`
       : "You have complimentary access to all Pro features.";
     badgeVariant = "default";
   } else if (isPro && isCancelled) {
@@ -390,6 +394,18 @@ function YourPlanCard() {
     statusNote = periodEnd
       ? `Your Pro access continues until ${periodEnd}, then you'll move to the Free plan.`
       : "Your subscription has been cancelled and will revert to Free at the end of the billing period.";
+    badgeVariant = "default";
+  } else if (isPro && isPastDue) {
+    planName = "Pro";
+    planDescription = "Full ESG management — unlimited sites, AI, and advanced reporting";
+    statusLabel = "Payment overdue";
+    statusNote = "Your last payment didn't go through. Please update your payment details to keep your Pro access.";
+    badgeVariant = "default";
+  } else if (isExpiringSoon) {
+    planName = "Pro";
+    planDescription = "Full ESG management — unlimited sites, AI, and advanced reporting";
+    statusLabel = "Expiring soon";
+    statusNote = `Your plan renews on ${periodEnd}. If payment fails, your account will move to the Free plan.`;
     badgeVariant = "default";
   } else if (isPro) {
     planName = "Pro";
@@ -431,7 +447,7 @@ function YourPlanCard() {
               </div>
               <Link href="/billing">
                 <Button variant="outline" size="sm" data-testid="button-manage-plan">
-                  {isPro ? "Manage plan" : "Upgrade to Pro"}
+                  {isPro ? "Manage plan →" : "Upgrade to Pro →"}
                 </Button>
               </Link>
             </div>

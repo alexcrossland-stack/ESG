@@ -525,7 +525,7 @@ export default function Evidence() {
           limit={10}
           noun="Evidence files"
           feature="evidence-upload"
-          valueMessage="Pro gives you unlimited uploads — add every invoice, certificate, and audit record that supports your ESG claims."
+          valueMessage="Pro gives you unlimited uploads — add every invoice, certificate, and document that backs up your ESG data."
           data-testid="banner-evidence-limit"
         />
       )}
