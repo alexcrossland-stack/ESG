@@ -527,7 +527,12 @@ type MissingPanelItem = {
 };
 
 function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: string }) {
-  const [expanded, setExpanded] = useState(false);
+  const isProvisionalPlus = esgState === "PROVISIONAL" || esgState === "CONFIRMED";
+  const [expanded, setExpanded] = useState(() => isProvisionalPlus);
+
+  useEffect(() => {
+    setExpanded(isProvisionalPlus);
+  }, [isProvisionalPlus]);
 
   if (!readiness) return null;
 
@@ -558,9 +563,14 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
 
   items.sort((a, b) => a.priority - b.priority);
 
-  const limit = esgState === "IN_PROGRESS" ? 3 : esgState === "DRAFT" ? 6 : 10;
-  const showExpand = items.length > limit;
-  const visibleItems = expanded ? items : items.slice(0, limit);
+  const collapseCount = 6;
+  const defaultLimit = isProvisionalPlus ? undefined : (esgState === "DRAFT" ? 6 : 3);
+  const showExpand = isProvisionalPlus
+    ? items.length > collapseCount
+    : defaultLimit !== undefined && items.length > defaultLimit;
+  const visibleItems = expanded
+    ? items
+    : items.slice(0, isProvisionalPlus ? collapseCount : (defaultLimit ?? items.length));
 
   return (
     <div data-testid="section-whats-missing" className="space-y-2">
@@ -595,7 +605,11 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
           data-testid="button-missing-expand"
         >
           {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-          {expanded ? "Show less" : `Show ${items.length - limit!} more`}
+          {expanded
+            ? "Show less"
+            : isProvisionalPlus
+              ? `Show all ${items.length}`
+              : `Show ${items.length - (defaultLimit ?? 0)} more`}
         </button>
       )}
     </div>
@@ -1096,10 +1110,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {showDraft && <PostWizardPanel />}
-      <ActivationCard />
+      {showConfirmed && <PostWizardPanel />}
+      {showConfirmed && <NextStepBanner />}
+      {showConfirmed && <ActivationCard />}
 
-      {showDraft && showMilestone && (
+      {showProvisional && showMilestone && (
         <FirstReportMilestone onDismiss={handleDismissMilestone} />
       )}
 
@@ -1111,7 +1126,7 @@ export default function Dashboard() {
 
       {showDraft && <ActionFeedCard />}
 
-      {showDraft && hasAlerts && (
+      {showProvisional && hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">
           {overdueActions.length > 0 && (
             <Alert variant="destructive" data-testid="alert-overdue-actions">

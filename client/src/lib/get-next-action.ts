@@ -58,8 +58,8 @@ export function getNextAction(readiness: any): NextAction {
     };
   }
 
-  // Step 4: Generate first report (applies once reporting is ready or confirmed)
-  if (!hasGeneratedReport) {
+  // Step 4: Generate first report (only when system is ready and report not yet created)
+  if (reportingReadiness && !hasGeneratedReport) {
     return {
       title: "Generate your first ESG report",
       description: "You have enough data to create an ESG report to share with stakeholders.",
