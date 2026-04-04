@@ -3649,6 +3649,103 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // GET /api/reports/readiness-detail — rich readiness breakdown for the report readiness panel
+  // Reuses evaluateEsgStatus (shared evaluator from #76) + policy/action gap checks
+  // No calculation logic is duplicated here — everything flows through the shared evaluator
+  app.get("/api/reports/readiness-detail", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { evaluateEsgStatus } = await import("./esg-status");
+
+      const [esgStatus, policy, actions, allMetrics, evidenceFiles] = await Promise.all([
+        evaluateEsgStatus(companyId),
+        storage.getPolicy(companyId).catch(() => null),
+        storage.getActions(companyId).catch(() => []),
+        storage.getMetrics(companyId),
+        storage.getEvidenceFiles(companyId),
+      ]);
+
+      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+
+      // Evidence gap: which metrics have no linked evidence?
+      const metricsWithEvidence = new Set(
+        evidenceFiles
+          .filter((e: any) => e.linkedModule === "metric_value" || e.linkedModule === "metrics")
+          .map((e: any) => e.linkedId)
+      );
+      const missingEvidenceCount = enabledMetrics.length - metricsWithEvidence.size;
+      const evidenceCoveragePercent = esgStatus.evidenceCoverage;
+      const estimatedPercent = esgStatus.totalMetrics > 0
+        ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100)
+        : 0;
+
+      // Policy status
+      const policyNotPublished = !policy || policy.workflowStatus !== "published";
+
+      // Overdue actions
+      const now = new Date();
+      const overdueActions = (Array.isArray(actions) ? actions : []).filter((a: any) =>
+        a.status !== "complete" && a.status !== "completed" && a.dueDate && new Date(a.dueDate) < now
+      ).length;
+
+      // Blocking factors — what's preventing a higher-quality report
+      const blockingFactors: string[] = [];
+      if (esgStatus.filledMetrics === 0) {
+        blockingFactors.push("No metric data entered — add data before generating a report");
+      }
+      if (estimatedPercent > 50) {
+        blockingFactors.push(`${estimatedPercent}% of data is estimated — replace with actual measured values`);
+      } else if (estimatedPercent > 20) {
+        blockingFactors.push(`${estimatedPercent}% of data is estimated — this limits the report to Draft quality`);
+      }
+      if (esgStatus.completenessPercentage < 60) {
+        blockingFactors.push(`Only ${esgStatus.completenessPercentage}% of metrics have data — fill more to reach Confirmed quality`);
+      }
+      if (evidenceCoveragePercent < 30) {
+        blockingFactors.push("Evidence coverage is low — upload supporting documents to strengthen report credibility");
+      }
+      if (policyNotPublished) {
+        blockingFactors.push("ESG policy is not yet published — complete and publish your policy");
+      }
+      if (overdueActions > 0) {
+        blockingFactors.push(`${overdueActions} overdue action${overdueActions === 1 ? "" : "s"} — resolve these to improve ESG management maturity`);
+      }
+
+      // What's missing by category
+      const missingCategories = {
+        missingMetrics: esgStatus.missingItems.slice(0, 10),
+        missingEvidenceCount,
+        highEstimateLoad: estimatedPercent > 20,
+        estimatedPercent,
+        policyNotPublished,
+        overdueActions,
+      };
+
+      // Can the user generate a Confirmed-quality report?
+      const canGenerateConfirmed = esgStatus.state === "CONFIRMED";
+
+      res.json({
+        esgState: esgStatus.state,
+        stateLabel: esgStatus.label,
+        stateExplanation: esgStatus.explanation,
+        completenessPercent: esgStatus.completenessPercentage,
+        evidenceCoveragePercent,
+        measuredCount: esgStatus.measuredCount,
+        estimateCount: esgStatus.estimateCount,
+        missingCount: esgStatus.missingMetrics,
+        totalMetrics: esgStatus.totalMetrics,
+        filledMetrics: esgStatus.filledMetrics,
+        nextAction: esgStatus.nextRecommendedAction,
+        minViableThresholdMet: esgStatus.minViableThresholdMet,
+        blockingFactors,
+        missingCategories,
+        canGenerateConfirmed,
+      });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
   app.post("/api/reports/generate", requireAuth, requireProvisioningPermission("generate_report"), reportLimiter, async (req, res) => {
     if (!featureFlags.reportGenerationEnabled) {
       const { status, body } = featureDisabledResponse("report_generation");
@@ -10009,6 +10106,28 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           company, sites, sitesSummary, metricsBySite, period,
           dateFrom: dateFrom || null, dateTo: dateTo || null,
         });
+      }
+
+      // Prepend standalone meta sections so the exported document stands alone
+      // Uses the shared evaluateEsgStatus() evaluator — same source of truth as the UI panel
+      try {
+        const { evaluateEsgStatus } = await import("./esg-status");
+        const { buildStandaloneMetaSections } = await import("./report-engine");
+        const esgStatus = await evaluateEsgStatus(companyId);
+        const estimatedPercent = esgStatus.totalMetrics > 0
+          ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100)
+          : 0;
+        const metaSections = buildStandaloneMetaSections({
+          companyName,
+          reportingPeriod: period || (dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : "All periods"),
+          esgState: esgStatus.state,
+          completenessPercent: esgStatus.completenessPercentage,
+          evidenceCoveragePercent: esgStatus.evidenceCoverage,
+          estimatedPercent,
+        });
+        reportData = { ...reportData, sections: [...metaSections, ...(reportData.sections || [])] };
+      } catch (_metaErr) {
+        // Non-fatal: if meta fails, still generate the report without meta sections
       }
 
       let fileBuffer: Buffer;

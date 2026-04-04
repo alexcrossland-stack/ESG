@@ -33,6 +33,7 @@ import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
+import { ReportReadinessPanel } from "@/components/report-readiness-panel";
 
 const ESG_EXPORT_TYPES = [
   {
@@ -1023,7 +1024,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
   );
 }
 
-function buildTextExport(data: any, sections: Record<string, boolean>): string {
+function buildTextExport(data: any, sections: Record<string, boolean>, esgMeta?: any): string {
   const {
     company, policySummary, metricsByCategory, values,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
@@ -1036,14 +1037,75 @@ function buildTextExport(data: any, sections: Record<string, boolean>): string {
   const hr = "=".repeat(60);
   const sr = "-".repeat(40);
 
+  // ── Status label from shared ESG evaluator (same source as UI panel) ──
+  const statusLabelMap: Record<string, string> = {
+    IN_PROGRESS: "Baseline — In Progress",
+    DRAFT: "Baseline — Draft",
+    PROVISIONAL: "Provisional",
+    CONFIRMED: "Confirmed",
+  };
+  const esgState: string = esgMeta?.esgState || "DRAFT";
+  const statusLabel = statusLabelMap[esgState] || "Draft";
+  const completenessPercent: number = esgMeta?.completenessPercent ?? dataQualityFlags?.completenessPercent ?? 0;
+  const evidencePercent: number = esgMeta?.evidenceCoveragePercent ?? evidenceCoverage?.coveragePercent ?? 0;
+  const estimatedPercent: number = esgMeta?.missingCategories?.estimatedPercent ?? dataQualityFlags?.estimatedPercent ?? 0;
+
   lines.push(hr);
   lines.push(branding?.name || `${company?.name} - ${templateLabel}`);
   if (branding?.tagline) lines.push(branding.tagline);
+  lines.push(`Report Status: ${statusLabel}`);
   lines.push(`Reporting Period: ${period}`);
   lines.push(`Generated: ${generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy HH:mm") : ""} by ${generatedBy}`);
   lines.push(`Factor Year: ${factorMethodology?.factorYear || "2024"} | Source: ${factorMethodology?.source || "UK DEFRA"}`);
   lines.push(hr);
   lines.push("");
+
+  // ── Report scope & confidence preamble ──
+  lines.push("REPORT SCOPE & CONFIDENCE");
+  lines.push(sr);
+  const orgName = company?.name || "the organisation";
+  lines.push(`Organisation: ${orgName}`);
+  lines.push(`Scope: This report covers the ESG performance of ${orgName} for the reporting period ${period}. It includes data from all active sites and organisational-level metric entries.`);
+  lines.push(`Data Completeness: ${completenessPercent}%`);
+  lines.push(`Evidence Coverage: ${evidencePercent}%`);
+  lines.push(`Estimated Values: ${estimatedPercent}%`);
+  if (esgState === "CONFIRMED") {
+    lines.push(`Confidence: Data quality is sufficient for stakeholder reporting. All material metrics are measured and evidenced.`);
+  } else if (esgState === "PROVISIONAL") {
+    lines.push(`Confidence: Results should be treated as indicative. ${estimatedPercent}% of values are estimated. Pending further data collection.`);
+  } else {
+    lines.push(`Confidence: This is a ${statusLabel} document. It should not be used for external disclosure without further data improvement.`);
+  }
+  lines.push("");
+
+  // ── Material caveats ──
+  const caveats: string[] = [];
+  if (estimatedPercent > 20) {
+    caveats.push(`${estimatedPercent}% of metric values are estimated. These should be replaced with direct measurements as data collection matures.`);
+  }
+  if (evidencePercent < 30) {
+    caveats.push("Supporting evidence is available for fewer than 30% of reported metrics. Evidence should be uploaded to strengthen report credibility.");
+  }
+  if (esgState === "DRAFT" || esgState === "IN_PROGRESS") {
+    caveats.push("This is a baseline document intended to establish a starting point for ESG performance tracking. It does not constitute a formal ESG audit or regulatory compliance certificate.");
+  }
+  if (completenessPercent < 60) {
+    caveats.push(`Data completeness is ${completenessPercent}%. Metrics without data are excluded from score calculations.`);
+  }
+  if (caveats.length > 0) {
+    lines.push("MATERIAL CAVEATS");
+    lines.push(sr);
+    caveats.forEach((c, i) => lines.push(`${i + 1}. ${c}`));
+    lines.push("");
+  }
+
+  // ── Recommended next steps (from readiness detail if available) ──
+  if (esgMeta?.blockingFactors?.length > 0 && esgState !== "CONFIRMED") {
+    lines.push("RECOMMENDED IMPROVEMENTS");
+    lines.push(sr);
+    esgMeta.blockingFactors.forEach((f: string, i: number) => lines.push(`${i + 1}. ${f}`));
+    lines.push("");
+  }
 
   if (sections.includeSummary && weightedScore) {
     lines.push("EXECUTIVE SUMMARY");
@@ -1284,6 +1346,7 @@ export default function Reports() {
 
   const activation = useActivationState();
   const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
+  const { data: readinessDetail } = useQuery<any>({ queryKey: ["/api/reports/readiness-detail"], staleTime: 30_000 });
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -1316,7 +1379,7 @@ export default function Reports() {
 
   const exportReport = () => {
     if (!reportData) return;
-    const content = buildTextExport(reportData, effectiveSections);
+    const content = buildTextExport(reportData, effectiveSections, readinessDetail);
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1724,74 +1787,7 @@ export default function Reports() {
         </p>
       </div>
 
-      {readiness && (
-        <Card className={`${readiness.reportingReadiness ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800" : "border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800"}`} data-testid="card-report-readiness">
-          <CardContent className="p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                {readiness.reportingReadiness ? (
-                  <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                )}
-                <div>
-                  <p className="text-sm font-medium">
-                    {readiness.isFirstReport && readiness.reportingReadiness
-                      ? "Ready for your first report"
-                      : readiness.reportingReadiness
-                      ? "Ready to generate"
-                      : "More data needed before generating"}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {readiness.plainEnglishSummary || `${readiness.dataCompletenessPercent ?? 0}% of metrics filled`}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-1.5">
-                  <ValueSourceBadge source="actual" />
-                  <span>{readiness.actualPercent ?? 0}%</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <ValueSourceBadge source="estimated" />
-                  <span>{readiness.estimatedPercent ?? 0}%</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <ValueSourceBadge source="missing" />
-                  <span>{readiness.missingPercent ?? 0}%</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <FileCheck className="w-3.5 h-3.5 text-blue-500" />
-                  <span>Evidence: {readiness.evidenceCoveragePercent ?? 0}%</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <EsgStatusBadge
-                    status={readiness?.esgStatus as EsgStatusData}
-                    size="sm"
-                    showTooltip={true}
-                    data-testid="badge-report-esg-status"
-                  />
-                </div>
-              </div>
-            </div>
-            {readiness.estimatedPercent > 20 && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
-                <Info className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  {readiness.estimatedPercent}% of your metrics are estimated. Your report will be labelled as a{" "}
-                  <strong>Draft Report</strong> until more actual data is added.
-                </span>
-              </div>
-            )}
-            {readiness.isFirstReport && readiness.reportingReadiness && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>This will generate your <strong>Baseline ESG Report</strong> — a starting point you can share with stakeholders and build on over time.</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      <ReportReadinessPanel />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="space-y-4">

@@ -16,6 +16,124 @@ interface ReportData {
   period?: string;
   sections: ReportSection[];
   summary?: string;
+  // Standalone report quality fields — make the exported document credible without the app open
+  statusLabel?: string;   // e.g. "Draft", "Provisional", "Confirmed"
+  scopeStatement?: string;
+  confidenceStatement?: string;
+  caveats?: string[];
+  nextSteps?: string[];
+}
+
+/**
+ * Build standalone metadata sections (scope, confidence, status, caveats, next steps)
+ * These are prepended to any exported report to make it self-standing.
+ * Source of truth: shared evaluateEsgStatus() via the readiness-detail endpoint.
+ */
+export function buildStandaloneMetaSections(opts: {
+  companyName: string;
+  reportingPeriod: string;
+  esgState?: "IN_PROGRESS" | "DRAFT" | "PROVISIONAL" | "CONFIRMED";
+  completenessPercent?: number;
+  evidenceCoveragePercent?: number;
+  estimatedPercent?: number;
+  scopeStatement?: string;
+  caveats?: string[];
+  nextSteps?: string[];
+}): ReportSection[] {
+  const {
+    companyName, reportingPeriod, esgState = "DRAFT",
+    completenessPercent = 0, evidenceCoveragePercent = 0,
+    estimatedPercent = 0,
+  } = opts;
+
+  const statusLabelMap: Record<string, string> = {
+    IN_PROGRESS: "Baseline — In Progress",
+    DRAFT: "Baseline — Draft",
+    PROVISIONAL: "Provisional",
+    CONFIRMED: "Confirmed",
+  };
+  const statusLabel = statusLabelMap[esgState] || "Draft";
+
+  const confidenceStatement = esgState === "CONFIRMED"
+    ? `This report is based on ${completenessPercent}% measured data with ${evidenceCoveragePercent}% evidence coverage. Data quality is sufficient for stakeholder reporting.`
+    : esgState === "PROVISIONAL"
+    ? `This report covers ${completenessPercent}% of tracked metrics. ${estimatedPercent > 0 ? `${estimatedPercent}% of values are estimated. ` : ""}Evidence coverage is ${evidenceCoveragePercent}%. Results should be treated as indicative pending further data collection.`
+    : esgState === "DRAFT"
+    ? `This is a draft baseline report. ${estimatedPercent}% of values are estimated and ${100 - completenessPercent}% of metrics have no data. This report should not be used for external disclosure without further data improvement.`
+    : `Data collection is in progress. This report should not be used for external reporting or regulatory disclosure.`;
+
+  const scopeStatement = opts.scopeStatement ||
+    `This report covers the ESG performance of ${companyName} for the reporting period ${reportingPeriod}. It includes data from all active sites and organisational-level metric entries. The reporting boundary is the legal entity of ${companyName}.`;
+
+  const defaultCaveats: string[] = [];
+  if (estimatedPercent > 20) {
+    defaultCaveats.push(`${estimatedPercent}% of metric values are estimated using proxies or benchmarks rather than measured actuals. These values should be replaced with direct measurements as data collection matures.`);
+  }
+  if (evidenceCoveragePercent < 30) {
+    defaultCaveats.push("Supporting evidence documents (invoices, meter readings, certificates) are available for fewer than 30% of reported metrics. Evidence should be uploaded to strengthen report credibility.");
+  }
+  if (esgState === "DRAFT" || esgState === "IN_PROGRESS") {
+    defaultCaveats.push("This report is a baseline document intended to establish a starting point for ESG performance tracking. It does not constitute a formal ESG audit or regulatory compliance certificate.");
+  }
+  if (completenessPercent < 60) {
+    defaultCaveats.push(`Data completeness is ${completenessPercent}%. Metrics without data are excluded from score calculations, which may not fully represent the organisation's ESG position.`);
+  }
+
+  const caveats = opts.caveats ?? defaultCaveats;
+
+  const defaultNextSteps: string[] = [];
+  if (estimatedPercent > 20) defaultNextSteps.push("Replace estimated values with actual measured data (utility bills, meter readings, payroll records).");
+  if (evidenceCoveragePercent < 50) defaultNextSteps.push("Upload evidence documents to support reported metric values and improve report credibility.");
+  if (completenessPercent < 80) defaultNextSteps.push("Enter data for missing metrics to increase data completeness above 80%.");
+  if (esgState !== "CONFIRMED") defaultNextSteps.push("Work towards Confirmed report status by measuring all material metrics and evidencing key values.");
+  defaultNextSteps.push("Review this report with your Company Admin and Approver before sharing with third parties.");
+
+  const nextSteps = opts.nextSteps ?? defaultNextSteps;
+
+  const sections: ReportSection[] = [];
+
+  sections.push({
+    title: "Report Status & Scope",
+    type: "metrics",
+    rows: [
+      { label: "Report Status", value: statusLabel, status: esgState === "CONFIRMED" ? "green" : esgState === "PROVISIONAL" ? undefined : "amber" },
+      { label: "Organisation", value: companyName },
+      { label: "Reporting Period", value: reportingPeriod },
+      { label: "Data Completeness", value: `${completenessPercent}%`, status: completenessPercent >= 80 ? "green" : completenessPercent >= 50 ? "amber" : "red" },
+      { label: "Evidence Coverage", value: `${evidenceCoveragePercent}%`, status: evidenceCoveragePercent >= 50 ? "green" : evidenceCoveragePercent >= 25 ? "amber" : "red" },
+      { label: "Estimated Values", value: `${estimatedPercent}%`, status: estimatedPercent <= 20 ? "green" : estimatedPercent <= 50 ? "amber" : "red" },
+    ],
+  });
+
+  sections.push({
+    title: "Reporting Scope",
+    type: "text",
+    content: scopeStatement,
+  });
+
+  sections.push({
+    title: "Confidence & Data Quality",
+    type: "text",
+    content: confidenceStatement,
+  });
+
+  if (caveats.length > 0) {
+    sections.push({
+      title: "Material Caveats",
+      type: "list",
+      items: caveats,
+    });
+  }
+
+  if (nextSteps.length > 0) {
+    sections.push({
+      title: "Recommended Next Steps",
+      type: "list",
+      items: nextSteps,
+    });
+  }
+
+  return sections;
 }
 
 // ============================================================
