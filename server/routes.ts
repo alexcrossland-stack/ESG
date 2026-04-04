@@ -139,6 +139,19 @@ function upgradeRequired(req: Request, res: Response, customMsg?: string) {
   res.status(403).json({ error: customMsg ?? "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 }
 
+/**
+ * Centralised 500 handler.
+ * - Logs the real error server-side (never send raw exception messages to clients).
+ * - Returns a safe, generic response with a typed code so the frontend resolver
+ *   can display appropriate guidance.
+ */
+function sendServerError(res: Response, error: unknown, context?: string): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? error.stack : undefined;
+  console.error(`[sendServerError]${context ? ` ${context}` : ""}: ${message}`, stack ?? "");
+  res.status(500).json({ error: "An unexpected error occurred.", code: "INTERNAL_ERROR" });
+}
+
 async function requireAuth(req: Request, res: Response, next: Function) {
   const auth = resolveAuth(req);
   if (!auth) {
@@ -314,7 +327,7 @@ function requirePermission(module: PermissionModule) {
     const userId = (req.session as any).userId;
     const user = await storage.getUser(userId);
     if (!user || !hasPermission(user.role, module)) {
-      return res.status(403).json({ error: "Insufficient permissions" });
+      return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
     }
     return next();
   };
@@ -330,7 +343,7 @@ function requireProvisioningPermission(action: ProvisioningAction) {
     const userId = (req.session as any).userId;
     const user = await storage.getUser(userId);
     if (!user || !hasProvisioningPermission(user.role, action)) {
-      return res.status(403).json({ error: "Insufficient permissions" });
+      return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
     }
     return next();
   };
@@ -905,11 +918,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }).catch(() => {});
       req.session.save((err) => {
-        if (err) return res.status(500).json({ error: "Session error" });
+        if (err) sendServerError(res, new Error("session error"), "session"); return;
         res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -971,7 +984,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }).catch(() => {});
     req.session.save((err: Error | null) => {
-      if (err) return res.status(500).json({ error: "Session error" });
+      if (err) sendServerError(res, new Error("session error"), "session"); return;
       res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
     });
   }
@@ -1040,7 +1053,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (user.mfaEnabled) {
         (req.session as any).mfaPendingUserId = user.id;
         req.session.save((err) => {
-          if (err) return res.status(500).json({ error: "Session error" });
+          if (err) sendServerError(res, new Error("session error"), "session"); return;
           res.json({ mfaRequired: true, userId: user.id });
         });
         return;
@@ -1050,7 +1063,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (mfaPolicy === "all_required" || (mfaPolicy === "admin_required" && (user.role === "admin" || user.role === "super_admin"))) {
         (req.session as any).mfaPendingUserId = user.id;
         req.session.save((err) => {
-          if (err) return res.status(500).json({ error: "Session error" });
+          if (err) sendServerError(res, new Error("session error"), "session"); return;
           res.json({ mfaRequired: true, mfaSetupRequired: true, userId: user.id });
         });
         return;
@@ -1058,8 +1071,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       establishSession(req, res, user, company, { ipAddress: clientIp, userAgent: clientUa });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -1107,7 +1119,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1133,7 +1145,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1158,7 +1170,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1260,8 +1272,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ success: true });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -1310,7 +1321,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(company);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1326,7 +1337,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const settings = await storage.upsertCompanySettings(companyId, req.body);
       res.json(settings);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1374,7 +1385,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.updateCompany(companyId, update);
       res.json(company);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1473,7 +1484,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       res.json(company);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1574,7 +1585,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         error: e?.message,
         stack: e?.stack,
       });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1621,7 +1632,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (!canAccess) {
-        return res.status(403).json({ error: "Insufficient permissions" });
+        return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
       }
 
       const company = await storage.getCompany(requestedCompanyId);
@@ -1744,7 +1755,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         },
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1755,7 +1766,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.updateCompany(companyId, { activationCardDismissedAt: dismiss ? new Date() : null });
       res.json({ dismissed: !!dismiss });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1790,7 +1801,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.info("[analytics]", JSON.stringify(payload));
       res.status(204).end();
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1910,7 +1921,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(actionPlan);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1961,7 +1972,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ id: supportReq.id, refNumber });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1970,7 +1981,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reqs = await storage.getSupportRequests(500);
       res.json(reqs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -1980,7 +1991,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!req_) return res.status(404).json({ error: "Not found" });
       res.json(req_);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2005,7 +2016,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2059,7 +2070,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2082,7 +2093,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.updateMaterialTopic(req.params.id, selected);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2116,7 +2127,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const metric = await storage.updateMetric(req.params.id, req.body);
       res.json(metric);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2154,7 +2165,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(target);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2168,7 +2179,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const values = await storage.getMetricValues(req.params.id);
       res.json(values);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2204,7 +2215,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ rows: allRows, periods, categories: { raw: rawLabels, manual: manualMetrics } });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2281,7 +2292,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2299,7 +2310,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2316,7 +2327,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const data = await storage.getRawDataByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
       res.json(data);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2351,7 +2362,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ saved: results.length, results });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2537,7 +2548,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.createPlatformHealthEvent(csvFailureEvent);
         dispatchCriticalHealthEvent(csvFailureEvent).catch(() => {});
       } catch {}
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2616,7 +2627,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ period, updated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2652,7 +2663,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allMetrics = await storage.getMetrics(companyId);
       res.json(allMetrics);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2676,7 +2687,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2694,7 +2705,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
       res.json(defs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2705,7 +2716,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!def) return res.status(404).json({ error: "Not found" });
       res.json(def);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2722,7 +2733,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const updated = await storage.updateMetricDefinition(req.params.id, { isActive });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2734,7 +2745,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const filtered = runs.filter(r => r.metricDefinitionId === req.params.id);
       res.json(filtered);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2744,7 +2755,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const evidence = await storage.getMetricEvidence(req.params.metricValueId);
       res.json(evidence);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2765,7 +2776,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.status(201).json(evidence);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2775,7 +2786,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.deleteMetricEvidence(req.params.id);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2789,7 +2800,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const frameworks = await storage.getFrameworks(true);
       res.json(frameworks);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2799,7 +2810,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reqs = await storage.getFrameworkRequirements(req.params.id);
       res.json(reqs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2815,7 +2826,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2829,7 +2840,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const sel = await storage.upsertBusinessFrameworkSelection(companyId, frameworkId, isEnabled);
       res.json(sel);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2845,7 +2856,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2856,7 +2867,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const readiness = await storage.getFrameworkReadiness(companyId);
       res.json(readiness);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2870,7 +2881,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await scoreCompleteness(companyId, period);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2888,7 +2899,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await scorePerformance(companyId, period, siteId);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2900,7 +2911,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await scoreManagementMaturity(companyId);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2912,7 +2923,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await scoreFrameworkReadiness(companyId);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2936,7 +2947,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         error: e?.message,
         stack: e?.stack,
       });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2946,7 +2957,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const alignment = await storage.getMetricDefinitionFrameworkAlignment(req.params.id);
       res.json(alignment);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2969,7 +2980,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       );
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -2990,7 +3001,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         error: e?.message,
         stack: e?.stack,
       });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3011,7 +3022,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         error: e?.message,
         stack: e?.stack,
       });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3028,7 +3039,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const estimates = runEstimationEngine(profile, actuals);
       res.json({ estimates, notice: "These are estimates only and have not been saved. Review and accept individual values to persist them." });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3247,7 +3258,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       generateReminders(companyId).catch(() => {});
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3363,7 +3374,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         plainEnglishSummary: summaryByState[dashboardState] || "",
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3476,7 +3487,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ estimates, period, industry, employeeCount });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3501,7 +3512,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(plan);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3523,7 +3534,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(plan);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3537,7 +3548,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.deleteActionPlan(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3548,7 +3559,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const data = await storage.getDashboardData(companyId);
       res.json(data);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3622,7 +3633,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reports = await storage.getReportRuns(companyId, siteId);
       res.json(reports);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -3635,7 +3646,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const eligibility = await checkReportEligibility(companyId, period, siteId);
       res.json(eligibility);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4121,7 +4132,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { error: e.message, period: req.body?.period, reportType: req.body?.reportType },
         req,
       });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4155,7 +4166,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }));
       res.json(safe);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4200,7 +4211,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         key: plaintext,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4226,7 +4237,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } as any).catch(() => {});
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4239,7 +4250,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : await storage.getActiveNotifications(companyId);
       res.json(items);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4249,7 +4260,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const active = await storage.getActiveNotifications(companyId);
       res.json({ count: active.length });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4259,7 +4270,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const count = await generateReminders(companyId);
       res.json({ generated: count });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4271,7 +4282,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!result) return res.status(404).json({ error: "Notification not found" });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4282,7 +4293,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.dismissAllNotifications(companyId, userId);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4625,7 +4636,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.createPlatformHealthEvent(aiFailureEvent);
         dispatchCriticalHealthEvent(aiFailureEvent).catch(() => {});
       } catch {}
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4663,7 +4674,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ ok: true, versionNumber: nextVersion });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4730,7 +4741,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.setHeader("Content-Disposition", `attachment; filename=carbon-estimate-${calc.reportingPeriod}.txt`);
       res.send(text);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4747,7 +4758,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const calcs = await storage.getCarbonCalculations(companyId, siteIdParam !== undefined ? siteId : undefined, period);
       res.json(calcs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4796,7 +4807,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(calc);
     } catch (e: any) {
       console.error("Carbon calculation error:", e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4808,7 +4819,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.deleteCarbonCalculation(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4830,7 +4841,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const qs = await storage.getQuestionnaires(companyId, siteIdParam !== undefined ? siteId : undefined, reportingPeriodId);
       res.json(qs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4892,7 +4903,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const savedQuestions = await storage.getQuestionnaireQuestions(q.id);
       res.json({ ...q, questions: savedQuestions });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -4998,7 +5009,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json({ questions: updatedQuestions });
     } catch (e: any) {
       console.error("Autofill error:", e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5012,7 +5023,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5028,7 +5039,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.deleteQuestionnaire(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5120,7 +5131,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(generatedPolicy);
     } catch (e: any) {
       console.error("Template generation error:", e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5156,7 +5167,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5168,7 +5179,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.deleteGeneratedPolicy(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5178,7 +5189,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!updated) return res.status(404).json({ error: "Template not found" });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5198,7 +5209,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json(Array.from(setMap.values()));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5209,7 +5220,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const sanitized = users.map(({ password, mfaSecretEncrypted, mfaBackupCodesHash, ...rest }) => rest);
       res.json(sanitized);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5258,7 +5269,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ ok: true, message: `Invitation sent to ${email}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5304,10 +5315,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const { password, ...sanitized } = updated;
         res.json(sanitized);
       } else {
-        res.status(500).json({ error: "Failed to update user role" });
+        sendServerError(res, new Error("Failed to update user role"), "update user role");
       }
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5344,7 +5355,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true, submitted: entityIds.length });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5378,7 +5389,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true, status });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5431,7 +5442,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json({ succeeded, failed, errors });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5441,7 +5452,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const pending = await storage.getWorkflowPendingItems(companyId);
       res.json(pending);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5452,7 +5463,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const tasks = await storage.getUserTasks(userId, companyId);
       res.json(tasks);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5462,7 +5473,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const approvals = await storage.getUserApprovals(companyId);
       res.json(approvals);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5489,7 +5500,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (e.message === "Entity not found" || e.message === "User not in company") {
         return res.status(404).json({ error: e.message });
       }
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5523,7 +5534,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json({ succeeded, failed, errors });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5533,7 +5544,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const requests = await storage.getEvidenceRequests(companyId);
       res.json(requests);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5544,7 +5555,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const requests = await storage.getEvidenceRequestsByUser(userId, companyId);
       res.json(requests);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5574,7 +5585,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.status(201).json(request);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5614,7 +5625,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5642,7 +5653,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(result);
     } catch (e: any) {
       if (e.message === "Evidence file not found") return res.status(404).json({ error: e.message });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5652,7 +5663,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const periods = await storage.getReportingPeriods(companyId);
       res.json(periods);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5681,7 +5692,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.status(201).json(period);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5700,7 +5711,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5719,7 +5730,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5748,7 +5759,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(201).json(result);
     } catch (e: any) {
       if (e.message === "Source period not found") return res.status(404).json({ error: e.message });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5763,7 +5774,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const comparison = await storage.getPeriodComparison(companyId, current, compare);
       res.json(comparison);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5773,7 +5784,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const logs = await storage.getAiGenerationLogs(companyId, req.params.entityType, req.params.entityId);
       res.json(logs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5791,7 +5802,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, period);
       res.json(files);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5802,7 +5813,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const coverage = await storage.getEvidenceCoverage(companyId, period);
       res.json(coverage);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5812,7 +5823,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const files = await storage.getEvidenceByEntity(companyId, req.params.module, req.params.entityId);
       res.json(files);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5910,7 +5921,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }).catch(() => {});
       res.json(file);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5956,7 +5967,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!file) return res.status(404).json({ error: "Evidence not found" });
       res.json(file);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -5983,7 +5994,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6063,7 +6074,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         categoryBreakdown,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6072,7 +6083,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const rows = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true ORDER BY name`);
       res.json(rows.rows);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6086,7 +6097,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       );
       res.json(rows.rows);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6138,7 +6149,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(frameworkStatus);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6231,7 +6242,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6361,7 +6372,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const displayed = limited ? recommendations.slice(0, 3) : recommendations;
       res.json({ recommendations: displayed, total: recommendations.length, limited });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6477,7 +6488,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         nextBestActions: nextBestActions.slice(0, 5),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6632,7 +6643,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         res.json({ reply: "I'm unable to answer right now. Please visit the Help Centre for guidance." });
       }
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6673,7 +6684,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       res.json(answers);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6690,7 +6701,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       await storage.createAuditLog({ companyId, userId: (req.session as any).userId, action: "Procurement answer created", entityType: "procurement_answer", entityId: result.rows[0].id, details: { question } });
       res.json(result.rows[0]);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6714,7 +6725,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       await storage.createAuditLog({ companyId, userId, action: "Procurement answer updated", entityType: "procurement_answer", entityId: req.params.id, details: { status } });
       res.json(result.rows[0]);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6725,7 +6736,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       await storage.createAuditLog({ companyId, userId: (req.session as any).userId, action: "Procurement answer deleted", entityType: "procurement_answer", entityId: req.params.id, details: {} });
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6749,7 +6760,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       scored.sort((a: any, b: any) => b.relevance - a.relevance);
       res.json(scored.filter((s: any) => s.relevance > 0).slice(0, 10));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6811,7 +6822,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         periodSubmissions,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6854,7 +6865,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       }
       res.json({ success: true, message: "Demo data seeded" });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6864,7 +6875,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const result = await db.execute(sql`SELECT demo_mode FROM companies WHERE id = ${companyId}`);
       res.json({ demoMode: result.rows[0]?.demo_mode || false });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6874,7 +6885,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       await db.execute(sql`UPDATE procurement_answers SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = NOW() WHERE id = ${req.params.id} AND company_id = ${companyId}`);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6884,7 +6895,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const jobId = await enqueueJob("reminder_check", {}, companyId, `manual_reminder:${companyId}:${new Date().toISOString().slice(0, 10)}`);
       res.json({ jobId, queued: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -6972,7 +6983,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     } catch (e: any) {
       try { await storage.createPlatformHealthEvent({ eventType: "report_failure", severity: "error", message: `Report generation failed: ${e.message}`, details: { reportId: req.params.id }, companyId: (req.session as any).companyId }); } catch {}
       auditLog({ companyId: (req.session as any).companyId ?? null, userId: (req.session as any).userId ?? null, actorType: "system", action: "report_generation_failure", entityType: "report_run", entityId: req.params.id, details: { error: e.message } });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7004,7 +7015,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
       res.send(buffer);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7020,7 +7031,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const files = await storage.getGeneratedFilesByReportRun(req.params.id);
       res.json(files.map(f => ({ id: f.id, filename: f.filename, fileType: f.fileType, fileSize: f.fileSize, generatedAt: f.generatedAt })));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7145,7 +7156,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const matched = matchResults.filter(m => m.confidence > 0).length;
       res.json({ questionnaireId: questionnaire.id, totalQuestions: matchResults.length, matched, unmatched: matchResults.length - matched, questions: matchResults });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7239,7 +7250,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       res.json({ questions: results, total: results.length });
     } catch (e: any) {
-      res.status(500).json({ error: "Failed to generate responses" });
+      sendServerError(res, new Error("Failed to generate responses"), "generate responses");
     }
   });
 
@@ -7318,7 +7329,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const mappings = columns.map(col => ({ column: col, ...matchColumn(col) }));
       res.json({ columns, rows: rows.slice(0, 100), mappings });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7394,7 +7405,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       res.json({ imported, skipped, unmatched, period });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7515,7 +7526,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const comparison = compareAgainstBenchmarks(companyMetrics);
       res.json(comparison);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7525,7 +7536,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const profile = await buildEsgProfile(companyId);
       res.json(profile);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7560,7 +7571,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         res.json({ enabled: false });
       }
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7571,7 +7582,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       await storage.updateCompany(companyId, { profileShareToken: token } as any);
       res.json({ token });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7602,7 +7613,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       res.json(filteredProfile);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7642,7 +7653,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         totalReports,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7693,7 +7704,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         },
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7704,7 +7715,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json({ roadmap: (company as any).esgRoadmap || null });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7825,7 +7836,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ roadmap });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7869,7 +7880,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const analytics = await storage.getActivityAnalytics(30);
       res.json(analytics);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7878,7 +7889,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const timeline = await storage.getActivityTimeline(30);
       res.json(timeline);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7887,7 +7898,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const deleted = await storage.cleanupOldActivity(90);
       res.json({ deleted });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7935,7 +7946,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         uptime: schedulerStatus.uptime,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7965,7 +7976,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         tables,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7978,7 +7989,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const events = await storage.getPlatformHealthEvents(limit, offset, severity, eventType);
       res.json(events);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -7989,7 +8000,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const filtered = statusFilter ? jobs.filter(j => j.status === statusFilter) : jobs;
       res.json(filtered);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8005,7 +8016,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
     } catch {}
     if (!res.headersSent) {
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -8033,7 +8044,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ url: session.url });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8056,7 +8067,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8077,7 +8088,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         compedUntil: isComped ? compedUntil : null,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8159,7 +8170,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       res.json({ received: true });
     } catch (e: any) {
       console.error("[Stripe] Webhook handler error:", e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8196,7 +8207,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ ok: true, message: "Demo environment has been reset" });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8206,7 +8217,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const result = await seedPeDemo();
       res.json({ ok: true, summary: result.summary, counts: result.counts });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8271,7 +8282,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const totalDiscrepancies = results.reduce((sum, r) => sum + r.discrepancies.length, 0) + portfolioResults.reduce((sum, r) => sum + r.discrepancies.length, 0);
       res.json({ checked: rows.length, groupsChecked: groupRows.length, totalDiscrepancies, results, portfolioResults });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8282,7 +8293,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const events = await storage.getTelemetryEvents({ eventName: eventName || undefined, companyId: qCompanyId || undefined, userId: qUserId || undefined, limit });
       res.json(events);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8306,7 +8317,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const logs = await storage.getAllAuditLogs(limit);
       res.json(logs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8329,7 +8340,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       checks.push({ check: "Expired auth tokens", pass: expiredTokens < 100, detail: `${expiredTokens} expired unused tokens pending cleanup` });
       res.json({ generatedAt: new Date().toISOString(), checks, summary: { passed: checks.filter(c => c.pass).length, failed: checks.filter(c => !c.pass).length, total: checks.length } });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8371,7 +8382,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.status(201).json(grant);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8381,7 +8392,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const grants = await storage.listAccessGrants(status ? { status } : undefined);
       res.json(grants);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8416,7 +8427,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(revoked);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8427,7 +8438,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const alerts = await getSecurityAlerts(limit, severity);
       res.json(alerts);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8454,7 +8465,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         superAdminActions: (superAdminResult as any).rows ?? [],
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8465,7 +8476,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await db.execute(sql.raw(`UPDATE security_alerts SET acknowledged_at = NOW(), acknowledged_by = '${adminUser.id}' WHERE id = '${id.replace(/'/g, "''")}'`));
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8484,7 +8495,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       evaluateSecurityEvent({ action: SECURITY_EVENTS.SESSION_REVOKED, userId: adminUser.id, details: { targetUserId: userId } }).catch(() => {});
       res.json({ ok: true, message: "Sessions revoked. User will need to log in again." });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8507,7 +8518,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       evaluateSecurityEvent({ action: SECURITY_EVENTS.SUPER_ADMIN_ACTION, userId: adminUser.id, details: { action: "disable_user", targetUserId: userId } }).catch(() => {});
       res.json({ ok: true, message: "User account disabled." });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8547,7 +8558,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       console.log(`[Beta] Granted beta access to company ${targetUser.company_id} (user: ${email}) by ${grantedBy}, expires ${betaExpiresAt.toISOString()}`);
       res.json({ success: true, companyId: targetUser.company_id, betaExpiresAt: betaExpiresAt.toISOString() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8578,7 +8589,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       console.log(`[Beta] Revoked beta access from company ${targetUser.company_id} (user: ${email}) by ${revokedBy}`);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8614,7 +8625,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }));
       res.json(rows);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8625,7 +8636,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const counts = await storage.getHealthEventCounts(since);
       res.json({ hours, since: since.toISOString(), ...counts });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8653,7 +8664,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         platformErrors24h: healthCounts.bySeverity?.error ?? 0,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8665,7 +8676,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const result = await storage.adminListCompanies(search, page, pageSize);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8677,7 +8688,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const result = await storage.adminListUsers(search, page, pageSize);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8696,7 +8707,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(detail);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8715,7 +8726,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(diag);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8796,7 +8807,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       } as any);
       res.json({ dryRun: false, siteId, siteName, tablesUpdated });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8864,7 +8875,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ totalCompanies, proCount, freeCount, estimatedMrr, newSubscriptions30d, churned30d, conversionRate, monthlyGrowth });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -8914,7 +8925,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         recentJobs: (recentJobsR as any).rows ?? [],
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9068,7 +9079,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         impersonatingAs: { userId: targetUser.id, username: targetUser.username, companyId, companyName: company.name },
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9119,7 +9130,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9141,7 +9152,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         companyName: company?.name ?? "Unknown",
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9184,7 +9195,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const sites = await storage.getSites(companyId, includeArchived);
       res.json(sites);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9198,7 +9209,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const summary = await storage.getSitesSummary(companyId, period, reportingPeriodId);
       res.json(summary);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9210,7 +9221,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const counts = await storage.getUnassignedCounts(companyId);
       res.json(counts);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9231,7 +9242,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!site) return res.status(404).json({ error: "Site not found" });
       res.json(site);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9272,7 +9283,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       res.status(201).json(site);
     } catch (e: any) {
       if (e.code === "23505") return res.status(409).json({ error: "A site with this name already exists" });
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9299,7 +9310,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const site = await storage.updateSite(req.params.id, companyId, updates);
       res.json(site);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9322,7 +9333,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }).catch(() => {});
       res.json(site);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9337,7 +9348,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!dashboard) return res.status(404).json({ error: "Site not found" });
       res.json(dashboard);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9353,7 +9364,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const updated = await storage.updateMetricDefinition(req.params.id, { isActive: !def.isActive });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9363,7 +9374,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
       res.json({ seeded: count, message: `Seeded ${count} new metric definitions` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9384,7 +9395,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const values = await storage.getMetricDefinitionValues(companyId, filters);
       res.json(values);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9424,7 +9435,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(value);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9451,7 +9462,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9468,7 +9479,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const runs = await storage.getMetricCalculationRuns(companyId, metricDefinitionId as string | undefined);
       res.json(runs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9484,7 +9495,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const topics = await storage.getMaterialTopics(companyId);
       res.json(topics);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9502,7 +9513,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9513,7 +9524,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const assessments = await storage.getMaterialityAssessments(companyId);
       res.json(assessments);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9524,7 +9535,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const a = await storage.createMaterialityAssessment({ ...req.body, companyId });
       res.json(a);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9535,7 +9546,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const a = await storage.updateMaterialityAssessment(req.params.id, companyId, req.body);
       res.json(a);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9550,7 +9561,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const records = await storage.getPolicyRecords(companyId);
       res.json(records);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9561,7 +9572,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const r = await storage.createPolicyRecord({ ...req.body, companyId });
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9572,7 +9583,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const r = await storage.updatePolicyRecord(req.params.id, companyId, req.body);
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9583,7 +9594,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await storage.deletePolicyRecord(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9598,7 +9609,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const assignments = await storage.getGovernanceAssignments(companyId);
       res.json(assignments);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9609,7 +9620,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const r = await storage.upsertGovernanceAssignment(companyId, req.params.area, req.body);
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9620,7 +9631,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await storage.deleteGovernanceAssignment(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9635,7 +9646,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const targets = await storage.getEsgTargets(companyId);
       res.json(targets);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9646,7 +9657,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const t = await storage.createEsgTarget({ ...req.body, companyId });
       res.json(t);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9657,7 +9668,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const t = await storage.updateEsgTarget(req.params.id, companyId, req.body);
       res.json(t);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9668,7 +9679,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await storage.deleteEsgTarget(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9684,7 +9695,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const actions = await storage.getEsgActions(companyId, targetId as string, riskId as string);
       res.json(actions);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9695,7 +9706,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const a = await storage.createEsgAction({ ...req.body, companyId });
       res.json(a);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9706,7 +9717,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const a = await storage.updateEsgAction(req.params.id, companyId, req.body);
       res.json(a);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9717,7 +9728,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await storage.deleteEsgAction(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9733,7 +9744,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const risks = await storage.getEsgRisks(companyId, pillar as string, riskType as string);
       res.json(risks);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9744,7 +9755,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const r = await storage.createEsgRisk({ ...req.body, companyId });
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9755,7 +9766,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const r = await storage.updateEsgRisk(req.params.id, companyId, req.body);
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -9766,7 +9777,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await storage.deleteEsgRisk(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10015,7 +10026,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }).catch(() => {});
     } catch (e: any) {
       console.error("[report-export]", e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10065,7 +10076,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         res.status(400).json({ error: "Unknown report type" });
       }
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10086,7 +10097,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const defs = await storage.getMetricDefinitions(filters);
       res.json(defs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10096,7 +10107,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!def) return res.status(404).json({ error: "Not found" });
       res.json(def);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10139,7 +10150,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.status(201).json(def);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10169,7 +10180,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(def);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10190,7 +10201,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(def);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10203,7 +10214,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const frameworks = await storage.getFrameworks();
       res.json(frameworks);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10228,7 +10239,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.status(201).json(fw[0]);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10255,7 +10266,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(fw);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10271,7 +10282,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json(reqs);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10299,7 +10310,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.status(201).json(req_);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10319,7 +10330,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!r) return res.status(404).json({ error: "Not found" });
       res.json(r);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10335,7 +10346,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10345,7 +10356,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const mappings = await storage.getAllMappings();
       res.json(mappings);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10376,7 +10387,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(mapping);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10391,7 +10402,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!mapping) return res.status(404).json({ error: "Not found" });
       res.json(mapping);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10401,7 +10412,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       await db.delete(metricFrameworkMappings).where(eq(metricFrameworkMappings.id, req.params.id));
       res.json({ success: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10421,7 +10432,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       );
       res.json((result as any).rows || []);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10475,7 +10486,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       };
       res.json(config);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10514,8 +10525,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const qrDataUrl: string = await QRCode.toDataURL(uri);
       res.json({ secret, uri, qrDataUrl });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -10545,7 +10555,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ success: true, dimensionWeights: weights });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10570,7 +10580,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ success: true, message: `Updated scoring weight for all active ${pillar} metrics to ${scoringWeight}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10628,7 +10638,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           if (!ex) storage.createUserSession({ userId, companyId: user.companyId, sessionId, ipAddress: clientIpMfa, userAgent: clientUaMfa, deviceSummary: parseUserAgent(clientUaMfa), lastSeenAt: new Date(), expiresAt }).catch(() => {});
         }).catch(() => {});
         return req.session.save((err) => {
-          if (err) return res.status(500).json({ error: "Session error" });
+          if (err) sendServerError(res, new Error("session error"), "session"); return;
           res.json({
             backupCodes,
             loggedIn: true,
@@ -10640,7 +10650,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json({ backupCodes });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10686,7 +10696,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ success: true, seeded, message: `Seeded "${topic}" into ${seeded} companies` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10719,7 +10729,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10745,7 +10755,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ backupCodes });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10807,8 +10817,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       delete (req.session as any).mfaPendingUserId;
       establishSession(req, res, user, company, { ipAddress: clientIp, userAgent: clientUa });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -10825,7 +10834,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         mfaPolicy: company?.mfaPolicy ?? "optional",
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10853,7 +10862,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }));
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10891,7 +10900,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json({ ok: true, loggedOut: false });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -10917,7 +10926,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       } as any);
       res.json({ ok: true, revokedCount: count });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11017,7 +11026,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       } as any).catch(() => {});
       res.json({ ok: true, stepUpGranted: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11045,7 +11054,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         requiresMfa: user?.mfaEnabled ?? false,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11068,7 +11077,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ ok: true, mfaPolicy });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11086,7 +11095,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }));
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11099,7 +11108,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json({ message: "SSO initiation stub", providerId, providerType: provider.providerType });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11112,7 +11121,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json({ message: "SSO callback stub - not yet implemented", providerId });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11122,7 +11131,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const providers = await storage.getIdentityProviders(companyId);
       res.json(providers);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11143,7 +11152,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(provider);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11165,7 +11174,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json(updated);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11186,7 +11195,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11219,7 +11228,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       enqueueJob("gdpr_export", { jobId: job.id, requestedBy: userId, exportScope }, companyId, `export-${job.id}`).catch(console.error);
       res.json({ jobId: job.id, status: "pending", message: "Export job queued. Download link will be available shortly." });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11247,7 +11256,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         fileSize: job.fileSize,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11297,7 +11306,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       res.setHeader("Content-Disposition", `attachment; filename="data-export-${job.id}.json"`);
       res.send(job.fileData || "{}");
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11320,7 +11329,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         fileSize: j.fileSize,
       })));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11365,7 +11374,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       req.session.destroy(() => {});
       res.json({ ok: true, message: "Your account has been anonymised. You have been logged out." });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11409,8 +11418,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       evaluateSecurityEvent({ action: SECURITY_EVENTS.COMPANY_DELETION_REQUESTED, userId, companyId, details: { scheduledIn: "7 days" } }).catch(() => {});
       res.json({ ok: true, requestId: request.id, message: "Company deletion scheduled. This will take effect in 7 days. Contact support to cancel." });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      res.status(500).json({ error: message });
+      sendServerError(res, e);
     }
   });
 
@@ -11420,7 +11428,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const requests = await storage.getDataDeletionRequests(companyId);
       res.json(requests);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11578,7 +11586,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (e.message?.includes("already exists")) {
         return res.status(409).json({ error: e.message });
       }
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11645,7 +11653,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ ok: true, message: `Invitation sent to ${email}` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11711,7 +11719,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ user: updatedUser });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11781,7 +11789,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (e.message?.includes("unique") || e.code === "23505") {
         return res.status(409).json({ error: "Company is already in this group" });
       }
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11817,7 +11825,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
       res.json(access.groups);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11881,7 +11889,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         highRiskFlagsCount: 0,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -11964,7 +11972,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ companies: rows, total, page, pageSize });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -12032,7 +12040,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json({ neverOnboarded, missingEvidence: [], overdueUpdates, noRecentReport });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 
@@ -12100,7 +12108,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.json(activity);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e);
     }
   });
 

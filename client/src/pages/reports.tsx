@@ -3,6 +3,7 @@ import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
+import { resolveApiError } from "@/lib/errorResolver";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1306,14 +1307,8 @@ export default function Reports() {
       toast({ title: "Report generated", description: `${templateConfig.label} is ready to preview and export.` });
     },
     onError: (e: any) => {
-      const code = (e as any)?.code as string | undefined;
-      const description =
-        code === "no_reporting_period_data"
-          ? `No data entered for ${selectedPeriod}. Go to Data Entry and add figures for this period first.`
-          : code === "no_metrics_configured"
-          ? "No metrics are enabled. Contact your administrator to configure metrics before generating a report."
-          : "Something went wrong generating the report. Try selecting a different period or report type.";
-      toast({ title: "Report generation failed", description, variant: "destructive" });
+      const r = resolveApiError(e);
+      toast({ title: r.title, description: `${r.description} ${r.nextStep}`, variant: "destructive" });
     },
   });
 

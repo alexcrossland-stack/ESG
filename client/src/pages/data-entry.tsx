@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/empty-state";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
+import { resolveApiError } from "@/lib/errorResolver";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -326,7 +327,10 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       toast({ title: "Period submitted for review" });
     },
-    onError: (e: any) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      const r = resolveApiError(e);
+      toast({ title: r.title, description: r.description + " " + r.nextStep, variant: "destructive" });
+    },
   });
 
   const approveWorkflowMutation = useMutation({
@@ -350,7 +354,10 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       toast({ title: "Review action completed" });
     },
-    onError: (e: any) => toast({ title: "Review failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      const r = resolveApiError(e);
+      toast({ title: r.title, description: r.description + " " + r.nextStep, variant: "destructive" });
+    },
   });
 
   const handleSaveRawAndRecalc = async () => {
