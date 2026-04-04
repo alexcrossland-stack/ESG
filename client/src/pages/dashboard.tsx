@@ -561,7 +561,7 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
 
   if (items.length === 0) return null;
 
-  items.sort((a, b) => a.priority - b.priority);
+  items.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
 
   const collapseCount = 6;
   const defaultLimit = isProvisionalPlus ? undefined : (esgState === "DRAFT" ? 6 : 3);
