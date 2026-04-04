@@ -13,7 +13,7 @@ import {
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
   Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
-  Database, TrendingDown, BookOpen, Globe, Star, Download,
+  Database, TrendingDown, BookOpen, Globe, Star, Download, Upload,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import { PageGuidance } from "@/components/page-guidance";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
+import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -250,6 +251,101 @@ function NextStepBanner() {
   );
 }
 
+function PostWizardPanel() {
+  const { data: authData } = useQuery({ queryKey: ["/api/auth/me"] });
+  const company = (authData as any)?.company;
+  const activation = useActivationState();
+
+  const isV3Completer =
+    company?.onboardingVersion === 3 &&
+    company?.onboardingComplete === true;
+
+  if (!isV3Completer) return null;
+  if (activation.isLoading) return null;
+  if (activation.activationComplete) return null;
+
+  type NextAction = {
+    icon: any;
+    title: string;
+    desc: string;
+    href: string;
+    testId: string;
+    highlighted?: boolean;
+  };
+  const NEXT_ACTIONS: NextAction[] = [
+    {
+      icon: TrendingUp,
+      title: "Enter more data",
+      desc: "Add figures for more metrics to build a fuller picture.",
+      href: "/data-entry",
+      testId: "post-wizard-action-data",
+    },
+    {
+      icon: Upload,
+      title: "Upload proof",
+      desc: "Attach invoices or certificates to back up your figures.",
+      href: "/evidence",
+      testId: "post-wizard-action-evidence",
+    },
+    {
+      icon: FileText,
+      title: "Generate your first report",
+      desc: "Create a baseline report to share with customers or investors.",
+      href: "/reports",
+      testId: "post-wizard-action-report",
+      highlighted: true,
+    },
+    {
+      icon: ClipboardList,
+      title: "Create your first policy",
+      desc: "Set out your commitment with a simple written ESG policy.",
+      href: "/policy",
+      testId: "post-wizard-action-policy",
+    },
+  ];
+
+  return (
+    <Card className="border-primary/30 bg-primary/5" data-testid="card-post-wizard-panel">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-primary" />
+          Setup complete — here's what to do next
+        </CardTitle>
+        <CardDescription className="text-xs">
+          You've finished the setup. These four steps will take you to your first report.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pb-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {NEXT_ACTIONS.map(action => {
+          const Icon = action.icon;
+          return (
+            <Link key={action.href} href={action.href}>
+              <button
+                type="button"
+                className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:bg-background/60 ${
+                  action.highlighted
+                    ? "border-primary/40 bg-background/50"
+                    : "border-border/60 bg-background/30"
+                }`}
+                data-testid={action.testId}
+              >
+                <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${action.highlighted ? "bg-primary/10" : "bg-muted"}`}>
+                  <Icon className={`w-3.5 h-3.5 ${action.highlighted ? "text-primary" : "text-muted-foreground"}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className={`text-xs font-medium ${action.highlighted ? "text-primary" : "text-foreground"}`}>{action.title}</p>
+                  <p className="text-xs text-muted-foreground leading-snug">{action.desc}</p>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              </button>
+            </Link>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ScoreMethodology({ weightedScore }: { weightedScore: any }) {
   const [open, setOpen] = useState(false);
   if (!weightedScore) return null;
@@ -397,29 +493,13 @@ function DataQualityCard() {
   );
 }
 
-function ConfidencePill({ confidence, label }: { confidence: string; label: string }) {
-  const config: Record<string, { cls: string }> = {
-    score_in_progress: { cls: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400" },
-    draft: { cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
-    provisional: { cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
-    confirmed: { cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
-  };
-  const cls = config[confidence]?.cls || config.draft.cls;
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cls}`} data-testid="badge-score-confidence">
-      {label}
-    </span>
-  );
-}
-
 function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weightedScore: any }) {
   const { data: readiness, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
 
   if (isLoading) return <Skeleton className="h-40 w-full" />;
 
+  const esgStatus: EsgStatusData | undefined = readiness?.esgStatus;
   const confidence = readiness?.scoreConfidence || "score_in_progress";
-  const confidenceLabel = readiness?.scoreConfidenceLabel || "Score in progress";
-  const explanation = readiness?.scoreConfidenceExplanation || "";
   const dataCompleteness = readiness?.dataCompletenessPercent ?? 0;
   const evidenceCoverage = readiness?.evidenceCoveragePercent ?? 0;
   const reportingReady = readiness?.reportingReadiness ?? false;
@@ -439,7 +519,12 @@ function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weig
             ) : (
               <ScoreRing score={esgScore} label="ESG Score" />
             )}
-            <ConfidencePill confidence={confidence} label={confidenceLabel} />
+            <EsgStatusBadge
+              status={esgStatus}
+              size="sm"
+              showTooltip={true}
+              data-testid="badge-score-confidence"
+            />
           </div>
 
           <div className="flex-1 min-w-0 space-y-3">
@@ -896,6 +981,7 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <PostWizardPanel />
       <NextStepBanner />
       <ActivationCard />
 

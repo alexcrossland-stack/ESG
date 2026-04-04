@@ -389,6 +389,7 @@ function classifyRawDataCategory(inputName: string): "environmental" | "social" 
 
 const TOTAL_ONBOARDING_STEPS_V1 = 8;
 const TOTAL_ONBOARDING_STEPS_V2 = 7;
+const TOTAL_ONBOARDING_STEPS_V3 = 5;
 
 const METRIC_KEY_MAP: Record<string, string> = {
   electricity: "Electricity Consumption",
@@ -1348,7 +1349,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { step, path, companyProfile, esgMaturity, selectedModules, selectedMetrics, onboardingAnswers, onboardingVersion, selectedTopics, reportingFrequency } = req.body;
 
       const version = onboardingVersion || 1;
-      const totalSteps = version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1;
+      const totalSteps = version === 3 ? TOTAL_ONBOARDING_STEPS_V3 : version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1;
       const stepNum = typeof step === "number" ? Math.min(Math.max(Math.round(step), 1), totalSteps) : 1;
       const update: any = {
         onboardingStep: stepNum,
@@ -1366,10 +1367,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (companyProfile.industry) update.industry = companyProfile.industry;
         if (companyProfile.businessType) update.businessType = companyProfile.businessType;
         if (companyProfile.employeeCount) update.employeeCount = companyProfile.employeeCount;
-        if (companyProfile.locations) update.locations = companyProfile.locations;
+        if (companyProfile.locations) {
+          const locParsed = parseInt(String(companyProfile.locations), 10);
+          update.locations = isNaN(locParsed) ? 1 : locParsed;
+        }
         if (companyProfile.country) update.country = companyProfile.country;
         if (companyProfile.operationalProfile) update.operationalProfile = companyProfile.operationalProfile;
         if (companyProfile.reportingYearStart) update.reportingYearStart = companyProfile.reportingYearStart;
+        if (typeof companyProfile.hasVehicles === "boolean") update.hasVehicles = companyProfile.hasVehicles;
       }
       if (esgMaturity) update.esgMaturity = esgMaturity;
       if (selectedModules) update.selectedModules = selectedModules;
@@ -1399,11 +1404,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const isQuickStart = path === "quick_start";
       const version = onboardingVersion || 1;
 
+      const totalStepsForVersion = version === 3 ? TOTAL_ONBOARDING_STEPS_V3 : version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1;
+
       const update: any = {
         onboardingComplete: true,
         onboardingCompletedAt: new Date(),
         onboardingProgressPercent: 100,
-        onboardingStep: version === 2 ? TOTAL_ONBOARDING_STEPS_V2 : TOTAL_ONBOARDING_STEPS_V1,
+        onboardingStep: totalStepsForVersion,
         onboardingVersion: version,
         lifecycleState: "active",
       };
@@ -1415,7 +1422,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (companyProfile.industry) update.industry = companyProfile.industry;
         if (companyProfile.businessType) update.businessType = companyProfile.businessType;
         if (companyProfile.employeeCount) update.employeeCount = companyProfile.employeeCount;
-        if (companyProfile.locations) update.locations = companyProfile.locations;
+        if (companyProfile.locations) {
+          const locParsed = parseInt(String(companyProfile.locations), 10);
+          update.locations = isNaN(locParsed) ? 1 : locParsed;
+        }
         if (companyProfile.country) update.country = companyProfile.country;
         if (companyProfile.operationalProfile) update.operationalProfile = companyProfile.operationalProfile;
         if (companyProfile.reportingYearStart) update.reportingYearStart = companyProfile.reportingYearStart;
@@ -1440,7 +1450,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      if (isManual || isQuickStart) {
+      if (isManual || isQuickStart || version === 3) {
         const existingMetrics = await storage.getMetrics(companyId);
         if (existingMetrics.length === 0) {
           await seedDatabase(companyId, userId);
@@ -3267,75 +3277,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/readiness", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const { evaluateEsgStatus } = await import("./esg-status");
       const company = await storage.getCompany(companyId);
-      const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = allMetrics.filter(m => m.enabled);
-      const evidenceFiles = await storage.getEvidenceFiles(companyId);
       const reportRuns = await storage.getReportRuns(companyId);
 
-      // Data completeness: what % of enabled metrics have any value
-      let filledMetrics = 0;
-      let estimatedMetrics = 0;
-      let actualMetrics = 0;
+      const status = await evaluateEsgStatus(companyId);
 
-      for (const metric of enabledMetrics) {
-        const vals = await storage.getMetricValues(metric.id);
-        const latestVal = vals.sort((a, b) => (b.period ?? "").localeCompare(a.period ?? "")).find(v => v.value !== null && v.value !== undefined);
-        if (latestVal) {
-          filledMetrics++;
-          if (latestVal.dataSourceType === "estimated") estimatedMetrics++;
-          else actualMetrics++;
-        }
-      }
-
-      const totalMetrics = enabledMetrics.length;
-      const missingMetrics = totalMetrics - filledMetrics;
-      const dataCompletenessPercent = totalMetrics > 0 ? Math.round((filledMetrics / totalMetrics) * 100) : 0;
-      const actualPercent = totalMetrics > 0 ? Math.round((actualMetrics / totalMetrics) * 100) : 0;
-      const estimatedPercent = totalMetrics > 0 ? Math.round((estimatedMetrics / totalMetrics) * 100) : 0;
-      const missingPercent = totalMetrics > 0 ? Math.round((missingMetrics / totalMetrics) * 100) : 0;
-
-      // Evidence coverage
-      const evidenceLinked = evidenceFiles.filter(e => e.linkedModule === "metric_value" || e.linkedModule === "metrics");
-      const evidenceCoveragePercent = totalMetrics > 0 ? Math.min(100, Math.round((evidenceLinked.length / totalMetrics) * 100)) : 0;
-
-      // Determine score confidence: Draft / Provisional / Confirmed / Score in progress
-      let scoreConfidence: "score_in_progress" | "draft" | "provisional" | "confirmed";
-      let scoreConfidenceLabel: string;
-      let scoreConfidenceExplanation: string;
-
-      if (filledMetrics === 0) {
-        scoreConfidence = "score_in_progress";
-        scoreConfidenceLabel = "Score in progress";
-        scoreConfidenceExplanation = "Add your first data point to see an ESG score.";
-      } else if (estimatedPercent > 50) {
-        scoreConfidence = "draft";
-        scoreConfidenceLabel = "Draft";
-        scoreConfidenceExplanation = "This score is based mainly on estimated data. Replace estimated values with actual data to improve confidence.";
-      } else if (estimatedPercent > 20 || dataCompletenessPercent < 60) {
-        scoreConfidence = "provisional";
-        scoreConfidenceLabel = "Provisional";
-        scoreConfidenceExplanation = "This score is partly based on estimated data. Improve accuracy by replacing estimates with actual figures.";
-      } else {
-        scoreConfidence = "confirmed";
-        scoreConfidenceLabel = "Confirmed";
-        scoreConfidenceExplanation = "Your score is based primarily on actual data and is ready for reporting.";
-      }
-
-      // Reporting readiness: can we generate a report?
-      const minViableThreshold = filledMetrics >= Math.min(3, totalMetrics) || dataCompletenessPercent >= 30;
       const hasGeneratedReport = reportRuns.length > 0;
       const isFirstReport = !hasGeneratedReport;
 
-      // Determine dashboard state
+      const legacyConfidenceMap: Record<string, "score_in_progress" | "draft" | "provisional" | "confirmed"> = {
+        IN_PROGRESS: "score_in_progress",
+        DRAFT: "draft",
+        PROVISIONAL: "provisional",
+        CONFIRMED: "confirmed",
+      };
+      const scoreConfidence = legacyConfidenceMap[status.state];
+      const scoreConfidenceLabel = {
+        IN_PROGRESS: "Score in progress",
+        DRAFT: "Draft",
+        PROVISIONAL: "Provisional",
+        CONFIRMED: "Confirmed",
+      }[status.state];
+
+      const actualMetrics = status.measuredCount;
+      const actualPercent = status.totalMetrics > 0 ? Math.round((actualMetrics / status.totalMetrics) * 100) : 0;
+      const estimatedPercent = status.totalMetrics > 0 ? Math.round((status.estimateCount / status.totalMetrics) * 100) : 0;
+      const missingPercent = status.totalMetrics > 0 ? Math.round((status.missingMetrics / status.totalMetrics) * 100) : 0;
+
       let dashboardState: string;
       if (!company?.onboardingComplete) {
         dashboardState = "no_onboarding";
-      } else if (filledMetrics === 0) {
+      } else if (status.filledMetrics === 0) {
         dashboardState = "onboarding_complete_no_data";
-      } else if (evidenceLinked.length === 0) {
+      } else if (status.evidenceCoverage === 0) {
         dashboardState = "some_data_no_evidence";
-      } else if (!minViableThreshold) {
+      } else if (!status.minViableThresholdMet) {
         dashboardState = "some_data_some_evidence";
       } else if (!hasGeneratedReport) {
         dashboardState = "ready_for_draft_report";
@@ -3343,7 +3320,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         dashboardState = "report_generated";
       }
 
-      // Plain-English summary based on state
       const summaryByState: Record<string, string> = {
         no_onboarding: "Complete your profile setup to unlock your ESG score and reporting.",
         onboarding_complete_no_data: "You're set up. Now add your first data — start with electricity consumption or headcount.",
@@ -3357,22 +3333,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         dashboardState,
         scoreConfidence,
         scoreConfidenceLabel,
-        scoreConfidenceExplanation,
-        dataCompletenessPercent,
+        scoreConfidenceExplanation: status.explanation,
+        dataCompletenessPercent: status.completenessPercentage,
         actualPercent,
         estimatedPercent,
         missingPercent,
-        totalMetrics,
-        filledMetrics,
-        estimatedMetrics,
+        totalMetrics: status.totalMetrics,
+        filledMetrics: status.filledMetrics,
+        estimatedMetrics: status.estimateCount,
         actualMetrics,
-        missingMetrics,
-        evidenceCoveragePercent,
-        reportingReadiness: minViableThreshold,
+        missingMetrics: status.missingMetrics,
+        evidenceCoveragePercent: status.evidenceCoverage,
+        reportingReadiness: status.minViableThresholdMet,
         hasGeneratedReport,
         isFirstReport,
         plainEnglishSummary: summaryByState[dashboardState] || "",
+        esgStatus: status,
       });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.get("/api/esg-status", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const { evaluateEsgStatus } = await import("./esg-status");
+      const status = await evaluateEsgStatus(companyId);
+      res.json(status);
     } catch (e: any) {
       sendServerError(res, e);
     }

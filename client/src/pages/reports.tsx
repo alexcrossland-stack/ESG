@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
+import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { resolveApiError } from "@/lib/errorResolver";
@@ -1763,8 +1764,12 @@ export default function Reports() {
                   <span>Evidence: {readiness.evidenceCoveragePercent ?? 0}%</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="font-medium capitalize">{readiness.scoreConfidenceLabel || readiness.scoreConfidence}</span>
+                  <EsgStatusBadge
+                    status={readiness?.esgStatus as EsgStatusData}
+                    size="sm"
+                    showTooltip={true}
+                    data-testid="badge-report-esg-status"
+                  />
                 </div>
               </div>
             </div>
@@ -1773,14 +1778,14 @@ export default function Reports() {
                 <Info className="w-3.5 h-3.5 shrink-0" />
                 <span>
                   {readiness.estimatedPercent}% of your metrics are estimated. Your report will be labelled as a{" "}
-                  <strong>{readiness.isFirstReport ? "Draft ESG Baseline" : "Draft ESG Summary"}</strong> until more actual data is added.
+                  <strong>Draft Report</strong> until more actual data is added.
                 </span>
               </div>
             )}
             {readiness.isFirstReport && readiness.reportingReadiness && (
               <div className="mt-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
                 <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>This will generate your <strong>Initial ESG Baseline Report</strong> — a starting point you can share with stakeholders and build on over time.</span>
+                <span>This will generate your <strong>Baseline ESG Report</strong> — a starting point you can share with stakeholders and build on over time.</span>
               </div>
             )}
           </CardContent>
