@@ -985,7 +985,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }).catch(() => {});
     req.session.save((err: Error | null) => {
-      if (err) sendServerError(res, new Error("session error"), "session"); return;
+      if (err) {
+        sendServerError(res, new Error("session error"), "session");
+        return;
+      }
       res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
     });
   }
@@ -1054,7 +1057,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (user.mfaEnabled) {
         (req.session as any).mfaPendingUserId = user.id;
         req.session.save((err) => {
-          if (err) sendServerError(res, new Error("session error"), "session"); return;
+          if (err) {
+            sendServerError(res, new Error("session error"), "session");
+            return;
+          }
           res.json({ mfaRequired: true, userId: user.id });
         });
         return;
@@ -1064,7 +1070,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (mfaPolicy === "all_required" || (mfaPolicy === "admin_required" && (user.role === "admin" || user.role === "super_admin"))) {
         (req.session as any).mfaPendingUserId = user.id;
         req.session.save((err) => {
-          if (err) sendServerError(res, new Error("session error"), "session"); return;
+          if (err) {
+            sendServerError(res, new Error("session error"), "session");
+            return;
+          }
           res.json({ mfaRequired: true, mfaSetupRequired: true, userId: user.id });
         });
         return;
@@ -10644,7 +10653,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           if (!ex) storage.createUserSession({ userId, companyId: user.companyId, sessionId, ipAddress: clientIpMfa, userAgent: clientUaMfa, deviceSummary: parseUserAgent(clientUaMfa), lastSeenAt: new Date(), expiresAt }).catch(() => {});
         }).catch(() => {});
         return req.session.save((err) => {
-          if (err) sendServerError(res, new Error("session error"), "session"); return;
+          if (err) {
+            sendServerError(res, new Error("session error"), "session");
+            return;
+          }
           res.json({
             backupCodes,
             loggedIn: true,
