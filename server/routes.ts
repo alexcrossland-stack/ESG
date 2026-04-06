@@ -8785,7 +8785,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const search = String(req.query.search || "");
       const page = Math.max(1, parseInt(String(req.query.page || "1"), 10));
       const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || "50"), 10)));
-      const result = await storage.adminListCompanies(search, page, pageSize);
+      const statusFilter = String(req.query.status || "");
+      const planFilter = String(req.query.plan || "");
+      const result = await storage.adminListCompanies(search, page, pageSize, statusFilter, planFilter);
       res.json(result);
     } catch (e: any) {
       sendServerError(res, e);
@@ -8797,7 +8799,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const search = String(req.query.search || "");
       const page = Math.max(1, parseInt(String(req.query.page || "1"), 10));
       const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || "50"), 10)));
-      const result = await storage.adminListUsers(search, page, pageSize);
+      const roleFilter = String(req.query.role || "");
+      const companyStatusFilter = String(req.query.companyStatus || "");
+      const result = await storage.adminListUsers(search, page, pageSize, roleFilter, companyStatusFilter);
       res.json(result);
     } catch (e: any) {
       sendServerError(res, e);

@@ -371,8 +371,8 @@ export interface IStorage {
   getChatMessages(sessionId: string): Promise<ChatMessage[]>;
 
   // Super Admin
-  adminListCompanies(search?: string, page?: number, pageSize?: number): Promise<{ companies: any[]; total: number }>;
-  adminListUsers(search?: string, page?: number, pageSize?: number): Promise<{ users: any[]; total: number }>;
+  adminListCompanies(search?: string, page?: number, pageSize?: number, statusFilter?: string, planFilter?: string): Promise<{ companies: any[]; total: number }>;
+  adminListUsers(search?: string, page?: number, pageSize?: number, roleFilter?: string, companyStatusFilter?: string): Promise<{ users: any[]; total: number }>;
   adminGetCompanyDetail(companyId: string): Promise<any>;
   adminSuspendCompany(companyId: string): Promise<void>;
   adminReactivateCompany(companyId: string): Promise<void>;
@@ -2038,8 +2038,11 @@ export class DatabaseStorage implements IStorage {
       .orderBy(chatMessages.createdAt);
   }
 
-  async adminListCompanies(search = "", page = 1, pageSize = 50) {
+  async adminListCompanies(search = "", page = 1, pageSize = 50, statusFilter = "", planFilter = "") {
     const offset = (page - 1) * pageSize;
+    const searchCond = search ? sql`AND c.name ILIKE ${`%${search}%`}` : sql``;
+    const statusCond = statusFilter ? sql`AND c.status = ${statusFilter}` : sql``;
+    const planCond = planFilter ? sql`AND c.plan_tier = ${planFilter}` : sql``;
     const companiesResult = await db.execute(sql`
       SELECT
         c.id, c.name, c.industry, c.country, c.plan_tier, c.status,
@@ -2047,36 +2050,42 @@ export class DatabaseStorage implements IStorage {
         (SELECT COUNT(*)::int FROM users u WHERE u.company_id = c.id) AS user_count,
         (SELECT COUNT(*)::int FROM esg_policies p WHERE p.company_id = c.id) AS policy_count,
         (SELECT COUNT(*)::int FROM metrics m WHERE m.company_id = c.id) AS metric_count,
-        (SELECT COUNT(*)::int FROM report_runs r WHERE r.company_id = c.id) AS report_count
+        (SELECT COUNT(*)::int FROM report_runs r WHERE r.company_id = c.id) AS report_count,
+        (SELECT saa.action FROM super_admin_actions saa WHERE saa.target_company_id = c.id ORDER BY saa.created_at DESC LIMIT 1) AS last_admin_action,
+        (SELECT saa.created_at FROM super_admin_actions saa WHERE saa.target_company_id = c.id ORDER BY saa.created_at DESC LIMIT 1) AS last_action_at
       FROM companies c
-      WHERE (${search} = '' OR c.name ILIKE ${'%' + search + '%'})
+      WHERE 1=1 ${searchCond} ${statusCond} ${planCond}
       ORDER BY c.created_at DESC
       LIMIT ${pageSize} OFFSET ${offset}
     `);
     const countResult = await db.execute(sql`
       SELECT COUNT(*)::int AS total FROM companies c
-      WHERE (${search} = '' OR c.name ILIKE ${'%' + search + '%'})
+      WHERE 1=1 ${searchCond} ${statusCond} ${planCond}
     `);
     const rows = (companiesResult as any).rows ?? [];
     const countRows = (countResult as any).rows ?? [];
     return { companies: rows as any[], total: (countRows[0]?.total ?? 0) as number };
   }
 
-  async adminListUsers(search = "", page = 1, pageSize = 50) {
+  async adminListUsers(search = "", page = 1, pageSize = 50, roleFilter = "", companyStatusFilter = "") {
     const offset = (page - 1) * pageSize;
+    const searchCond = search ? sql`AND (u.email ILIKE ${`%${search}%`} OR u.username ILIKE ${`%${search}%`})` : sql``;
+    const roleCond = roleFilter ? sql`AND u.role = ${roleFilter}` : sql``;
+    const companyStatusCond = companyStatusFilter ? sql`AND c.status = ${companyStatusFilter}` : sql``;
     const usersResult = await db.execute(sql`
       SELECT
         u.id, u.username, u.email, u.role, u.created_at,
         c.id AS company_id, c.name AS company_name, c.status AS company_status
       FROM users u
       LEFT JOIN companies c ON c.id = u.company_id
-      WHERE (${search} = '' OR u.email ILIKE ${'%' + search + '%'} OR u.username ILIKE ${'%' + search + '%'})
+      WHERE 1=1 ${searchCond} ${roleCond} ${companyStatusCond}
       ORDER BY u.created_at DESC
       LIMIT ${pageSize} OFFSET ${offset}
     `);
     const countResult = await db.execute(sql`
       SELECT COUNT(*)::int AS total FROM users u
-      WHERE (${search} = '' OR u.email ILIKE ${'%' + search + '%'} OR u.username ILIKE ${'%' + search + '%'})
+      LEFT JOIN companies c ON c.id = u.company_id
+      WHERE 1=1 ${searchCond} ${roleCond} ${companyStatusCond}
     `);
     const rows = (usersResult as any).rows ?? [];
     const countRows = (countResult as any).rows ?? [];

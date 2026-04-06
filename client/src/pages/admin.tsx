@@ -19,7 +19,7 @@ import {
   Building2, Users, CreditCard, AlertTriangle, Search, Eye, LogIn,
   ShieldOff, ShieldCheck, ChevronLeft, ChevronRight, RefreshCw,
   TrendingUp, Activity, CheckCircle, XCircle, Clock, FileText,
-  DollarSign, ExternalLink, Crown, Shield, Key, Gift, Trash2, Archive,
+  DollarSign, ExternalLink, Crown, Shield, Key, Gift, Trash2, Archive, UserX,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,6 +75,8 @@ function JobStatusBadge({ status }: { status: string }) {
 function CompaniesTable() {
   const { isSuperAdmin } = usePermissions();
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [planFilter, setPlanFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "reactivate" | "impersonate" | "archive"; company: any } | null>(null);
   const [deleteCompanyDialog, setDeleteCompanyDialog] = useState<any | null>(null);
@@ -83,10 +85,13 @@ function CompaniesTable() {
   const [, navigate] = useLocation();
   const PAGE_SIZE = 50;
 
-  const { data, isLoading, refetch } = useQuery<{ companies: any[]; total: number }>({
-    queryKey: ["/api/admin/companies", search, page],
+  const statusParam = statusFilter === "all" ? "" : statusFilter;
+  const planParam = planFilter === "all" ? "" : planFilter;
+
+  const { data, isLoading, isFetching, refetch } = useQuery<{ companies: any[]; total: number }>({
+    queryKey: ["/api/admin/companies", search, page, statusFilter, planFilter],
     queryFn: () =>
-      fetch(`/api/admin/companies?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}`, { credentials: "include" })
+      fetch(`/api/admin/companies?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}&status=${statusParam}&plan=${planParam}`, { credentials: "include" })
         .then(r => r.json()),
   });
 
@@ -145,19 +150,40 @@ function CompaniesTable() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input className="pl-9" placeholder="Search companies…" value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }} data-testid="input-company-search" />
         </div>
+        <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-[140px]" data-testid="select-company-status-filter">
+            <SelectValue placeholder="All statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="suspended">Suspended</SelectItem>
+            <SelectItem value="archived">Archived</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={planFilter} onValueChange={v => { setPlanFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-[120px]" data-testid="select-company-plan-filter">
+            <SelectValue placeholder="All plans" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All plans</SelectItem>
+            <SelectItem value="free">Free</SelectItem>
+            <SelectItem value="pro">Pro</SelectItem>
+          </SelectContent>
+        </Select>
         <Button variant="ghost" size="icon" onClick={() => refetch()} data-testid="button-refresh-companies">
           <RefreshCw className="w-4 h-4" />
         </Button>
         <span className="text-sm text-muted-foreground">{total} companies</span>
       </div>
 
-      {isLoading ? (
+      {(isLoading || (isFetching && !data)) ? (
         <div className="text-center py-8 text-muted-foreground text-sm">Loading…</div>
       ) : (
         <div className="rounded-md border overflow-hidden">
@@ -170,6 +196,7 @@ function CompaniesTable() {
                 <th className="text-left px-4 py-3 font-medium">Status</th>
                 <th className="text-left px-4 py-3 font-medium">Users</th>
                 <th className="text-left px-4 py-3 font-medium">Created</th>
+                <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Last Action</th>
                 {isSuperAdmin && (
                   <th className="text-right px-4 py-3 font-medium whitespace-nowrap w-[220px]">Actions</th>
                 )}
@@ -189,6 +216,16 @@ function CompaniesTable() {
                   <td className="px-4 py-3">{c.user_count ?? 0}</td>
                   <td className="px-4 py-3 text-muted-foreground text-xs">
                     {c.created_at ? formatDistanceToNow(new Date(c.created_at), { addSuffix: true }) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-xs" data-testid={`last-action-${c.id}`}>
+                    {c.last_admin_action ? (
+                      <div className="space-y-0.5">
+                        <div className="font-medium text-foreground capitalize">{String(c.last_admin_action).replace(/_/g, " ")}</div>
+                        <div className="text-muted-foreground">{c.last_action_at ? formatDistanceToNow(new Date(c.last_action_at), { addSuffix: true }) : ""}</div>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   {isSuperAdmin && (
                     <td className="px-4 py-3 whitespace-nowrap">
@@ -226,7 +263,7 @@ function CompaniesTable() {
                 </tr>
               ))}
               {companies.length === 0 && (
-                <tr><td colSpan={isSuperAdmin ? 7 : 6} className="text-center py-8 text-muted-foreground">No companies found</td></tr>
+                <tr><td colSpan={isSuperAdmin ? 8 : 7} className="text-center py-8 text-muted-foreground">No companies found</td></tr>
               )}
             </tbody>
           </table>
@@ -328,16 +365,22 @@ function CompaniesTable() {
 function UsersTable() {
   const { isSuperAdmin } = usePermissions();
   const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [companyStatusFilter, setCompanyStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [deleteUserDialog, setDeleteUserDialog] = useState<any | null>(null);
   const [deleteUserInput, setDeleteUserInput] = useState("");
+  const [deactivateUserDialog, setDeactivateUserDialog] = useState<any | null>(null);
   const PAGE_SIZE = 50;
   const { toast } = useToast();
 
-  const { data, isLoading, refetch } = useQuery<{ users: any[]; total: number }>({
-    queryKey: ["/api/admin/users", search, page],
+  const roleParam = roleFilter === "all" ? "" : roleFilter;
+  const companyStatusParam = companyStatusFilter === "all" ? "" : companyStatusFilter;
+
+  const { data, isLoading, isFetching, refetch } = useQuery<{ users: any[]; total: number }>({
+    queryKey: ["/api/admin/users", search, page, roleFilter, companyStatusFilter],
     queryFn: () =>
-      fetch(`/api/admin/users?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}`, { credentials: "include" })
+      fetch(`/api/admin/users?search=${encodeURIComponent(search)}&page=${page}&pageSize=${PAGE_SIZE}&role=${roleParam}&companyStatus=${companyStatusParam}`, { credentials: "include" })
         .then(r => r.json()),
   });
 
@@ -354,25 +397,60 @@ function UsersTable() {
     onError: (e: any) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
+  const deactivateUserMut = useMutation({
+    mutationFn: (userId: string) => apiRequest("POST", `/api/admin/security/containment/disable-user/${userId}`, {}),
+    onSuccess: () => {
+      toast({ title: "User deactivated", description: "The user account has been disabled. They will not be able to log in." });
+      setDeactivateUserDialog(null);
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+    },
+    onError: (e: any) => toast({ title: "Deactivation failed", description: e.message, variant: "destructive" }),
+  });
+
   const usersList = data?.users ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input className="pl-9" placeholder="Search by email or username…" value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }} data-testid="input-user-search" />
         </div>
+        <Select value={roleFilter} onValueChange={v => { setRoleFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-[140px]" data-testid="select-user-role-filter">
+            <SelectValue placeholder="All roles" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All roles</SelectItem>
+            <SelectItem value="admin">Admin</SelectItem>
+            <SelectItem value="editor">Editor</SelectItem>
+            <SelectItem value="contributor">Contributor</SelectItem>
+            <SelectItem value="viewer">Viewer</SelectItem>
+            <SelectItem value="super_admin">Super admin</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={companyStatusFilter} onValueChange={v => { setCompanyStatusFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-[160px]" data-testid="select-user-company-status-filter">
+            <SelectValue placeholder="All company statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All company statuses</SelectItem>
+            <SelectItem value="active">Company active</SelectItem>
+            <SelectItem value="suspended">Company suspended</SelectItem>
+            <SelectItem value="archived">Company archived</SelectItem>
+          </SelectContent>
+        </Select>
         <Button variant="ghost" size="icon" onClick={() => refetch()} data-testid="button-refresh-users">
           <RefreshCw className="w-4 h-4" />
         </Button>
         <span className="text-sm text-muted-foreground">{total} users</span>
       </div>
 
-      {isLoading ? (
+      {(isLoading || (isFetching && !data)) ? (
         <div className="text-center py-8 text-muted-foreground text-sm">Loading…</div>
       ) : (
         <div className="rounded-md border overflow-hidden">
@@ -409,12 +487,22 @@ function UsersTable() {
                   </td>
                   {isSuperAdmin && (
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <div className="flex items-center justify-end min-w-[56px]">
+                      <div className="flex items-center justify-end gap-1 min-w-[90px]">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeactivateUserDialog(u)}
+                          data-testid={`button-deactivate-user-${u.id}`}
+                          title="Deactivate (disable login)"
+                        >
+                          <UserX className="w-3.5 h-3.5 text-amber-600" />
+                        </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => { setDeleteUserDialog(u); setDeleteUserInput(""); }}
                           data-testid={`button-delete-user-${u.id}`}
+                          title="Delete and anonymise"
                         >
                           <Trash2 className="w-3.5 h-3.5 text-destructive" />
                         </Button>
@@ -444,6 +532,33 @@ function UsersTable() {
           </div>
         </div>
       )}
+
+      <Dialog open={!!deactivateUserDialog} onOpenChange={(open) => { if (!open) setDeactivateUserDialog(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Deactivate user account</DialogTitle>
+            <DialogDescription>
+              This will immediately disable the user's login. Their data will remain intact. A super admin can re-enable the account by resetting the password.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+            You are about to deactivate <strong>{deactivateUserDialog?.email ?? deactivateUserDialog?.username}</strong>.
+            They will not be able to sign in until the account is re-enabled.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeactivateUserDialog(null)}>Cancel</Button>
+            <Button
+              variant="default"
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => deactivateUserDialog && deactivateUserMut.mutate(deactivateUserDialog.id)}
+              disabled={deactivateUserMut.isPending}
+              data-testid="button-confirm-deactivate-user"
+            >
+              {deactivateUserMut.isPending ? "Deactivating…" : "Deactivate account"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!deleteUserDialog} onOpenChange={(open) => { if (!open) { setDeleteUserDialog(null); setDeleteUserInput(""); } }}>
         <DialogContent>
