@@ -2,7 +2,7 @@ import { Resend } from "resend";
 import crypto from "crypto";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-const FROM_ADDRESS = process.env.EMAIL_FROM || "ESG Manager <noreply@esgmanager.app>";
+const FROM_ADDRESS = process.env.EMAIL_FROM;
 const BASE_URL = process.env.APP_BASE_URL || "https://esgmanager.app";
 
 export interface SendEmailOptions {
@@ -16,6 +16,10 @@ export async function sendEmail(options: SendEmailOptions): Promise<{ success: b
   if (!resend) {
     console.warn("[Email] RESEND_API_KEY not set — email skipped:", options.subject, "->", options.to);
     return { success: false, error: "Email service not configured" };
+  }
+  if (!FROM_ADDRESS) {
+    console.warn("[Email] EMAIL_FROM not set — email skipped:", options.subject, "->", options.to);
+    return { success: false, error: "EMAIL_FROM is not configured" };
   }
   try {
     const response = await resend.emails.send({
