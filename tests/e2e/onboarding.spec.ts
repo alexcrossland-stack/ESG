@@ -40,4 +40,27 @@ test.describe("Onboarding flow", () => {
     });
     expect(stepRes.status()).not.toBe(500);
   });
+
+  test("onboarding step accepts current employee range values", async ({ request }) => {
+    const { tenantA } = readSeedInfo();
+
+    const stepRes = await request.put("/api/onboarding/step", {
+      data: {
+        step: 1,
+        path: "/onboarding",
+        companyProfile: {
+          name: "Tenant A Co",
+          industry: "Technology",
+          employeeCount: "11-50",
+          country: "United Kingdom",
+          locations: "1",
+        },
+      },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+
+    expect(stepRes.status()).toBe(200);
+    const body = await stepRes.json();
+    expect(body.employeeCount).toBe(50);
+  });
 });

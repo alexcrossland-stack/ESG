@@ -152,6 +152,44 @@ function sendServerError(res: Response, error: unknown, context?: string): void 
   res.status(500).json({ error: "An unexpected error occurred.", code: "INTERNAL_ERROR" });
 }
 
+function parseEmployeeCountInput(value: unknown): { ok: true; value: number } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") {
+    return { ok: false, error: "Employee count is required" };
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return { ok: true, value: Math.max(0, Math.round(value)) };
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return { ok: false, error: "Employee count is required" };
+  }
+
+  const rangeMap: Record<string, number> = {
+    "1-10": 10,
+    "11-50": 50,
+    "51-200": 200,
+    "51-250": 250,
+    "201-500": 500,
+    "251-1000": 1000,
+    "501-1000": 1000,
+    "1001-5000": 5000,
+    "5001+": 5001,
+  };
+
+  if (rangeMap[raw] !== undefined) {
+    return { ok: true, value: rangeMap[raw] };
+  }
+
+  const numeric = parseInt(raw, 10);
+  if (!Number.isNaN(numeric)) {
+    return { ok: true, value: Math.max(0, numeric) };
+  }
+
+  return { ok: false, error: "Invalid employee count. Use a numeric value or a supported range such as 1-10 or 11-50." };
+}
+
 async function requireAuth(req: Request, res: Response, next: Function) {
   const auth = resolveAuth(req);
   if (!auth) {
@@ -1385,7 +1423,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (companyProfile.name) update.name = companyProfile.name;
         if (companyProfile.industry) update.industry = companyProfile.industry;
         if (companyProfile.businessType) update.businessType = companyProfile.businessType;
-        if (companyProfile.employeeCount) update.employeeCount = companyProfile.employeeCount;
+        if (companyProfile.employeeCount !== undefined) {
+          const parsedEmployeeCount = parseEmployeeCountInput(companyProfile.employeeCount);
+          if (!parsedEmployeeCount.ok) {
+            return res.status(400).json({ error: parsedEmployeeCount.error, code: "INVALID_EMPLOYEE_COUNT" });
+          }
+          update.employeeCount = parsedEmployeeCount.value;
+        }
         if (companyProfile.locations) {
           const locParsed = parseInt(String(companyProfile.locations), 10);
           update.locations = isNaN(locParsed) ? 1 : locParsed;
@@ -1440,7 +1484,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (companyProfile.name) update.name = companyProfile.name;
         if (companyProfile.industry) update.industry = companyProfile.industry;
         if (companyProfile.businessType) update.businessType = companyProfile.businessType;
-        if (companyProfile.employeeCount) update.employeeCount = companyProfile.employeeCount;
+        if (companyProfile.employeeCount !== undefined) {
+          const parsedEmployeeCount = parseEmployeeCountInput(companyProfile.employeeCount);
+          if (!parsedEmployeeCount.ok) {
+            return res.status(400).json({ error: parsedEmployeeCount.error, code: "INVALID_EMPLOYEE_COUNT" });
+          }
+          update.employeeCount = parsedEmployeeCount.value;
+        }
         if (companyProfile.locations) {
           const locParsed = parseInt(String(companyProfile.locations), 10);
           update.locations = isNaN(locParsed) ? 1 : locParsed;
