@@ -81,6 +81,7 @@ import {
   accessGrants,
   type AccessGrant, type InsertAccessGrant,
 } from "@shared/schema";
+import { isPlatformSuperAdmin } from "./permissions";
 
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -2133,6 +2134,17 @@ export class DatabaseStorage implements IStorage {
       if (!company) {
         throw storageError(404, "Company not found");
       }
+      const now = new Date();
+      const companyUsers = await tx.select({ id: users.id }).from(users).where(eq(users.companyId, companyId));
+      const companyUserIds = companyUsers.map((user) => user.id);
+      if (companyUserIds.length > 0) {
+        await tx.update(userSessions)
+          .set({ revokedAt: now })
+          .where(and(inArray(userSessions.userId, companyUserIds), isNull(userSessions.revokedAt)));
+      }
+      await tx.update(accessGrants)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(accessGrants.companyId, companyId), isNull(accessGrants.revokedAt)));
       const [updated] = await tx.update(companies).set({
         status: "archived",
         lifecycleState: "archived",
@@ -2199,11 +2211,24 @@ export class DatabaseStorage implements IStorage {
       if (!user) {
         throw storageError(404, "User not found");
       }
+      const targetIsPlatformSuperAdmin = isPlatformSuperAdmin(user);
+      if (targetIsPlatformSuperAdmin) {
+        const result = await tx.execute(sql`
+          SELECT COUNT(*)::int AS count
+          FROM users
+          WHERE anonymised_at IS NULL
+            AND role = 'super_admin'
+        `);
+        const remaining = Number((result as any).rows?.[0]?.count ?? 0);
+        if (remaining <= 1) {
+          throw storageError(400, "Cannot delete the last remaining super admin");
+        }
+      }
       if (user.id === currentSuperAdminUserId) {
         throw storageError(400, "You cannot delete your own super admin account");
       }
 
-      if (user.companyId && (user.role === "admin" || user.role === "super_admin")) {
+      if (user.companyId && (user.role === "admin" || isPlatformSuperAdmin(user))) {
         const alternateAdmins = await tx.select({ id: users.id })
           .from(users)
           .where(and(
@@ -2214,7 +2239,7 @@ export class DatabaseStorage implements IStorage {
           ));
 
         if (alternateAdmins.length === 0) {
-          throw storageError(409, "Cannot delete the only admin for this company");
+          throw storageError(400, "Cannot delete the only admin for this company");
         }
       }
 

@@ -23,6 +23,10 @@ export type CompanyRole =
   | "portfolio_owner"
   | "super_admin";
 
+export type PlatformSuperAdminLike = {
+  role?: string | null;
+} | null | undefined;
+
 export type ProvisioningAction =
   // Company management
   | "create_company"
@@ -157,6 +161,10 @@ export function getAllowedActions(role: string | undefined): ProvisioningAction[
   if (role === "super_admin") return PROVISIONING_PERMISSIONS.super_admin;
   const normalizedRole = (role === "editor" ? "contributor" : role) as CompanyRole;
   return PROVISIONING_PERMISSIONS[normalizedRole] ?? [];
+}
+
+export function isPlatformSuperAdmin(user: PlatformSuperAdminLike): boolean {
+  return !!user && user.role === "super_admin";
 }
 
 /**

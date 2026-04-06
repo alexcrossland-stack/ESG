@@ -13,7 +13,7 @@ import {
   users, type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
-import { hasProvisioningPermission, type ProvisioningAction } from "./permissions";
+import { hasProvisioningPermission, isPlatformSuperAdmin, type ProvisioningAction } from "./permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -235,7 +235,7 @@ async function requireAuth(req: Request, res: Response, next: Function) {
     }
 
     const user = await storage.getUser(auth.userId);
-    if (user && user.role !== "super_admin" && auth.companyId) {
+    if (user && !isPlatformSuperAdmin(user) && auth.companyId) {
       const companyStatus = await storage.getCompanyStatus(auth.companyId);
       if (companyStatus === "suspended" || companyStatus === "archived" || companyStatus === "deleted") {
         const message = companyStatus === "suspended"
@@ -248,7 +248,7 @@ async function requireAuth(req: Request, res: Response, next: Function) {
     }
     const consentExemptPaths = ["/api/auth/accept-terms", "/api/auth/logout", "/api/auth/me", "/api/auth/mfa/", "/api/auth/sessions", "/api/auth/step-up"];
     const isConsentExempt = consentExemptPaths.some(p => req.path.startsWith(p));
-    if (!isConsentExempt && user && user.role !== "super_admin") {
+    if (!isConsentExempt && user && !isPlatformSuperAdmin(user)) {
       if (user.termsVersionAccepted !== CURRENT_LEGAL_VERSION || user.privacyVersionAccepted !== CURRENT_LEGAL_VERSION) {
         return res.status(451).json({ error: "You must accept the updated terms and privacy policy before continuing.", code: "CONSENT_REQUIRED" });
       }
@@ -326,7 +326,7 @@ function requirePermission(module: PermissionModule) {
   return async (req: Request, res: Response, next: Function) => {
     const userId = (req.session as any).userId;
     const user = await storage.getUser(userId);
-    if (!user || !hasPermission(user.role, module)) {
+    if (!user || (!isPlatformSuperAdmin(user) && !hasPermission(user.role, module))) {
       return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
     }
     return next();
@@ -342,7 +342,7 @@ function requireProvisioningPermission(action: ProvisioningAction) {
   return async (req: Request, res: Response, next: Function) => {
     const userId = (req.session as any).userId;
     const user = await storage.getUser(userId);
-    if (!user || !hasProvisioningPermission(user.role, action)) {
+    if (!user || (!isPlatformSuperAdmin(user) && !hasProvisioningPermission(user.role, action))) {
       return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
     }
     return next();
@@ -365,7 +365,7 @@ async function requireSuperAdmin(req: Request, res: Response, next: Function) {
   const auth = (req as any)._auth || resolveAuth(req);
   if (!auth) return res.status(401).json({ error: "Not authenticated" });
   const user = await storage.getUser(auth.userId);
-  if (!user || user.role !== "super_admin") {
+  if (!user || !isPlatformSuperAdmin(user)) {
     return res.status(403).json({ error: "Super admin access required" });
   }
   (req as any)._auth = auth;
@@ -919,8 +919,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }).catch(() => {});
       req.session.save((err) => {
-        if (err) sendServerError(res, new Error("session error"), "session"); return;
-        res.json({ user: { ...user, password: undefined }, company, token });
+        if (err) {
+          sendServerError(res, new Error("session error"), "session");
+          return;
+        }
+        return res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
       sendServerError(res, e);
@@ -1036,7 +1039,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
 
-      if (user.role !== "super_admin" && user.companyId) {
+      if (!isPlatformSuperAdmin(user) && user.companyId) {
         const status = await storage.getCompanyStatus(user.companyId);
         if (status === "suspended") {
           await storage.createAuditLog({
@@ -1067,7 +1070,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const mfaPolicy = company?.mfaPolicy ?? "optional";
-      if (mfaPolicy === "all_required" || (mfaPolicy === "admin_required" && (user.role === "admin" || user.role === "super_admin"))) {
+      if (mfaPolicy === "all_required" || (mfaPolicy === "admin_required" && (user.role === "admin" || isPlatformSuperAdmin(user)))) {
         (req.session as any).mfaPendingUserId = user.id;
         req.session.save((err) => {
           if (err) {
@@ -1234,7 +1237,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!user) return res.status(401).json({ error: "User not found" });
     const sessionData = req.session as any;
     const isActiveImpersonation = !!(sessionData.isImpersonating && sessionData.originalSuperAdminUserId);
-    if (!isActiveImpersonation && user.role !== "super_admin" && user.companyId) {
+    if (!isActiveImpersonation && !isPlatformSuperAdmin(user) && user.companyId) {
       try {
         const status = await storage.getCompanyStatus(user.companyId);
         if (status === "suspended") {
@@ -1626,7 +1629,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       let canAccess = false;
-      if (user.role === "super_admin") {
+      if (isPlatformSuperAdmin(user)) {
         canAccess = true;
       } else if (requestedCompanyId === user.companyId) {
         canAccess = true;
@@ -5382,8 +5385,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!targetUser || targetUser.companyId !== companyId) {
         return res.status(404).json({ error: "User not found" });
       }
-      if (targetUser.role === "super_admin") {
-        const superAdminCountResult = await db.execute(sql`SELECT COUNT(*)::int AS total FROM users WHERE role = 'super_admin'`);
+      if (isPlatformSuperAdmin(targetUser)) {
+        const superAdminCountResult = await db.execute(sql`
+          SELECT COUNT(*)::int AS total
+          FROM users
+          WHERE anonymised_at IS NULL
+            AND role = 'super_admin'
+        `);
         const superAdminCount = ((superAdminCountResult as any).rows ?? [])[0]?.total ?? 0;
         if (superAdminCount <= 1) {
           return res.status(400).json({ error: "Cannot demote the last super admin. Promote another user to super_admin first." });
@@ -5404,7 +5412,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ipAddress: getClientIp(req),
         userAgent: req.headers["user-agent"],
       });
-      if (role === "admin" || role === "super_admin" || previousRole === "admin" || previousRole === "super_admin") {
+      if (role === "admin" || role === "super_admin" || previousRole === "admin" || previousRole === "super_admin" || isPlatformSuperAdmin(targetUser)) {
         evaluateSecurityEvent({ action: SECURITY_EVENTS.USER_ROLE_CHANGED, userId, companyId, ipAddress: getClientIp(req), details: { previousRole, newRole: role, targetUserId: req.params.id } }).catch(() => {});
       }
       if (updated) {
@@ -5690,7 +5698,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
-      const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+      const isAdmin = user?.role === "admin" || isPlatformSuperAdmin(user);
       const existing = await storage.getEvidenceRequests(companyId);
       const current = existing.find(r => r.id === req.params.id);
       if (!current) return res.status(404).json({ error: "Evidence request not found" });
@@ -9335,6 +9343,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const adminUser = (req as any)._superAdmin;
       const { companyId } = z.object({ companyId: z.string().uuid() }).parse(req.params);
       const company = await storage.adminArchiveCompany(companyId);
+      await storage.createAuditLog({
+        companyId,
+        userId: adminUser.id,
+        actorType: "super_admin",
+        action: "admin_archive_company",
+        entityType: "company",
+        entityId: companyId,
+        details: { companyName: company.name, status: company.status },
+      });
       await storage.createSuperAdminAction({
         adminUserId: adminUser.id,
         action: "archive_company",
@@ -9354,6 +9371,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const adminUser = (req as any)._superAdmin;
       const { companyId } = z.object({ companyId: z.string().uuid() }).parse(req.params);
       const company = await storage.adminDeleteCompany(companyId);
+      await storage.createAuditLog({
+        companyId,
+        userId: adminUser.id,
+        actorType: "super_admin",
+        action: "admin_delete_company",
+        entityType: "company",
+        entityId: companyId,
+        details: {
+          deletionMode: "soft_delete",
+          companyName: company.name,
+          status: company.status,
+        },
+      });
       await storage.createSuperAdminAction({
         adminUserId: adminUser.id,
         action: "delete_company",
@@ -9382,6 +9412,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const adminUser = (req as any)._superAdmin;
       const { userId } = z.object({ userId: z.string().uuid() }).parse(req.params);
       const deletedUser = await storage.adminDeleteUser(userId, adminUser.id);
+      await storage.createAuditLog({
+        companyId: deletedUser.companyId || undefined,
+        userId: adminUser.id,
+        actorType: "super_admin",
+        action: "admin_delete_user",
+        entityType: "user",
+        entityId: userId,
+        details: {
+          previousCompanyId: deletedUser.companyId,
+          anonymisedAt: deletedUser.anonymisedAt,
+          wasSuperAdmin: isPlatformSuperAdmin(deletedUser),
+        },
+      });
       await storage.createSuperAdminAction({
         adminUserId: adminUser.id,
         action: "delete_user",
@@ -9414,7 +9457,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(400).json({ error: "No admin user found in this company to impersonate" });
       }
       const targetUser = adminUsers[0];
-      if (targetUser.role === "super_admin") {
+      if (isPlatformSuperAdmin(targetUser)) {
         return res.status(400).json({ error: "Cannot impersonate a super admin user" });
       }
 
@@ -9467,7 +9510,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const sessionRole = session.originalSuperAdminRole;
       const originalAdmin = await storage.getUser(originalAdminUserId);
-      if (!originalAdmin || originalAdmin.role !== "super_admin") {
+      if (!originalAdmin || !isPlatformSuperAdmin(originalAdmin)) {
         session.isImpersonating = false;
         return res.status(403).json({ error: "Cannot restore session: original user is no longer a super admin" });
       }
@@ -9506,7 +9549,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.json({ isImpersonating: false });
       }
       const originalAdmin = await storage.getUser(session.originalSuperAdminUserId);
-      if (!originalAdmin || originalAdmin.role !== "super_admin") {
+      if (!originalAdmin || !isPlatformSuperAdmin(originalAdmin)) {
         session.isImpersonating = false;
         return res.json({ isImpersonating: false });
       }
@@ -11597,7 +11640,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const exportScope = scope === "company" ? "company" : "personal";
       if (exportScope === "company") {
         const user = await storage.getUser(userId);
-        if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
+        if (!user || (user.role !== "admin" && !isPlatformSuperAdmin(user))) {
           return res.status(403).json({ error: "Only admins can request company-wide exports" });
         }
       }
@@ -11633,7 +11676,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(403).json({ error: "Access denied" });
       }
       const requester = await storage.getUser(userId);
-      if (job.requestedBy !== userId && requester?.role !== "admin" && requester?.role !== "super_admin") {
+      if (job.requestedBy !== userId && requester?.role !== "admin" && !isPlatformSuperAdmin(requester)) {
         return res.status(403).json({ error: "Access denied" });
       }
       res.json({
@@ -11661,7 +11704,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(403).json({ error: "Access denied" });
       }
       const user = await storage.getUser(userId);
-      if (job.requestedBy !== userId && user?.role !== "admin" && user?.role !== "super_admin") {
+      if (job.requestedBy !== userId && user?.role !== "admin" && !isPlatformSuperAdmin(user)) {
         return res.status(403).json({ error: "Access denied" });
       }
       if (job.status !== "completed" || job.downloadTokenUsed) {
@@ -11706,7 +11749,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { userId, companyId } = (req as any)._auth;
       const user = await storage.getUser(userId);
       const jobs = await storage.getDataExportJobs(companyId);
-      const filtered = (user?.role === "admin" || user?.role === "super_admin")
+      const filtered = (user?.role === "admin" || isPlatformSuperAdmin(user))
         ? jobs
         : jobs.filter(j => j.requestedBy === userId);
       res.json(filtered.map(j => ({
@@ -11950,7 +11993,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
       }
 
-      if (callerUser.role !== "admin" && callerUser.role !== "super_admin" && callerUser.role !== "portfolio_owner") {
+      if (callerUser.role !== "admin" && !isPlatformSuperAdmin(callerUser) && callerUser.role !== "portfolio_owner") {
         return res.status(403).json({ error: "Insufficient permissions to create a company" });
       }
 
@@ -11962,7 +12005,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       // Update the session companyId so subsequent API calls immediately use the new company context.
       // super_admin does not switch company context (they operate across all companies), but
       // admin and portfolio_owner callers are promoted to admin of the new company and should switch.
-      if (callerUser.role !== "super_admin") {
+      if (!isPlatformSuperAdmin(callerUser)) {
         (req.session as any).companyId = result.companyId;
       }
 
@@ -11995,7 +12038,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       // Resource-scope check: super_admin can invite to any company; admins/portfolio_owners
       // can only invite to their own company. Role-level gate (requireProvisioningPermission)
       // already ran, so here we only enforce the target-company ownership constraint.
-      const isSuperAdmin = callerUser.role === "super_admin";
+      const isSuperAdmin = isPlatformSuperAdmin(callerUser);
       const isOwnerOfTargetCompany = callerUser.companyId === targetCompanyId;
       if (!isSuperAdmin && !isOwnerOfTargetCompany) {
         return res.status(403).json({ error: "You can only invite users to your own company" });
@@ -12060,7 +12103,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       // Resource-scope check: super_admin can assign users to any company; admins can only
       // assign users to their own company. Role-level gate already ran above.
-      const isSuperAdmin = callerUser.role === "super_admin";
+      const isSuperAdmin = isPlatformSuperAdmin(callerUser);
       const isOwnerOfTargetCompany = callerUser.companyId === targetCompanyId;
       if (!isSuperAdmin && !isOwnerOfTargetCompany) {
         return res.status(403).json({ error: "You can only assign users to your own company" });
@@ -12133,7 +12176,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const group = await storage.getGroupById(groupId);
       if (!group) return res.status(404).json({ error: "Group not found" });
 
-      if (callerUser.role !== "super_admin") {
+      if (!isPlatformSuperAdmin(callerUser)) {
         const { db: importedDb } = await import("./storage");
         const { userGroupRoles: ugr } = await import("@shared/schema");
         const { eq: eqFn, and: andFn } = await import("drizzle-orm");
@@ -12211,7 +12254,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const access = await resolvePortfolioAccess(user.id, user.role, user.companyId);
-      if (access.groups.length === 0 && user.role !== "super_admin") {
+      if (access.groups.length === 0 && !isPlatformSuperAdmin(user)) {
         return res.status(403).json({ error: "Portfolio access required" });
       }
       res.json(access.groups);
