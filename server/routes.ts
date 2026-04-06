@@ -3029,27 +3029,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // GET /api/dashboard/readiness — combined score and report readiness
-  app.get("/api/dashboard/readiness", requireAuth, async (req, res) => {
-    try {
-      const companyId = (req.session as any).companyId;
-      const { getScoreReadiness } = await import("./score-readiness");
-      const { getReportReadiness } = await import("./report-readiness");
-      const [scoreReadiness, reportReadiness] = await Promise.all([
-        getScoreReadiness(companyId),
-        getReportReadiness(companyId),
-      ]);
-      res.json({ scoreReadiness, reportReadiness });
-    } catch (e: any) {
-      console.error("[api/dashboard/readiness] failed", {
-        companyId: (req.session as any).companyId,
-        error: e?.message,
-        stack: e?.stack,
-      });
-      sendServerError(res, e);
-    }
-  });
-
   // POST /api/data-entries/estimate — returns estimation suggestions only, does NOT persist
   app.post("/api/data-entries/estimate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     if (!featureFlags.estimationEnabled) {
@@ -5350,7 +5329,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         token: plaintext,
       });
       emailPayload.to = email;
-      sendEmail(emailPayload).catch(() => {});
+      const emailResult = await sendEmail(emailPayload);
+      if (!emailResult.success) {
+        return res.status(503).json({
+          error: "Invitation could not be sent right now. Please check email configuration and try again.",
+          code: "EMAIL_SEND_FAILED",
+        });
+      }
 
       auditLog({
         companyId,
@@ -12069,7 +12054,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         token: plaintext,
       });
       emailPayload.to = email;
-      sendEmail(emailPayload).catch(() => {});
+      const emailResult = await sendEmail(emailPayload);
+      if (!emailResult.success) {
+        return res.status(503).json({
+          error: "Invitation could not be sent right now. Please check email configuration and try again.",
+          code: "EMAIL_SEND_FAILED",
+        });
+      }
 
       auditLog({
         companyId: targetCompanyId,

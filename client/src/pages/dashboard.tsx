@@ -842,11 +842,44 @@ function FirstReportMilestone({ onDismiss }: { onDismiss: () => void }) {
 }
 
 function BenchmarkSummaryCard() {
-  const { data: comparison, isLoading } = useQuery<any[]>({
+  const { data: comparison, isLoading, isError, error } = useQuery<any[]>({
     queryKey: ["/api/benchmarks/comparison"],
   });
 
   if (isLoading) return <Skeleton className="h-48" />;
+  if (isError) {
+    const err = error as Error & { code?: string };
+    const isUpgradeBlocked = err?.code === "UPGRADE_REQUIRED" || /pro plan/i.test(err?.message || "");
+
+    return (
+      <Card data-testid="card-benchmark-summary-blocked">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary" />
+            Benchmark Comparison
+          </CardTitle>
+          <CardDescription className="text-xs">
+            {isUpgradeBlocked ? "Available on Pro" : "Temporarily unavailable"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+            {isUpgradeBlocked
+              ? (
+                <>
+                  Benchmarking is available on Pro. Upgrade to compare your ESG performance against SME reference ranges.{" "}
+                  <Link href="/billing" className="underline font-medium">
+                    View plans
+                  </Link>
+                  .
+                </>
+              )
+              : "Benchmark comparison is temporarily unavailable. The rest of your dashboard is still available."}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
   if (!comparison || comparison.length === 0) return null;
 
   const topMetrics = comparison.slice(0, 4);

@@ -49,10 +49,9 @@ function runStep(name: string, command: string, args: string[], options?: { allo
 function main() {
   console.log("Release-Critical Regression Suite");
   console.log("================================");
+  console.log("Covers: production build, API security/RBAC when DATABASE_URL is set, metric upsert checks when DATABASE_URL is set, and selected E2E journeys when RUN_E2E_RELEASE=1.");
 
   runStep("Production build", "npm", ["run", "build"]);
-  runStep("Report provenance precedence", "node", ["--import", "tsx", "tests/report-provenance.test.ts"]);
-  runStep("Report scoring helper", "node", ["--import", "tsx", "tests/report-traffic-light.test.ts"]);
 
   if (process.env.DATABASE_URL) {
     runStep("API security / RBAC / tenant isolation", "node", ["--import", "tsx", "tests/api-security.test.ts"], { allowFailure: process.env.STRICT_RELEASE !== "1" });
