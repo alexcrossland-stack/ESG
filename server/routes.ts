@@ -1154,7 +1154,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         const emailData = buildPasswordResetEmail({ token: plaintext });
         emailData.to = user.email;
-        await sendEmail(emailData);
+        const emailResult = await sendEmail(emailData);
+        if (!emailResult.success) {
+          console.error("[auth/forgot-password] Failed to send password reset email:", emailResult.error || "Unknown email error");
+          return res.status(503).json({
+            code: "EMAIL_SEND_FAILED",
+            error: "Unable to send password reset email right now. Please try again shortly.",
+          });
+        }
       }
       res.json({ ok: true });
     } catch (e: any) {

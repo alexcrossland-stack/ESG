@@ -25,6 +25,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<{ success: b
       html: options.html,
       text: options.text,
     });
+    console.log("[Email] Sent:", options.subject, "->", options.to);
     return { success: true };
   } catch (err: any) {
     console.error("[Email] Send failed:", err.message);

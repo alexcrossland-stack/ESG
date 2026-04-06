@@ -166,14 +166,22 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
-  // ── 12. Password reset request (no 500) ──────────────────────────────────
+  // ── 12. Password reset request returns typed result, not silent success ──
   {
-    const name = "POST /api/auth/forgot-password with valid email returns 200";
+    const name = "POST /api/auth/forgot-password with valid email returns 200 or typed email failure";
     const res = await apiRequest("POST", "/api/auth/forgot-password", {
       email: tenantA.adminEmail,
     });
-    if (res.status >= 500) fail(name, `server error status=${res.status}`);
-    else pass(name, `status=${res.status}`);
+    if (![200, 503].includes(res.status)) {
+      fail(name, `unexpected status=${res.status}`);
+    } else if (res.status === 503) {
+      const body = JSON.parse(res.body) as { code?: string; error?: string };
+      if (body.code !== "EMAIL_SEND_FAILED") fail(name, `code=${body.code}`);
+      else if (!body.error) fail(name, "missing error message");
+      else pass(name, `status=${res.status}`);
+    } else {
+      pass(name, `status=${res.status}`);
+    }
   }
 }
 
