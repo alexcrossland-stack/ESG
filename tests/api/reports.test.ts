@@ -165,6 +165,28 @@ async function run(tenants: SeededTenants): Promise<void> {
       else pass(name, `${body.length} reports`);
     }
   }
+
+  // ── 11. Readiness detail returns structured report-readiness payload ─────
+  {
+    const name = "GET /api/reports/readiness-detail returns 200 with readiness detail";
+    const res = await apiRequest("GET", "/api/reports/readiness-detail", undefined, tenantA.adminToken);
+    if (res.status !== 200) fail(name, `status=${res.status} body=${res.body.slice(0, 200)}`);
+    else {
+      const body = JSON.parse(res.body) as {
+        esgState?: string;
+        stateLabel?: string;
+        stateExplanation?: string;
+        blockingFactors?: unknown;
+        missingCategories?: unknown;
+      };
+      if (!body.esgState) fail(name, "missing esgState");
+      else if (!body.stateLabel) fail(name, "missing stateLabel");
+      else if (!body.stateExplanation) fail(name, "missing stateExplanation");
+      else if (!Array.isArray(body.blockingFactors)) fail(name, "blockingFactors is not an array");
+      else if (!body.missingCategories || typeof body.missingCategories !== "object") fail(name, "missingCategories is not an object");
+      else pass(name, `state=${body.esgState}`);
+    }
+  }
 }
 
 (async () => {

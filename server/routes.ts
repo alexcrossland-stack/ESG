@@ -3649,7 +3649,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [esgStatus, policy, actions, allMetrics, evidenceFiles] = await Promise.all([
         evaluateEsgStatus(companyId),
         storage.getPolicy(companyId).catch(() => null),
-        storage.getActions(companyId).catch(() => []),
+        storage.getActionPlans(companyId).catch(() => []),
         storage.getMetrics(companyId),
         storage.getEvidenceFiles(companyId),
       ]);
