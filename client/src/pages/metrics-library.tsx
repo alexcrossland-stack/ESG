@@ -9,11 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, PencilLine, CheckCircle2, Loader2, Globe } from "lucide-react";
+import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, Globe } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { MetricEvidenceAttachment } from "@/components/metric-evidence-attachment";
-import { subMonths } from "date-fns";
 
 const STRENGTH_COLORS: Record<string, string> = {
   direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
@@ -123,180 +121,7 @@ const FREQUENCY_LABELS: Record<string, string> = {
   annual: "Annual",
 };
 
-function generatePeriods() {
-  const periods: { label: string; start: string; end: string }[] = [];
-  const now = new Date();
-  const startDate = new Date(2020, 0, 1);
-  let d = new Date(now.getFullYear(), now.getMonth(), 1);
-  while (d >= startDate) {
-    const year = d.getFullYear();
-    const month = d.getMonth();
-    const quarterStart = new Date(year, Math.floor(month / 3) * 3, 1);
-    const quarterEnd = new Date(year, Math.floor(month / 3) * 3 + 3, 0, 23, 59, 59);
-    const label = `Q${Math.floor(month / 3) + 1} ${year}`;
-    const existing = periods.find(p => p.label === label);
-    if (!existing) {
-      periods.push({ label, start: quarterStart.toISOString(), end: quarterEnd.toISOString() });
-    }
-    d = subMonths(d, 1);
-  }
-  return periods;
-}
-
-const PERIODS = generatePeriods();
-
-type MetricDefinitionValue = {
-  id: string;
-  valueNumeric: string | null;
-  valueText: string | null;
-  valueBoolean: boolean | null;
-  notes: string | null;
-};
-
-function buildSavePayload(metric: MetricDefinition, numericValue: string, textValue: string, boolValue: boolean | null, notes: string, period: typeof PERIODS[0]) {
-  const base = {
-    metricDefinitionId: metric.id,
-    reportingPeriodStart: period.start,
-    reportingPeriodEnd: period.end,
-    notes: notes || null,
-    sourceType: "manual",
-  };
-  if (metric.dataType === "boolean") {
-    return { ...base, valueBoolean: boolValue };
-  }
-  if (metric.dataType === "text") {
-    return { ...base, valueText: textValue };
-  }
-  return { ...base, valueNumeric: numericValue };
-}
-
-function MetricValueEntry({ metric, period }: { metric: MetricDefinition; period: typeof PERIODS[0] }) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [numericValue, setNumericValue] = useState("");
-  const [textValue, setTextValue] = useState("");
-  const [boolValue, setBoolValue] = useState<boolean | null>(null);
-  const [notes, setNotes] = useState("");
-
-  const { data: existingValues = [] } = useQuery<MetricDefinitionValue[]>({
-    queryKey: ["/api/metric-definition-values", metric.id, period.start],
-    queryFn: () => fetch(`/api/metric-definition-values?metricDefinitionId=${metric.id}&periodStart=${period.start}&periodEnd=${period.end}`, { credentials: "include" }).then(r => r.json()),
-  });
-
-  const existingValue = existingValues[0];
-
-  const saveMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/metric-definition-values", buildSavePayload(metric, numericValue, textValue, boolValue, notes, period)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/metric-definition-values", metric.id, period.start] });
-      toast({ title: "Value saved" });
-    },
-    onError: (e: Error) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
-  });
-
-  const hasValue = metric.dataType === "boolean" ? boolValue !== null : metric.dataType === "text" ? textValue.trim().length > 0 : numericValue.trim().length > 0;
-
-  if (metric.isDerived) {
-    return (
-      <div className="mt-3 pt-3 border-t border-border/50">
-        <p className="text-xs text-muted-foreground flex items-center gap-1">
-          <Zap className="w-3 h-3" />
-          Derived metric — calculated automatically from source values
-        </p>
-        {existingValue?.valueNumeric && (
-          <p className="text-xs font-medium mt-1">{parseFloat(existingValue.valueNumeric).toFixed(4)} {metric.unit || ""}</p>
-        )}
-      </div>
-    );
-  }
-
-  const currentDisplay = () => {
-    if (!existingValue) return null;
-    if (metric.dataType === "boolean") return existingValue.valueBoolean === true ? "Yes" : existingValue.valueBoolean === false ? "No" : null;
-    if (metric.dataType === "text") return existingValue.valueText;
-    return existingValue.valueNumeric ? `${existingValue.valueNumeric} ${metric.unit || ""}`.trim() : null;
-  };
-
-  return (
-    <div className="mt-3 pt-3 border-t border-border/50 space-y-2" data-testid={`entry-panel-${metric.id}`}>
-      {existingValue && currentDisplay() && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CheckCircle2 className="w-3 h-3 text-primary" />
-          Current: <span className="font-medium text-foreground">{currentDisplay()}</span>
-          {existingValue.notes && <span className="truncate max-w-[120px]">— {existingValue.notes}</span>}
-        </div>
-      )}
-      <div className="flex gap-2 items-end">
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs text-muted-foreground">
-            {metric.dataType === "boolean" ? "Yes / No" : metric.unit ? `Value (${metric.unit})` : "Value"}
-          </Label>
-          {metric.dataType === "boolean" ? (
-            <div className="flex gap-2" data-testid={`input-value-${metric.id}`}>
-              <Button
-                size="sm"
-                variant={boolValue === true ? "default" : "outline"}
-                className="h-7 text-xs flex-1"
-                onClick={() => setBoolValue(true)}
-                data-testid={`input-value-${metric.id}-yes`}
-              >Yes</Button>
-              <Button
-                size="sm"
-                variant={boolValue === false ? "default" : "outline"}
-                className="h-7 text-xs flex-1"
-                onClick={() => setBoolValue(false)}
-                data-testid={`input-value-${metric.id}-no`}
-              >No</Button>
-            </div>
-          ) : metric.dataType === "text" ? (
-            <Input
-              value={textValue}
-              onChange={e => setTextValue(e.target.value)}
-              placeholder="Enter text value"
-              className="h-7 text-xs"
-              data-testid={`input-value-${metric.id}`}
-            />
-          ) : (
-            <Input
-              type="number"
-              step="any"
-              value={numericValue}
-              onChange={e => setNumericValue(e.target.value)}
-              placeholder="Enter value"
-              className="h-7 text-xs"
-              data-testid={`input-value-${metric.id}`}
-            />
-          )}
-        </div>
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs text-muted-foreground">Notes</Label>
-          <Input
-            value={notes}
-            onChange={e => setNotes(e.target.value)}
-            placeholder="Optional"
-            className="h-7 text-xs"
-            data-testid={`input-notes-${metric.id}`}
-          />
-        </div>
-        <Button
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => saveMutation.mutate()}
-          disabled={!hasValue || saveMutation.isPending}
-          data-testid={`button-save-metric-value-${metric.id}`}
-        >
-          {saveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-        </Button>
-      </div>
-      {existingValue?.id && (
-        <MetricEvidenceAttachment metricValueId={existingValue.id} />
-      )}
-    </div>
-  );
-}
-
-function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: MetricDefinition; onToggle: (id: string) => void; isToggling: boolean; selectedPeriod: typeof PERIODS[0] }) {
-  const [showEntry, setShowEntry] = useState(false);
+function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition; onToggle: (id: string) => void; isToggling: boolean }) {
   const [showAlignment, setShowAlignment] = useState(false);
   const pillar = PILLAR_CONFIG[metric.pillar];
 
@@ -355,18 +180,6 @@ function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: 
             <Globe className="w-3 h-3 mr-1" />
             {showAlignment ? "Hide" : "Alignment"}
           </Button>
-          {metric.isActive && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 text-xs px-2"
-              onClick={() => setShowEntry(v => !v)}
-              data-testid={`button-enter-value-${metric.id}`}
-            >
-              <PencilLine className="w-3 h-3 mr-1" />
-              {showEntry ? "Close" : "Enter"}
-            </Button>
-          )}
           {!metric.isCore ? (
             <Switch
               checked={metric.isActive}
@@ -380,13 +193,17 @@ function MetricCard({ metric, onToggle, isToggling, selectedPeriod }: { metric: 
           )}
         </div>
       </div>
-      {showEntry && <MetricValueEntry metric={metric} period={selectedPeriod} />}
+      <div className="mt-3 pt-3 border-t border-border/50">
+        <p className="text-xs text-muted-foreground">
+          Browse the definition here, then use <span className="font-medium text-foreground">Metrics</span> to review active company metrics and <span className="font-medium text-foreground">Enter Data</span> to add values.
+        </p>
+      </div>
       {showAlignment && <FrameworkAlignmentPanel metricDefinitionId={metric.id} />}
     </div>
   );
 }
 
-function CategoryGroup({ category, metrics, onToggle, toggling, selectedPeriod }: { category: string; metrics: MetricDefinition[]; onToggle: (id: string) => void; toggling: Set<string>; selectedPeriod: typeof PERIODS[0] }) {
+function CategoryGroup({ category, metrics, onToggle, toggling }: { category: string; metrics: MetricDefinition[]; onToggle: (id: string) => void; toggling: Set<string> }) {
   const [open, setOpen] = useState(true);
   const activeCount = metrics.filter(m => m.isActive).length;
 
@@ -404,7 +221,7 @@ function CategoryGroup({ category, metrics, onToggle, toggling, selectedPeriod }
       <CollapsibleContent>
         <div className="space-y-2 mt-1 mb-3">
           {metrics.map(m => (
-            <MetricCard key={m.id} metric={m} onToggle={onToggle} isToggling={toggling.has(m.id)} selectedPeriod={selectedPeriod} />
+            <MetricCard key={m.id} metric={m} onToggle={onToggle} isToggling={toggling.has(m.id)} />
           ))}
         </div>
       </CollapsibleContent>
@@ -420,7 +237,6 @@ export default function MetricsLibraryPage() {
   const [pillarFilter, setPillarFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [toggling, setToggling] = useState<Set<string>>(new Set());
-  const [selectedPeriodIdx, setSelectedPeriodIdx] = useState(0);
 
   const { data: definitions = [], isLoading } = useQuery<MetricDefinition[]>({
     queryKey: ["/api/metric-definitions"],
@@ -478,7 +294,7 @@ export default function MetricsLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Browse and manage all ESG metric definitions. Core metrics are always tracked; advanced metrics can be enabled as needed.
+            Browse the full catalog of available ESG metric definitions. Use Metrics to review the ones your company is actively tracking, and Enter Data to add values for eligible metrics.
           </p>
         </div>
         {definitions.length === 0 && !isLoading && (
@@ -547,16 +363,6 @@ export default function MetricsLibraryPage() {
             <SelectItem value="inactive">Inactive</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={String(selectedPeriodIdx)} onValueChange={v => setSelectedPeriodIdx(Number(v))}>
-          <SelectTrigger className="w-32" data-testid="select-period-filter">
-            <SelectValue placeholder="Period" />
-          </SelectTrigger>
-          <SelectContent>
-            {PERIODS.map((p, i) => (
-              <SelectItem key={p.label} value={String(i)}>{p.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
       {isLoading ? (
@@ -612,7 +418,6 @@ export default function MetricsLibraryPage() {
                         metrics={catMetrics}
                         onToggle={id => toggleMutation.mutate(id)}
                         toggling={toggling}
-                        selectedPeriod={PERIODS[selectedPeriodIdx]}
                       />
                     ))}
                   </div>

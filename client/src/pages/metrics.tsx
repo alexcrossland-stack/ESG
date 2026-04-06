@@ -345,24 +345,24 @@ export default function Metrics() {
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
       <PageGuidance
         pageKey="metrics"
-        title="Metrics Library — what this page does"
-        summary="This page shows all the ESG metrics available to your business. Enable the ones relevant to you, then enter data for each period on the Data Entry page. The platform calculates carbon emissions and other derived metrics automatically."
+        title="Metrics — what this page does"
+        summary="This page shows the ESG metrics your company is actively tracking. Use Enter Data to add figures for eligible metrics each period. Calculated and derived metrics update from the data you save."
         goodLooksLike="At least 5–10 metrics enabled across environmental, social, and governance categories, with data entered for the current and previous 3 months."
         steps={[
-          "Toggle on the metrics relevant to your business",
+          "Review the metrics your company is currently tracking",
           "Pay attention to 'calculated' metrics — these auto-update when you enter raw data",
-          "Go to Data Entry to start logging values each month or quarter",
-          "Return here to review coverage and enable more metrics as your programme grows",
+          "Go to Enter Data to log values for the current period",
+          "Use Metrics Library to browse the wider catalog of available definitions",
         ]}
       />
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-primary" />
-            Metrics Library
+            Metrics
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Track and manage your ESG performance metrics
+            Your company’s active ESG metrics and current status
           </p>
         </div>
         <div className="flex items-center gap-2">

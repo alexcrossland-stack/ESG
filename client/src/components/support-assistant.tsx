@@ -14,7 +14,7 @@ import {
 
 const PAGE_LABELS: Record<string, string> = {
   "/": "Dashboard",
-  "/metrics": "Metrics Library",
+  "/metrics": "Metrics",
   "/data-entry": "Data Entry",
   "/policy": "ESG Policy",
   "/policy-templates": "Policy Templates",
