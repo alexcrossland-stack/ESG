@@ -18,14 +18,38 @@ export async function sendEmail(options: SendEmailOptions): Promise<{ success: b
     return { success: false, error: "Email service not configured" };
   }
   try {
-    await resend.emails.send({
+    const response = await resend.emails.send({
       from: FROM_ADDRESS,
       to: options.to,
       subject: options.subject,
       html: options.html,
       text: options.text,
     });
-    console.log("[Email] Sent:", options.subject, "->", options.to);
+
+    const responseError =
+      (response as any)?.error?.message ||
+      (response as any)?.error ||
+      undefined;
+    const messageId =
+      (response as any)?.data?.id ||
+      (response as any)?.id ||
+      undefined;
+
+    if (responseError) {
+      console.error("[Email] Send failed:", responseError);
+      return { success: false, error: String(responseError) };
+    }
+
+    console.log(
+      "[Email] Sent:",
+      options.subject,
+      "->",
+      options.to,
+      "id=",
+      messageId ?? "n/a",
+      "error=",
+      (response as any)?.error ?? null,
+    );
     return { success: true };
   } catch (err: any) {
     console.error("[Email] Send failed:", err.message);
