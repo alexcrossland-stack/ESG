@@ -460,6 +460,51 @@ const METRIC_KEY_MAP: Record<string, string> = {
   esg_assigned: "ESG Responsibility Assigned",
 };
 
+function normalizeMetricName(name: string | null | undefined): string {
+  const normalized = (name ?? "").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    "natural gas consumption": "gas / fuel consumption",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function buildCompanyMetricFromDefinition(companyId: string, def: any) {
+  const defaultMetric = DEFAULT_METRICS.find(
+    (metric) => normalizeMetricName(metric.name) === normalizeMetricName(def.name),
+  );
+
+  if (defaultMetric) {
+    return {
+      ...defaultMetric,
+      companyId,
+      enabled: true,
+      isDefault: true,
+    };
+  }
+
+  const formulaDescription = typeof def.formulaJson === "object" && def.formulaJson && "description" in def.formulaJson
+    ? String((def.formulaJson as any).description)
+    : null;
+
+  return {
+    companyId,
+    name: def.name,
+    description: def.description ?? `Track ${def.name} for your ESG reporting.`,
+    category: def.pillar,
+    unit: def.unit ?? "",
+    frequency: def.inputFrequency ?? "monthly",
+    dataOwner: "",
+    metricType: def.isDerived ? "derived" : (def.formulaJson ? "calculated" : "manual"),
+    calculationType: null,
+    formulaText: formulaDescription,
+    direction: def.pillar === "environmental" ? "lower_is_better" : "higher_is_better",
+    displayOrder: def.sortOrder ?? 0,
+    helpText: def.description ?? `Track ${def.name} for your ESG reporting.`,
+    enabled: true,
+    isDefault: Boolean(def.isCore),
+  };
+}
+
 async function seedMetricsFromSelection(companyId: string, selectedKeys: string[], answers?: any) {
   const selectedNames = new Set<string>();
   for (const key of selectedKeys) {
@@ -2777,14 +2822,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // GET /api/metric-definitions — list all (optionally filtered)
   app.get("/api/metric-definitions", requireAuth, async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
       const { pillar, search, isCore, isActive } = req.query as Record<string, string>;
       const filter: Record<string, any> = {};
       if (pillar) filter.pillar = pillar;
       if (search) filter.search = search;
       if (isCore !== undefined) filter.isCore = isCore === "true";
-      if (isActive !== undefined) filter.isActive = isActive === "true";
       const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
-      res.json(defs);
+      const companyMetrics = await storage.getMetrics(companyId);
+      const metricByName = new Map(
+        companyMetrics.map((metric: any) => [normalizeMetricName(metric.name), metric]),
+      );
+      const defsWithCompanyState = defs.map((def: any) => {
+        const companyMetric = metricByName.get(normalizeMetricName(def.name));
+        return {
+          ...def,
+          isActive: companyMetric ? Boolean(companyMetric.enabled) : false,
+        };
+      });
+      const filteredDefs = isActive !== undefined
+        ? defsWithCompanyState.filter((def: any) => def.isActive === (isActive === "true"))
+        : defsWithCompanyState;
+      res.json(filteredDefs);
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -2804,15 +2863,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // PATCH /api/metric-definitions/:id/active — enable/disable advanced metrics
   app.patch("/api/metric-definitions/:id/active", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
       const { isActive } = req.body;
       if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive must be boolean" });
 
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Not found" });
-      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
+      const companyMetrics = await storage.getMetrics(companyId);
+      const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
 
-      const updated = await storage.updateMetricDefinition(req.params.id, { isActive });
-      res.json(updated);
+      if (existingMetric) {
+        const updatedMetric = await storage.updateMetric(existingMetric.id, { enabled: isActive });
+        return res.json({ ...def, isActive: Boolean(updatedMetric?.enabled) });
+      }
+
+      if (!isActive) {
+        return res.json({ ...def, isActive: false });
+      }
+
+      const createdMetric = await storage.createMetric(buildCompanyMetricFromDefinition(companyId, def) as any);
+      res.json({ ...def, isActive: Boolean(createdMetric.enabled) });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -9809,11 +9879,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.patch("/api/metric-definitions/:id/toggle", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Metric definition not found" });
-      if (def.isCore) return res.status(400).json({ error: "Core metrics cannot be disabled" });
-      const updated = await storage.updateMetricDefinition(req.params.id, { isActive: !def.isActive });
-      res.json(updated);
+      const companyMetrics = await storage.getMetrics(companyId);
+      const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
+
+      if (existingMetric) {
+        const updatedMetric = await storage.updateMetric(existingMetric.id, { enabled: !existingMetric.enabled });
+        return res.json({ ...def, isActive: Boolean(updatedMetric?.enabled) });
+      }
+
+      const createdMetric = await storage.createMetric(buildCompanyMetricFromDefinition(companyId, def) as any);
+      res.json({ ...def, isActive: Boolean(createdMetric.enabled) });
     } catch (e: any) {
       sendServerError(res, e);
     }

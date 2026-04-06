@@ -135,9 +135,9 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="font-medium text-sm text-foreground" data-testid={`text-metric-name-${metric.id}`}>{metric.name}</span>
             {metric.isCore ? (
-              <Badge variant="default" className="text-[10px] px-1.5 py-0 h-4" data-testid={`badge-core-${metric.id}`}>Core</Badge>
+              <Badge variant="default" className="text-[10px] px-1.5 py-0 h-4" data-testid={`badge-core-${metric.id}`}>Recommended</Badge>
             ) : (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4" data-testid={`badge-advanced-${metric.id}`}>Advanced</Badge>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4" data-testid={`badge-advanced-${metric.id}`}>Optional</Badge>
             )}
             {metric.isDerived && (
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
@@ -180,17 +180,13 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
             <Globe className="w-3 h-3 mr-1" />
             {showAlignment ? "Hide" : "Alignment"}
           </Button>
-          {!metric.isCore ? (
-            <Switch
-              checked={metric.isActive}
-              onCheckedChange={() => onToggle(metric.id)}
-              disabled={isToggling}
-              data-testid={`toggle-metric-${metric.id}`}
-              aria-label={`${metric.isActive ? "Disable" : "Enable"} ${metric.name}`}
-            />
-          ) : (
-            <span className="text-[10px] text-muted-foreground">Always on</span>
-          )}
+          <Switch
+            checked={metric.isActive}
+            onCheckedChange={() => onToggle(metric.id)}
+            disabled={isToggling}
+            data-testid={`toggle-metric-${metric.id}`}
+            aria-label={`${metric.isActive ? "Disable" : "Enable"} ${metric.name}`}
+          />
         </div>
       </div>
       <div className="mt-3 pt-3 border-t border-border/50">
@@ -205,7 +201,7 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
 
 function CategoryGroup({ category, metrics, onToggle, toggling }: { category: string; metrics: MetricDefinition[]; onToggle: (id: string) => void; toggling: Set<string> }) {
   const [open, setOpen] = useState(true);
-  const activeCount = metrics.filter(m => m.isActive).length;
+  const enabledCount = metrics.filter(m => m.isActive).length;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-testid={`group-category-${category.replace(/\s+/g, "-").toLowerCase()}`}>
@@ -214,7 +210,7 @@ function CategoryGroup({ category, metrics, onToggle, toggling }: { category: st
           <div className="flex items-center gap-2">
             {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
             <span className="text-sm font-medium">{category}</span>
-            <span className="text-xs text-muted-foreground">({activeCount}/{metrics.length} active)</span>
+            <span className="text-xs text-muted-foreground">({enabledCount}/{metrics.length} enabled)</span>
           </div>
         </div>
       </CollapsibleTrigger>
@@ -282,9 +278,9 @@ export default function MetricsLibraryPage() {
 
   const stats = useMemo(() => ({
     total: definitions.length,
-    core: definitions.filter(d => d.isCore).length,
-    advanced: definitions.filter(d => !d.isCore).length,
-    active: definitions.filter(d => d.isActive).length,
+    recommended: definitions.filter(d => d.isCore).length,
+    optional: definitions.filter(d => !d.isCore).length,
+    enabled: definitions.filter(d => d.isActive).length,
     derived: definitions.filter(d => d.isDerived).length,
   }), [definitions]);
 
@@ -294,7 +290,7 @@ export default function MetricsLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Browse the full catalog of available ESG metric definitions. Use Metrics to review the ones your company is actively tracking, and Enter Data to add values for eligible metrics.
+            Browse the full catalog of available ESG metric definitions. Recommended metrics are enabled for new companies by default, and you can turn any metric on or off for your company here.
           </p>
         </div>
         {definitions.length === 0 && !isLoading && (
@@ -315,16 +311,16 @@ export default function MetricsLibraryPage() {
             <div className="text-xs text-muted-foreground">Total metrics</div>
           </Card>
           <Card className="p-3">
-            <div className="text-2xl font-bold text-primary" data-testid="stat-core">{stats.core}</div>
-            <div className="text-xs text-muted-foreground">Core (always on)</div>
+            <div className="text-2xl font-bold text-primary" data-testid="stat-core">{stats.recommended}</div>
+            <div className="text-xs text-muted-foreground">Recommended defaults</div>
           </Card>
           <Card className="p-3">
-            <div className="text-2xl font-bold text-muted-foreground" data-testid="stat-advanced">{stats.advanced}</div>
-            <div className="text-xs text-muted-foreground">Advanced (optional)</div>
+            <div className="text-2xl font-bold text-muted-foreground" data-testid="stat-advanced">{stats.optional}</div>
+            <div className="text-xs text-muted-foreground">Optional metrics</div>
           </Card>
           <Card className="p-3">
-            <div className="text-2xl font-bold text-green-600" data-testid="stat-active">{stats.active}</div>
-            <div className="text-xs text-muted-foreground">Active</div>
+            <div className="text-2xl font-bold text-green-600" data-testid="stat-active">{stats.enabled}</div>
+            <div className="text-xs text-muted-foreground">Enabled for your company</div>
           </Card>
         </div>
       )}
@@ -357,10 +353,10 @@ export default function MetricsLibraryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All</SelectItem>
-            <SelectItem value="core">Core only</SelectItem>
-            <SelectItem value="advanced">Advanced only</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="inactive">Inactive</SelectItem>
+            <SelectItem value="core">Recommended</SelectItem>
+            <SelectItem value="advanced">Optional</SelectItem>
+            <SelectItem value="active">Enabled</SelectItem>
+            <SelectItem value="inactive">Disabled</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -396,7 +392,7 @@ export default function MetricsLibraryPage() {
             const config = PILLAR_CONFIG[pillar];
             const PillarIcon = config.icon;
             const pillarMetrics = Object.values(categories).flat();
-            const activePillarCount = pillarMetrics.filter(m => m.isActive).length;
+            const enabledPillarCount = pillarMetrics.filter(m => m.isActive).length;
 
             return (
               <Card key={pillar} className={`border ${config.border}`} data-testid={`section-pillar-${pillar}`}>
@@ -406,7 +402,7 @@ export default function MetricsLibraryPage() {
                       <PillarIcon className={`w-5 h-5 ${config.color}`} />
                       <CardTitle className={`text-base ${config.color}`}>{config.label}</CardTitle>
                     </div>
-                    <span className="text-xs text-muted-foreground">{activePillarCount}/{pillarMetrics.length} active</span>
+                    <span className="text-xs text-muted-foreground">{enabledPillarCount}/{pillarMetrics.length} enabled</span>
                   </div>
                 </CardHeader>
                 <CardContent className="pt-4">
