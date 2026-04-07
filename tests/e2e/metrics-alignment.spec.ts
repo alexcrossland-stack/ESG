@@ -43,6 +43,9 @@ test.describe("Metrics surface alignment", () => {
 
     await page.goto("/metrics");
     await page.waitForLoadState("networkidle");
+    const metricsBadgeText = (await page.locator("[data-testid='badge-metric-count']").textContent()) || "";
+    const metricsBadgeCount = Number(metricsBadgeText.split(" ")[0] || "0");
+    expect(metricsBadgeCount).toBe(enabledLibraryCount);
     await expect(page.locator("[data-testid^='metric-row-']")).toHaveCount(enabledLibraryCount);
 
     await page.goto("/data-entry");

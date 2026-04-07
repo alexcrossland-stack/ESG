@@ -39,6 +39,7 @@ import { useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
+import { buildCanonicalEnabledMetrics } from "@/lib/metric-activation";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -99,6 +100,17 @@ const CATEGORY_ICONS = {
   governance: { icon: Shield, color: "text-purple-500", bg: "bg-purple-500/10", label: "Governance" },
 };
 
+type MetricDefinitionActivation = {
+  id: string;
+  name: string;
+  pillar: "environmental" | "social" | "governance";
+  description?: string | null;
+  unit?: string | null;
+  isActive: boolean;
+  isDerived?: boolean;
+  formulaJson?: Record<string, unknown> | null;
+};
+
 function QualityBadge({ score, metricId }: { score: number; metricId: string }) {
   const variant = score > 70 ? "default" : score >= 40 ? "secondary" : "outline";
   const color = score > 70 ? "text-emerald-600 dark:text-emerald-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
@@ -148,6 +160,11 @@ export default function DataEntry() {
 
   const { data: reportingPeriods = [] } = useQuery<any[]>({
     queryKey: ["/api/reporting-periods"],
+  });
+
+  const { data: metricDefinitions = [], isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
+    queryKey: ["/api/metric-definitions"],
+    queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
   });
 
   const activeReportingPeriod = reportingPeriods.find((rp: any) => rp.id === selectedReportingPeriodId);
@@ -372,10 +389,10 @@ export default function DataEntry() {
     await recalcMutation.mutateAsync();
   };
 
-  const handleSaveManual = async (metricId: string) => {
-    const val = manualValues[metricId];
+  const handleSaveManual = async (metricKey: string, metricId: string) => {
+    const val = manualValues[metricKey];
     if (!val?.value) return;
-    const dataSourceType = manualDataSourceTypes[metricId] || "manual";
+    const dataSourceType = manualDataSourceTypes[metricKey] || "manual";
     await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null });
     const isFirstData = !activation.hasAddedData;
     if (isFirstData) {
@@ -393,12 +410,12 @@ export default function DataEntry() {
   const isLocked = existingValues.some((v: any) => v.locked);
   const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
   const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
-  const allEnabledMetrics = metrics;
-  const isMetricEntryEligible = (metric: any) => metric.metricType === "manual" || !metric.metricType;
+  const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, metrics);
+  const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && (metric.metricType === "manual" || !metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
   const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
 
-  const isLoading = rawLoading || entryLoading;
+  const isLoading = rawLoading || entryLoading || definitionsLoading;
   if (isLoading) {
     return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>;
   }
@@ -1012,63 +1029,68 @@ export default function DataEntry() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {catMetrics.map((metric: any) => {
-                    const metricId = metric.metricId || metric.id;
+                    const metricId = metric.id || metric.metricId || null;
+                    const metricKey = metricId || metric.key || metric.name;
                     const isEligible = isMetricEntryEligible(metric);
-                    const localVal = manualValues[metricId] || { value: "", notes: "" };
+                    const localVal = manualValues[metricKey] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
-                    const metricValue = existingValues.find((v: any) => v.metricId === metricId);
+                    const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId) : undefined;
                     const metricPriority = getManualMetricPriority(metric.name);
                     const mpc = PRIORITY_LABELS[metricPriority];
-                    const currentSourceType = manualDataSourceTypes[metricId] || metricValue?.dataSourceType || "manual";
+                    const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
                     const isCurrentlyEstimated = currentSourceType === "estimated";
 
                     return (
                       <div
-                        key={metricId}
+                        key={metricKey}
                         className={`grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 p-3 rounded-md border ${highlightEstimated && metricValue?.dataSourceType === "estimated" ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20 ring-1 ring-amber-300" : hasValue ? "border-primary/20 bg-primary/5" : "border-border"}`}
-                        data-testid={`manual-row-${metricId}`}
+                        data-testid={`manual-row-${metricKey}`}
                       >
                         <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${mpc.color}`} data-testid={`badge-priority-metric-${metricId}`}>{mpc.label}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${mpc.color}`} data-testid={`badge-priority-metric-${metricKey}`}>{mpc.label}</span>
                             {!isEligible && (
-                              <Badge variant="secondary" className="text-[10px]" data-testid={`badge-ineligible-${metricId}`}>
-                                {metric.metricType === "derived" ? "Derived automatically" : "Calculated automatically"}
+                              <Badge variant="secondary" className="text-[10px]" data-testid={`badge-ineligible-${metricKey}`}>
+                                {metric.missingCompanyMetric ? "Awaiting sync" : metric.metricType === "derived" ? "Derived automatically" : "Calculated automatically"}
                               </Badge>
                             )}
                             <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
                             <DataSourceBadge type={metricValue?.dataSourceType} />
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && isEligible && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
-                            {dataQuality?.perMetric?.find((q: any) => q.metricId === metricId) && (
+                            {metricId && dataQuality?.perMetric?.find((q: any) => q.metricId === metricId) && (
                               <QualityBadge
                                 score={dataQuality.perMetric.find((q: any) => q.metricId === metricId).score}
-                                metricId={metricId}
+                                metricId={metricKey}
                               />
                             )}
-                            <SourceBadge
-                              entityType="metric"
-                              entityId={metricId}
-                              status={metricValue?.workflowStatus}
-                              owner={metricValue?.owner || metricValue?.submittedBy}
-                              reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
-                              dataSourceType={metricValue?.dataSourceType}
-                              hasEvidence={metricValue?.dataSourceType === "evidenced"}
-                            />
+                            {metricId && (
+                              <SourceBadge
+                                entityType="metric"
+                                entityId={metricId}
+                                status={metricValue?.workflowStatus}
+                                owner={metricValue?.owner || metricValue?.submittedBy}
+                                reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
+                                dataSourceType={metricValue?.dataSourceType}
+                                hasEvidence={metricValue?.dataSourceType === "evidenced"}
+                              />
+                            )}
                           </div>
-                          <EvidenceSuggestions metricId={metricId} category={metric.category} />
+                          {metricId && <EvidenceSuggestions metricId={metricId} category={metric.category} />}
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
                           )}
                           {!isEligible && (
-                            <p className="text-[11px] text-muted-foreground" data-testid={`hint-ineligible-${metricId}`}>
-                              This metric is enabled for your company and included in your reporting set, but it updates automatically from raw data or other metrics instead of direct manual entry.
+                            <p className="text-[11px] text-muted-foreground" data-testid={`hint-ineligible-${metricKey}`}>
+                              {metric.missingCompanyMetric
+                                ? "This metric is enabled in Metrics Library, but the company metric record is missing. It stays visible here so your enabled metric set remains consistent."
+                                : "This metric is enabled for your company and included in your reporting set, but it updates automatically from raw data or other metrics instead of direct manual entry."}
                             </p>
                           )}
                           {isCurrentlyEstimated && (
-                            <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1" data-testid={`hint-estimated-${metricId}`}>
+                            <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1" data-testid={`hint-estimated-${metricKey}`}>
                               <span className="text-amber-500">›</span> You can update this with an actual value when you have it — every improvement counts.
                             </p>
                           )}
@@ -1082,12 +1104,12 @@ export default function DataEntry() {
                                 value={localVal.value}
                                 onChange={e => setManualValues(prev => ({
                                   ...prev,
-                                  [metricId]: { ...prev[metricId] || { notes: "" }, value: e.target.value }
+                                  [metricKey]: { ...prev[metricKey] || { notes: "" }, value: e.target.value }
                                 }))}
                                 placeholder={isEligible ? `Enter ${metric.unit || "value"}` : "Calculated automatically"}
                                 disabled={editDisabled || !isEligible}
                                 className="h-8 text-sm"
-                                data-testid={`input-manual-${metricId}`}
+                                data-testid={`input-manual-${metricKey}`}
                               />
                             </div>
                             <div className="space-y-1">
@@ -1096,12 +1118,12 @@ export default function DataEntry() {
                                 value={localVal.notes}
                                 onChange={e => setManualValues(prev => ({
                                   ...prev,
-                                  [metricId]: { ...prev[metricId] || { value: "" }, notes: e.target.value }
+                                  [metricKey]: { ...prev[metricKey] || { value: "" }, notes: e.target.value }
                                 }))}
                                 placeholder="Optional note"
                                 disabled={editDisabled || !isEligible}
                                 className="h-8 text-sm"
-                                data-testid={`input-notes-${metricId}`}
+                                data-testid={`input-notes-${metricKey}`}
                               />
                             </div>
                             <div className="space-y-1">
@@ -1109,11 +1131,11 @@ export default function DataEntry() {
                                 Type of data <EsgTooltip term="dataType" />
                               </Label>
                               <Select
-                                value={manualDataSourceTypes[metricId] || "manual"}
-                                onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metricId]: val }))}
+                                value={manualDataSourceTypes[metricKey] || "manual"}
+                                onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metricKey]: val }))}
                                 disabled={editDisabled || !isEligible}
                               >
-                                <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metricId}`}>
+                                <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metricKey}`}>
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -1130,9 +1152,9 @@ export default function DataEntry() {
                             <Button
                               size="sm"
                               variant={hasValue ? "secondary" : "default"}
-                              onClick={() => handleSaveManual(metricId)}
-                              disabled={saveManualMutation.isPending || !localVal.value || !isEligible}
-                              data-testid={`button-save-manual-${metricId}`}
+                              onClick={() => metricId && handleSaveManual(metricKey, metricId)}
+                              disabled={saveManualMutation.isPending || !metricId || !localVal.value || !isEligible}
+                              data-testid={`button-save-manual-${metricKey}`}
                             >
                               <Save className="w-3.5 h-3.5" />
                             </Button>

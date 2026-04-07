@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { authFetch } from "@/lib/queryClient";
+import { buildCanonicalEnabledMetrics } from "@/lib/metric-activation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,17 @@ type MetricValueRow = {
   value: string | number | null;
   status?: string | null;
   percentChange?: string | number | null;
+};
+
+type MetricDefinitionActivation = {
+  id: string;
+  name: string;
+  pillar: "environmental" | "social" | "governance";
+  description?: string | null;
+  unit?: string | null;
+  isActive: boolean;
+  isDerived?: boolean;
+  formulaJson?: Record<string, unknown> | null;
 };
 
 const CATEGORY_CONFIG = {
@@ -241,28 +253,41 @@ export default function Metrics() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
 
+  const { data: definitions = [], isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
+    queryKey: ["/api/metric-definitions"],
+    queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
+  });
+
   const { data: companyMetrics = [], isLoading: metricsLoading } = useQuery<CompanyMetric[]>({
     queryKey: ["/api/metrics"],
     queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
   });
 
-  const enabledMetrics = companyMetrics.filter((metric) => metric.enabled);
+  const enabledMetrics = buildCanonicalEnabledMetrics(definitions, companyMetrics);
+  const enabledMetricsWithRows = enabledMetrics.filter((metric) => metric.id);
   const historyQueries = useQueries({
-    queries: enabledMetrics.map((metric) => ({
+    queries: enabledMetricsWithRows.map((metric) => ({
       queryKey: ["/api/metrics", metric.id, "values"],
       queryFn: () => authFetch(`/api/metrics/${metric.id}/values`).then((r) => r.json() as Promise<MetricValueRow[]>),
       staleTime: 60_000,
     })),
   });
 
-  const isLoading = metricsLoading || historyQueries.some((query) => query.isLoading);
+  const historyByMetricId = new Map(
+    enabledMetricsWithRows.map((metric, index) => [
+      metric.id as string,
+      ((historyQueries[index]?.data || []) as MetricValueRow[]),
+    ]),
+  );
+
+  const isLoading = definitionsLoading || metricsLoading || historyQueries.some((query) => query.isLoading);
 
   if (isLoading) {
     return <div className="p-4 sm:p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-14" />)}</div>;
   }
 
-  const metrics: MetricSummary[] = enabledMetrics.map((metric, index) => {
-    const values = (historyQueries[index]?.data || []) as MetricValueRow[];
+  const metrics: MetricSummary[] = enabledMetrics.map((metric) => {
+    const values = metric.id ? (historyByMetricId.get(metric.id) || []) : [];
     const latest = values[0];
     const previous = values[1];
     const latestValue = latest?.value !== null && latest?.value !== undefined ? Number(latest.value) : null;
@@ -272,10 +297,8 @@ export default function Metrics() {
       : (latestValue !== null && previousValue !== null && previousValue !== 0
         ? ((latestValue - previousValue) / Math.abs(previousValue)) * 100
         : null);
-    const target = metric.target?.targetValue ?? metric.targetValue ?? metric.targetMax ?? metric.targetMin ?? null;
-
     return {
-      id: metric.id,
+      id: metric.id ?? metric.key,
       name: metric.name,
       category: metric.category,
       unit: metric.unit,
@@ -285,7 +308,7 @@ export default function Metrics() {
       previousValue,
       status: latest?.status || (latestValue !== null ? "green" : "missing"),
       percentChange: computedPercentChange,
-      target: target !== null && target !== undefined ? Number(target) : null,
+      target: null,
       helpText: metric.helpText,
       formulaText: metric.formulaText,
       trend: values.slice(0, 6).reverse().map((value) => ({
