@@ -1,7 +1,11 @@
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -21,10 +25,29 @@ export default function TeamPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { isPro } = useBillingStatus();
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("contributor");
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+
+  const { data: authData } = useQuery<any>({
+    queryKey: ["/api/auth/me"],
+  });
+  const user = authData?.user;
+  const isPlatformSuperAdmin = user?.role === "super_admin";
 
   const { data: users, isLoading } = useQuery<any[]>({
     queryKey: ["/api/users"],
   });
+  const { data: companiesData } = useQuery<any>({
+    queryKey: ["/api/companies"],
+    enabled: isPlatformSuperAdmin,
+  });
+  const companies = useMemo(() => {
+    if (Array.isArray(companiesData)) return companiesData;
+    if (Array.isArray(companiesData?.companies)) return companiesData.companies;
+    return [];
+  }, [companiesData]);
+  const selectedCompanyName = companies.find((company: any) => company.id === selectedCompanyId)?.name;
 
   const updateRoleMutation = useMutation({
     mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
@@ -37,6 +60,37 @@ export default function TeamPage() {
     },
     onError: (e: any) => {
       toast({ title: "Failed to update role", description: e.message || "Something went wrong", variant: "destructive" });
+    },
+  });
+  const inviteUserMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      };
+
+      if (isPlatformSuperAdmin) {
+        body.companyId = selectedCompanyId;
+        const companyName = selectedCompanyName || "Unknown company";
+        console.log("[team] Inviting user into company:", companyName);
+        toast({
+          title: "Preparing invite",
+          description: `Target company: ${companyName}`,
+        });
+      }
+
+      await apiRequest("POST", "/api/users/invite", body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/audit-logs"] });
+      toast({ title: "Invitation sent", description: `An invite has been sent to ${inviteEmail.trim()}.` });
+      setInviteEmail("");
+      setInviteRole("contributor");
+      setSelectedCompanyId("");
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to send invite", description: e.message || "Something went wrong", variant: "destructive" });
     },
   });
 
@@ -70,6 +124,74 @@ export default function TeamPage() {
           data-testid="banner-seat-limit"
         />
       )}
+
+      <Card data-testid="card-team-invite">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users className="w-4 h-4" />
+            Invite Team Member
+          </CardTitle>
+          <CardDescription className="text-xs">
+            {isPlatformSuperAdmin
+              ? "Send an invite into any company and assign the initial role."
+              : "Invite a teammate into your current company and assign the initial role."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {isPlatformSuperAdmin && (
+            <div className="space-y-1">
+              <Label htmlFor="invite-company">Target company</Label>
+              <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
+                <SelectTrigger id="invite-company" data-testid="select-invite-company">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies.map((company: any) => (
+                    <SelectItem key={company.id} value={company.id} data-testid={`option-invite-company-${company.id}`}>
+                      {company.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-[1fr_180px_auto] sm:items-end">
+            <div className="space-y-1">
+              <Label htmlFor="invite-email">Email address</Label>
+              <Input
+                id="invite-email"
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="name@company.com"
+                data-testid="input-invite-email"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="invite-role">Role</Label>
+              <Select value={inviteRole} onValueChange={setInviteRole}>
+                <SelectTrigger id="invite-role" data-testid="select-invite-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLES.map((r) => (
+                    <SelectItem key={r.value} value={r.value} data-testid={`option-invite-role-${r.value}`}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              onClick={() => inviteUserMutation.mutate()}
+              disabled={!inviteEmail.trim() || inviteUserMutation.isPending || (isPlatformSuperAdmin && !selectedCompanyId)}
+              data-testid="button-send-invite"
+            >
+              Send invite
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card data-testid="card-team-users">
         <CardHeader className="pb-4">
