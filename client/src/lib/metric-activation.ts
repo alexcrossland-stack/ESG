@@ -1,12 +1,22 @@
 type MetricDefinitionLike = {
   id: string;
+  code?: string | null;
   name: string;
   pillar: "environmental" | "social" | "governance";
+  category?: string | null;
   description?: string | null;
+  dataType?: string | null;
   unit?: string | null;
+  inputFrequency?: string | null;
+  isCore?: boolean | null;
   isActive: boolean;
   isDerived?: boolean;
   formulaJson?: Record<string, unknown> | null;
+  frameworkTags?: string[] | null;
+  scoringWeight?: string | null;
+  evidenceRequired?: boolean | null;
+  rollupMethod?: string | null;
+  sortOrder?: number | null;
 };
 
 type CompanyMetricLike = {
@@ -20,6 +30,11 @@ type CompanyMetricLike = {
   direction?: string | null;
   helpText?: string | null;
   formulaText?: string | null;
+};
+
+export type MetricLibraryEntry = MetricDefinitionLike & {
+  companyMetricId?: string;
+  isSyntheticCustom?: boolean;
 };
 
 type EvidenceCoverageLike = {
@@ -124,19 +139,84 @@ function mergeCandidates(
   };
 }
 
+function buildSyntheticLibraryMetric(metric: CompanyMetricLike): MetricLibraryEntry {
+  return {
+    id: `custom:${metric.id}`,
+    code: `custom:${metric.id}`,
+    name: metric.name,
+    pillar: metric.category,
+    category: "Custom",
+    description: metric.description ?? metric.helpText ?? null,
+    dataType: "numeric",
+    unit: metric.unit ?? null,
+    inputFrequency: "monthly",
+    isCore: false,
+    isActive: Boolean(metric.enabled),
+    isDerived: metric.metricType === "derived",
+    formulaJson: metric.metricType === "calculated" || metric.metricType === "derived" ? {} : null,
+    frameworkTags: null,
+    scoringWeight: null,
+    evidenceRequired: false,
+    rollupMethod: "sum",
+    sortOrder: 9999,
+    companyMetricId: metric.id,
+    isSyntheticCustom: true,
+  };
+}
+
+export function buildMetricLibraryEntries(
+  definitions: MetricDefinitionLike[],
+  companyMetrics: CompanyMetricLike[],
+): MetricLibraryEntry[] {
+  const byCanonicalId = new Map<string, MetricLibraryEntry>();
+
+  for (const definition of definitions) {
+    const canonicalId = normalizeMetricActivationName(definition.name);
+    if (!byCanonicalId.has(canonicalId)) {
+      byCanonicalId.set(canonicalId, { ...definition });
+      continue;
+    }
+    const existing = byCanonicalId.get(canonicalId)!;
+    byCanonicalId.set(canonicalId, {
+      ...existing,
+      isActive: Boolean(existing.isActive) || Boolean(definition.isActive),
+      isCore: Boolean(existing.isCore) || Boolean(definition.isCore),
+      isDerived: Boolean(existing.isDerived) || Boolean(definition.isDerived),
+      description: existing.description ?? definition.description ?? null,
+      unit: existing.unit ?? definition.unit ?? null,
+      frameworkTags: existing.frameworkTags ?? definition.frameworkTags ?? null,
+      evidenceRequired: Boolean(existing.evidenceRequired) || Boolean(definition.evidenceRequired),
+    });
+  }
+
+  for (const metric of companyMetrics) {
+    const canonicalId = normalizeMetricActivationName(metric.name);
+    if (byCanonicalId.has(canonicalId)) continue;
+    byCanonicalId.set(canonicalId, buildSyntheticLibraryMetric(metric));
+  }
+
+  return [...byCanonicalId.values()].sort((a, b) => {
+    if (a.pillar !== b.pillar) return a.pillar.localeCompare(b.pillar);
+    return a.name.localeCompare(b.name);
+  });
+}
+
 export function buildCanonicalEnabledMetrics(
   definitions: MetricDefinitionLike[],
   companyMetrics: CompanyMetricLike[],
 ): CanonicalEnabledMetric[] {
   const byCanonicalId = new Map<string, CanonicalEnabledMetric>();
 
-  for (const definition of definitions.filter((item) => item.isActive)) {
+  const libraryEntries = buildMetricLibraryEntries(definitions, companyMetrics);
+
+  for (const definition of libraryEntries.filter((item) => item.isActive)) {
     const candidate = buildDefinitionCandidate(definition);
     byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
   }
 
   for (const metric of companyMetrics.filter((item) => Boolean(item.enabled))) {
     const candidate = buildCompanyCandidate(metric);
+    if (!byCanonicalId.has(candidate.canonicalId)) continue;
     byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
   }
 

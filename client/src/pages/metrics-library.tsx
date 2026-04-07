@@ -14,6 +14,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AddMetricDialog } from "@/components/add-metric-dialog";
 import { usePermissions } from "@/lib/permissions";
+import { authFetch } from "@/lib/queryClient";
+import { buildMetricLibraryEntries, type MetricLibraryEntry } from "@/lib/metric-activation";
 
 const STRENGTH_COLORS: Record<string, string> = {
   direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
@@ -109,6 +111,8 @@ type MetricDefinition = {
   evidenceRequired: boolean;
   rollupMethod: string;
   sortOrder: number;
+  companyMetricId?: string;
+  isSyntheticCustom?: boolean;
 };
 
 const PILLAR_CONFIG = {
@@ -241,6 +245,15 @@ export default function MetricsLibraryPage() {
   const { data: definitions = [], isLoading } = useQuery<MetricDefinition[]>({
     queryKey: ["/api/metric-definitions"],
   });
+  const { data: companyMetrics = [] } = useQuery<any[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
+  });
+
+  const libraryMetrics = useMemo<MetricLibraryEntry[]>(
+    () => buildMetricLibraryEntries(definitions, companyMetrics),
+    [definitions, companyMetrics],
+  );
 
   const seedMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/metric-definitions/seed"),
@@ -252,21 +265,31 @@ export default function MetricsLibraryPage() {
   });
 
   const toggleMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("PATCH", `/api/metric-definitions/${id}/toggle`),
-    onMutate: (id: string) => setToggling(prev => new Set([...prev, id])),
-    onSettled: (_, __, id: string) => setToggling(prev => { const s = new Set(prev); s.delete(id); return s; }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/metric-definitions"] }),
+    mutationFn: (metric: MetricDefinition) => {
+      if (metric.isSyntheticCustom && metric.companyMetricId) {
+        return apiRequest("PUT", `/api/metrics/${metric.companyMetricId}`, { enabled: !metric.isActive });
+      }
+      return apiRequest("PATCH", `/api/metric-definitions/${metric.id}/toggle`);
+    },
+    onMutate: (metric: MetricDefinition) => setToggling(prev => new Set([...prev, metric.id])),
+    onSettled: (_, __, metric: MetricDefinition) => setToggling(prev => { const s = new Set(prev); s.delete(metric.id); return s; }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/metric-definitions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+    },
     onError: (e: Error) => toast({ title: "Toggle failed", description: e.message, variant: "destructive" }),
   });
 
   const filtered = useMemo(() => {
-    return definitions.filter(d => {
+    return libraryMetrics.filter(d => {
       const matchesPillar = pillarFilter === "all" || d.pillar === pillarFilter;
       const matchesStatus = statusFilter === "all" || (statusFilter === "active" && d.isActive) || (statusFilter === "inactive" && !d.isActive) || (statusFilter === "core" && d.isCore) || (statusFilter === "advanced" && !d.isCore);
       const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.code.toLowerCase().includes(search.toLowerCase()) || (d.description ?? "").toLowerCase().includes(search.toLowerCase());
       return matchesPillar && matchesStatus && matchesSearch;
     });
-  }, [definitions, pillarFilter, statusFilter, search]);
+  }, [libraryMetrics, pillarFilter, statusFilter, search]);
 
   const byPillarAndCategory = useMemo(() => {
     const pillars: Record<string, Record<string, MetricDefinition[]>> = {};
@@ -281,12 +304,12 @@ export default function MetricsLibraryPage() {
   const pillarOrder: Array<"environmental" | "social" | "governance"> = ["environmental", "social", "governance"];
 
   const stats = useMemo(() => ({
-    total: definitions.length,
-    recommended: definitions.filter(d => d.isCore).length,
-    optional: definitions.filter(d => !d.isCore).length,
-    enabled: definitions.filter(d => d.isActive).length,
-    derived: definitions.filter(d => d.isDerived).length,
-  }), [definitions]);
+    total: libraryMetrics.length,
+    recommended: libraryMetrics.filter(d => d.isCore).length,
+    optional: libraryMetrics.filter(d => !d.isCore).length,
+    enabled: libraryMetrics.filter(d => d.isActive).length,
+    derived: libraryMetrics.filter(d => d.isDerived).length,
+  }), [libraryMetrics]);
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -308,7 +331,7 @@ export default function MetricsLibraryPage() {
               <AddMetricDialog onClose={() => setShowAdd(false)} />
             </Dialog>
           )}
-          {definitions.length === 0 && !isLoading && (
+          {libraryMetrics.length === 0 && !isLoading && (
             <Button
               onClick={() => seedMutation.mutate()}
               disabled={seedMutation.isPending}
@@ -320,7 +343,7 @@ export default function MetricsLibraryPage() {
         </div>
       </div>
 
-      {definitions.length > 0 && (
+      {libraryMetrics.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="stats-summary">
           <Card className="p-3">
             <div className="text-2xl font-bold" data-testid="stat-total">{stats.total}</div>
@@ -381,7 +404,7 @@ export default function MetricsLibraryPage() {
         <div className="space-y-4">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-32 w-full" />)}
         </div>
-      ) : definitions.length === 0 ? (
+      ) : libraryMetrics.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <Leaf className="w-12 h-12 text-muted-foreground mb-4" />
@@ -428,7 +451,10 @@ export default function MetricsLibraryPage() {
                         key={category}
                         category={category}
                         metrics={catMetrics}
-                        onToggle={id => toggleMutation.mutate(id)}
+                        onToggle={id => {
+                          const metric = libraryMetrics.find((m) => m.id === id);
+                          if (metric) toggleMutation.mutate(metric as MetricDefinition);
+                        }}
                         toggling={toggling}
                       />
                     ))}
