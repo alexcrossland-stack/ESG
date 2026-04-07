@@ -224,6 +224,20 @@ function sendServerError(res: Response, error: unknown, context?: string): void 
   res.status(500).json({ error: "An unexpected error occurred.", code: "INTERNAL_ERROR" });
 }
 
+function isOpenAiQuotaError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: number; code?: string; error?: { code?: string; type?: string; message?: string }; message?: string; type?: string };
+  const message = String(candidate.message || candidate.error?.message || "");
+  const code = candidate.code || candidate.error?.code;
+  const type = candidate.type || candidate.error?.type;
+  return (
+    candidate.status === 429 &&
+    (code === "insufficient_quota" ||
+      type === "insufficient_quota" ||
+      message.toLowerCase().includes("exceeded your current quota"))
+  );
+}
+
 function parseEmployeeCountInput(value: unknown): { ok: true; value: number } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") {
     return { ok: false, error: "Employee count is required" };
@@ -5408,6 +5422,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(generatedPolicy);
     } catch (e: any) {
       console.error("Template generation error:", e);
+      if (isOpenAiQuotaError(e)) {
+        return res.status(503).json({
+          code: "AI_QUOTA_EXHAUSTED",
+          error: "Policy generation is temporarily unavailable. Please try again shortly.",
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -5503,12 +5523,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/users/invite", requireAuth, requireProvisioningPermission("invite_user"), inviteLimiter, async (req, res) => {
     try {
-      const companyId = (req.session as any).companyId;
-      const actorId = (req.session as any).userId;
+      const auth = resolveAuth(req)!;
+      const actorId = auth.userId;
+      const callerUser = await storage.getUser(actorId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+
+      const requestedCompanyId = typeof req.body?.companyId === "string" ? req.body.companyId : undefined;
+      const isSuperAdmin = isPlatformSuperAdmin(callerUser);
+      const companyId = isSuperAdmin && requestedCompanyId ? requestedCompanyId : auth.companyId;
+      if (!companyId) return res.status(400).json({ error: "companyId is required" });
+
       const { email, role = "contributor", inviteeName } = req.body;
       if (!email) return res.status(400).json({ error: "email is required" });
       const validRoles = ["admin", "contributor", "approver", "viewer"];
       if (!validRoles.includes(role)) return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+
+      const targetCompany = await storage.getCompany(companyId);
+      if (!targetCompany) {
+        return res.status(404).json({ error: "Target company not found" });
+      }
 
       const existing = await storage.getUserByEmail(email);
       if (existing && existing.companyId === companyId) {
@@ -5519,12 +5552,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
       await storage.createAuthToken({ tokenHash: hash, type: "invitation", email, expiresAt });
 
-      const company = await storage.getCompany(companyId);
-      const actor = await storage.getUser(actorId);
       const emailPayload = buildInvitationEmail({
         inviteeName: inviteeName || email,
-        companyName: company?.name || "your company",
-        inviterName: actor?.username || actor?.email || "A team member",
+        companyName: targetCompany.name || "your company",
+        inviterName: callerUser.username || callerUser.email || "A team member",
         token: plaintext,
       });
       emailPayload.to = email;
@@ -5545,7 +5576,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: null,
         details: {
           before: null,
-          after: { email, role, inviteeName: inviteeName ?? null, expiresAt: expiresAt.toISOString() },
+          after: { email, role, inviteeName: inviteeName ?? null, targetCompanyId: companyId, expiresAt: expiresAt.toISOString() },
         },
         req,
       });
@@ -5558,17 +5589,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/users/:id/role", requireAuth, requireProvisioningPermission("assign_user_role"), requireStepUp, async (req, res) => {
     try {
-      const companyId = (req.session as any).companyId;
-      const userId = (req.session as any).userId;
-      const { role } = req.body;
+      const auth = resolveAuth(req)!;
+      const companyId = auth.companyId;
+      const userId = auth.userId;
+      const callerUser = await storage.getUser(userId);
+      if (!callerUser) return res.status(401).json({ error: "Not authenticated" });
+      const isSuperAdmin = isPlatformSuperAdmin(callerUser);
+
+      const { role, companyId: requestedCompanyId } = req.body;
       const validRoles = ["admin", "contributor", "approver", "viewer"];
       if (!validRoles.includes(role)) {
         return res.status(400).json({ error: "Invalid role. Must be one of: admin, contributor, approver, viewer" });
       }
+
       const targetUser = await storage.getUser(req.params.id);
-      if (!targetUser || targetUser.companyId !== companyId) {
+      if (!targetUser) {
         return res.status(404).json({ error: "User not found" });
       }
+      if (!isSuperAdmin && targetUser.companyId !== companyId) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let targetCompanyId = targetUser.companyId;
+      if (isSuperAdmin && typeof requestedCompanyId === "string" && requestedCompanyId.trim()) {
+        const targetCompany = await storage.getCompany(requestedCompanyId);
+        if (!targetCompany) {
+          return res.status(404).json({ error: "Target company not found" });
+        }
+        targetCompanyId = requestedCompanyId;
+      }
+
       if (isPlatformSuperAdmin(targetUser)) {
         const superAdminCountResult = await db.execute(sql`
           SELECT COUNT(*)::int AS total
@@ -5582,22 +5632,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       const previousRole = targetUser.role;
-      const updated = await storage.updateUser(req.params.id, { role });
+      const previousCompanyId = targetUser.companyId;
+      const updated = await storage.updateUser(req.params.id, {
+        role,
+        ...(targetCompanyId ? { companyId: targetCompanyId } : {}),
+      });
       await auditLog({
-        companyId,
+        companyId: targetCompanyId || companyId,
         userId,
         action: "user_role_changed",
         entityType: "user",
         entityId: req.params.id,
         details: {
-          before: { role: previousRole },
-          after: { role, targetUsername: targetUser.username },
+          before: { role: previousRole, companyId: previousCompanyId },
+          after: { role, companyId: targetCompanyId, targetUsername: targetUser.username },
         },
         ipAddress: getClientIp(req),
         userAgent: req.headers["user-agent"],
       });
       if (role === "admin" || role === "super_admin" || previousRole === "admin" || previousRole === "super_admin" || isPlatformSuperAdmin(targetUser)) {
-        evaluateSecurityEvent({ action: SECURITY_EVENTS.USER_ROLE_CHANGED, userId, companyId, ipAddress: getClientIp(req), details: { previousRole, newRole: role, targetUserId: req.params.id } }).catch(() => {});
+        evaluateSecurityEvent({
+          action: SECURITY_EVENTS.USER_ROLE_CHANGED,
+          userId,
+          companyId: targetCompanyId || companyId,
+          ipAddress: getClientIp(req),
+          details: { previousRole, newRole: role, previousCompanyId, newCompanyId: targetCompanyId, targetUserId: req.params.id },
+        }).catch(() => {});
       }
       if (updated) {
         const { password, ...sanitized } = updated;

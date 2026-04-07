@@ -281,6 +281,30 @@ app.use((req, res, next) => {
     `);
   } catch {}
   try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS user_sessions_ext (
+        id serial PRIMARY KEY,
+        user_id varchar NOT NULL,
+        company_id varchar,
+        session_id text NOT NULL UNIQUE,
+        ip_address text,
+        user_agent text,
+        device_summary text,
+        created_at timestamp DEFAULT now() NOT NULL,
+        last_seen_at timestamp DEFAULT now() NOT NULL,
+        expires_at timestamp NOT NULL,
+        revoked_at timestamp,
+        step_up_at timestamp
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_user_sessions_ext_user_id ON user_sessions_ext (user_id)`);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_sessions_ext_session_id ON user_sessions_ext (session_id)`);
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not create or validate user_sessions_ext — run db:push or apply schema manually");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
     const result = await db.execute(sql`SELECT id FROM users WHERE role = 'super_admin' LIMIT 1`);
     const rows = (result as any).rows ?? [];
     if (rows.length === 0) {
@@ -315,6 +339,46 @@ app.use((req, res, next) => {
     console.log("[Startup] Multi-site schema check passed");
   } catch (e: any) {
     console.error("[Startup] FATAL: Could not validate multi-site schema:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
+    const sessionTableResult = await db.execute(sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_name = 'user_sessions_ext' AND table_schema = 'public'
+    `);
+    const sessionRows = (sessionTableResult as any).rows ?? [];
+    if (sessionRows.length === 0) {
+      console.error("[Startup] FATAL: user_sessions_ext table is missing — run db:push or apply schema manually");
+      process.exit(1);
+    }
+    const sessionColumnResult = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'user_sessions_ext' AND table_schema = 'public'
+    `);
+    const sessionColumns = new Set(((sessionColumnResult as any).rows ?? []).map((r: any) => r.column_name as string));
+    const requiredSessionColumns = [
+      "id",
+      "user_id",
+      "company_id",
+      "session_id",
+      "ip_address",
+      "user_agent",
+      "device_summary",
+      "created_at",
+      "last_seen_at",
+      "expires_at",
+      "revoked_at",
+      "step_up_at",
+    ];
+    const missingSessionColumns = requiredSessionColumns.filter(col => !sessionColumns.has(col));
+    if (missingSessionColumns.length > 0) {
+      console.error(`[Startup] FATAL: user_sessions_ext is missing columns: ${missingSessionColumns.join(", ")}`);
+      console.error("[Startup] FATAL: Run db:push or apply the session schema manually");
+      process.exit(1);
+    }
+    console.log("[Startup] Extended session schema check passed");
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not validate user_sessions_ext schema:", e.message ?? e);
     process.exit(1);
   }
   try {
