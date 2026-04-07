@@ -49,7 +49,7 @@ async function createDbClient(): Promise<Client> {
 
 async function enableProPlan(client: Client, companyId: string) {
   await client.query(
-    "UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1",
+    "UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1::uuid",
     [companyId],
   );
 }
@@ -63,6 +63,17 @@ async function getTenantAMetricId(adminToken: string): Promise<string> {
   const metricId = metrics[0]?.id;
   if (!metricId) throw new Error("No tenant A metric found for test");
   return metricId;
+}
+
+async function getTenantAMetricIds(adminToken: string, count: number): Promise<string[]> {
+  const res = await apiRequest("GET", "/api/metrics", undefined, adminToken);
+  if (res.status !== 200) {
+    throw new Error(`GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
+  }
+  const metrics = JSON.parse(res.body) as Array<{ id: string }>;
+  const metricIds = metrics.slice(0, count).map((metric) => metric.id).filter(Boolean);
+  if (metricIds.length < count) throw new Error(`Expected at least ${count} metrics for bulk paste test`);
+  return metricIds;
 }
 
 async function getMetricDefinitionId(client: Client): Promise<string> {
@@ -89,11 +100,11 @@ async function countMetricValues(client: Client, metricId: string, period: strin
     `
       SELECT COUNT(*)::int AS count, MAX(value::text) AS value
       FROM metric_values
-      WHERE metric_id = $1
+      WHERE metric_id = $1::uuid
         AND period = $2
         AND (
           ($3::text IS NULL AND site_id IS NULL)
-          OR site_id = $3::text
+          OR site_id = $3::uuid
         )
     `,
     [metricId, period, siteId],
@@ -116,13 +127,13 @@ async function countMetricDefinitionValues(
     `
       SELECT COUNT(*)::int AS count, MAX(value_numeric::text) AS value_numeric
       FROM metric_definition_values
-      WHERE business_id = $1
-        AND metric_definition_id = $2
+      WHERE business_id = $1::uuid
+        AND metric_definition_id = $2::uuid
         AND reporting_period_start = $3::timestamp
         AND reporting_period_end = $4::timestamp
         AND (
           ($5::text IS NULL AND site_id IS NULL)
-          OR site_id = $5::text
+          OR site_id = $5::uuid
         )
     `,
     [businessId, metricDefinitionId, periodStart, periodEnd, siteId],
@@ -203,6 +214,169 @@ async function testMetricValuesUpsert(adminToken: string, metricId: string, clie
       "metric_values concurrent submissions should remain unique",
       `statuses=${concurrentResponses.map((r) => r.status).join(",")} count=${concurrentRow.count}`,
     );
+  }
+}
+
+async function testBulkMetricPasteUpsert(adminToken: string, metricIds: string[], client: Client) {
+  console.log("\n── bulk metric paste tests ──");
+
+  const validateRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [
+      { metricId: metricIds[0], period: "2026-04", rawValue: "1,250" },
+      { metricId: metricIds[1], period: "2026-04", rawValue: "£250" },
+    ],
+  }, adminToken);
+
+  if (validateRes.status === 200) {
+    const body = JSON.parse(validateRes.body) as ValidationShape;
+    if (body.summary.createCount === 2 && body.summary.errorCount === 0) {
+      pass("bulk validate reports create counts before commit", `creates=${body.summary.createCount}`);
+    } else {
+      fail("bulk validate should classify pending creates", JSON.stringify(body.summary));
+    }
+  } else {
+    fail("bulk validate should return 200", `status=${validateRes.status}`);
+  }
+
+  const commitRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "commit",
+    cells: [
+      { metricId: metricIds[0], period: "2026-04", rawValue: "1,250" },
+      { metricId: metricIds[1], period: "2026-04", rawValue: "£250" },
+    ],
+  }, adminToken);
+
+  if (commitRes.status === 200) {
+    const firstRow = await countMetricValues(client, metricIds[0], "2026-04", null);
+    const secondRow = await countMetricValues(client, metricIds[1], "2026-04", null);
+    if (
+      firstRow.count === 1 &&
+      secondRow.count === 1 &&
+      numericTextEquals(firstRow.value, 1250) &&
+      numericTextEquals(secondRow.value, 250)
+    ) {
+      pass("bulk commit stores normalized values once per metric/month", `values=${firstRow.value},${secondRow.value}`);
+    } else {
+      fail("bulk commit should persist normalized values", `row1=${JSON.stringify(firstRow)} row2=${JSON.stringify(secondRow)}`);
+    }
+  } else {
+    fail("bulk commit should succeed", `status=${commitRes.status}`);
+  }
+
+  const updateRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "commit",
+    cells: [
+      { metricId: metricIds[0], period: "2026-04", rawValue: "" },
+      { metricId: metricIds[1], period: "2026-04", rawValue: "12%" },
+    ],
+  }, adminToken);
+
+  if (updateRes.status === 200) {
+    const firstRow = await countMetricValues(client, metricIds[0], "2026-04", null);
+    const secondRow = await countMetricValues(client, metricIds[1], "2026-04", null);
+    if (
+      firstRow.count === 1 &&
+      secondRow.count === 1 &&
+      firstRow.value === null &&
+      numericTextEquals(secondRow.value, 12)
+    ) {
+      pass("bulk commit can clear values and update existing rows without duplicates", `cleared=${firstRow.value} updated=${secondRow.value}`);
+    } else {
+      fail("bulk commit should clear/update existing rows", `row1=${JSON.stringify(firstRow)} row2=${JSON.stringify(secondRow)}`);
+    }
+  } else {
+    fail("bulk update commit should succeed", `status=${updateRes.status}`);
+  }
+}
+
+type ValidationShape = {
+  summary: {
+    createCount: number;
+    updateCount: number;
+    clearCount: number;
+    errorCount: number;
+    warningCount: number;
+  };
+  ok?: boolean;
+  rowIssues?: Array<{ metricName: string | null; errors: string[]; warnings: string[] }>;
+  cells?: Array<{ status: string; normalizedValue: number | null; errors: string[]; warnings: string[] }>;
+};
+
+async function insertLockedReportingPeriod(client: Client, companyId: string, month: string) {
+  await client.query(
+    `
+      INSERT INTO reporting_periods (company_id, name, period_type, start_date, end_date, status)
+      VALUES ($1::uuid, $2, 'monthly', $3::timestamp, $4::timestamp, 'locked')
+    `,
+    [
+      companyId,
+      `Locked ${month}`,
+      `${month}-01T00:00:00.000Z`,
+      `${month}-28T23:59:59.999Z`,
+    ],
+  );
+}
+
+async function testBulkMetricPasteValidationEdges(adminToken: string, companyId: string, metricIds: string[], client: Client) {
+  console.log("\n── bulk metric paste validation edges ──");
+
+  const mixedRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [
+      { metricId: metricIds[0], period: "2026-05", rawValue: "100" },
+      { metricId: metricIds[0], period: "2026-06", rawValue: "1000" },
+      { metricId: metricIds[1], period: "2026-06", rawValue: "not-a-number" },
+    ],
+  }, adminToken);
+
+  if (mixedRes.status === 200) {
+    const body = JSON.parse(mixedRes.body) as ValidationShape;
+    if ((body.summary.errorCount ?? 0) >= 1 && (body.summary.warningCount ?? 0) >= 1 && body.ok === false) {
+      pass("bulk validate returns mixed warnings and blocking errors in one batch", `errors=${body.summary.errorCount} warnings=${body.summary.warningCount}`);
+    } else {
+      fail("bulk validate should report mixed error/warning batches", JSON.stringify(body.summary));
+    }
+  } else {
+    fail("mixed validation batch should return 200", `status=${mixedRes.status}`);
+  }
+
+  const duplicateRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [
+      { metricId: metricIds[0], period: "2026-07", rawValue: "10" },
+      { metricId: metricIds[0], period: "2026-07", rawValue: "20" },
+    ],
+  }, adminToken);
+
+  if (duplicateRes.status === 200) {
+    const body = JSON.parse(duplicateRes.body) as ValidationShape;
+    if ((body.summary.errorCount ?? 0) >= 1) {
+      pass("bulk validate blocks duplicate metric/month cells inside one batch", `errors=${body.summary.errorCount}`);
+    } else {
+      fail("duplicate batch should be rejected before commit", JSON.stringify(body.summary));
+    }
+  } else {
+    fail("duplicate validation batch should return 200", `status=${duplicateRes.status}`);
+  }
+
+  await insertLockedReportingPeriod(client, companyId, "2026-08");
+  const lockedRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [
+      { metricId: metricIds[0], period: "2026-08", rawValue: "25" },
+    ],
+  }, adminToken);
+
+  if (lockedRes.status === 200) {
+    const body = JSON.parse(lockedRes.body) as ValidationShape;
+    if ((body.summary.errorCount ?? 0) >= 1 && (body.rowIssues || []).some((issue) => issue.errors.some((error) => error.includes("locked")))) {
+      pass("bulk validate blocks locked reporting periods", "locked month rejected");
+    } else {
+      fail("locked reporting period should be rejected", JSON.stringify(body));
+    }
+  } else {
+    fail("locked validation batch should return 200", `status=${lockedRes.status}`);
   }
 }
 
@@ -332,9 +506,12 @@ async function run() {
     await enableProPlan(client, tenants.tenantA.companyId);
 
     const metricId = await getTenantAMetricId(tenants.tenantA.adminToken);
+    const bulkMetricIds = await getTenantAMetricIds(tenants.tenantA.adminToken, 2);
     const metricDefinitionId = await getMetricDefinitionId(client);
 
     await testMetricValuesUpsert(tenants.tenantA.adminToken, metricId, client);
+    await testBulkMetricPasteUpsert(tenants.tenantA.adminToken, bulkMetricIds, client);
+    await testBulkMetricPasteValidationEdges(tenants.tenantA.adminToken, tenants.tenantA.companyId, bulkMetricIds, client);
     await testMetricDefinitionValuesUpsert(
       tenants.tenantA.adminToken,
       tenants.tenantA.companyId,

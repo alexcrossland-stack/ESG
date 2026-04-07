@@ -38,6 +38,7 @@ import { trackTelemetryEvent } from "./telemetry";
 import { auditLog, getClientIp } from "./audit";
 import { getEffectivePlanTier, getActiveGrant } from "./billing/entitlement";
 import { insertAccessGrantSchema } from "@shared/schema";
+import { commitBulkMetricPaste, getBulkMetricGrid, validateBulkMetricPaste } from "./bulk-metric-entry";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -2435,6 +2436,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const values = await storage.getMetricValuesByPeriod(companyId, req.params.period);
     const allMetrics = await storage.getMetrics(companyId);
     res.json({ values, metrics: allMetrics.filter(m => m.enabled) });
+  });
+
+  app.get("/api/data-entry/bulk-grid", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" ? null : (siteIdParam || null);
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      const periodsParam = String(req.query.periods || "");
+      const periods = periodsParam.split(",").map((period) => period.trim()).filter(Boolean);
+      if (periods.length === 0) {
+        return res.status(400).json({ error: "At least one reporting month is required" });
+      }
+
+      const result = await getBulkMetricGrid(companyId, periods, siteId);
+      res.json(result);
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.post("/api/data-entry/bulk-upsert", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const siteId = req.body?.siteId === undefined || req.body?.siteId === null || req.body?.siteId === "" ? null : String(req.body.siteId);
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      const mode = req.body?.mode === "commit" ? "commit" : "validate";
+      const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
+      if (cells.length === 0) {
+        return res.status(400).json({ error: "At least one cell is required" });
+      }
+
+      const validation = await validateBulkMetricPaste({
+        companyId,
+        siteId,
+        cells,
+        mode,
+      });
+
+      if (mode === "validate") {
+        return res.json(validation);
+      }
+
+      if (!validation.ok) {
+        return res.status(400).json(validation);
+      }
+
+      const committed = await commitBulkMetricPaste({
+        companyId,
+        userId,
+        siteId,
+        validation,
+        req,
+      });
+      res.json(committed);
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
   });
 
   app.post("/api/data-entry", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {

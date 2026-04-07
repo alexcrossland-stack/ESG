@@ -40,6 +40,7 @@ import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
+import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -136,7 +137,7 @@ export default function DataEntry() {
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState("raw");
+  const [activeTab, setActiveTab] = useState("paste");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
@@ -805,6 +806,10 @@ export default function DataEntry() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
+          <TabsTrigger value="paste" data-testid="tab-paste-excel">
+            <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
+            Paste from Excel
+          </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw-data">
             <Calculator className="w-3.5 h-3.5 mr-1.5" />
             Raw Data
@@ -815,9 +820,20 @@ export default function DataEntry() {
           </TabsTrigger>
           <TabsTrigger value="upload" data-testid="tab-excel-upload">
             <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5" />
-            Excel Upload
+            Upload File
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="paste" className="mt-4 space-y-4">
+          {canEdit ? (
+            <PasteFromExcelTab selectedPeriod={selectedPeriod} onSwitchToUpload={() => setActiveTab("upload")} />
+          ) : (
+            <div className="text-center py-12 space-y-2">
+              <Eye className="w-8 h-8 text-muted-foreground mx-auto" />
+              <p className="text-sm text-muted-foreground">You do not have permission to paste data.</p>
+            </div>
+          )}
+        </TabsContent>
 
         <TabsContent value="raw" className="mt-4 space-y-4">
           <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-md border border-border">
@@ -1608,7 +1624,7 @@ function ExcelUploadTab() {
         <FileSpreadsheet className="w-4 h-4 text-blue-500" />
         <AlertDescription className="text-sm">
           Upload an Excel file with metric names down the left column and monthly periods (YYYY-MM) across the top.
-          This allows you to upload historical and ongoing data in bulk.
+          This remains available as a fallback when direct paste is not practical.
         </AlertDescription>
       </Alert>
 
