@@ -1,17 +1,19 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, Globe } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AddMetricDialog } from "@/components/add-metric-dialog";
+import { usePermissions } from "@/lib/permissions";
 
 const STRENGTH_COLORS: Record<string, string> = {
   direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
@@ -191,7 +193,7 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
       </div>
       <div className="mt-3 pt-3 border-t border-border/50">
         <p className="text-xs text-muted-foreground">
-          Browse the definition here, then use <span className="font-medium text-foreground">Metrics</span> to review active company metrics and <span className="font-medium text-foreground">Enter Data</span> to add values.
+          Use this page to browse the catalog, enable or disable metrics for your company, and add new manual metrics. Use <span className="font-medium text-foreground">Metrics</span> to review enabled company metrics and <span className="font-medium text-foreground">Enter Data</span> to add values for eligible ones.
         </p>
       </div>
       {showAlignment && <FrameworkAlignmentPanel metricDefinitionId={metric.id} />}
@@ -228,11 +230,13 @@ function CategoryGroup({ category, metrics, onToggle, toggling }: { category: st
 export default function MetricsLibraryPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
 
   const [search, setSearch] = useState("");
   const [pillarFilter, setPillarFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [toggling, setToggling] = useState<Set<string>>(new Set());
+  const [showAdd, setShowAdd] = useState(false);
 
   const { data: definitions = [], isLoading } = useQuery<MetricDefinition[]>({
     queryKey: ["/api/metric-definitions"],
@@ -290,18 +294,30 @@ export default function MetricsLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Browse the full catalog of available ESG metric definitions. Recommended metrics are enabled for new companies by default, and you can turn any metric on or off for your company here.
+            Browse the full catalog of available ESG metric definitions. Recommended metrics are enabled for new companies by default, and you can turn any metric on or off or add a new manual metric for your company here.
           </p>
         </div>
-        {definitions.length === 0 && !isLoading && (
-          <Button
-            onClick={() => seedMutation.mutate()}
-            disabled={seedMutation.isPending}
-            data-testid="button-seed-metrics"
-          >
-            {seedMutation.isPending ? "Seeding..." : "Load Metric Library"}
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {can("metrics_data_entry") && (
+            <Dialog open={showAdd} onOpenChange={setShowAdd}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-library-add-metric">
+                  Add Manual Metric
+                </Button>
+              </DialogTrigger>
+              <AddMetricDialog onClose={() => setShowAdd(false)} />
+            </Dialog>
+          )}
+          {definitions.length === 0 && !isLoading && (
+            <Button
+              onClick={() => seedMutation.mutate()}
+              disabled={seedMutation.isPending}
+              data-testid="button-seed-metrics"
+            >
+              {seedMutation.isPending ? "Seeding..." : "Load Metric Library"}
+            </Button>
+          )}
+        </div>
       </div>
 
       {definitions.length > 0 && (

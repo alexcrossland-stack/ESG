@@ -188,6 +188,36 @@ async function run(tenants: SeededTenants): Promise<void> {
       else pass(name);
     }
   }
+
+  // ── 12. Custom metric appears in active metric and data-entry views ──────
+  {
+    const name = "POST /api/metrics creates a custom manual metric that appears in Metrics and Enter Data";
+    const customName = `QA Custom Metric ${Date.now()}`;
+    const createRes = await apiRequest("POST", "/api/metrics", {
+      name: customName,
+      description: "Custom manual metric created from Metrics Library flow",
+      category: "environmental",
+      unit: "kg",
+      frequency: "monthly",
+      dataOwner: "QA Owner",
+    }, tenantA.adminToken);
+
+    if (![200, 201].includes(createRes.status)) {
+      fail(name, `create status=${createRes.status} body=${createRes.body.slice(0, 200)}`);
+    } else {
+      const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+      const metrics = JSON.parse(metricsRes.body) as Array<{ name: string; enabled: boolean }>;
+      const inMetrics = metrics.some((metric) => metric.name === customName && metric.enabled);
+
+      const dataEntryRes = await apiRequest("GET", "/api/data-entry/2024-01", undefined, tenantA.adminToken);
+      const dataEntry = JSON.parse(dataEntryRes.body) as { metrics: Array<{ name: string }> };
+      const inDataEntry = dataEntry.metrics.some((metric) => metric.name === customName);
+
+      if (!inMetrics) fail(name, "created metric missing from /api/metrics enabled view");
+      else if (!inDataEntry) fail(name, "created metric missing from /api/data-entry enabled metrics");
+      else pass(name);
+    }
+  }
 }
 
 (async () => {

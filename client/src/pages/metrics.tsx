@@ -1,28 +1,22 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { PageGuidance } from "@/components/page-guidance";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, authFetch } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
+import { authFetch } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { useForm } from "react-hook-form";
-import { useToast } from "@/hooks/use-toast";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  BarChart3, Plus, Leaf, Users, Shield, ArrowUp, ArrowDown,
+  BarChart3, Leaf, Users, Shield, ArrowUp, ArrowDown,
   Minus, Calculator, PenLine, GitBranch, ChevronRight,
 } from "lucide-react";
-import { usePermissions } from "@/lib/permissions";
 
 type MetricSummary = {
   id: string;
@@ -224,104 +218,8 @@ function MetricRow({ metric, onClick }: { metric: MetricSummary; onClick: () => 
   );
 }
 
-function AddMetricDialog({ onClose }: { onClose: () => void }) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const form = useForm({
-    defaultValues: {
-      name: "", description: "", category: "environmental", unit: "",
-      frequency: "monthly", dataOwner: "",
-    },
-  });
-
-  const mutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/metrics", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      toast({ title: "Metric added" });
-      onClose();
-    },
-  });
-
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>Add Custom Metric</DialogTitle>
-      </DialogHeader>
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(d => mutation.mutate(d))} className="space-y-4 pt-2">
-          <FormField control={form.control} name="name" render={({ field }) => (
-            <FormItem>
-              <FormLabel>Metric Name</FormLabel>
-              <FormControl><Input placeholder="e.g. Fleet Fuel Consumption" {...field} data-testid="input-metric-name" /></FormControl>
-              <FormMessage />
-            </FormItem>
-          )} />
-          <FormField control={form.control} name="description" render={({ field }) => (
-            <FormItem>
-              <FormLabel>Description</FormLabel>
-              <FormControl><Textarea placeholder="What does this metric measure?" {...field} className="resize-none" data-testid="input-metric-desc" /></FormControl>
-            </FormItem>
-          )} />
-          <div className="grid grid-cols-2 gap-3">
-            <FormField control={form.control} name="category" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Category</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value}>
-                  <FormControl><SelectTrigger data-testid="select-metric-category"><SelectValue /></SelectTrigger></FormControl>
-                  <SelectContent>
-                    <SelectItem value="environmental">Environmental</SelectItem>
-                    <SelectItem value="social">Social</SelectItem>
-                    <SelectItem value="governance">Governance</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormItem>
-            )} />
-            <FormField control={form.control} name="frequency" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Frequency</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value}>
-                  <FormControl><SelectTrigger data-testid="select-metric-freq"><SelectValue /></SelectTrigger></FormControl>
-                  <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormItem>
-            )} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <FormField control={form.control} name="unit" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Unit</FormLabel>
-                <FormControl><Input placeholder="kWh, %, tonnes..." {...field} data-testid="input-metric-unit" /></FormControl>
-              </FormItem>
-            )} />
-            <FormField control={form.control} name="dataOwner" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Data Owner</FormLabel>
-                <FormControl><Input placeholder="HR Manager" {...field} data-testid="input-metric-owner" /></FormControl>
-              </FormItem>
-            )} />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending} data-testid="button-add-metric">
-              {mutation.isPending ? "Adding..." : "Add Metric"}
-            </Button>
-          </div>
-        </form>
-      </Form>
-    </DialogContent>
-  );
-}
-
 export default function Metrics() {
-  const { can } = usePermissions();
   const [selectedMetric, setSelectedMetric] = useState<MetricSummary | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -346,7 +244,7 @@ export default function Metrics() {
       <PageGuidance
         pageKey="metrics"
         title="Metrics — what this page does"
-        summary="This page shows the ESG metrics your company is actively tracking. Use Enter Data to add figures for eligible metrics each period. Calculated and derived metrics update from the data you save."
+        summary="This page shows the ESG metrics your company is currently tracking. Use Metrics Library to enable or disable metrics and add manual metrics. Use Enter Data to add figures for eligible enabled metrics each period."
         goodLooksLike="At least 5–10 metrics enabled across environmental, social, and governance categories, with data entered for the current and previous 3 months."
         steps={[
           "Review the metrics your company is currently tracking",
@@ -362,22 +260,11 @@ export default function Metrics() {
             Metrics
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Your company’s active ESG metrics and current status
+            Your company’s enabled ESG metrics and current status
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="secondary" data-testid="badge-metric-count">{metrics.length} metrics</Badge>
-          {can("metrics_data_entry") && (
-            <Dialog open={showAdd} onOpenChange={setShowAdd}>
-              <DialogTrigger asChild>
-                <Button size="sm" data-testid="button-add-custom-metric">
-                  <Plus className="w-3.5 h-3.5 mr-1.5" />
-                  Add
-                </Button>
-              </DialogTrigger>
-              <AddMetricDialog onClose={() => setShowAdd(false)} />
-            </Dialog>
-          )}
         </div>
       </div>
 
@@ -442,13 +329,20 @@ export default function Metrics() {
               <p className="text-xs text-muted-foreground mt-1">Metrics are the individual measurements that make up your ESG score — things like carbon emissions, headcount, and whether policies are in place.</p>
             </div>
             <p className="text-xs text-muted-foreground">
-              Scroll down to turn on the metrics relevant to your business, or complete onboarding to have metrics pre-selected for your industry.
+              Open Metrics Library to enable the metrics relevant to your business, add a custom manual metric, or complete onboarding to have recommended metrics pre-selected for your industry.
             </p>
-            <Link href="/onboarding">
-              <Button size="sm" variant="outline" data-testid="button-metrics-empty-onboarding">
-                Complete onboarding to pre-select metrics
-              </Button>
-            </Link>
+            <div className="flex items-center justify-center gap-2">
+              <Link href="/metrics-library">
+                <Button size="sm" variant="outline" data-testid="button-metrics-empty-library">
+                  Open Metrics Library
+                </Button>
+              </Link>
+              <Link href="/onboarding">
+                <Button size="sm" variant="outline" data-testid="button-metrics-empty-onboarding">
+                  Complete onboarding
+                </Button>
+              </Link>
+            </div>
           </div>
         )}
         {filtered.length === 0 && metrics.length > 0 && (
