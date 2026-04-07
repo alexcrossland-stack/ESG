@@ -239,7 +239,7 @@ export default function EsgPolicyRegisterPage() {
       setEditingPolicy(null);
       toast({ title: "Policy saved" });
     },
-    onError: () => toast({ title: "Save failed", variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Save failed", description: e?.message || "Unable to save policy right now.", variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
@@ -250,7 +250,7 @@ export default function EsgPolicyRegisterPage() {
       setEditingPolicy(null);
       toast({ title: "Policy updated" });
     },
-    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Update failed", description: e?.message || "Unable to update policy right now.", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({

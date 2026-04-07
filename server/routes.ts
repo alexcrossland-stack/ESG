@@ -81,6 +81,78 @@ function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   return map;
 }
 
+const policyRecordStatusValues = ["draft", "active", "under_review", "retired"] as const;
+const policyRecordTypeValues = [
+  "environmental",
+  "social",
+  "governance",
+  "health_safety",
+  "data_privacy",
+  "anti_bribery",
+  "whistleblowing",
+  "cybersecurity",
+  "supplier",
+  "climate",
+  "other",
+] as const;
+
+const policyRecordPayloadSchema = z.object({
+  title: z.string().trim().min(1, "Policy title is required"),
+  policyType: z.enum(policyRecordTypeValues).optional(),
+  owner: z.string().trim().nullable().optional(),
+  status: z.enum(policyRecordStatusValues).optional(),
+  effectiveDate: z.string().nullable().optional(),
+  reviewDate: z.string().nullable().optional(),
+  documentLink: z.string().trim().nullable().optional(),
+  notes: z.string().trim().nullable().optional(),
+  linkedMaterialTopicIds: z.array(z.string()).optional(),
+  ownerUserId: z.string().nullable().optional(),
+});
+
+function normalizePolicyRecordPayload(input: unknown) {
+  const parsed = policyRecordPayloadSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false as const, error: parsed.error.issues[0]?.message || "Invalid policy payload" };
+  }
+
+  const toNullableText = (value: string | null | undefined) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : null;
+  };
+
+  const toNullableDate = (value: string | null | undefined, fieldLabel: string) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return { ok: true as const, value: null };
+    const date = new Date(trimmed);
+    if (Number.isNaN(date.getTime())) {
+      return { ok: false as const, error: `${fieldLabel} must be a valid date` };
+    }
+    return { ok: true as const, value: date };
+  };
+
+  const effectiveDate = toNullableDate(parsed.data.effectiveDate, "Effective date");
+  if (!effectiveDate.ok) return { success: false as const, error: effectiveDate.error };
+
+  const reviewDate = toNullableDate(parsed.data.reviewDate, "Review date");
+  if (!reviewDate.ok) return { success: false as const, error: reviewDate.error };
+
+  return {
+    success: true as const,
+    data: {
+      title: parsed.data.title.trim(),
+      policyType: parsed.data.policyType ?? "other",
+      owner: toNullableText(parsed.data.owner),
+      status: parsed.data.status ?? "draft",
+      effectiveDate: effectiveDate.value,
+      reviewDate: reviewDate.value,
+      documentLink: toNullableText(parsed.data.documentLink),
+      notes: toNullableText(parsed.data.notes),
+      linkedMaterialTopicIds: parsed.data.linkedMaterialTopicIds,
+      ownerUserId: parsed.data.ownerUserId ?? null,
+    },
+  };
+}
+
 const { Pool } = pg;
 
 const BCRYPT_ROUNDS = 12;
@@ -10098,7 +10170,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const r = await storage.createPolicyRecord({ ...req.body, companyId });
+      const normalized = normalizePolicyRecordPayload(req.body);
+      if (!normalized.success) {
+        return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
+      }
+      const r = await storage.createPolicyRecord({ ...normalized.data, companyId });
       res.json(r);
     } catch (e: any) {
       sendServerError(res, e);
@@ -10109,7 +10185,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const r = await storage.updatePolicyRecord(req.params.id, companyId, req.body);
+      const normalized = normalizePolicyRecordPayload(req.body);
+      if (!normalized.success) {
+        return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
+      }
+      const r = await storage.updatePolicyRecord(req.params.id, companyId, normalized.data);
       res.json(r);
     } catch (e: any) {
       sendServerError(res, e);
