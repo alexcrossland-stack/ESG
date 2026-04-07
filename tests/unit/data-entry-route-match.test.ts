@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DATA_ENTRY_PERIOD_ROUTE,
   matchesLegacyDataEntryPeriodPath,
+  resolveDataEntryRoute,
 } from "../../server/data-entry-route-patterns";
 
 type TestResult = { name: string; passed: boolean; detail?: string };
@@ -20,24 +21,25 @@ function fail(name: string, detail?: string) {
 
 function run() {
   try {
-    assert.equal(matchesLegacyDataEntryPeriodPath("/api/data-entry/bulk-grid"), false);
-    pass("bulk-grid path does not match the legacy monthly route");
+    assert.equal(resolveDataEntryRoute("/api/data-entry/bulk-grid"), "bulk-grid");
+    pass("bulk-grid resolves to the static bulk-grid route before the legacy route");
   } catch (error: any) {
-    fail("bulk-grid path does not match the legacy monthly route", error.message);
+    fail("bulk-grid resolves to the static bulk-grid route before the legacy route", error.message);
   }
 
   try {
+    assert.equal(resolveDataEntryRoute("/api/data-entry/2026-03"), "period");
     assert.equal(matchesLegacyDataEntryPeriodPath("/api/data-entry/2026-03"), true);
-    pass("monthly yyyy-MM path still matches the legacy route");
+    pass("monthly yyyy-MM path still resolves to the legacy period route");
   } catch (error: any) {
-    fail("monthly yyyy-MM path still matches the legacy route", error.message);
+    fail("monthly yyyy-MM path still resolves to the legacy period route", error.message);
   }
 
   try {
-    assert.equal(DATA_ENTRY_PERIOD_ROUTE, "/api/data-entry/:period(\\d{4}-\\d{2})");
-    pass("route constant keeps the Express matcher constrained to yyyy-MM periods");
+    assert.equal(DATA_ENTRY_PERIOD_ROUTE, "/api/data-entry/:period");
+    pass("route constant keeps the legacy route parameterized while static routes stay first");
   } catch (error: any) {
-    fail("route constant keeps the Express matcher constrained to yyyy-MM periods", error.message);
+    fail("route constant keeps the legacy route parameterized while static routes stay first", error.message);
   }
 }
 
