@@ -83,6 +83,7 @@ async function run() {
     pass("GET /api/metric-definitions returns 200 for admin");
 
     const definitions = JSON.parse(libraryRes.body) as Array<{ id: string; name: string; isActive: boolean; isCore: boolean }>;
+    const enabledDefinitionCount = definitions.filter((metric) => metric.isActive).length;
     const recommendedLibraryMetric = definitions.find((metric) => metric.name === recommendedDef.name);
     if (!recommendedLibraryMetric) {
       fail("Recommended default definition appears in Metrics Library", recommendedDef.name);
@@ -100,10 +101,29 @@ async function run() {
 
     const companyMetrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string; enabled: boolean; isDefault: boolean }>;
     const enabledDefaults = companyMetrics.filter((metric) => metric.enabled && metric.isDefault);
+    const enabledCompanyMetrics = companyMetrics.filter((metric) => metric.enabled);
     if (enabledDefaults.length === 0) {
       fail("New company has recommended defaults enabled in company metrics");
     } else {
       pass("New company has recommended defaults enabled in company metrics", `${enabledDefaults.length} enabled defaults`);
+    }
+
+    if (enabledCompanyMetrics.length !== enabledDefinitionCount) {
+      fail("Enabled Metrics Library count matches enabled company metrics count", `library=${enabledDefinitionCount} metrics=${enabledCompanyMetrics.length}`);
+    } else {
+      pass("Enabled Metrics Library count matches enabled company metrics count", `${enabledCompanyMetrics.length}`);
+    }
+
+    const initialDataEntryRes = await apiRequest("GET", "/api/data-entry/2024-01", undefined, tenantA.adminToken);
+    if (initialDataEntryRes.status !== 200) {
+      fail("GET /api/data-entry/2024-01 returns 200 for enabled metric denominator", `status=${initialDataEntryRes.status}`);
+    } else {
+      const dataEntry = JSON.parse(initialDataEntryRes.body) as { metrics: Array<{ name: string }> };
+      if (dataEntry.metrics.length !== enabledDefinitionCount) {
+        fail("Enabled Metrics Library count matches Enter Data enabled metric denominator", `library=${enabledDefinitionCount} data-entry=${dataEntry.metrics.length}`);
+      } else {
+        pass("Enabled Metrics Library count matches Enter Data enabled metric denominator", `${dataEntry.metrics.length}`);
+      }
     }
 
     const disableRes = await apiRequest("PATCH", `/api/metric-definitions/${recommendedDef.id}/toggle`, undefined, tenantA.adminToken);

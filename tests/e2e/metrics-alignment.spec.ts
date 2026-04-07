@@ -28,4 +28,28 @@ test.describe("Metrics surface alignment", () => {
     await expect(page.locator("[data-testid='button-library-add-metric']")).toHaveCount(1);
     await expect(page.locator("[data-testid^='button-enter-value-']")).toHaveCount(0);
   });
+
+  test("enabled metric count matches Metrics rows and Enter Data denominator", async ({ page }) => {
+    const { tenantA } = readSeedInfo();
+
+    await page.goto("/auth");
+    await page.evaluate((token: string) => {
+      localStorage.setItem("auth_token", token);
+    }, tenantA.adminToken);
+
+    await page.goto("/metrics-library");
+    await page.waitForLoadState("networkidle");
+    const enabledLibraryCount = Number((await page.locator("[data-testid='stat-active']").textContent()) || "0");
+
+    await page.goto("/metrics");
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator("[data-testid^='metric-row-']")).toHaveCount(enabledLibraryCount);
+
+    await page.goto("/data-entry");
+    await page.waitForLoadState("networkidle");
+    const denominatorText = (await page.locator("[data-testid='badge-enabled-metric-denominator']").textContent()) || "";
+    const denominator = Number(denominatorText.split(" ")[0] || "0");
+    expect(denominator).toBe(enabledLibraryCount);
+    await expect(page.locator("[data-testid^='manual-row-']")).toHaveCount(enabledLibraryCount);
+  });
 });

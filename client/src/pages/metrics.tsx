@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { PageGuidance } from "@/components/page-guidance";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { authFetch } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,10 +35,27 @@ type MetricSummary = {
   trend: { period: string; value: number | null }[];
 };
 
-type EnhancedData = {
-  totalMetrics: number;
-  statusCounts: { green: number; amber: number; red: number; missing: number };
-  metricSummaries: MetricSummary[];
+type CompanyMetric = {
+  id: string;
+  name: string;
+  category: "environmental" | "social" | "governance";
+  unit: string | null;
+  metricType: string | null;
+  direction: string | null;
+  enabled: boolean;
+  helpText: string | null;
+  formulaText: string | null;
+  targetValue?: string | number | null;
+  targetMin?: string | number | null;
+  targetMax?: string | number | null;
+  target?: { targetValue?: string | number | null } | null;
+};
+
+type MetricValueRow = {
+  period: string;
+  value: string | number | null;
+  status?: string | null;
+  percentChange?: string | number | null;
 };
 
 const CATEGORY_CONFIG = {
@@ -224,16 +241,69 @@ export default function Metrics() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
 
-  const { data, isLoading } = useQuery<EnhancedData>({
-    queryKey: ["/api/dashboard/enhanced"],
+  const { data: companyMetrics = [], isLoading: metricsLoading } = useQuery<CompanyMetric[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
   });
+
+  const enabledMetrics = companyMetrics.filter((metric) => metric.enabled);
+  const historyQueries = useQueries({
+    queries: enabledMetrics.map((metric) => ({
+      queryKey: ["/api/metrics", metric.id, "values"],
+      queryFn: () => authFetch(`/api/metrics/${metric.id}/values`).then((r) => r.json() as Promise<MetricValueRow[]>),
+      staleTime: 60_000,
+    })),
+  });
+
+  const isLoading = metricsLoading || historyQueries.some((query) => query.isLoading);
 
   if (isLoading) {
     return <div className="p-4 sm:p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-14" />)}</div>;
   }
 
-  const metrics = data?.metricSummaries || [];
-  const statusCounts = data?.statusCounts || { green: 0, amber: 0, red: 0, missing: 0 };
+  const metrics: MetricSummary[] = enabledMetrics.map((metric, index) => {
+    const values = (historyQueries[index]?.data || []) as MetricValueRow[];
+    const latest = values[0];
+    const previous = values[1];
+    const latestValue = latest?.value !== null && latest?.value !== undefined ? Number(latest.value) : null;
+    const previousValue = previous?.value !== null && previous?.value !== undefined ? Number(previous.value) : null;
+    const computedPercentChange = latest?.percentChange !== null && latest?.percentChange !== undefined
+      ? Number(latest.percentChange)
+      : (latestValue !== null && previousValue !== null && previousValue !== 0
+        ? ((latestValue - previousValue) / Math.abs(previousValue)) * 100
+        : null);
+    const target = metric.target?.targetValue ?? metric.targetValue ?? metric.targetMax ?? metric.targetMin ?? null;
+
+    return {
+      id: metric.id,
+      name: metric.name,
+      category: metric.category,
+      unit: metric.unit,
+      metricType: metric.metricType || "manual",
+      direction: metric.direction || "higher_is_better",
+      latestValue,
+      previousValue,
+      status: latest?.status || (latestValue !== null ? "green" : "missing"),
+      percentChange: computedPercentChange,
+      target: target !== null && target !== undefined ? Number(target) : null,
+      helpText: metric.helpText,
+      formulaText: metric.formulaText,
+      trend: values.slice(0, 6).reverse().map((value) => ({
+        period: value.period,
+        value: value.value !== null && value.value !== undefined ? Number(value.value) : null,
+      })),
+    };
+  });
+
+  const statusCounts = metrics.reduce(
+    (acc, metric) => {
+      const key = metric.status as "green" | "amber" | "red" | "missing";
+      if (acc[key] !== undefined) acc[key] += 1;
+      else acc.missing += 1;
+      return acc;
+    },
+    { green: 0, amber: 0, red: 0, missing: 0 },
+  );
 
   let filtered = activeTab === "all" ? metrics : metrics.filter(m => m.category === activeTab);
   if (statusFilter !== "all") filtered = filtered.filter(m => m.status === statusFilter);
