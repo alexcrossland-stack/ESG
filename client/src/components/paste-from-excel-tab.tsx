@@ -8,37 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { authFetch, apiRequest } from "@/lib/queryClient";
+import { parseBulkGridResponse, resolvePasteGridState, type GridResponse } from "@/lib/paste-grid-response";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useSiteContext } from "@/hooks/use-site-context";
-
-type GridMetric = {
-  id: string;
-  name: string;
-  category: string;
-  unit: string | null;
-  metricType: string | null;
-  enabled: boolean;
-  readOnly: boolean;
-};
-
-type GridValue = {
-  id: string;
-  metricId: string;
-  period: string;
-  value: string | null;
-  locked: boolean;
-  dataSourceType: string | null;
-  workflowStatus: string | null;
-  siteId: string | null;
-};
-
-type GridResponse = {
-  periods: string[];
-  metrics: GridMetric[];
-  values: GridValue[];
-  lockedPeriods: string[];
-};
 
 type ValidationCell = {
   metricId: string;
@@ -183,20 +156,30 @@ export function PasteFromExcelTab({
     [monthCount, selectedPeriod],
   );
 
-  const { data, isLoading } = useQuery<GridResponse>({
+  const { data, isLoading, isError, error } = useQuery<GridResponse>({
     queryKey: ["/api/data-entry/bulk-grid", visiblePeriods.join(","), activeSiteId || "__org__"],
-    queryFn: () => authFetch(`/api/data-entry/bulk-grid?periods=${visiblePeriods.join(",")}&siteId=${activeSiteId || "null"}`).then((res) => res.json()),
+    queryFn: async () => parseBulkGridResponse(
+      await authFetch(`/api/data-entry/bulk-grid?periods=${visiblePeriods.join(",")}&siteId=${activeSiteId || "null"}`),
+    ),
   });
 
+  const gridState = resolvePasteGridState({
+    isLoading,
+    isError,
+    data,
+    error: error as Error | null | undefined,
+  });
+  const gridData = gridState.gridData;
+
   useEffect(() => {
-    if (!data) return;
+    if (!gridData) return;
     const nextBase: Record<string, string> = {};
-    for (const metric of data.metrics) {
-      for (const period of data.periods) {
+    for (const metric of gridData.metrics) {
+      for (const period of gridData.periods) {
         nextBase[keyFor(metric.id, period)] = "";
       }
     }
-    for (const value of data.values) {
+    for (const value of gridData.values) {
       nextBase[keyFor(value.metricId, value.period)] = value.value ?? "";
     }
     setBaseValues(nextBase);
@@ -207,13 +190,13 @@ export function PasteFromExcelTab({
     setSelectionEnd({ row: 0, col: 0 });
     setPasteNotice(null);
     setHeuristicReviewRequired(false);
-  }, [data]);
+  }, [gridData]);
 
   const dirtyCells = useMemo(() => {
-    if (!data) return [];
+    if (!gridData) return [];
     const results: Array<{ metricId: string; period: string; rawValue: string | null; rowIndex: number; columnIndex: number }> = [];
-    data.metrics.forEach((metric, rowIndex) => {
-      data.periods.forEach((period, columnIndex) => {
+    gridData.metrics.forEach((metric, rowIndex) => {
+      gridData.periods.forEach((period, columnIndex) => {
         const key = keyFor(metric.id, period);
         const currentValue = deferredDraftValues[key] ?? "";
         const originalValue = baseValues[key] ?? "";
@@ -229,7 +212,7 @@ export function PasteFromExcelTab({
       });
     });
     return results;
-  }, [baseValues, data, deferredDraftValues]);
+  }, [baseValues, gridData, deferredDraftValues]);
 
   const cellValidationMap = useMemo(() => {
     const map = new Map<string, ValidationCell>();
@@ -282,7 +265,7 @@ export function PasteFromExcelTab({
   });
 
   useEffect(() => {
-    if (!data || dirtyCells.length === 0) {
+    if (!gridData || dirtyCells.length === 0) {
       setValidation(null);
       return;
     }
@@ -290,14 +273,15 @@ export function PasteFromExcelTab({
       validateMutation.mutate(dirtyCells);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [data, dirtyCells, validateMutation]);
+  }, [gridData, dirtyCells, validateMutation]);
 
   const moveFocus = (row: number, col: number) => {
-    if (!data) return;
-    const nextRow = Math.max(0, Math.min(row, data.metrics.length - 1));
-    const nextCol = Math.max(0, Math.min(col, data.periods.length - 1));
-    const metric = data.metrics[nextRow];
-    const period = data.periods[nextCol];
+    if (!gridData || !Array.isArray(gridData.metrics) || !Array.isArray(gridData.periods)) return;
+    const nextRow = Math.max(0, Math.min(row, gridData.metrics.length - 1));
+    const nextCol = Math.max(0, Math.min(col, gridData.periods.length - 1));
+    const metric = gridData.metrics[nextRow];
+    const period = gridData.periods[nextCol];
+    if (!metric || !period) return;
     const key = keyFor(metric.id, period);
     setActiveCell({ row: nextRow, col: nextCol });
     setSelectionStart({ row: nextRow, col: nextCol });
@@ -307,12 +291,12 @@ export function PasteFromExcelTab({
   };
 
   const applyPaste = (row: number, col: number, clipboardText: string) => {
-    if (!data) return;
+    if (!gridData || !Array.isArray(gridData.metrics) || !Array.isArray(gridData.periods)) return;
     const rawBlock = parseClipboardBlock(clipboardText);
     if (rawBlock.length === 0) return;
     const normalizedBlock = normalizeClipboardBlock(rawBlock, {
-      visiblePeriods: data.periods,
-      metrics: data.metrics,
+      visiblePeriods: gridData.periods,
+      metrics: gridData.metrics,
       startRow: row,
       startCol: col,
     });
@@ -328,17 +312,17 @@ export function PasteFromExcelTab({
         pasteRow.forEach((value, colOffset) => {
           const targetRow = row + rowOffset;
           const targetCol = col + colOffset;
-          if (!data.metrics[targetRow] || !data.periods[targetCol]) {
+          if (!gridData.metrics[targetRow] || !gridData.periods[targetCol]) {
             ignoredCells += 1;
             return;
           }
-          next[keyFor(data.metrics[targetRow].id, data.periods[targetCol])] = value ?? "";
+          next[keyFor(gridData.metrics[targetRow].id, gridData.periods[targetCol])] = value ?? "";
         });
       });
       return next;
     });
-    const targetEndRow = Math.min(row + block.length - 1, data.metrics.length - 1);
-    const targetEndCol = Math.min(col + Math.max(...block.map((pasteRow) => pasteRow.length), 1) - 1, data.periods.length - 1);
+    const targetEndRow = Math.min(row + block.length - 1, gridData.metrics.length - 1);
+    const targetEndCol = Math.min(col + Math.max(...block.map((pasteRow) => pasteRow.length), 1) - 1, gridData.periods.length - 1);
     setSelectionStart({ row, col });
     setSelectionEnd({ row: targetEndRow, col: targetEndCol });
     setActiveCell({ row, col });
@@ -358,7 +342,7 @@ export function PasteFromExcelTab({
     }
   };
 
-  if (isLoading || !data) {
+  if (gridState.kind === "loading") {
     return (
       <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -367,7 +351,33 @@ export function PasteFromExcelTab({
     );
   }
 
-  const lockedPeriods = new Set(data.lockedPeriods);
+  if (gridState.kind === "error" || !gridData) {
+    return (
+      <Card className="border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            Paste grid unavailable
+          </CardTitle>
+          <CardDescription>
+            The paste-from-Excel grid could not be loaded safely, so this tab has been disabled for now.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {gridState.errorMessage || "The server returned an unexpected response."}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={onSwitchToUpload} data-testid="button-fallback-upload-from-grid-error">
+              Use file upload fallback
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const lockedPeriods = new Set(Array.isArray(gridData.lockedPeriods) ? gridData.lockedPeriods : []);
   const hasErrors = (validation?.summary.errorCount || 0) > 0;
   const canSave = dirtyCells.length > 0 && !hasErrors && !saveMutation.isPending && !validateMutation.isPending && !heuristicReviewRequired;
 
@@ -420,10 +430,10 @@ export function PasteFromExcelTab({
             </SelectContent>
           </Select>
           <Badge variant="outline" data-testid="badge-grid-metric-count">
-            {data.metrics.length} metrics
+            {gridData.metrics.length} metrics
           </Badge>
           <Badge variant="outline" data-testid="badge-grid-period-count">
-            {data.periods.length} months
+            {gridData.periods.length} months
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -467,7 +477,7 @@ export function PasteFromExcelTab({
               <thead>
                 <tr className="bg-muted/50 border-b">
                   <th className="sticky left-0 z-20 min-w-[260px] border-r bg-muted/50 px-3 py-2 text-left font-medium">Metric</th>
-                  {data.periods.map((period) => (
+                  {gridData.periods.map((period) => (
                     <th
                       key={period}
                       className={cn(
@@ -482,13 +492,13 @@ export function PasteFromExcelTab({
                 </tr>
               </thead>
               <tbody>
-                {data.metrics.map((metric, rowIndex) => (
+                {gridData.metrics.map((metric, rowIndex) => (
                   <tr key={metric.id} className="border-b last:border-0">
                     <td className="sticky left-0 z-10 border-r bg-background px-3 py-2 align-middle">
                       <div className="font-medium">{metric.name}</div>
                       <div className="text-[11px] text-muted-foreground">{metric.unit || "Value"}</div>
                     </td>
-                    {data.periods.map((period, colIndex) => {
+                    {gridData.periods.map((period, colIndex) => {
                       const key = keyFor(metric.id, period);
                       const validationCell = cellValidationMap.get(key);
                       const dirty = (draftValues[key] ?? "") !== (baseValues[key] ?? "");
@@ -531,7 +541,7 @@ export function PasteFromExcelTab({
                               if (event.key === "ArrowRight") {
                                 event.preventDefault();
                                 if (event.shiftKey) {
-                                  setSelectionEnd({ row: rowIndex, col: Math.min(colIndex + 1, data.periods.length - 1) });
+                                  setSelectionEnd({ row: rowIndex, col: Math.min(colIndex + 1, gridData.periods.length - 1) });
                                 } else {
                                   moveFocus(rowIndex, colIndex + 1);
                                 }
@@ -545,7 +555,7 @@ export function PasteFromExcelTab({
                               } else if (event.key === "ArrowDown" || event.key === "Enter") {
                                 event.preventDefault();
                                 if (event.shiftKey && event.key === "ArrowDown") {
-                                  setSelectionEnd({ row: Math.min(rowIndex + 1, data.metrics.length - 1), col: colIndex });
+                                  setSelectionEnd({ row: Math.min(rowIndex + 1, gridData.metrics.length - 1), col: colIndex });
                                 } else {
                                   moveFocus(rowIndex + 1, colIndex);
                                 }

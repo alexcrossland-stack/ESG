@@ -39,6 +39,7 @@ import { auditLog, getClientIp } from "./audit";
 import { getEffectivePlanTier, getActiveGrant } from "./billing/entitlement";
 import { insertAccessGrantSchema } from "@shared/schema";
 import { commitBulkMetricPaste, getBulkMetricGrid, validateBulkMetricPaste } from "./bulk-metric-entry";
+import { DATA_ENTRY_PERIOD_ROUTE } from "./data-entry-route-patterns";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -2430,14 +2431,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Metric Values (data entry)
-  app.get("/api/data-entry/:period", requireAuth, async (req, res) => {
-    const companyId = (req.session as any).companyId;
-    const values = await storage.getMetricValuesByPeriod(companyId, req.params.period);
-    const allMetrics = await storage.getMetrics(companyId);
-    res.json({ values, metrics: allMetrics.filter(m => m.enabled) });
-  });
-
   app.get("/api/data-entry/bulk-grid", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
@@ -2459,6 +2452,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) {
       sendServerError(res, e);
     }
+  });
+
+  // Metric Values (data entry)
+  app.get(DATA_ENTRY_PERIOD_ROUTE, requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
+    const values = await storage.getMetricValuesByPeriod(companyId, req.params.period);
+    const allMetrics = await storage.getMetrics(companyId);
+    res.json({ values, metrics: allMetrics.filter(m => m.enabled) });
   });
 
   app.post("/api/data-entry/bulk-upsert", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {

@@ -137,7 +137,7 @@ export default function DataEntry() {
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState("paste");
+  const [activeTab, setActiveTab] = useState("raw");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
