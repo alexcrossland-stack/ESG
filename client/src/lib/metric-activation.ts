@@ -22,7 +22,16 @@ type CompanyMetricLike = {
   formulaText?: string | null;
 };
 
+type EvidenceCoverageLike = {
+  metricId?: string | null;
+  metricName?: string | null;
+  category?: "environmental" | "social" | "governance" | null;
+  hasEvidence?: boolean | null;
+  dataSourceType?: string | null;
+};
+
 export type CanonicalEnabledMetric = {
+  canonicalId: string;
   key: string;
   id?: string;
   definitionId?: string;
@@ -35,6 +44,12 @@ export type CanonicalEnabledMetric = {
   helpText?: string | null;
   formulaText?: string | null;
   missingCompanyMetric: boolean;
+  source: "definition" | "company" | "merged";
+};
+
+export type CanonicalEvidenceMetric = CanonicalEnabledMetric & {
+  hasEvidence: boolean;
+  dataSourceType?: string | null;
 };
 
 export function normalizeMetricActivationName(name: string | null | undefined): string {
@@ -45,56 +60,117 @@ export function normalizeMetricActivationName(name: string | null | undefined): 
   return aliases[normalized] ?? normalized;
 }
 
+function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEnabledMetric {
+  return {
+    canonicalId: normalizeMetricActivationName(definition.name),
+    key: `definition:${definition.id}`,
+    definitionId: definition.id,
+    name: definition.name,
+    category: definition.pillar,
+    description: definition.description ?? null,
+    unit: definition.unit ?? null,
+    metricType: definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual"),
+    direction: "higher_is_better",
+    helpText: definition.description ?? null,
+    formulaText: null,
+    missingCompanyMetric: true,
+    source: "definition",
+  };
+}
+
+function buildCompanyCandidate(metric: CompanyMetricLike): CanonicalEnabledMetric {
+  return {
+    canonicalId: normalizeMetricActivationName(metric.name),
+    key: metric.id,
+    id: metric.id,
+    name: metric.name,
+    category: metric.category,
+    description: metric.description ?? null,
+    unit: metric.unit ?? null,
+    metricType: metric.metricType ?? "manual",
+    direction: metric.direction ?? "higher_is_better",
+    helpText: metric.helpText ?? null,
+    formulaText: metric.formulaText ?? null,
+    missingCompanyMetric: false,
+    source: "company",
+  };
+}
+
+function mergeCandidates(
+  existing: CanonicalEnabledMetric | undefined,
+  incoming: CanonicalEnabledMetric,
+): CanonicalEnabledMetric {
+  if (!existing) return incoming;
+
+  const preferCompany = !incoming.missingCompanyMetric && existing.missingCompanyMetric;
+  const base = preferCompany ? incoming : existing;
+  const extra = preferCompany ? existing : incoming;
+
+  return {
+    ...base,
+    definitionId: base.definitionId ?? extra.definitionId,
+    id: base.id ?? extra.id,
+    key: base.id ?? extra.id ?? base.key ?? extra.key,
+    name: base.name || extra.name,
+    category: base.category || extra.category,
+    description: base.description ?? extra.description ?? null,
+    unit: base.unit ?? extra.unit ?? null,
+    metricType: base.metricType ?? extra.metricType ?? "manual",
+    direction: base.direction ?? extra.direction ?? "higher_is_better",
+    helpText: base.helpText ?? extra.helpText ?? null,
+    formulaText: base.formulaText ?? extra.formulaText ?? null,
+    missingCompanyMetric: base.missingCompanyMetric && extra.missingCompanyMetric,
+    source: existing.source === incoming.source ? existing.source : "merged",
+  };
+}
+
 export function buildCanonicalEnabledMetrics(
   definitions: MetricDefinitionLike[],
   companyMetrics: CompanyMetricLike[],
 ): CanonicalEnabledMetric[] {
-  const enabledDefinitions = definitions.filter((definition) => definition.isActive);
-  const enabledCompanyMetrics = companyMetrics.filter((metric) => Boolean(metric.enabled));
+  const byCanonicalId = new Map<string, CanonicalEnabledMetric>();
 
-  const companyMetricByName = new Map(
-    enabledCompanyMetrics.map((metric) => [normalizeMetricActivationName(metric.name), metric] as const),
-  );
-  const activeDefinitionNames = new Set(
-    enabledDefinitions.map((definition) => normalizeMetricActivationName(definition.name)),
-  );
+  for (const definition of definitions.filter((item) => item.isActive)) {
+    const candidate = buildDefinitionCandidate(definition);
+    byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
+  }
 
-  const definitionBackedMetrics = enabledDefinitions.map((definition) => {
-    const companyMetric = companyMetricByName.get(normalizeMetricActivationName(definition.name));
-    return {
-      key: companyMetric?.id ?? `definition:${definition.id}`,
-      id: companyMetric?.id,
-      definitionId: definition.id,
-      name: companyMetric?.name ?? definition.name,
-      category: companyMetric?.category ?? definition.pillar,
-      description: companyMetric?.description ?? definition.description ?? null,
-      unit: companyMetric?.unit ?? definition.unit ?? null,
-      metricType: companyMetric?.metricType ?? (definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual")),
-      direction: companyMetric?.direction ?? "higher_is_better",
-      helpText: companyMetric?.helpText ?? definition.description ?? null,
-      formulaText: companyMetric?.formulaText ?? null,
-      missingCompanyMetric: !companyMetric,
-    } satisfies CanonicalEnabledMetric;
-  });
+  for (const metric of companyMetrics.filter((item) => Boolean(item.enabled))) {
+    const candidate = buildCompanyCandidate(metric);
+    byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
+  }
 
-  const customEnabledMetrics = enabledCompanyMetrics
-    .filter((metric) => !activeDefinitionNames.has(normalizeMetricActivationName(metric.name)))
-    .map((metric) => ({
-      key: metric.id,
-      id: metric.id,
-      name: metric.name,
-      category: metric.category,
-      description: metric.description ?? null,
-      unit: metric.unit ?? null,
-      metricType: metric.metricType ?? "manual",
-      direction: metric.direction ?? "higher_is_better",
-      helpText: metric.helpText ?? null,
-      formulaText: metric.formulaText ?? null,
-      missingCompanyMetric: false,
-    } satisfies CanonicalEnabledMetric));
-
-  return [...definitionBackedMetrics, ...customEnabledMetrics].sort((a, b) => {
+  return [...byCanonicalId.values()].sort((a, b) => {
     if (a.category !== b.category) return a.category.localeCompare(b.category);
     return a.name.localeCompare(b.name);
+  });
+}
+
+export function buildCanonicalEvidenceMetrics(
+  canonicalMetrics: CanonicalEnabledMetric[],
+  metricCoverage: EvidenceCoverageLike[],
+): CanonicalEvidenceMetric[] {
+  const coverageByCanonicalId = new Map<string, EvidenceCoverageLike>();
+
+  for (const metric of metricCoverage) {
+    const canonicalId = normalizeMetricActivationName(metric.metricName);
+    const existing = coverageByCanonicalId.get(canonicalId);
+    const next = existing
+      ? {
+          ...existing,
+          hasEvidence: Boolean(existing.hasEvidence) || Boolean(metric.hasEvidence),
+          dataSourceType: existing.dataSourceType ?? metric.dataSourceType ?? null,
+        }
+      : metric;
+    coverageByCanonicalId.set(canonicalId, next);
+  }
+
+  return canonicalMetrics.map((metric) => {
+    const coverage = coverageByCanonicalId.get(metric.canonicalId);
+    return {
+      ...metric,
+      hasEvidence: Boolean(coverage?.hasEvidence),
+      dataSourceType: coverage?.dataSourceType ?? null,
+    };
   });
 }

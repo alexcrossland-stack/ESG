@@ -39,7 +39,7 @@ import { useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
-import { buildCanonicalEnabledMetrics } from "@/lib/metric-activation";
+import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -411,6 +411,7 @@ export default function DataEntry() {
   const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
   const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
   const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, metrics);
+  const canonicalEvidenceMetrics = buildCanonicalEvidenceMetrics(allEnabledMetrics, evidenceCoverage?.metricCoverage || []);
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && (metric.metricType === "manual" || !metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
   const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
@@ -505,7 +506,7 @@ export default function DataEntry() {
           {evidenceCoverage && (
             <Badge variant="outline" className="text-xs gap-1" data-testid="badge-evidence-summary">
               <FileCheck className="w-3 h-3" />
-              {evidenceCoverage.metricCoverage?.filter((m: any) => m.hasEvidence).length || 0}/{evidenceCoverage.metricCoverage?.length || 0} evidenced
+              {canonicalEvidenceMetrics.filter((m) => m.hasEvidence).length}/{allEnabledMetrics.length} enabled metrics evidenced
             </Badge>
           )}
           {periodWorkflowStatus && <WorkflowBadge status={periodWorkflowStatus} />}
@@ -822,7 +823,7 @@ export default function DataEntry() {
           <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-md border border-border">
             <div className="flex-1">
               <p className="text-sm font-medium">Raw Data Completion</p>
-              <p className="text-xs text-muted-foreground">{filledRawCount} of {totalRawFields} fields entered</p>
+              <p className="text-xs text-muted-foreground">Raw input fields completed: {filledRawCount}/{totalRawFields}</p>
             </div>
             <div className="flex items-center gap-2">
               {canEdit && isPro && (

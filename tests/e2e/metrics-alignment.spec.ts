@@ -47,6 +47,8 @@ test.describe("Metrics surface alignment", () => {
     const metricsBadgeCount = Number(metricsBadgeText.split(" ")[0] || "0");
     expect(metricsBadgeCount).toBe(enabledLibraryCount);
     await expect(page.locator("[data-testid^='metric-row-']")).toHaveCount(enabledLibraryCount);
+    const metricNames = await page.locator("[data-testid^='metric-row-'] .font-medium").allTextContents();
+    expect(new Set(metricNames).size).toBe(metricNames.length);
 
     await page.goto("/data-entry");
     await page.waitForLoadState("networkidle");
@@ -54,5 +56,12 @@ test.describe("Metrics surface alignment", () => {
     const denominator = Number(denominatorText.split(" ")[0] || "0");
     expect(denominator).toBe(enabledLibraryCount);
     await expect(page.locator("[data-testid^='manual-row-']")).toHaveCount(enabledLibraryCount);
+    await expect(page.getByText("Raw input fields completed:", { exact: false })).toBeVisible();
+
+    await page.goto("/evidence");
+    await page.waitForLoadState("networkidle");
+    await page.getByTestId("tab-evidence-coverage").click();
+    const evidenceRows = page.locator("[data-testid^='row-metric-coverage-']");
+    await expect(evidenceRows).toHaveCount(enabledLibraryCount);
   });
 });

@@ -24,6 +24,32 @@ import {
   Calendar, XCircle,
 } from "lucide-react";
 import { OwnerAssignment } from "@/components/owner-assignment";
+import { authFetch } from "@/lib/queryClient";
+import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
+
+type MetricDefinitionActivation = {
+  id: string;
+  name: string;
+  pillar: "environmental" | "social" | "governance";
+  description?: string | null;
+  unit?: string | null;
+  isActive: boolean;
+  isDerived?: boolean;
+  formulaJson?: Record<string, unknown> | null;
+};
+
+type CompanyMetric = {
+  id: string;
+  name: string;
+  category: "environmental" | "social" | "governance";
+  description?: string | null;
+  unit?: string | null;
+  enabled?: boolean | null;
+  metricType?: string | null;
+  direction?: string | null;
+  helpText?: string | null;
+  formulaText?: string | null;
+};
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   uploaded: { label: "Uploaded", icon: Upload, className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
@@ -203,9 +229,22 @@ function CoverageOverview() {
   const { data: coverage, isLoading } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
   });
+  const { data: definitions = [] } = useQuery<MetricDefinitionActivation[]>({
+    queryKey: ["/api/metric-definitions"],
+    queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
+  });
+  const { data: companyMetrics = [] } = useQuery<CompanyMetric[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
+  });
 
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading coverage...</div>;
   if (!coverage) return null;
+
+  const canonicalMetrics = buildCanonicalEnabledMetrics(definitions, companyMetrics);
+  const canonicalCoverage = buildCanonicalEvidenceMetrics(canonicalMetrics, coverage.metricCoverage || []);
+  const evidencedCount = canonicalCoverage.filter((metric) => metric.hasEvidence).length;
+  const coveragePercent = canonicalMetrics.length > 0 ? Math.round((evidencedCount / canonicalMetrics.length) * 100) : 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -229,8 +268,8 @@ function CoverageOverview() {
               <PieChart className="w-5 h-5 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-coverage-percent">{coverage.coveragePercent}%</p>
-              <p className="text-xs text-muted-foreground">Metric Coverage</p>
+              <p className="text-2xl font-bold" data-testid="text-coverage-percent">{coveragePercent}%</p>
+              <p className="text-xs text-muted-foreground">Enabled Metrics Evidenced</p>
             </div>
           </div>
         </CardContent>
@@ -269,8 +308,19 @@ function MetricCoverageTable() {
   const { data: coverage } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
   });
+  const { data: definitions = [] } = useQuery<MetricDefinitionActivation[]>({
+    queryKey: ["/api/metric-definitions"],
+    queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
+  });
+  const { data: companyMetrics = [] } = useQuery<CompanyMetric[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
+  });
 
-  if (!coverage?.metricCoverage?.length) return null;
+  const canonicalMetrics = buildCanonicalEnabledMetrics(definitions, companyMetrics);
+  const canonicalCoverage = buildCanonicalEvidenceMetrics(canonicalMetrics, coverage?.metricCoverage || []);
+
+  if (!canonicalCoverage.length) return null;
 
   const categories = ["environmental", "social", "governance"];
 
@@ -283,19 +333,19 @@ function MetricCoverageTable() {
       <CardContent>
         <div className="space-y-4">
           {categories.map(cat => {
-            const metricsInCat = coverage.metricCoverage.filter((m: any) => m.category === cat);
+            const metricsInCat = canonicalCoverage.filter((m) => m.category === cat);
             if (!metricsInCat.length) return null;
-            const evidenced = metricsInCat.filter((m: any) => m.hasEvidence).length;
+            const evidenced = metricsInCat.filter((m) => m.hasEvidence).length;
             return (
               <div key={cat}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium capitalize">{cat}</span>
-                  <span className="text-xs text-muted-foreground">{evidenced}/{metricsInCat.length} evidenced</span>
+                  <span className="text-xs text-muted-foreground">{evidenced}/{metricsInCat.length} enabled metrics evidenced</span>
                 </div>
                 <div className="space-y-1">
-                  {metricsInCat.map((m: any) => (
-                    <div key={m.metricId} className="flex items-center justify-between py-1 px-2 rounded text-sm hover:bg-muted/50" data-testid={`row-metric-coverage-${m.metricId}`}>
-                      <span className={m.hasEvidence ? "text-foreground" : "text-muted-foreground"}>{m.metricName}</span>
+                  {metricsInCat.map((m) => (
+                    <div key={m.canonicalId} className="flex items-center justify-between py-1 px-2 rounded text-sm hover:bg-muted/50" data-testid={`row-metric-coverage-${m.canonicalId}`}>
+                      <span className={m.hasEvidence ? "text-foreground" : "text-muted-foreground"}>{m.name}</span>
                       <div className="flex items-center gap-2">
                         <DataSourceBadge type={m.dataSourceType} />
                         {m.hasEvidence ? (
