@@ -102,7 +102,7 @@ function emailBase(content: string): string {
 }
 
 export function buildInvitationEmail(params: { inviteeName: string; companyName: string; inviterName: string; token: string }): SendEmailOptions {
-  const link = `${BASE_URL}/auth?invitation=${params.token}`;
+  const link = `${BASE_URL}/invite?token=${params.token}`;
   return {
     to: "",
     subject: `You've been invited to ${params.companyName} on ESG Manager`,

@@ -3,7 +3,7 @@ import { useLocation, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, setAuthToken } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Leaf, CheckCircle2, Shield } from "lucide-react";
 import { LEGAL_VERSION } from "@/lib/legal-content";
+import { getInitialAuthView, getInvitationTokenFromSearch, getResetTokenFromSearch, type AuthView } from "@/lib/auth-route";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email"),
@@ -38,16 +39,20 @@ const resetSchema = z.object({
   confirmPassword: z.string(),
 }).refine(d => d.newPassword === d.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] });
 
+const inviteSchema = z.object({
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  confirmPassword: z.string(),
+}).refine(d => d.password === d.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] });
+
 export default function Auth() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const params = new URLSearchParams(window.location.search);
-  const resetToken = params.get("reset");
-  const [view, setView] = useState<"tabs" | "forgot" | "reset" | "forgot-sent" | "reset-done" | "mfa-verify" | "mfa-setup">(
-    resetToken ? "reset" : "tabs"
-  );
+  const search = typeof window !== "undefined" ? window.location.search : "";
+  const resetToken = getResetTokenFromSearch(search);
+  const invitationToken = getInvitationTokenFromSearch(search);
+  const [view, setView] = useState<AuthView>(getInitialAuthView(search));
   const [mfaToken, setMfaToken] = useState("");
   const [mfaBackupCode, setMfaBackupCode] = useState("");
   const [mfaUseBackup, setMfaUseBackup] = useState(false);
@@ -75,6 +80,15 @@ export default function Auth() {
     resolver: zodResolver(resetSchema),
     defaultValues: { newPassword: "", confirmPassword: "" },
   });
+
+  const inviteForm = useForm<z.infer<typeof inviteSchema>>({
+    resolver: zodResolver(inviteSchema),
+    defaultValues: { password: "", confirmPassword: "" },
+  });
+
+  useEffect(() => {
+    setView(getInitialAuthView(search));
+  }, [location, search]);
 
   const loginMutation = useMutation({
     mutationFn: async (data: z.infer<typeof loginSchema>) => {
@@ -187,6 +201,51 @@ export default function Auth() {
     },
   });
 
+  const invitationQuery = useQuery({
+    queryKey: ["/api/auth/invitation", invitationToken ?? ""],
+    enabled: Boolean(invitationToken),
+    queryFn: async () => {
+      const res = await fetch(`/api/auth/invitation?token=${encodeURIComponent(invitationToken!)}`, {
+        credentials: "include",
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        let message = text || res.statusText;
+        try {
+          const json = JSON.parse(text);
+          message = json.error || json.message || message;
+        } catch {}
+        throw new Error(message);
+      }
+      return JSON.parse(text) as {
+        email: string;
+        company?: { id?: string; name?: string };
+        role?: string;
+        inviteeName?: string | null;
+      };
+    },
+  });
+
+  const acceptInvitationMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof inviteSchema>) => {
+      const res = await apiRequest("POST", "/api/auth/accept-invitation", {
+        token: invitationToken,
+        password: data.password,
+        confirmPassword: data.confirmPassword,
+      });
+      return res.json();
+    },
+    onSuccess: async (data) => {
+      if (data.token) setAuthToken(data.token);
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
+      toast({ title: "Account ready", description: "Your invitation has been accepted and you're now signed in." });
+      setLocation("/");
+    },
+    onError: (e: any) => {
+      toast({ title: "Invite activation failed", description: e.message || "We couldn't activate this invitation.", variant: "destructive" });
+    },
+  });
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/30 flex items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
@@ -199,6 +258,77 @@ export default function Auth() {
           <h1 className="text-2xl font-bold">ESG Manager</h1>
           <p className="text-muted-foreground text-sm">Sustainability management for growing businesses</p>
         </div>
+
+        {view === "invite" && (
+          <Card>
+            <CardHeader>
+              <p className="font-semibold text-base">Create your account</p>
+              <p className="text-sm text-muted-foreground">
+                {invitationQuery.isLoading
+                  ? "Checking your invitation link…"
+                  : invitationQuery.data
+                    ? "Create your password to join your invited company."
+                    : "We couldn't load this invitation."}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {invitationQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">Validating your invitation…</p>
+              ) : invitationQuery.isError || !invitationQuery.data ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-destructive">
+                    {(invitationQuery.error as Error | undefined)?.message || "This invitation link is invalid or has expired."}
+                  </p>
+                  <Button className="w-full" variant="outline" onClick={() => { setView("tabs"); setLocation("/auth"); }} data-testid="button-invite-invalid-sign-in">
+                    Go to sign in
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-4" data-testid="card-invite-details">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invited email</p>
+                      <p className="text-sm font-medium" data-testid="text-invite-email">{invitationQuery.data.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Company</p>
+                      <p className="text-sm" data-testid="text-invite-company">{invitationQuery.data.company?.name || "Your company"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Role</p>
+                      <p className="text-sm capitalize" data-testid="text-invite-role">{invitationQuery.data.role || "Contributor"}</p>
+                    </div>
+                  </div>
+                  <Form {...inviteForm}>
+                    <form onSubmit={inviteForm.handleSubmit((data) => acceptInvitationMutation.mutate(data))} className="space-y-4">
+                      <FormField control={inviteForm.control} name="password" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Create your password</FormLabel>
+                          <FormControl>
+                            <Input type="password" placeholder="••••••••" {...field} data-testid="input-invite-password" autoFocus />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={inviteForm.control} name="confirmPassword" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Confirm password</FormLabel>
+                          <FormControl>
+                            <Input type="password" placeholder="••••••••" {...field} data-testid="input-invite-confirm-password" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <Button type="submit" className="w-full" disabled={acceptInvitationMutation.isPending} data-testid="button-invite-submit">
+                        {acceptInvitationMutation.isPending ? "Activating..." : "Create account"}
+                      </Button>
+                    </form>
+                  </Form>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {view === "forgot" && (
           <Card>

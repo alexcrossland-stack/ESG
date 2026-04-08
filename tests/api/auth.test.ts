@@ -9,6 +9,8 @@
 
 import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
+import { Client } from "pg";
+import crypto from "crypto";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -20,6 +22,56 @@ function pass(name: string, detail?: string) {
 function fail(name: string, detail?: string) {
   results.push({ name, passed: false, detail });
   console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+function createInvitationToken() {
+  const plaintext = crypto.randomBytes(24).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(plaintext).digest("hex");
+  return { plaintext, tokenHash };
+}
+
+async function insertInvitationToken(input: {
+  companyId: string;
+  email: string;
+  role?: "admin" | "contributor" | "approver" | "viewer";
+  inviteeName?: string;
+  expiresAt?: Date;
+  usedAt?: Date | null;
+  invitedUserId?: string | null;
+}) {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  try {
+    const companyRes = await client.query<{ name: string }>(
+      "SELECT name FROM companies WHERE id = $1",
+      [input.companyId],
+    );
+    const companyName = companyRes.rows[0]?.name ?? "Test Company";
+    const { plaintext, tokenHash } = createInvitationToken();
+    await client.query(
+      `INSERT INTO auth_tokens (token_hash, type, email, metadata, expires_at, used_at)
+       VALUES ($1, 'invitation', $2, $3::jsonb, $4, $5)`,
+      [
+        tokenHash,
+        input.email,
+        JSON.stringify({
+          companyId: input.companyId,
+          role: input.role ?? "contributor",
+          inviteeName: input.inviteeName ?? null,
+          companyName,
+          invitedUserId: input.invitedUserId ?? null,
+        }),
+        input.expiresAt ?? new Date(Date.now() + 48 * 60 * 60 * 1000),
+        input.usedAt ?? null,
+      ],
+    );
+    return plaintext;
+  } finally {
+    await client.end();
+  }
 }
 
 async function run(tenants: SeededTenants): Promise<void> {
@@ -181,6 +233,114 @@ async function run(tenants: SeededTenants): Promise<void> {
       else pass(name, `status=${res.status}`);
     } else {
       pass(name, `status=${res.status}`);
+    }
+  }
+
+  // ── 13. Valid invite token resolves to activation details ────────────────
+  {
+    const name = "GET /api/auth/invitation with valid token returns invited email, company, and role";
+    const inviteEmail = `invite-valid-${Date.now()}@test-esg.example`;
+    const token = await insertInvitationToken({
+      companyId: tenantA.companyId,
+      email: inviteEmail,
+      role: "approver",
+      inviteeName: "Invited Person",
+    });
+    const res = await apiRequest("GET", `/api/auth/invitation?token=${encodeURIComponent(token)}`);
+    if (res.status !== 200) {
+      fail(name, `status=${res.status}`);
+    } else {
+      const body = JSON.parse(res.body) as { email?: string; role?: string; company?: { id?: string } };
+      if (body.email !== inviteEmail) fail(name, `email=${body.email}`);
+      else if (body.role !== "approver") fail(name, `role=${body.role}`);
+      else if (body.company?.id !== tenantA.companyId) fail(name, `companyId=${body.company?.id}`);
+      else pass(name);
+    }
+  }
+
+  // ── 14. Valid invite creates user and signs them in ──────────────────────
+  {
+    const name = "POST /api/auth/accept-invitation creates user correctly";
+    const inviteEmail = `invite-accept-${Date.now()}@test-esg.example`;
+    const token = await insertInvitationToken({
+      companyId: tenantA.companyId,
+      email: inviteEmail,
+      role: "viewer",
+      inviteeName: "Invite Accept",
+    });
+    const res = await apiRequest("POST", "/api/auth/accept-invitation", {
+      token,
+      password: "Welcome123!",
+      confirmPassword: "Welcome123!",
+    });
+    if (res.status !== 200) {
+      fail(name, `status=${res.status}`);
+    } else {
+      const body = JSON.parse(res.body) as { token?: string; user?: { email?: string; role?: string; companyId?: string }; company?: { id?: string } };
+      if (!body.token) fail(name, "missing token");
+      else if (body.user?.email !== inviteEmail) fail(name, `email=${body.user?.email}`);
+      else if (body.user?.role !== "viewer") fail(name, `role=${body.user?.role}`);
+      else if (body.user?.companyId !== tenantA.companyId) fail(name, `user.companyId=${body.user?.companyId}`);
+      else if (body.company?.id !== tenantA.companyId) fail(name, `company.id=${body.company?.id}`);
+      else pass(name);
+    }
+  }
+
+  // ── 15. Expired invite rejected ──────────────────────────────────────────
+  {
+    const name = "Expired invitation token is rejected";
+    const token = await insertInvitationToken({
+      companyId: tenantA.companyId,
+      email: `invite-expired-${Date.now()}@test-esg.example`,
+      expiresAt: new Date(Date.now() - 60 * 1000),
+    });
+    const res = await apiRequest("GET", `/api/auth/invitation?token=${encodeURIComponent(token)}`);
+    if (res.status !== 410) {
+      fail(name, `status=${res.status}`);
+    } else {
+      const body = JSON.parse(res.body) as { code?: string };
+      if (body.code !== "INVITE_EXPIRED") fail(name, `code=${body.code}`);
+      else pass(name);
+    }
+  }
+
+  // ── 16. Used invite rejected ─────────────────────────────────────────────
+  {
+    const name = "Used invitation token is rejected";
+    const token = await insertInvitationToken({
+      companyId: tenantA.companyId,
+      email: `invite-used-${Date.now()}@test-esg.example`,
+      usedAt: new Date(),
+    });
+    const res = await apiRequest("GET", `/api/auth/invitation?token=${encodeURIComponent(token)}`);
+    if (res.status !== 410) {
+      fail(name, `status=${res.status}`);
+    } else {
+      const body = JSON.parse(res.body) as { code?: string };
+      if (body.code !== "INVITE_ALREADY_USED") fail(name, `code=${body.code}`);
+      else pass(name);
+    }
+  }
+
+  // ── 17. Invite email is locked to the token ──────────────────────────────
+  {
+    const name = "Invite email cannot be changed during activation";
+    const token = await insertInvitationToken({
+      companyId: tenantA.companyId,
+      email: `invite-lock-${Date.now()}@test-esg.example`,
+    });
+    const res = await apiRequest("POST", "/api/auth/accept-invitation", {
+      token,
+      email: "different-email@test-esg.example",
+      password: "Welcome123!",
+      confirmPassword: "Welcome123!",
+    });
+    if (res.status !== 400) {
+      fail(name, `status=${res.status}`);
+    } else {
+      const body = JSON.parse(res.body) as { code?: string };
+      if (body.code !== "INVITE_EMAIL_MISMATCH") fail(name, `code=${body.code}`);
+      else pass(name);
     }
   }
 }

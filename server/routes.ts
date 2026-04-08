@@ -174,6 +174,65 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
   return storedHash === legacyHashPassword(password);
 }
 
+const INVITABLE_ROLES = ["admin", "contributor", "approver", "viewer"] as const;
+type InvitableRole = typeof INVITABLE_ROLES[number];
+
+type InvitationTokenMetadata = {
+  companyId: string;
+  role: InvitableRole;
+  inviteeName?: string | null;
+  inviterUserId?: string | null;
+  inviterRole?: string | null;
+  companyName?: string | null;
+  invitedUserId?: string | null;
+};
+
+const invitationMetadataSchema = z.object({
+  companyId: z.string().min(1),
+  role: z.enum(INVITABLE_ROLES),
+  inviteeName: z.string().nullable().optional(),
+  inviterUserId: z.string().nullable().optional(),
+  inviterRole: z.string().nullable().optional(),
+  companyName: z.string().nullable().optional(),
+  invitedUserId: z.string().nullable().optional(),
+});
+
+function normalizeUsernameCandidate(value: string | null | undefined): string {
+  const fallback = "user";
+  const compact = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  return compact || fallback;
+}
+
+async function generateInvitedUsername(email: string, inviteeName?: string | null): Promise<string> {
+  const emailLocalPart = email.split("@")[0] || "user";
+  const base = normalizeUsernameCandidate(inviteeName || emailLocalPart);
+  let candidate = base;
+  let attempt = 0;
+
+  while (attempt < 50) {
+    const existing = await storage.getUserByUsername(candidate);
+    if (!existing) return candidate;
+    attempt += 1;
+    candidate = `${base}_${attempt}`;
+  }
+
+  return `${base}_${Date.now()}`;
+}
+
+function isInviteExpired(expiresAt: Date | string): boolean {
+  return new Date(expiresAt).getTime() < Date.now();
+}
+
+function parseInvitationMetadata(metadata: unknown): InvitationTokenMetadata | null {
+  const parsed = invitationMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
+}
+
 const tokenSessions = new Map<string, { userId: string; companyId: string; expiresAt: number; sessionId?: string }>();
 
 function generateToken(): string {
@@ -965,6 +1024,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     validate: false,
   });
 
+  async function getValidatedInvitation(token: string) {
+    const hash = crypto.createHash("sha256").update(token).digest("hex");
+    const record = await storage.getAuthTokenByHash(hash);
+
+    if (!record || record.type !== "invitation") {
+      return {
+        ok: false as const,
+        status: 400,
+        code: "INVALID_INVITE_TOKEN",
+        error: "This invitation link is invalid. Ask your admin for a new invite.",
+      };
+    }
+
+    if (record.usedAt) {
+      return {
+        ok: false as const,
+        status: 410,
+        code: "INVITE_ALREADY_USED",
+        error: "This invitation link has already been used. Ask your admin for a fresh invite.",
+      };
+    }
+
+    if (isInviteExpired(record.expiresAt)) {
+      return {
+        ok: false as const,
+        status: 410,
+        code: "INVITE_EXPIRED",
+        error: "This invitation link has expired. Ask your admin for a new invite.",
+      };
+    }
+
+    const metadata = parseInvitationMetadata((record as any).metadata);
+    if (!metadata) {
+      return {
+        ok: false as const,
+        status: 400,
+        code: "INVALID_INVITE_TOKEN",
+        error: "This invitation link is no longer valid. Ask your admin for a fresh invite.",
+      };
+    }
+
+    const company = await storage.getCompany(metadata.companyId);
+    if (!company) {
+      return {
+        ok: false as const,
+        status: 404,
+        code: "INVITE_COMPANY_NOT_FOUND",
+        error: "The company for this invitation could not be found.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      record,
+      metadata,
+      company,
+    };
+  }
+
   // Auth routes
   app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
@@ -1360,6 +1478,133 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { email: record.email },
       });
       res.json({ ok: true });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.get("/api/auth/invitation", async (req, res) => {
+    try {
+      const token = typeof req.query.token === "string" ? req.query.token : "";
+      if (!token) {
+        return res.status(400).json({
+          code: "INVALID_INVITE_TOKEN",
+          error: "Invitation token is required.",
+        });
+      }
+
+      const validated = await getValidatedInvitation(token);
+      if (!validated.ok) {
+        return res.status(validated.status).json({
+          code: validated.code,
+          error: validated.error,
+        });
+      }
+
+      res.json({
+        email: validated.record.email,
+        company: {
+          id: validated.company.id,
+          name: validated.metadata.companyName || validated.company.name,
+        },
+        role: validated.metadata.role,
+        inviteeName: validated.metadata.inviteeName ?? null,
+        expiresAt: validated.record.expiresAt,
+      });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.post("/api/auth/accept-invitation", loginLimiter, async (req, res) => {
+    try {
+      const { token, password, confirmPassword, email } = req.body ?? {};
+      if (!token || !password || !confirmPassword) {
+        return res.status(400).json({ error: "Token, password, and confirmPassword are required" });
+      }
+      if (password !== confirmPassword) {
+        return res.status(400).json({ error: "Passwords do not match", code: "PASSWORD_MISMATCH" });
+      }
+      if (String(password).length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters", code: "PASSWORD_TOO_SHORT" });
+      }
+
+      const validated = await getValidatedInvitation(token);
+      if (!validated.ok) {
+        return res.status(validated.status).json({
+          code: validated.code,
+          error: validated.error,
+        });
+      }
+
+      if (typeof email === "string" && email.trim().toLowerCase() !== validated.record.email.toLowerCase()) {
+        return res.status(400).json({
+          code: "INVITE_EMAIL_MISMATCH",
+          error: "The invited email address is fixed by this invitation and cannot be changed.",
+        });
+      }
+
+      const passwordHash = await hashPassword(password);
+      let user = validated.metadata.invitedUserId
+        ? await storage.getUser(validated.metadata.invitedUserId)
+        : undefined;
+
+      if (user) {
+        if (user.email.toLowerCase() !== validated.record.email.toLowerCase() || user.companyId !== validated.metadata.companyId) {
+          return res.status(409).json({
+            code: "INVITE_ACCOUNT_CONFLICT",
+            error: "This invitation no longer matches the target user. Ask your admin for a new invite.",
+          });
+        }
+        user = await storage.updateUser(user.id, {
+          password: passwordHash,
+          role: validated.metadata.role,
+          companyId: validated.metadata.companyId,
+        });
+      } else {
+        const existingUser = await storage.getUserByEmail(validated.record.email);
+        if (existingUser) {
+          return res.status(409).json({
+            code: "INVITE_ACCOUNT_EXISTS",
+            error: "An account already exists for this email address. Please sign in or ask your admin for help.",
+          });
+        }
+
+        const username = await generateInvitedUsername(validated.record.email, validated.metadata.inviteeName);
+        user = await storage.createUser({
+          username,
+          email: validated.record.email,
+          password: passwordHash,
+          role: validated.metadata.role,
+          companyId: validated.metadata.companyId,
+          termsAcceptedAt: null,
+          privacyAcceptedAt: null,
+          termsVersionAccepted: null,
+          privacyVersionAccepted: null,
+        });
+      }
+
+      if (!user) {
+        return res.status(500).json({ error: "Failed to create invited user account", code: "INVITE_ACCEPT_FAILED" });
+      }
+
+      await storage.markAuthTokenUsed(validated.record.id);
+      await storage.createAuditLog({
+        companyId: validated.metadata.companyId,
+        userId: user.id,
+        actorType: "user",
+        action: "invitation_accepted",
+        entityType: "auth",
+        details: {
+          email: validated.record.email,
+          role: validated.metadata.role,
+          inviterUserId: validated.metadata.inviterUserId ?? null,
+        },
+      });
+
+      const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const clientUa = req.headers["user-agent"] || null;
+      establishSession(req, res, user, validated.company, { ipAddress: clientIp, userAgent: clientUa });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -5604,8 +5849,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { email, role = "contributor", inviteeName } = req.body;
       if (!email) return res.status(400).json({ error: "email is required" });
-      const validRoles = ["admin", "contributor", "approver", "viewer"];
-      if (!validRoles.includes(role)) return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+      if (!INVITABLE_ROLES.includes(role)) return res.status(400).json({ error: `role must be one of: ${INVITABLE_ROLES.join(", ")}` });
 
       const targetCompany = await storage.getCompany(companyId);
       if (!targetCompany) {
@@ -5619,7 +5863,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { plaintext, hash } = generateSecureToken();
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email, expiresAt });
+      await storage.createAuthToken({
+        tokenHash: hash,
+        type: "invitation",
+        email,
+        expiresAt,
+        metadata: {
+          companyId,
+          role,
+          inviteeName: inviteeName ?? null,
+          inviterUserId: actorId,
+          inviterRole: callerUser.role ?? null,
+          companyName: targetCompany.name ?? null,
+        },
+      });
 
       const emailPayload = buildInvitationEmail({
         inviteeName: inviteeName || email,
@@ -9432,7 +9689,21 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { plaintext, hash } = generateSecureToken();
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email: targetUser.email, expiresAt });
+      await storage.createAuthToken({
+        tokenHash: hash,
+        type: "invitation",
+        email: targetUser.email,
+        expiresAt,
+        metadata: {
+          companyId,
+          role: (INVITABLE_ROLES.includes(targetUser.role as InvitableRole) ? targetUser.role : "contributor") as InvitableRole,
+          inviteeName: targetUser.username || targetUser.email,
+          inviterUserId: adminUser.id,
+          inviterRole: adminUser.role ?? null,
+          companyName: company.name ?? null,
+          invitedUserId: targetUser.id,
+        },
+      });
 
       const emailPayload = buildInvitationEmail({
         inviteeName: targetUser.username || targetUser.email,
@@ -12375,9 +12646,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { email, role = "contributor", inviteeName } = req.body;
       if (!email) return res.status(400).json({ error: "email is required" });
-      const validRoles = ["admin", "contributor", "approver", "viewer"];
-      if (!validRoles.includes(role)) {
-        return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
+      if (!INVITABLE_ROLES.includes(role)) {
+        return res.status(400).json({ error: `role must be one of: ${INVITABLE_ROLES.join(", ")}` });
       }
 
       const existing = await storage.getUserByEmail(email);
@@ -12387,7 +12657,20 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { plaintext, hash } = generateSecureToken();
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      await storage.createAuthToken({ tokenHash: hash, type: "invitation", email, expiresAt });
+      await storage.createAuthToken({
+        tokenHash: hash,
+        type: "invitation",
+        email,
+        expiresAt,
+        metadata: {
+          companyId: targetCompanyId,
+          role,
+          inviteeName: inviteeName ?? null,
+          inviterUserId: callerUser.id,
+          inviterRole: callerUser.role ?? null,
+          companyName: company?.name ?? null,
+        },
+      });
 
       const company = await storage.getCompany(targetCompanyId);
       const actor = await storage.getUser(callerUser.id);

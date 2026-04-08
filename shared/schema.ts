@@ -582,6 +582,7 @@ export const authTokens = pgTable("auth_tokens", {
   type: authTokenTypeEnum("type").notNull(),
   userId: varchar("user_id"),
   email: text("email").notNull(),
+  metadata: jsonb("metadata"),
   expiresAt: timestamp("expires_at").notNull(),
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").defaultNow(),
