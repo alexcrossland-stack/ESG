@@ -20,6 +20,7 @@ import {
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
   Send, Check, X, FileCheck, Loader2, ArrowRight, Sparkles, Pencil,
+  Paperclip, Trash2, ExternalLink, FileText,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
@@ -112,6 +113,27 @@ type MetricDefinitionActivation = {
   formulaJson?: Record<string, unknown> | null;
 };
 
+type EvidenceAttachment = {
+  id: string;
+  filename: string;
+  fileUrl: string | null;
+  fileType: string | null;
+  description: string | null;
+  linkedModule: string | null;
+  linkedEntityId: string | null;
+  linkedPeriod: string | null;
+  evidenceStatus: string | null;
+  uploadedAt: string | null;
+};
+
+const METRIC_EVIDENCE_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp,.svg,.ppt,.pptx,.odt,.ods,.odp,.zip,.eml,.msg";
+
+function formatAttachmentSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function QualityBadge({ score, metricId }: { score: number; metricId: string }) {
   const variant = score > 70 ? "default" : score >= 40 ? "secondary" : "outline";
   const color = score > 70 ? "text-emerald-600 dark:text-emerald-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
@@ -150,9 +172,20 @@ export default function DataEntry() {
   const [editingEstimate, setEditingEstimate] = useState<string | null>(null);
   const [editEstimateValue, setEditEstimateValue] = useState("");
   const [editSaveAsActual, setEditSaveAsActual] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<Record<string, File[]>>({});
 
   const { data: evidenceCoverage } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
+  });
+
+  const { data: evidenceFiles = [] } = useQuery<EvidenceAttachment[]>({
+    queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("period", selectedPeriod);
+      if (activeSiteId) params.set("siteId", activeSiteId);
+      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+    },
   });
 
   const { data: dataQuality } = useQuery<any>({
@@ -244,10 +277,45 @@ export default function DataEntry() {
   });
 
   const saveManualMutation = useMutation({
-    mutationFn: (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string; siteId?: string | null }) =>
-      apiRequest("POST", "/api/data-entry", data),
+    mutationFn: async (data: { metricId: string; period: string; value: string; notes: string; dataSourceType?: string; siteId?: string | null; attachments?: File[] }) => {
+      if (data.attachments?.length) {
+        const formData = new FormData();
+        formData.append("metricId", data.metricId);
+        formData.append("period", data.period);
+        formData.append("value", data.value);
+        formData.append("notes", data.notes || "");
+        if (data.dataSourceType) formData.append("dataSourceType", data.dataSourceType);
+        if (data.siteId) formData.append("siteId", data.siteId);
+        data.attachments.forEach((file) => formData.append("attachments", file, file.name));
+        return apiRequest("POST", "/api/data-entry", formData).then((response) => response.json());
+      }
+
+      return apiRequest("POST", "/api/data-entry", {
+        metricId: data.metricId,
+        period: data.period,
+        value: data.value,
+        notes: data.notes,
+        dataSourceType: data.dataSourceType,
+        siteId: data.siteId,
+      }).then((response) => response.json());
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+    },
+  });
+
+  const deleteEvidenceMutation = useMutation({
+    mutationFn: (evidenceId: string) => apiRequest("DELETE", `/api/evidence/${evidenceId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      toast({ title: "Evidence removed" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Could not remove evidence", description: error.message, variant: "destructive" });
     },
   });
 
@@ -394,7 +462,19 @@ export default function DataEntry() {
     const val = manualValues[metricKey];
     if (!val?.value) return;
     const dataSourceType = manualDataSourceTypes[metricKey] || "manual";
-    await saveManualMutation.mutateAsync({ metricId, period: selectedPeriod, value: val.value, notes: val.notes, dataSourceType, siteId: activeSiteId || null });
+    const attachments = pendingAttachments[metricKey] || [];
+    await saveManualMutation.mutateAsync({
+      metricId,
+      period: selectedPeriod,
+      value: val.value,
+      notes: val.notes,
+      dataSourceType,
+      siteId: activeSiteId || null,
+      attachments,
+    });
+    if (attachments.length > 0) {
+      setPendingAttachments((prev) => ({ ...prev, [metricKey]: [] }));
+    }
     const isFirstData = !activation.hasAddedData;
     if (isFirstData) {
       trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: selectedPeriod, source: "manual" });
@@ -402,7 +482,11 @@ export default function DataEntry() {
     }
     toast({
       title: "Value saved",
-      description: isFirstData ? "First data point recorded. Next: add an evidence file to support this entry." : "Metric updated for this period.",
+      description: attachments.length > 0
+        ? `${attachments.length} evidence file${attachments.length === 1 ? "" : "s"} uploaded with this metric.`
+        : isFirstData
+          ? "First data point recorded. Next: add an evidence file to support this entry."
+          : "Metric updated for this period.",
     });
   };
 
@@ -416,6 +500,23 @@ export default function DataEntry() {
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && (metric.metricType === "manual" || !metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
   const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
+  const getMetricEvidence = (metricValueId?: string) =>
+    metricValueId
+      ? evidenceFiles.filter((file) => file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId)
+      : [];
+  const queueMetricAttachments = (metricKey: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setPendingAttachments((prev) => ({
+      ...prev,
+      [metricKey]: [...(prev[metricKey] || []), ...Array.from(files)],
+    }));
+  };
+  const removePendingAttachment = (metricKey: string, index: number) => {
+    setPendingAttachments((prev) => ({
+      ...prev,
+      [metricKey]: (prev[metricKey] || []).filter((_, fileIndex) => fileIndex !== index),
+    }));
+  };
 
   const isLoading = rawLoading || entryLoading || definitionsLoading;
   if (isLoading) {
@@ -1056,6 +1157,8 @@ export default function DataEntry() {
                     const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
                     const isCurrentlyEstimated = currentSourceType === "estimated";
+                    const attachedEvidence = getMetricEvidence(metricValue?.id);
+                    const queuedAttachments = pendingAttachments[metricKey] || [];
 
                     return (
                       <div
@@ -1162,6 +1265,93 @@ export default function DataEntry() {
                                 </SelectContent>
                               </Select>
                             </div>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Paperclip className="w-3 h-3" />
+                                Evidence files
+                              </Label>
+                              <Input
+                                type="file"
+                                multiple
+                                accept={METRIC_EVIDENCE_ACCEPT}
+                                disabled={editDisabled || !isEligible}
+                                className="h-9 text-xs"
+                                data-testid={`input-evidence-files-${metricKey}`}
+                                onChange={(e) => {
+                                  queueMetricAttachments(metricKey, e.target.files);
+                                  e.target.value = "";
+                                }}
+                              />
+                              <p className="text-[11px] text-muted-foreground">
+                                Add one or more supporting files. They’ll upload and link to this metric when you save.
+                              </p>
+                            </div>
+
+                            {queuedAttachments.length > 0 && (
+                              <div className="space-y-1">
+                                {queuedAttachments.map((file, index) => (
+                                  <div
+                                    key={`${file.name}-${file.size}-${index}`}
+                                    className="flex items-center gap-2 rounded-md border border-dashed border-primary/30 bg-primary/5 px-2 py-1.5 text-xs"
+                                    data-testid={`pending-evidence-${metricKey}-${index}`}
+                                  >
+                                    <Upload className="w-3 h-3 text-primary shrink-0" />
+                                    <span className="flex-1 truncate font-medium">{file.name}</span>
+                                    <span className="shrink-0 text-muted-foreground">{formatAttachmentSize(file.size)}</span>
+                                    {!editDisabled && (
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-5 w-5"
+                                        onClick={() => removePendingAttachment(metricKey, index)}
+                                        data-testid={`button-remove-pending-evidence-${metricKey}-${index}`}
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {attachedEvidence.length > 0 && (
+                              <div className="space-y-1">
+                                {attachedEvidence.map((evidence) => (
+                                  <div
+                                    key={evidence.id}
+                                    className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-xs"
+                                    data-testid={`metric-evidence-${metricKey}-${evidence.id}`}
+                                  >
+                                    <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                                    <span className="flex-1 truncate font-medium">{evidence.filename}</span>
+                                    <span className="shrink-0 text-muted-foreground">{evidence.fileType || "file"}</span>
+                                    {evidence.fileUrl && (
+                                      <a href={evidence.fileUrl} target="_blank" rel="noopener noreferrer">
+                                        <Button type="button" size="icon" variant="ghost" className="h-5 w-5" data-testid={`button-open-evidence-${metricKey}-${evidence.id}`}>
+                                          <ExternalLink className="w-3 h-3" />
+                                        </Button>
+                                      </a>
+                                    )}
+                                    {!editDisabled && (
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-5 w-5 text-destructive hover:text-destructive"
+                                        disabled={deleteEvidenceMutation.isPending}
+                                        onClick={() => deleteEvidenceMutation.mutate(evidence.id)}
+                                        data-testid={`button-delete-evidence-${metricKey}-${evidence.id}`}
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                         {!editDisabled && (
