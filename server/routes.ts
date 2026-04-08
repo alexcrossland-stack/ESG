@@ -4,7 +4,7 @@ import { createServer, type Server } from "http";
 import fs from "fs/promises";
 import path from "path";
 import session from "express-session";
-import { storage, assertTenantScope } from "./storage";
+import { storage } from "./storage";
 import { db } from "./storage";
 import { DEFAULT_METRICS } from "./default-metrics";
 import {
@@ -6777,10 +6777,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         `);
         const metricValue = (metricValueResult as any).rows?.[0];
         if (!metricValue) return res.status(404).json({ error: "Metric value not found" });
-        assertTenantScope({
-          actorCompanyId: companyId,
-          targetCompanyId: metricValue.company_id,
-        });
+        if (metricValue.company_id !== companyId) {
+          return res.status(404).json({ error: "Metric value not found" });
+        }
         bodySiteId = metricValue.site_id ?? null;
       }
       const file = await storage.createEvidenceFile({
