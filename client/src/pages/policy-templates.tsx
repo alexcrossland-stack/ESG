@@ -31,6 +31,8 @@ import {
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge, AiDraftBadge } from "@/components/workflow-badge";
+import { GeneratedDocumentContent } from "@/components/generated-document-content";
+import { buildGeneratedDocumentHtmlPage, renderGeneratedMarkdownToHtml } from "@shared/generated-document-markdown";
 
 const CATEGORY_ICONS: Record<string, any> = {
   "Quality": ClipboardCheck,
@@ -702,22 +704,37 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
   };
 
   const buildDocContent = () => {
+    const metadataRows = [
+      ["Policy Owner", policy.policyOwner || "—"],
+      ["Approver", policy.approver || "—"],
+      ["Version", String(policy.versionNumber || 1)],
+      ["Status", policy.status || "draft"],
+      ["Review Date", policy.reviewDate ? new Date(policy.reviewDate).toLocaleDateString() : "Not set"],
+    ];
+
+    const metadataTable = [
+      "| Field | Value |",
+      "| --- | --- |",
+      ...metadataRows.map(([label, value]) => `| ${label} | ${String(value).replace(/\|/g, "\\|")} |`),
+    ].join("\n");
+
     const text = Object.entries(content).map(([key, val]) => {
       const section = sections.find((s: any) => s.key === key);
       return `## ${section?.label || key}\n\n${val}\n`;
     }).join("\n---\n\n");
-    const header = `# ${policy.title}\n\nPolicy Owner: ${policy.policyOwner || "—"}\nApprover: ${policy.approver || "—"}\nVersion: ${policy.versionNumber || 1}\nStatus: ${policy.status}\nReview Date: ${policy.reviewDate ? new Date(policy.reviewDate).toLocaleDateString() : "Not set"}\n\n---\n\n`;
-    const guardrail = "\n\n---\n\nDISCLAIMER: This policy does not guarantee certification to any ISO standard or full legal compliance. Implementation, records, training, internal audits, and management review are also required.\n";
+    const header = `# ${policy.title}\n\n${metadataTable}\n\n---\n\n`;
+    const guardrail = "\n\n---\n\n> **Disclaimer:** This policy does not guarantee certification to any ISO standard or full legal compliance. Implementation, records, training, internal audits, and management review are also required.\n";
     return header + text + guardrail;
   };
 
   const buildHtmlDoc = () => {
-    const clauses = Object.entries(content).map(([key, val]) => {
-      const section = sections.find((s: any) => s.key === key);
-      return `<h2 style="color:#1a5c3a;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px;">${section?.label || key}</h2>\n<p style="white-space:pre-wrap;">${(val as string).replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`;
-    }).join("\n");
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${policy.title}</title><style>body{font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:40px auto;padding:20px;color:#222;line-height:1.6}h1{color:#1a5c3a}table{border-collapse:collapse;margin:16px 0}td{padding:4px 12px;border:1px solid #ddd;font-size:14px}.disclaimer{margin-top:32px;padding:16px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:13px}</style></head><body><h1>${policy.title}</h1><table><tr><td><strong>Policy Owner</strong></td><td>${policy.policyOwner || "—"}</td></tr><tr><td><strong>Approver</strong></td><td>${policy.approver || "—"}</td></tr><tr><td><strong>Version</strong></td><td>${policy.versionNumber || 1}</td></tr><tr><td><strong>Status</strong></td><td>${policy.status}</td></tr><tr><td><strong>Review Date</strong></td><td>${policy.reviewDate ? new Date(policy.reviewDate).toLocaleDateString() : "Not set"}</td></tr></table>${clauses}<div class="disclaimer"><strong>Disclaimer:</strong> This policy does not guarantee certification to any ISO standard or full legal compliance. Implementation, records, training, internal audits, and management review are also required.</div></body></html>`;
+    return buildGeneratedDocumentHtmlPage({
+      title: policy.title,
+      bodyHtml: renderGeneratedMarkdownToHtml(buildDocContent()),
+    });
   };
+
+  const renderedPolicyMarkdown = buildDocContent();
 
   const handleExport = (format: "txt" | "docx" | "pdf") => {
     if (format === "txt") {
@@ -881,6 +898,18 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
               </CardContent>
             </Card>
           ))}
+
+          <Card data-testid="generated-policy-preview-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Rendered Preview</CardTitle>
+              <CardDescription className="text-xs">
+                Generated markdown is rendered here using the same safe document pipeline used for print and export.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <GeneratedDocumentContent markdown={renderedPolicyMarkdown} data-testid="generated-policy-preview" />
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-4">

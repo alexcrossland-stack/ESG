@@ -1,5 +1,11 @@
 import PDFDocument from "pdfkit";
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, WidthType, AlignmentType, BorderStyle } from "docx";
+import {
+  parseGeneratedInlineMarkdown,
+  parseGeneratedMarkdownBlocks,
+  stripMarkdownToText,
+  type GeneratedInlineRun,
+} from "@shared/generated-document-markdown";
 
 interface ReportSection {
   title: string;
@@ -22,6 +28,247 @@ interface ReportData {
   confidenceStatement?: string;
   caveats?: string[];
   nextSteps?: string[];
+}
+
+const PDF_CONTENT_WIDTH = 495;
+const PDF_PAGE_BREAK_Y = 720;
+
+function ensurePdfSpace(doc: any, minHeight = 36) {
+  if (doc.y > PDF_PAGE_BREAK_Y - minHeight) doc.addPage();
+}
+
+function pdfFontForRun(run: GeneratedInlineRun): string {
+  if (run.bold && run.italic) return "Helvetica-BoldOblique";
+  if (run.bold) return "Helvetica-Bold";
+  if (run.italic) return "Helvetica-Oblique";
+  return "Helvetica";
+}
+
+function splitRunsOnNewlines(runs: GeneratedInlineRun[]): GeneratedInlineRun[][] {
+  const lines: GeneratedInlineRun[][] = [[]];
+
+  for (const run of runs) {
+    const parts = (run.text || "").split("\n");
+    parts.forEach((part, index) => {
+      if (part) lines[lines.length - 1].push({ ...run, text: part });
+      if (index < parts.length - 1) lines.push([]);
+    });
+  }
+
+  return lines;
+}
+
+function renderPdfInlineParagraph(
+  doc: any,
+  runs: GeneratedInlineRun[],
+  options: { fontSize: number; color?: string; indent?: number; after?: number } = { fontSize: 10 },
+) {
+  const lines = splitRunsOnNewlines(runs);
+  const width = PDF_CONTENT_WIDTH - (options.indent || 0);
+  const color = options.color || "#333";
+
+  for (const line of lines) {
+    ensurePdfSpace(doc, 24);
+    if (line.length === 0) {
+      doc.moveDown(0.4);
+      continue;
+    }
+
+    line.forEach((run, index) => {
+      doc
+        .font(pdfFontForRun(run))
+        .fontSize(options.fontSize)
+        .fillColor(color)
+        .text(run.text || "", {
+          width,
+          indent: options.indent || 0,
+          continued: index < line.length - 1,
+        });
+    });
+  }
+
+  doc.moveDown(options.after ?? 0.55);
+}
+
+function renderPdfTable(doc: any, headers: string[], rows: string[][]) {
+  if (!headers.length) return;
+
+  const colW = Math.floor(PDF_CONTENT_WIDTH / headers.length);
+  const startX = 50;
+
+  ensurePdfSpace(doc, 48);
+  doc.fontSize(9).fillColor("#666");
+  headers.forEach((header, index) => {
+    doc.text(stripMarkdownToText(header) || "-", startX + index * colW, doc.y, {
+      width: colW - 5,
+      continued: index < headers.length - 1,
+    });
+  });
+  doc.moveDown(0.3);
+  doc.strokeColor("#ccc").lineWidth(0.5).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+  doc.moveDown(0.3);
+
+  for (const row of rows) {
+    ensurePdfSpace(doc, 28);
+    doc.fontSize(9).fillColor("#333");
+    row.forEach((cell, index) => {
+      doc.text(stripMarkdownToText(cell) || "-", startX + index * colW, doc.y, {
+        width: colW - 5,
+        continued: index < row.length - 1,
+      });
+    });
+    doc.moveDown(0.2);
+  }
+
+  doc.moveDown(0.8);
+}
+
+function renderMarkdownToPdf(doc: any, markdown: string) {
+  const blocks = parseGeneratedMarkdownBlocks(markdown);
+
+  for (const block of blocks) {
+    if (block.type === "heading") {
+      const fontSize = block.depth <= 1 ? 12 : block.depth === 2 ? 11 : 10;
+      renderPdfInlineParagraph(doc, block.runs, { fontSize, color: "#14532d", after: 0.25 });
+      continue;
+    }
+
+    if (block.type === "paragraph") {
+      const color = block.callout === "disclaimer" ? "#92400e" : block.callout === "note" ? "#1d4ed8" : "#333";
+      const indent = block.callout ? 12 : 0;
+      renderPdfInlineParagraph(doc, block.runs, { fontSize: 10, color, indent, after: 0.6 });
+      continue;
+    }
+
+    if (block.type === "list") {
+      block.items.forEach((item, index) => {
+        const prefix = block.ordered ? `${index + 1}. ` : "• ";
+        renderPdfInlineParagraph(doc, [{ text: prefix, bold: true }, ...item.runs], { fontSize: 10, indent: 8, after: 0.2 });
+      });
+      doc.moveDown(0.3);
+      continue;
+    }
+
+    if (block.type === "table") {
+      renderPdfTable(doc, block.headers, block.rows);
+      continue;
+    }
+
+    if (block.type === "thematicBreak") {
+      ensurePdfSpace(doc, 12);
+      doc.strokeColor("#ddd").lineWidth(0.5).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.7);
+    }
+  }
+}
+
+function docxRunsFromMarkdownRuns(runs: GeneratedInlineRun[], size = 22): TextRun[] {
+  if (!runs.length) return [new TextRun({ text: "", size })];
+
+  return runs.map((run) => new TextRun({
+    text: run.text,
+    size,
+    bold: run.bold,
+    italics: run.italic,
+    font: run.code ? "Courier New" : undefined,
+    style: run.code ? "Code" : undefined,
+  }));
+}
+
+function paragraphFromMarkdownRuns(
+  runs: GeneratedInlineRun[],
+  options: { size?: number; bullet?: boolean; numbering?: { reference: string; level: number }; color?: string; indent?: number } = {},
+) {
+  return new Paragraph({
+    children: runs.length > 0
+      ? runs.map((run) => new TextRun({
+          text: run.text,
+          size: options.size ?? 22,
+          bold: run.bold,
+          italics: run.italic,
+          color: options.color,
+          font: run.code ? "Courier New" : undefined,
+          style: run.code ? "Code" : undefined,
+        }))
+      : [new TextRun({ text: "", size: options.size ?? 22, color: options.color })],
+    bullet: options.bullet ? { level: 0 } : undefined,
+    numbering: options.numbering,
+    indent: options.indent ? { left: options.indent } : undefined,
+    spacing: { after: 120 },
+  });
+}
+
+function buildDocxTable(headers: string[], rows: string[][]) {
+  const colPercent = Math.floor(100 / Math.max(headers.length, 1));
+  const headerRow = new TableRow({
+    children: headers.map((header) => new TableCell({
+      children: [new Paragraph({ children: [new TextRun({ text: stripMarkdownToText(header) || "-", bold: true, size: 20 })] })],
+      width: { size: colPercent, type: WidthType.PERCENTAGE },
+    })),
+  });
+  const dataRows = rows.map((row) => new TableRow({
+    children: row.map((cell) => new TableCell({
+      children: [new Paragraph({ children: [new TextRun({ text: stripMarkdownToText(cell) || "-", size: 20 })] })],
+      width: { size: colPercent, type: WidthType.PERCENTAGE },
+    })),
+  }));
+
+  return new Table({
+    rows: [headerRow, ...dataRows],
+    width: { size: 100, type: WidthType.PERCENTAGE },
+  });
+}
+
+function renderMarkdownToDocx(markdown: string): Array<Paragraph | Table> {
+  const blocks = parseGeneratedMarkdownBlocks(markdown);
+  const children: Array<Paragraph | Table> = [];
+
+  blocks.forEach((block) => {
+    if (block.type === "heading") {
+      const heading = block.depth <= 1
+        ? HeadingLevel.HEADING_3
+        : block.depth === 2
+          ? HeadingLevel.HEADING_4
+          : HeadingLevel.HEADING_5;
+      children.push(new Paragraph({
+        children: docxRunsFromMarkdownRuns(block.runs, 22),
+        heading,
+        spacing: { before: 120, after: 80 },
+      }));
+      return;
+    }
+
+    if (block.type === "paragraph") {
+      const color = block.callout === "disclaimer" ? "92400E" : block.callout === "note" ? "1D4ED8" : undefined;
+      children.push(paragraphFromMarkdownRuns(block.runs, { size: 22, color, indent: block.callout ? 240 : undefined }));
+      return;
+    }
+
+    if (block.type === "list") {
+      block.items.forEach((item, index) => {
+        if (block.ordered) {
+          children.push(paragraphFromMarkdownRuns([{ text: `${index + 1}. ` }, ...item.runs], { size: 22, indent: 240 }));
+        } else {
+          children.push(paragraphFromMarkdownRuns(item.runs, { size: 22, bullet: true }));
+        }
+      });
+      return;
+    }
+
+    if (block.type === "table") {
+      children.push(buildDocxTable(block.headers, block.rows));
+      return;
+    }
+
+    if (block.type === "thematicBreak") {
+      children.push(new Paragraph({
+        border: { bottom: { color: "D1D5DB", style: BorderStyle.SINGLE, size: 1 } },
+        spacing: { after: 120 },
+      }));
+    }
+  });
+
+  return children;
 }
 
 /**
@@ -615,8 +862,8 @@ export async function generatePdf(reportData: ReportData, reportType: string, co
     doc.moveDown(1);
 
     if (reportData.summary) {
-      doc.fontSize(10).fillColor("#444").text(reportData.summary);
-      doc.moveDown(1);
+      renderMarkdownToPdf(doc, reportData.summary);
+      doc.moveDown(0.2);
     }
 
     for (const section of reportData.sections) {
@@ -628,15 +875,19 @@ export async function generatePdf(reportData: ReportData, reportType: string, co
       doc.moveDown(0.5);
 
       if (section.type === "text" && section.content) {
-        doc.fontSize(10).fillColor("#333").text(section.content);
-        doc.moveDown(0.8);
+        renderMarkdownToPdf(doc, section.content);
       }
 
       if (section.type === "list" && section.items) {
         for (const item of section.items) {
-          doc.fontSize(10).fillColor("#333").text(`  •  ${item}`);
+          const runs = parseGeneratedInlineMarkdown(item);
+          renderPdfInlineParagraph(doc, [{ text: "• ", bold: true }, ...(runs.length > 0 ? runs : [{ text: stripMarkdownToText(item) }])], {
+            fontSize: 10,
+            indent: 8,
+            after: 0.2,
+          });
         }
-        doc.moveDown(0.8);
+        doc.moveDown(0.3);
       }
 
       if (section.type === "metrics" && section.rows) {
@@ -656,33 +907,17 @@ export async function generatePdf(reportData: ReportData, reportType: string, co
           if (doc.y > 720) doc.addPage();
           const y = doc.y;
           doc.fontSize(9).fillColor("#333");
-          doc.text(row.label, startX, y, { width: colWidths[0] - 10 });
-          doc.text(row.value, startX + colWidths[0], y, { width: colWidths[1] - 10 });
+          doc.text(stripMarkdownToText(row.label) || "-", startX, y, { width: colWidths[0] - 10 });
+          doc.text(stripMarkdownToText(row.value) || "-", startX + colWidths[0], y, { width: colWidths[1] - 10 });
           const statusColor = row.status === "green" ? "#16a34a" : row.status === "amber" ? "#d97706" : row.status === "red" ? "#dc2626" : "#666";
-          doc.fillColor(statusColor).text(row.status || "-", startX + colWidths[0] + colWidths[1], y);
+          doc.fillColor(statusColor).text(stripMarkdownToText(row.status || "-") || "-", startX + colWidths[0] + colWidths[1], y);
           doc.moveDown(0.2);
         }
         doc.moveDown(0.8);
       }
 
       if (section.type === "table" && section.tableHeaders && section.tableRows) {
-        const headers = section.tableHeaders;
-        const colW = Math.floor(495 / headers.length);
-        const startX = 50;
-
-        doc.fontSize(9).fillColor("#666");
-        headers.forEach((h, i) => doc.text(h, startX + i * colW, doc.y, { width: colW - 5, continued: i < headers.length - 1 }));
-        doc.moveDown(0.3);
-        doc.strokeColor("#ccc").lineWidth(0.5).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-        doc.moveDown(0.3);
-
-        for (const row of section.tableRows) {
-          if (doc.y > 720) doc.addPage();
-          doc.fontSize(9).fillColor("#333");
-          row.forEach((cell, i) => doc.text(cell || "-", startX + i * colW, doc.y, { width: colW - 5, continued: i < row.length - 1 }));
-          doc.moveDown(0.2);
-        }
-        doc.moveDown(0.8);
+        renderPdfTable(doc, section.tableHeaders, section.tableRows);
       }
     }
 
@@ -724,10 +959,7 @@ export async function generateDocx(reportData: ReportData, reportType: string, c
   );
 
   if (reportData.summary) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: reportData.summary, size: 22 })],
-      spacing: { after: 300 },
-    }));
+    children.push(...renderMarkdownToDocx(reportData.summary));
   }
 
   for (const section of reportData.sections) {
@@ -738,59 +970,25 @@ export async function generateDocx(reportData: ReportData, reportType: string, c
     }));
 
     if (section.type === "text" && section.content) {
-      children.push(new Paragraph({
-        children: [new TextRun({ text: section.content, size: 22 })],
-        spacing: { after: 200 },
-      }));
+      children.push(...renderMarkdownToDocx(section.content));
     }
 
     if (section.type === "list" && section.items) {
       for (const item of section.items) {
-        children.push(new Paragraph({
-          children: [new TextRun({ text: item, size: 22 })],
-          bullet: { level: 0 },
-          spacing: { after: 60 },
-        }));
+        const runs = parseGeneratedInlineMarkdown(item);
+        children.push(paragraphFromMarkdownRuns(runs.length > 0 ? runs : [{ text: stripMarkdownToText(item) }], { size: 22, bullet: true }));
       }
     }
 
     if (section.type === "metrics" && section.rows) {
-      const headerRow = new TableRow({
-        children: ["Metric", "Value", "Status"].map(h => new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 20 })] })],
-          width: { size: 33, type: WidthType.PERCENTAGE },
-        })),
-      });
-      const dataRows = section.rows.map(r => new TableRow({
-        children: [r.label, r.value, r.status || "-"].map(cell => new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: cell, size: 20 })] })],
-          width: { size: 33, type: WidthType.PERCENTAGE },
-        })),
-      }));
-      children.push(new Table({
-        rows: [headerRow, ...dataRows],
-        width: { size: 100, type: WidthType.PERCENTAGE },
-      }));
+      children.push(buildDocxTable(
+        ["Metric", "Value", "Status"],
+        section.rows.map((row) => [row.label, row.value, row.status || "-"]),
+      ));
     }
 
     if (section.type === "table" && section.tableHeaders && section.tableRows) {
-      const colPercent = Math.floor(100 / section.tableHeaders.length);
-      const headerRow = new TableRow({
-        children: section.tableHeaders.map(h => new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 20 })] })],
-          width: { size: colPercent, type: WidthType.PERCENTAGE },
-        })),
-      });
-      const dataRows = section.tableRows.map(row => new TableRow({
-        children: row.map(cell => new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: cell || "-", size: 20 })] })],
-          width: { size: colPercent, type: WidthType.PERCENTAGE },
-        })),
-      }));
-      children.push(new Table({
-        rows: [headerRow, ...dataRows],
-        width: { size: 100, type: WidthType.PERCENTAGE },
-      }));
+      children.push(buildDocxTable(section.tableHeaders, section.tableRows));
     }
   }
 

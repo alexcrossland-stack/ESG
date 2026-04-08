@@ -1387,7 +1387,7 @@ export default function Reports() {
     a.download = `${selectedTemplate}-report-${selectedPeriod}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-    toast({ title: "Report exported" });
+    toast({ title: "Report exported as plain text" });
   };
 
   const exportCsv = () => {
@@ -1985,7 +1985,7 @@ export default function Reports() {
                   </Button>
                   <Button size="sm" variant="outline" onClick={exportReport} data-testid="button-export-report">
                     <Download className="w-3.5 h-3.5 mr-1.5" />
-                    Text
+                    Plain Text
                   </Button>
                   {isPro ? (
                     <>
