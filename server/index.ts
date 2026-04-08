@@ -305,6 +305,13 @@ app.use((req, res, next) => {
     process.exit(1);
   }
   try {
+    await db.execute(sql`ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS metadata jsonb`);
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not ensure auth_tokens.metadata exists");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
     const result = await db.execute(sql`SELECT id FROM users WHERE role = 'super_admin' LIMIT 1`);
     const rows = (result as any).rows ?? [];
     if (rows.length === 0) {

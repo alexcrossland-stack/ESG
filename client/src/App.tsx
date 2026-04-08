@@ -472,6 +472,7 @@ function ProtectedApp() {
 function Router() {
   return (
     <Switch>
+      <Route path="/invite" component={Auth} />
       <Route path="/auth" component={Auth} />
       <Route path="/terms" component={TermsPage} />
       <Route path="/privacy" component={PrivacyPage} />
