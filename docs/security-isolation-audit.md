@@ -53,7 +53,6 @@ This document audits every route category for tenant isolation enforcement and R
 | `GET /api/metrics` | `requireAuth` | `companyId` from session | |
 | `POST /api/metric-values` | `requireAuth` + `requirePermission("metrics_data_entry")` | `companyId` from session | |
 | `PUT /api/metric-values/:id` | `requireAuth` + `requirePermission("metrics_data_entry")` | Ownership verified via `companyId` | |
-| `POST /api/data-entry/bulk-upload` | `requireAuth` + `requirePermission("metrics_data_entry")` | `companyId` from session; rate-limited |
 | `POST /api/carbon` | `requireAuth` + `requirePermission("metrics_data_entry")` | `companyId` from session | |
 
 ---

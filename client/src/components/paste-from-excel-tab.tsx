@@ -1,7 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addMonths, format, subMonths } from "date-fns";
-import { AlertCircle, CheckCircle2, ClipboardPaste, Loader2, Table, Upload } from "lucide-react";
+import { AlertCircle, CheckCircle2, ClipboardPaste, Loader2, Table } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -127,10 +127,8 @@ function withinSelection(cell: CellCoord, start: CellCoord, end: CellCoord) {
 
 export function PasteFromExcelTab({
   selectedPeriod,
-  onSwitchToUpload,
 }: {
   selectedPeriod: string;
-  onSwitchToUpload: () => void;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -367,11 +365,6 @@ export function PasteFromExcelTab({
           <p className="text-sm text-muted-foreground">
             {gridState.errorMessage || "The server returned an unexpected response."}
           </p>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onSwitchToUpload} data-testid="button-fallback-upload-from-grid-error">
-              Use file upload fallback
-            </Button>
-          </div>
         </CardContent>
       </Card>
     );
@@ -392,9 +385,6 @@ export function PasteFromExcelTab({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge variant="outline" className="border-sky-300 text-sky-700 dark:border-sky-700 dark:text-sky-300">Paste from Excel</Badge>
             <span>Changed cells are highlighted immediately and validated before save.</span>
-            <Button variant="ghost" size="sm" className="h-auto p-0 text-sky-700 underline-offset-2 hover:underline dark:text-sky-300" onClick={onSwitchToUpload} data-testid="button-open-upload-fallback">
-              Use file upload fallback
-            </Button>
           </div>
           <p className="text-xs text-sky-700 dark:text-sky-300">
             Blank cells inside the pasted range clear existing values. Blank cells outside the pasted range are ignored.
@@ -718,10 +708,6 @@ export function PasteFromExcelTab({
         <CardContent className="pt-4 text-xs text-muted-foreground space-y-2">
           <p>Clipboard rules: columns are tab-separated, rows are newline-separated, blanks stay empty, and values like `1,234`, `£450`, or `12%` are normalized automatically.</p>
           <p>Keyboard support: arrows move cell-to-cell, `Tab` moves across months, `Enter` moves down, and `Shift` with arrows expands the current selection.</p>
-          <div className="flex items-center gap-2">
-            <Upload className="w-3.5 h-3.5" />
-            <span>Need the old flow for a full file? The upload tab is still available as a fallback.</span>
-          </div>
         </CardContent>
       </Card>
     </div>

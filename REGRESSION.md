@@ -76,7 +76,6 @@ All routes below now use `requireProvisioningPermission(action)` backed by the a
 | `POST /api/metrics` | `enter_metric_data` | admin, contributor, super_admin |
 | `PUT /api/metrics/:id` | `enter_metric_data` | admin, contributor, super_admin |
 | `POST /api/data-entry` | `enter_metric_data` | admin, contributor, super_admin |
-| `POST /api/data-entry/bulk-upload` | `enter_metric_data` | admin, contributor, super_admin |
 | `POST /api/raw-data` | `enter_metric_data` | admin, contributor, super_admin |
 | `POST /api/metrics/recalculate/:period` | `enter_metric_data` | admin, contributor, super_admin |
 | `PATCH /api/metric-definitions/:id/active` | `enter_metric_data` | admin, contributor, super_admin |
