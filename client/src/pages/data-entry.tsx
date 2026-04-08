@@ -18,7 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ClipboardList, Lock, Save, Leaf, Users, Shield,
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
-  Upload, Download, Table, Eye,
+  Upload, Download, FileSpreadsheet, Table, Eye,
   Send, Check, X, FileCheck, Loader2, ArrowRight, Sparkles, Pencil,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
