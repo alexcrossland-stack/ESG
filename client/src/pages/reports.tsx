@@ -35,6 +35,31 @@ import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { ReportReadinessPanel } from "@/components/report-readiness-panel";
 
+type ReportHistoryEntry = {
+  id: string;
+  period?: string | null;
+  reportType?: string | null;
+  reportTemplate?: string | null;
+  generatedAt?: string | Date | null;
+  workflowStatus?: string | null;
+  siteId?: string | null;
+  siteName?: string | null;
+  latestFileId?: string | null;
+  latestFilename?: string | null;
+  latestFileType?: string | null;
+  latestFileSize?: number | null;
+  latestFileGeneratedAt?: string | Date | null;
+  latestDownloadUrl?: string | null;
+  fileAvailability?: "available" | "unavailable" | null;
+  fileUnavailableReason?: "missing" | "retained_history_only" | null;
+};
+
+type DownloadableHistoryEntry = ReportHistoryEntry & {
+  latestFileId: string;
+  latestFilename?: string | null;
+  latestDownloadUrl: string;
+};
+
 const ESG_EXPORT_TYPES = [
   {
     id: "esg_metrics_summary",
@@ -1306,7 +1331,7 @@ export default function Reports() {
     }));
   };
 
-  const { data: reports = [], isLoading } = useQuery<any[]>({
+  const { data: reports = [], isLoading } = useQuery<ReportHistoryEntry[]>({
     queryKey: ["/api/reports", effectiveSiteId ?? "all"],
     queryFn: async () => {
       const url = effectiveSiteId ? `/api/reports?siteId=${effectiveSiteId}` : "/api/reports";
@@ -1414,8 +1439,8 @@ export default function Reports() {
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
-      if (data.fileId) {
-        handleDownloadFile(reportId, data.fileId, data.filename);
+      if (data.downloadUrl) {
+        handleDownloadFile(data.downloadUrl, data.filename);
       }
       toast({ title: `${data.fileType?.toUpperCase() || "File"} generated` });
     },
@@ -1423,16 +1448,29 @@ export default function Reports() {
   });
 
   const latestReportId = reports.length > 0 ? String(reports[0].id) : null;
+  const availableHistoryFiles = Array.from(
+    new Map(
+      reports
+        .filter((report): report is DownloadableHistoryEntry =>
+          report.fileAvailability === "available"
+          && !!report.latestFileId
+          && !!report.latestDownloadUrl
+        )
+        .map((report) => [report.latestFileId, report])
+    ).values()
+  );
 
-  const { data: generatedFiles = [] } = useQuery<any[]>({
-    queryKey: ["/api/reports", latestReportId, "files"],
-    queryFn: () => latestReportId ? authFetch(`/api/reports/${latestReportId}/files`).then(r => r.json()) : Promise.resolve([]),
-    enabled: !!latestReportId,
-  });
-
-  const handleDownloadFile = async (reportId: string, fileId: string, filename: string) => {
+  const handleDownloadFile = async (downloadUrl: string, filename: string) => {
     try {
-      const res = await authFetch(`/api/reports/${reportId}/download/${fileId}`);
+      if (!downloadUrl) {
+        throw new Error("File unavailable");
+      }
+      const res = await authFetch(downloadUrl);
+      if (!res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+        const errorBody = await res.json().catch(() => null);
+        throw new Error(errorBody?.error || "Download failed");
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -1440,8 +1478,12 @@ export default function Reports() {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      toast({ title: "Download failed", variant: "destructive" });
+    } catch (error: any) {
+      toast({
+        title: error?.message === "File not found" ? "File unavailable" : "Download failed",
+        description: error?.message === "File not found" ? "This report entry is still in history, but the file is no longer available." : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -2125,6 +2167,27 @@ export default function Reports() {
                   <p className="text-xs text-muted-foreground">
                     Generated {format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm")}
                   </p>
+                  {report.fileAvailability === "available" ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <button
+                        type="button"
+                        className="font-medium text-primary underline-offset-4 hover:underline"
+                        onClick={() => handleDownloadFile(report.latestDownloadUrl || "", report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`)}
+                        data-testid={`link-report-file-${report.id}`}
+                      >
+                        {report.latestFilename || "Download file"}
+                      </button>
+                      <span>{report.latestFileType?.toUpperCase()}</span>
+                      {report.latestFileSize ? <span>{`${(report.latestFileSize / 1024).toFixed(1)} KB`}</span> : null}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground" data-testid={`report-file-status-${report.id}`}>
+                      <span className="font-medium">Unavailable.</span>{" "}
+                      {report.fileUnavailableReason === "retained_history_only"
+                        ? "The history entry remains for audit purposes, but the file is no longer available."
+                        : "No downloadable file is available for this report entry."}
+                    </p>
+                  )}
                 </div>
                 <WorkflowBadge status={report.workflowStatus} size="sm" />
                 <Badge variant="outline" className="text-xs">{report.reportType?.toUpperCase()}</Badge>
@@ -2171,33 +2234,48 @@ export default function Reports() {
                     </Button>
                   </>
                 )}
+                {report.fileAvailability === "available" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDownloadFile(report.latestDownloadUrl || "", report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`)}
+                    data-testid={`button-download-report-file-${report.id}`}
+                  >
+                    <Download className="w-3.5 h-3.5 mr-1.5" />
+                    Download
+                  </Button>
+                ) : (
+                  <Badge variant="secondary" className="text-xs" data-testid={`badge-report-file-unavailable-${report.id}`}>
+                    Unavailable
+                  </Badge>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {generatedFiles.length > 0 && (
+      {availableHistoryFiles.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
             <FileDown className="w-4 h-4" />
-            Generated Files
+            Available Files
           </h2>
           <div className="space-y-2">
-            {generatedFiles.map((file: any) => (
-              <div key={file.id} className="flex items-center gap-3 p-3 rounded-md border border-border" data-testid={`generated-file-${file.id}`}>
+            {availableHistoryFiles.map((report) => (
+              <div key={report.latestFileId} className="flex items-center gap-3 p-3 rounded-md border border-border" data-testid={`generated-file-${report.latestFileId}`}>
                 <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{file.filename}</p>
+                  <p className="text-sm font-medium">{report.latestFilename}</p>
                   <p className="text-xs text-muted-foreground">
-                    {file.fileType?.toUpperCase()} | {file.fileSize ? `${(file.fileSize / 1024).toFixed(1)} KB` : ""} | {file.generatedAt ? format(new Date(file.generatedAt), "dd MMM yyyy 'at' HH:mm") : ""}
+                    {report.latestFileType?.toUpperCase()} | {report.latestFileSize ? `${(report.latestFileSize / 1024).toFixed(1)} KB` : ""} | {report.latestFileGeneratedAt ? format(new Date(report.latestFileGeneratedAt), "dd MMM yyyy 'at' HH:mm") : ""}
                   </p>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => handleDownloadFile(file.reportRunId, file.id, file.filename)}
-                  data-testid={`button-redownload-${file.id}`}
+                  onClick={() => handleDownloadFile(report.latestDownloadUrl, report.latestFilename || "report-file")}
+                  data-testid={`button-redownload-${report.latestFileId}`}
                 >
                   <Download className="w-3.5 h-3.5 mr-1.5" />
                   Download

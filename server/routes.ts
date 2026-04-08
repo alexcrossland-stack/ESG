@@ -12,11 +12,12 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users, metricValues, type InsertMetricDefinition,
+  users, metricValues, generatedFiles,
+  type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
 import { hasProvisioningPermission, isPlatformSuperAdmin, type ProvisioningAction } from "./permissions";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
@@ -4098,6 +4099,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Reports
   app.get("/api/reports", requireAuth, async (req, res) => {
     try {
+      const GENERATED_FILE_RETENTION_DAYS = 90;
       const companyId = (req.session as any).companyId;
       const rawSiteId = req.query.siteId as string | undefined;
       const siteId = rawSiteId === "null" ? null : rawSiteId;
@@ -4106,7 +4108,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
       const reports = await storage.getReportRuns(companyId, siteId);
-      res.json(reports);
+      if (!reports.length) {
+        return res.json(reports);
+      }
+
+      const reportIds = reports.map((report) => report.id);
+      const fileRows = reportIds.length
+        ? await db.select({
+            reportRunId: generatedFiles.reportRunId,
+            id: generatedFiles.id,
+            filename: generatedFiles.filename,
+            fileType: generatedFiles.fileType,
+            fileSize: generatedFiles.fileSize,
+            generatedAt: generatedFiles.generatedAt,
+          })
+          .from(generatedFiles)
+          .where(and(
+            eq(generatedFiles.companyId, companyId),
+            inArray(generatedFiles.reportRunId, reportIds),
+          ))
+          .orderBy(generatedFiles.reportRunId, desc(generatedFiles.generatedAt))
+        : [];
+
+      const latestFileByReportId = new Map<string, typeof fileRows[number]>();
+      for (const file of fileRows) {
+        if (!file.reportRunId || latestFileByReportId.has(file.reportRunId)) continue;
+        latestFileByReportId.set(file.reportRunId, file);
+      }
+
+      const retentionCutoff = new Date(Date.now() - GENERATED_FILE_RETENTION_DAYS * 86400000);
+      res.json(reports.map((report) => {
+        const latestFile = latestFileByReportId.get(report.id) ?? null;
+        const isRetainedHistoryOnly = !latestFile && !!report.generatedAt && new Date(report.generatedAt) < retentionCutoff;
+        return {
+          ...report,
+          latestFileId: latestFile?.id ?? null,
+          latestFilename: latestFile?.filename ?? null,
+          latestFileType: latestFile?.fileType ?? null,
+          latestFileSize: latestFile?.fileSize ?? null,
+          latestFileGeneratedAt: latestFile?.generatedAt ?? null,
+          latestDownloadUrl: latestFile ? `/api/reports/${report.id}/download/${latestFile.id}` : null,
+          fileAvailability: latestFile ? "available" : "unavailable",
+          fileUnavailableReason: latestFile ? null : (isRetainedHistoryOnly ? "retained_history_only" : "missing"),
+        };
+      }));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -7666,7 +7711,13 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         fileSize: fileBuffer.length,
       });
 
-      res.json({ fileId: savedFile.id, filename, fileSize: fileBuffer.length, fileType: format });
+      res.json({
+        fileId: savedFile.id,
+        filename,
+        fileSize: fileBuffer.length,
+        fileType: format,
+        downloadUrl: `/api/reports/${req.params.id}/download/${savedFile.id}`,
+      });
     } catch (e: any) {
       try { await storage.createPlatformHealthEvent({ eventType: "report_failure", severity: "error", message: `Report generation failed: ${e.message}`, details: { reportId: req.params.id }, companyId: (req.session as any).companyId }); } catch {}
       auditLog({ companyId: (req.session as any).companyId ?? null, userId: (req.session as any).userId ?? null, actorType: "system", action: "report_generation_failure", entityType: "report_run", entityId: req.params.id, details: { error: e.message } });

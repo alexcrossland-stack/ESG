@@ -27,6 +27,7 @@ async function run(tenants: SeededTenants): Promise<void> {
 
   // ── 1. Admin can generate a report ───────────────────────────────────────
   let generatedReportId: string | null = null;
+  let generatedFileId: string | null = null;
   {
     const name = "admin POST /api/reports/generate returns 200 with id (no 500)";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -52,15 +53,25 @@ async function run(tenants: SeededTenants): Promise<void> {
 
   // ── 2. Generated report appears in list ──────────────────────────────────
   {
-    const name = "generated report appears in GET /api/reports list";
+    const name = "generated report appears in GET /api/reports list with unavailable file status before file generation";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);
     if (res.status !== 200) fail(name, `status=${res.status}`);
     else {
       const body = JSON.parse(res.body);
       if (!Array.isArray(body)) fail(name, "expected array");
       else if (generatedReportId) {
-        const found = body.find((r: { id?: string }) => r.id === generatedReportId);
+        const found = body.find((r: { id?: string }) => r.id === generatedReportId) as {
+          id?: string;
+          fileAvailability?: string;
+          latestFileId?: string | null;
+          latestDownloadUrl?: string | null;
+          fileUnavailableReason?: string | null;
+        } | undefined;
         if (!found) fail(name, `reportId=${generatedReportId} not in list`);
+        else if (found.fileAvailability !== "unavailable") fail(name, `expected unavailable before file generation, got ${found.fileAvailability}`);
+        else if (found.latestFileId !== null) fail(name, `expected latestFileId null, got ${found.latestFileId}`);
+        else if (found.latestDownloadUrl !== null) fail(name, `expected latestDownloadUrl null, got ${found.latestDownloadUrl}`);
+        else if (!found.fileUnavailableReason) fail(name, "missing fileUnavailableReason");
         else pass(name);
       } else {
         pass(name, "skipped id check — generation skipped");
@@ -68,7 +79,57 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
-  // ── 3. Viewer blocked from generating reports → 403 ──────────────────────
+  // ── 3. File generation enriches report history with download metadata ────
+  {
+    const name = "generated report exposes latest file metadata in GET /api/reports after file creation";
+    if (!generatedReportId) {
+      pass(name, "skipped — generated report unavailable");
+    } else {
+      const fileRes = await apiRequest("POST", `/api/reports/${generatedReportId}/generate-file`, {
+        format: "pdf",
+      }, tenantA.adminToken);
+      if (fileRes.status !== 200) fail(name, `file generation status=${fileRes.status} body=${fileRes.body.slice(0, 200)}`);
+      else {
+        const fileBody = JSON.parse(fileRes.body) as { fileId?: string; downloadUrl?: string };
+        generatedFileId = fileBody.fileId || null;
+        const listRes = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);
+        if (listRes.status !== 200) fail(name, `list status=${listRes.status}`);
+        else {
+          const listBody = JSON.parse(listRes.body);
+          const found = Array.isArray(listBody)
+            ? listBody.find((r: { id?: string }) => r.id === generatedReportId) as {
+                fileAvailability?: string;
+                latestFileId?: string | null;
+                latestFilename?: string | null;
+                latestDownloadUrl?: string | null;
+              } | undefined
+            : undefined;
+          if (!generatedFileId) fail(name, "missing fileId from generate-file response");
+          else if (fileBody.downloadUrl !== `/api/reports/${generatedReportId}/download/${generatedFileId}`) fail(name, `unexpected generate-file downloadUrl=${fileBody.downloadUrl}`);
+          else if (!found) fail(name, `reportId=${generatedReportId} missing after file generation`);
+          else if (found.fileAvailability !== "available") fail(name, `expected available, got ${found.fileAvailability}`);
+          else if (found.latestFileId !== generatedFileId) fail(name, `expected latestFileId=${generatedFileId}, got ${found.latestFileId}`);
+          else if (!found.latestFilename) fail(name, "missing latestFilename");
+          else if (found.latestDownloadUrl !== `/api/reports/${generatedReportId}/download/${generatedFileId}`) fail(name, `unexpected latestDownloadUrl=${found.latestDownloadUrl}`);
+          else pass(name);
+        }
+      }
+    }
+  }
+
+  // ── 4. Download route requires auth ───────────────────────────────────────
+  {
+    const name = "GET generated report download route without token returns 401";
+    if (!generatedReportId || !generatedFileId) {
+      pass(name, "skipped — generated file unavailable");
+    } else {
+      const res = await apiRequest("GET", `/api/reports/${generatedReportId}/download/${generatedFileId}`);
+      if (res.status !== 401) fail(name, `status=${res.status}`);
+      else pass(name);
+    }
+  }
+
+  // ── 5. Viewer blocked from generating reports → 403 ──────────────────────
   {
     const name = "viewer POST /api/reports/generate returns 403";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -80,7 +141,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
-  // ── 4. Contributor blocked from generating reports → 403 ─────────────────
+  // ── 6. Contributor blocked from generating reports → 403 ─────────────────
   {
     const name = "contributor POST /api/reports/generate returns 403";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -92,7 +153,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
-  // ── 5. Unauthenticated → 401 ─────────────────────────────────────────────
+  // ── 7. Unauthenticated → 401 ─────────────────────────────────────────────
   {
     const name = "POST /api/reports/generate without token returns 401";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -104,7 +165,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
-  // ── 6. Invalid reportType enum value → 400 ───────────────────────────────
+  // ── 8. Invalid reportType enum value → 400 ───────────────────────────────
   {
     const name = "POST /api/reports/generate with invalid reportType returns 400";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -119,7 +180,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
-  // ── 7. Invalid period format → 400 ───────────────────────────────────────
+  // ── 9. Invalid period format → 400 ───────────────────────────────────────
   {
     const name = "POST /api/reports/generate with invalid period returns 400";
     const res = await apiRequest("POST", "/api/reports/generate", {
@@ -131,7 +192,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
-  // ── 8. Cross-company: Tenant A cannot access Tenant B report files ────────
+  // ── 10. Cross-company: Tenant A cannot access Tenant B report files ───────
   {
     const name = "Tenant A cannot GET Tenant B report files (403 or 404)";
     if (!tenantB.reportId) {
@@ -143,7 +204,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
-  // ── 9. List is company-scoped (Tenant B data absent from Tenant A list) ───
+  // ── 11. List is company-scoped (Tenant B data absent from Tenant A list) ───
   {
     const name = "GET /api/reports is company-scoped (Tenant B companyId absent from Tenant A list)";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);
@@ -154,7 +215,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
-  // ── 10. GET /api/reports returns 200 array ────────────────────────────────
+  // ── 12. GET /api/reports returns 200 array ────────────────────────────────
   {
     const name = "GET /api/reports returns 200 array for admin";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);
@@ -166,7 +227,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
-  // ── 11. Readiness detail returns structured report-readiness payload ─────
+  // ── 13. Readiness detail returns structured report-readiness payload ─────
   {
     const name = "GET /api/reports/readiness-detail returns 200 with readiness detail";
     const res = await apiRequest("GET", "/api/reports/readiness-detail", undefined, tenantA.adminToken);
