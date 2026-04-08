@@ -67,12 +67,18 @@ export async function apiRequest(
   retryFn?: () => void,
 ): Promise<Response> {
   const headers: Record<string, string> = { ...getAuthHeaders() };
-  if (data) headers["Content-Type"] = "application/json";
+  const isFormData = typeof FormData !== "undefined" && data instanceof FormData;
+  const isBlob = typeof Blob !== "undefined" && data instanceof Blob;
+  if (data && !isFormData && !isBlob) headers["Content-Type"] = "application/json";
 
   const res = await fetch(url, {
     method,
     headers,
-    body: data ? JSON.stringify(data) : undefined,
+    body: data
+      ? isFormData || isBlob
+        ? data as BodyInit
+        : JSON.stringify(data)
+      : undefined,
     credentials: "include",
   });
 

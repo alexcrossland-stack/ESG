@@ -25,6 +25,34 @@ function fail(name: string, detail?: string) {
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA, tenantB } = tenants;
   const PERIOD = "2024-Q1";
+  const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
+
+  async function uploadMetricValueWithAttachment(opts: {
+    token: string;
+    metricId: string;
+    period: string;
+    value: string;
+    notes?: string;
+    filename: string;
+    fileBody?: string;
+    fileType?: string;
+  }) {
+    const form = new FormData();
+    form.append("metricId", opts.metricId);
+    form.append("period", opts.period);
+    form.append("value", opts.value);
+    form.append("notes", opts.notes || "");
+    form.append("dataSourceType", "evidenced");
+    form.append("attachments", new Blob([opts.fileBody || "test evidence body"], { type: opts.fileType || "text/plain" }), opts.filename);
+
+    return fetch(`${BASE_URL}/api/data-entry`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${opts.token}`,
+      },
+      body: form,
+    });
+  }
 
   // ── 1. GET /api/metrics returns array ────────────────────────────────────
   {
@@ -88,6 +116,173 @@ async function run(tenants: SeededTenants): Promise<void> {
         if (!found) fail(name, `period ${PERIOD} not found in values`);
         else pass(name);
       }
+    }
+  }
+
+  // ── 4b. Multipart metric save can attach evidence ───────────────────────
+  let multipartMetricValueId: string | null = null;
+  let firstEvidenceId: string | null = null;
+  let firstEvidenceUrl: string | null = null;
+  let survivingEvidenceUrl: string | null = null;
+  {
+    const name = "POST /api/data-entry multipart persists evidence attachments for a metric value";
+    if (!testMetricId) {
+      fail(name, "skipped — no metricId");
+    } else {
+      const saveRes = await uploadMetricValueWithAttachment({
+        token: tenantA.adminToken,
+        metricId: testMetricId,
+        period: "2024-Q2",
+        value: "51.25",
+        notes: "Multipart evidence upload test",
+        filename: "metric-evidence.txt",
+      });
+
+      if (![200, 201].includes(saveRes.status)) {
+        fail(name, `save status=${saveRes.status}`);
+      } else {
+        const saved = await saveRes.json() as { id?: string; attachments?: Array<{ id?: string; filename?: string; fileUrl?: string | null }> };
+        if (!saved.id) {
+          fail(name, "missing metric value id");
+        } else if (!saved.attachments?.length) {
+          fail(name, "missing attachment metadata in save response");
+        } else {
+          multipartMetricValueId = saved.id;
+          firstEvidenceId = saved.attachments[0]?.id || null;
+          firstEvidenceUrl = saved.attachments[0]?.fileUrl || null;
+          const evidenceRes = await apiRequest("GET", `/api/evidence/entity/metric_value/${saved.id}`, undefined, tenantA.adminToken);
+          if (evidenceRes.status !== 200) {
+            fail(name, `evidence fetch status=${evidenceRes.status}`);
+          } else {
+            const evidence = JSON.parse(evidenceRes.body) as Array<{ filename?: string; fileUrl?: string | null }>;
+            const linked = evidence.find((file) => file.filename === "metric-evidence.txt");
+            if (!linked) fail(name, "uploaded evidence not linked to metric value");
+            else if (!linked.fileUrl) fail(name, "missing stable download URL");
+            else pass(name, `metricValueId=${saved.id}`);
+          }
+        }
+      }
+    }
+  }
+
+  // ── 4c. Failed multipart save does not leave partial metric state ───────
+  {
+    const name = "multipart metric save rolls back the metric value when attachment validation fails";
+    if (!testMetricId) {
+      fail(name, "skipped — no metricId");
+    } else {
+      const failedSave = await uploadMetricValueWithAttachment({
+        token: tenantA.adminToken,
+        metricId: testMetricId,
+        period: "2024-Q3",
+        value: "61.00",
+        notes: "Should fail",
+        filename: "blocked-script.sh",
+      });
+
+      if (failedSave.status !== 500 && failedSave.status !== 400) {
+        fail(name, `expected failure status, got ${failedSave.status}`);
+      } else {
+        const valuesRes = await apiRequest("GET", `/api/metrics/${testMetricId}/values`, undefined, tenantA.adminToken);
+        if (valuesRes.status !== 200) {
+          fail(name, `values status=${valuesRes.status}`);
+        } else {
+          const values = JSON.parse(valuesRes.body) as Array<{ period: string }>;
+          const leaked = values.find((row) => row.period === "2024-Q3");
+          if (leaked) fail(name, "metric value persisted despite attachment failure");
+          else pass(name);
+        }
+      }
+    }
+  }
+
+  // ── 4d. Attachment metadata is present on normal reload path ─────────────
+  {
+    const name = "GET /api/data-entry/:period includes attachment metadata on reload";
+    const period = "2024-Q2";
+    if (!multipartMetricValueId) {
+      fail(name, "skipped — no multipart metric value id");
+    } else {
+      const reloadRes = await apiRequest("GET", `/api/data-entry/${period}`, undefined, tenantA.adminToken);
+      if (reloadRes.status !== 200) {
+        fail(name, `status=${reloadRes.status}`);
+      } else {
+        const body = JSON.parse(reloadRes.body) as { values?: Array<{ id: string; attachments?: Array<{ id?: string; filename?: string }> }> };
+        const row = body.values?.find((value) => value.id === multipartMetricValueId);
+        if (!row) fail(name, "metric value missing from reload response");
+        else if (!row.attachments?.some((attachment) => attachment.filename === "metric-evidence.txt")) fail(name, "attachments missing from reload response");
+        else pass(name);
+      }
+    }
+  }
+
+  // ── 4e. Repeated multipart save appends evidence, delete removes one ─────
+  {
+    const name = "repeat multipart save appends evidence and delete removes only the targeted attachment";
+    if (!testMetricId || !multipartMetricValueId || !firstEvidenceId) {
+      fail(name, "skipped — missing multipart setup");
+    } else {
+      const appendRes = await uploadMetricValueWithAttachment({
+        token: tenantA.adminToken,
+        metricId: testMetricId,
+        period: "2024-Q2",
+        value: "52.00",
+        notes: "Second attachment",
+        filename: "metric-evidence-2.txt",
+      });
+
+      if (![200, 201].includes(appendRes.status)) {
+        fail(name, `append status=${appendRes.status}`);
+      } else {
+        const evidenceBeforeDeleteRes = await apiRequest("GET", `/api/evidence/entity/metric_value/${multipartMetricValueId}`, undefined, tenantA.adminToken);
+        if (evidenceBeforeDeleteRes.status !== 200) {
+          fail(name, `evidence status=${evidenceBeforeDeleteRes.status}`);
+        } else {
+          const beforeDelete = JSON.parse(evidenceBeforeDeleteRes.body) as Array<{ id: string; filename: string; fileUrl?: string | null }>;
+          const second = beforeDelete.find((file) => file.filename === "metric-evidence-2.txt");
+          if (beforeDelete.length < 2 || !second) {
+            fail(name, "append did not create a second attachment");
+          } else {
+            survivingEvidenceUrl = second.fileUrl || null;
+            const deleteRes = await apiRequest("DELETE", `/api/evidence/${firstEvidenceId}`, undefined, tenantA.adminToken);
+            if (deleteRes.status !== 200) {
+              fail(name, `delete status=${deleteRes.status}`);
+            } else {
+              const evidenceAfterDeleteRes = await apiRequest("GET", `/api/evidence/entity/metric_value/${multipartMetricValueId}`, undefined, tenantA.adminToken);
+              if (evidenceAfterDeleteRes.status !== 200) {
+                fail(name, `after delete status=${evidenceAfterDeleteRes.status}`);
+              } else {
+                const afterDelete = JSON.parse(evidenceAfterDeleteRes.body) as Array<{ id: string; filename: string; fileUrl?: string | null }>;
+                const removedStillPresent = afterDelete.some((file) => file.id === firstEvidenceId);
+                const secondStillPresent = afterDelete.some((file) => file.id === second.id);
+                if (removedStillPresent) fail(name, "deleted attachment still returned");
+                else if (!secondStillPresent) fail(name, "delete removed surviving attachment");
+                else pass(name);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── 4f. Download endpoint is tenant-scoped and readable in-tenant ────────
+  {
+    const name = "download endpoint allows same-tenant access and blocks cross-tenant access";
+    const downloadUrl = survivingEvidenceUrl || firstEvidenceUrl;
+    if (!downloadUrl) {
+      fail(name, "skipped — missing evidence download url");
+    } else {
+      const ownRes = await fetch(`${BASE_URL}${downloadUrl}`, {
+        headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
+      });
+      const crossTenantRes = await fetch(`${BASE_URL}${downloadUrl}`, {
+        headers: { Authorization: `Bearer ${tenantB.adminToken}` },
+      });
+
+      if (ownRes.status !== 200) fail(name, `same-tenant status=${ownRes.status}`);
+      else if (crossTenantRes.status !== 404) fail(name, `cross-tenant status=${crossTenantRes.status}`);
+      else pass(name);
     }
   }
 
