@@ -4,7 +4,7 @@ import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem,
   SidebarHeader, SidebarFooter, SidebarSeparator,
-  SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton, SidebarMenuBadge,
+  SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton,
 } from "@/components/ui/sidebar";
 import { usePortfolioAccess } from "@/hooks/use-portfolio-access";
 import {
@@ -12,13 +12,14 @@ import {
 } from "@/components/ui/collapsible";
 import {
   LayoutDashboard, FileText, Target, BarChart3, ClipboardList,
-  CheckSquare, Download, Settings, LogOut, Leaf, ChevronDown,
+  Download, Settings, LogOut, Leaf, ChevronDown,
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
-  TrendingUp, Building2, Activity, HeartPulse, Sparkles, HelpCircle,
-  MessageSquare, CreditCard, Users, ChevronRight, MapPin, Globe, BookOpen,
+  TrendingUp, Building2, Sparkles, HelpCircle,
+  Users, ChevronRight, MapPin, Globe, BookOpen,
   Star, AlertTriangle,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,18 @@ import { logout } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
+import {
+  DATA_AND_METRICS_ITEMS,
+  DATA_AND_METRICS_ROUTES,
+  DATA_EVIDENCE_ROUTES,
+  ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
+  ESG_SETUP_ADVANCED_ROUTES,
+  ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
+  ESG_SETUP_ROUTES,
+  isActive,
+  isGroupActive,
+  type NavItem,
+} from "@/lib/navigation";
 
 const STORAGE_KEY = "sidebar_collapsed_groups";
 
@@ -55,33 +68,36 @@ function useGroupState(groupKey: string, defaultOpen: boolean) {
   return [open, toggle] as const;
 }
 
-const ESG_SETUP_ROUTES = ["/policy", "/topics", "/esg-profile", "/team"];
-const DATA_EVIDENCE_ROUTES = ["/metrics", "/metrics-library", "/data-entry", "/evidence"];
-const FRAMEWORK_ROUTES = ["/framework-readiness", "/framework-settings"];
-const SETTINGS_ROUTES = [
-  "/settings", "/billing", "/settings/sites", "/sites",
-  "/compliance", "/benchmarks", "/recommendations",
-  "/my-tasks", "/my-approvals", "/questionnaire",
-  "/carbon-calculator", "/policy-templates", "/policy-generator",
-  "/answer-library", "/control-centre",
-];
-const ESG_MANAGEMENT_ROUTES = [
-  "/materiality", "/esg-policy-register", "/esg-targets", "/esg-risks",
-];
-const ADVANCED_ROUTES = [
-  "/compliance", "/benchmarks", "/recommendations",
-  "/my-tasks", "/my-approvals", "/questionnaire",
-  "/carbon-calculator", "/policy-templates", "/policy-generator",
-  "/answer-library", "/control-centre",
-];
+const ICON_BY_HREF: Record<string, LucideIcon> = {
+  "/policy": FileText,
+  "/topics": Target,
+  "/esg-profile": Building2,
+  "/team": Users,
+  "/framework-readiness": Globe,
+  "/framework-settings": Settings,
+  "/materiality": Star,
+  "/esg-targets": Target,
+  "/esg-risks": AlertTriangle,
+  "/compliance": Shield,
+  "/benchmarks": TrendingUp,
+  "/recommendations": Sparkles,
+  "/my-tasks": ClipboardCheck,
+  "/my-approvals": ListChecks,
+  "/questionnaire": FileQuestion,
+  "/carbon-calculator": Calculator,
+  "/policy-templates": Library,
+  "/policy-generator": Wand2,
+  "/answer-library": Bookmark,
+  "/control-centre": Gauge,
+  "/metrics": BarChart3,
+  "/metrics-library": BookOpen,
+  "/data-entry": ClipboardList,
+  "/esg-policy-register": FileText,
+  "/evidence": FileCheck,
+};
 
-function isActive(location: string, href: string) {
-  if (href === "/") return location === "/";
-  return location === href || location.startsWith(href + "/");
-}
-
-function isGroupActive(location: string, routes: string[]) {
-  return routes.some(r => isActive(location, r));
+function navTestId(label: string) {
+  return `nav-${label.toLowerCase().replace(/&/g, "and").replace(/\s+/g, "-")}`;
 }
 
 interface NavBadgeProps { show: boolean }
@@ -121,10 +137,29 @@ function SiteSwitcher() {
   );
 }
 
+function canShowItem(item: NavItem, can: ReturnType<typeof usePermissions>["can"]) {
+  return !item.permission || can(item.permission);
+}
+
+function AdvancedNavLink({ item, location }: { item: NavItem; location: string }) {
+  const Icon = ICON_BY_HREF[item.href] ?? FileText;
+  return (
+    <Link
+      href={item.href}
+      data-testid={navTestId(item.label)}
+      className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
+      aria-current={isActive(location, item.href) ? "page" : undefined}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" />
+      <span>{item.label}</span>
+    </Link>
+  );
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { can, isAdmin, isSuperAdmin } = usePermissions();
-  const { canAccessPortfolio, groups: portfolioGroups } = usePortfolioAccess();
+  const { canAccessPortfolio } = usePortfolioAccess();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
@@ -149,26 +184,24 @@ export function AppSidebar() {
 
   const esgGroupDefault = isGroupActive(location, ESG_SETUP_ROUTES);
   const dataGroupDefault = isGroupActive(location, DATA_EVIDENCE_ROUTES);
-  const frameworkGroupDefault = isGroupActive(location, FRAMEWORK_ROUTES);
-  const settingsGroupDefault = isGroupActive(location, SETTINGS_ROUTES);
-  const advancedGroupDefault = isGroupActive(location, ADVANCED_ROUTES);
-  const mgmtGroupDefault = isGroupActive(location, ESG_MANAGEMENT_ROUTES);
+  const advancedGroupDefault = isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES);
+  const dataMetricsGroupDefault = isGroupActive(location, DATA_AND_METRICS_ROUTES);
 
   const [esgOpen, setEsgOpen] = useGroupState("esg_setup", esgGroupDefault);
   const [dataOpen, setDataOpen] = useGroupState("data_evidence", dataGroupDefault);
-  const [frameworkOpen, setFrameworkOpen] = useGroupState("frameworks", frameworkGroupDefault);
-  const [settingsOpen, setSettingsOpen] = useGroupState("settings", settingsGroupDefault);
-  const [advancedOpen, setAdvancedOpen] = useGroupState("advanced", advancedGroupDefault);
-  const [mgmtOpen, setMgmtOpen] = useGroupState("esg_management", mgmtGroupDefault);
+  const [advancedOpen, setAdvancedOpen] = useGroupState("esg_advanced", advancedGroupDefault);
+  const [dataMetricsOpen, setDataMetricsOpen] = useGroupState("data_metrics", dataMetricsGroupDefault);
 
   useEffect(() => {
     if (isGroupActive(location, ESG_SETUP_ROUTES)) setEsgOpen(true);
     if (isGroupActive(location, DATA_EVIDENCE_ROUTES)) setDataOpen(true);
-    if (isGroupActive(location, FRAMEWORK_ROUTES)) setFrameworkOpen(true);
-    if (isGroupActive(location, SETTINGS_ROUTES)) setSettingsOpen(true);
-    if (isGroupActive(location, ADVANCED_ROUTES)) setAdvancedOpen(true);
-    if (isGroupActive(location, ESG_MANAGEMENT_ROUTES)) setMgmtOpen(true);
+    if (isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES)) setAdvancedOpen(true);
+    if (isGroupActive(location, DATA_AND_METRICS_ROUTES)) setDataMetricsOpen(true);
   }, [location]);
+
+  const advancedPrimaryItems = ESG_SETUP_ADVANCED_PRIMARY_ITEMS.filter(item => canShowItem(item, can));
+  const advancedSupportItems = ESG_SETUP_ADVANCED_SUPPORT_ITEMS.filter(item => canShowItem(item, can));
+  const dataMetricItems = DATA_AND_METRICS_ITEMS.filter(item => canShowItem(item, can));
 
   return (
     <Sidebar>
@@ -202,12 +235,11 @@ export function AppSidebar() {
       <SidebarContent className="overflow-y-auto">
         <SidebarGroup>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu data-testid="primary-navigation" aria-label="Primary navigation">
 
-              {/* Dashboard */}
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-active={isActive(location, "/")}>
-                  <Link href="/" data-testid="nav-dashboard">
+                  <Link href="/" data-testid="nav-dashboard" aria-current={isActive(location, "/") ? "page" : undefined}>
                     <LayoutDashboard className="w-4 h-4 shrink-0" />
                     <span>Dashboard</span>
                     {isActive(location, "/") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
@@ -215,20 +247,6 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
-              {/* Portfolio — visible to portfolio users */}
-              {canAccessPortfolio && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild data-active={isActive(location, "/portfolio")}>
-                    <Link href="/portfolio" data-testid="nav-portfolio">
-                      <BarChart3 className="w-4 h-4 shrink-0" />
-                      <span>Portfolio</span>
-                      {isActive(location, "/portfolio") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-
-              {/* ESG Setup */}
               <SidebarMenuItem>
                 <Collapsible open={esgOpen} onOpenChange={setEsgOpen}>
                   <CollapsibleTrigger asChild>
@@ -245,7 +263,7 @@ export function AppSidebar() {
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/policy")}>
-                          <Link href="/policy" data-testid="nav-policies">
+                          <Link href="/policy" data-testid="nav-policies" aria-current={isActive(location, "/policy") ? "page" : undefined}>
                             <FileText className="w-3.5 h-3.5 shrink-0" />
                             <span>Policies</span>
                           </Link>
@@ -253,7 +271,7 @@ export function AppSidebar() {
                       </SidebarMenuSubItem>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/topics")}>
-                          <Link href="/topics" data-testid="nav-topics">
+                          <Link href="/topics" data-testid="nav-topics" aria-current={isActive(location, "/topics") ? "page" : undefined}>
                             <Target className="w-3.5 h-3.5 shrink-0" />
                             <span>Topics</span>
                           </Link>
@@ -261,7 +279,7 @@ export function AppSidebar() {
                       </SidebarMenuSubItem>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-profile")}>
-                          <Link href="/esg-profile" data-testid="nav-esg-profile">
+                          <Link href="/esg-profile" data-testid="nav-esg-profile" aria-current={isActive(location, "/esg-profile") ? "page" : undefined}>
                             <Building2 className="w-3.5 h-3.5 shrink-0" />
                             <span>ESG Profile</span>
                           </Link>
@@ -270,71 +288,47 @@ export function AppSidebar() {
                       {isAdmin && (
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton asChild data-active={isActive(location, "/team")}>
-                            <Link href="/team" data-testid="nav-team">
+                            <Link href="/team" data-testid="nav-team" aria-current={isActive(location, "/team") ? "page" : undefined}>
                               <Users className="w-3.5 h-3.5 shrink-0" />
                               <span>Team</span>
                             </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </Collapsible>
-              </SidebarMenuItem>
 
-              {/* ESG Management */}
-              <SidebarMenuItem>
-                <Collapsible open={mgmtOpen} onOpenChange={setMgmtOpen}>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      data-active={isGroupActive(location, ESG_MANAGEMENT_ROUTES) && !mgmtOpen}
-                      data-testid="nav-group-esg-management"
-                    >
-                      <Shield className="w-4 h-4 shrink-0" />
-                      <span>ESG Management</span>
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${mgmtOpen ? "rotate-180" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
                       <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/materiality")}>
-                          <Link href="/materiality" data-testid="nav-materiality">
-                            <Star className="w-3.5 h-3.5 shrink-0" />
-                            <span>Materiality</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-policy-register")}>
-                          <Link href="/esg-policy-register" data-testid="nav-esg-policy-register">
-                            <FileText className="w-3.5 h-3.5 shrink-0" />
-                            <span>Policy Register</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-targets")}>
-                          <Link href="/esg-targets" data-testid="nav-esg-targets">
-                            <Target className="w-3.5 h-3.5 shrink-0" />
-                            <span>Targets & Actions</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-risks")}>
-                          <Link href="/esg-risks" data-testid="nav-esg-risks">
-                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                            <span>Risk Register</span>
-                          </Link>
-                        </SidebarMenuSubButton>
+                        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuSubButton
+                              data-active={isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES) && !advancedOpen}
+                              data-testid="nav-group-esg-advanced"
+                              className="w-full"
+                            >
+                              <Gauge className="w-3.5 h-3.5 shrink-0" />
+                              <span>Advanced</span>
+                              <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
+                            </SidebarMenuSubButton>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-esg-advanced-items">
+                              {advancedPrimaryItems.map(item => (
+                                <AdvancedNavLink key={item.href} item={item} location={location} />
+                              ))}
+                              {advancedSupportItems.length > 0 && (
+                                <div className="my-1 h-px bg-border" aria-hidden="true" />
+                              )}
+                              {advancedSupportItems.map(item => (
+                                <AdvancedNavLink key={item.href} item={item} location={location} />
+                              ))}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </Collapsible>
               </SidebarMenuItem>
 
-              {/* Data & Evidence */}
               <SidebarMenuItem>
                 <Collapsible open={dataOpen} onOpenChange={setDataOpen}>
                   <CollapsibleTrigger asChild>
@@ -343,44 +337,50 @@ export function AppSidebar() {
                       data-testid="nav-group-data-evidence"
                     >
                       <ClipboardList className="w-4 h-4 shrink-0" />
-                      <span>Data &amp; Evidence</span>
+                      <span>Data and Evidence</span>
                       <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${dataOpen ? "rotate-180" : ""}`} />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/metrics")}>
-                          <Link href="/metrics" data-testid="nav-metrics">
-                            <BarChart3 className="w-3.5 h-3.5 shrink-0" />
-                            <span>Metrics</span>
-                            <NextBadge show={nextUrls.has("/metrics")} />
-                          </Link>
-                        </SidebarMenuSubButton>
+                        <Collapsible open={dataMetricsOpen} onOpenChange={setDataMetricsOpen}>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuSubButton
+                              data-active={isGroupActive(location, DATA_AND_METRICS_ROUTES) && !dataMetricsOpen}
+                              data-testid="nav-group-data-and-metrics"
+                              className="w-full"
+                            >
+                              <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+                              <span>Data and Metrics</span>
+                              <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${dataMetricsOpen ? "rotate-180" : ""}`} />
+                            </SidebarMenuSubButton>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-data-and-metrics-items">
+                              {dataMetricItems.map(item => {
+                                const Icon = ICON_BY_HREF[item.href] ?? BarChart3;
+                                return (
+                                  <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    data-testid={item.href === "/esg-policy-register" ? "nav-esg-policy-register" : navTestId(item.label)}
+                                    aria-current={isActive(location, item.href) ? "page" : undefined}
+                                    className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
+                                  >
+                                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                                    <span>{item.label}</span>
+                                    <NextBadge show={nextUrls.has(item.href)} />
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/metrics-library")}>
-                          <Link href="/metrics-library" data-testid="nav-metrics-library">
-                            <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                            <span>Metrics Library</span>
-                            <NextBadge show={nextUrls.has("/metrics-library")} />
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      {can("metrics_data_entry") && (
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild data-active={isActive(location, "/data-entry")}>
-                            <Link href="/data-entry" data-testid="nav-data-entry">
-                              <ClipboardList className="w-3.5 h-3.5 shrink-0" />
-                              <span>Enter Data</span>
-                              <NextBadge show={nextUrls.has("/data-entry")} />
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/evidence")}>
-                          <Link href="/evidence" data-testid="nav-evidence">
+                          <Link href="/evidence" data-testid="nav-evidence" aria-current={isActive(location, "/evidence") ? "page" : undefined}>
                             <FileCheck className="w-3.5 h-3.5 shrink-0" />
                             <span>Evidence</span>
                             <NextBadge show={nextUrls.has("/evidence")} />
@@ -392,178 +392,15 @@ export function AppSidebar() {
                 </Collapsible>
               </SidebarMenuItem>
 
-              {/* Reports */}
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-active={isActive(location, "/reports")}>
-                  <Link href="/reports" data-testid="nav-reports">
+                  <Link href="/reports" data-testid="nav-reports" aria-current={isActive(location, "/reports") ? "page" : undefined}>
                     <Download className="w-4 h-4 shrink-0" />
                     <span>Reports</span>
                     {isActive(location, "/reports") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-
-              {/* Frameworks */}
-              <SidebarMenuItem>
-                <Collapsible open={frameworkOpen} onOpenChange={setFrameworkOpen}>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      data-active={isGroupActive(location, FRAMEWORK_ROUTES) && !frameworkOpen}
-                      data-testid="nav-group-frameworks"
-                    >
-                      <Globe className="w-4 h-4 shrink-0" />
-                      <span>Frameworks</span>
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${frameworkOpen ? "rotate-180" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/framework-readiness")}>
-                          <Link href="/framework-readiness" data-testid="nav-framework-readiness">
-                            <Activity className="w-3.5 h-3.5 shrink-0" />
-                            <span>Readiness</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      {can("settings_admin") && (
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild data-active={isActive(location, "/framework-settings")}>
-                            <Link href="/framework-settings" data-testid="nav-framework-settings">
-                              <Settings className="w-3.5 h-3.5 shrink-0" />
-                              <span>Framework Settings</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </Collapsible>
-              </SidebarMenuItem>
-
-              {/* Help */}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild data-active={isActive(location, "/help")}>
-                  <Link href="/help" data-testid="nav-help">
-                    <HelpCircle className="w-4 h-4 shrink-0" />
-                    <span>Help</span>
-                    {isActive(location, "/help") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-
-              {/* Settings */}
-              <SidebarMenuItem>
-                <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      data-active={isGroupActive(location, SETTINGS_ROUTES) && !settingsOpen}
-                      data-testid="nav-group-settings"
-                    >
-                      <Settings className="w-4 h-4 shrink-0" />
-                      <span>Settings</span>
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${settingsOpen ? "rotate-180" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/settings")}>
-                          <Link href="/settings" data-testid="nav-settings">
-                            <Settings className="w-3.5 h-3.5 shrink-0" />
-                            <span>Company Settings</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/settings/sites") || isActive(location, "/sites")}>
-                          <Link href="/settings/sites" data-testid="nav-sites">
-                            <Building2 className="w-3.5 h-3.5 shrink-0" />
-                            <span>Sites</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/billing")}>
-                          <Link href="/billing" data-testid="nav-billing">
-                            <CreditCard className="w-3.5 h-3.5 shrink-0" />
-                            <span>Billing</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-
-                      {/* Advanced nested collapsible */}
-                      <SidebarMenuSubItem>
-                        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuSubButton
-                              data-active={isGroupActive(location, ADVANCED_ROUTES) && !advancedOpen}
-                              data-testid="nav-group-advanced"
-                              className="w-full"
-                            >
-                              <Gauge className="w-3.5 h-3.5 shrink-0" />
-                              <span>Advanced</span>
-                              <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
-                            </SidebarMenuSubButton>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3">
-                              {[
-                                { href: "/compliance", label: "Compliance", icon: Shield },
-                                { href: "/benchmarks", label: "Benchmarks", icon: TrendingUp },
-                                { href: "/recommendations", label: "Recommendations", icon: Sparkles },
-                                { href: "/my-tasks", label: "My Tasks", icon: ClipboardCheck },
-                                ...(can("report_generation") ? [{ href: "/my-approvals", label: "My Approvals", icon: ListChecks }] : []),
-                                { href: "/questionnaire", label: "Questionnaires", icon: FileQuestion },
-                                { href: "/carbon-calculator", label: "Carbon Calculator", icon: Calculator },
-                                { href: "/policy-templates", label: "Policy Templates", icon: Library },
-                                { href: "/policy-generator", label: "Policy Generator", icon: Wand2 },
-                                { href: "/answer-library", label: "Answer Library", icon: Bookmark },
-                                { href: "/control-centre", label: "Control Centre", icon: Gauge },
-                              ].map(({ href, label, icon: Icon }) => (
-                                <Link
-                                  key={href}
-                                  href={href}
-                                  data-testid={`nav-advanced-${label.toLowerCase().replace(/\s+/g, "-")}`}
-                                  className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
-                                >
-                                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                                  <span>{label}</span>
-                                </Link>
-                              ))}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </SidebarMenuSubItem>
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </Collapsible>
-              </SidebarMenuItem>
-
-              {/* Admin — super admins only */}
-              {isSuperAdmin && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild data-active={isActive(location, "/admin")}>
-                    <Link href="/admin" data-testid="nav-admin-console">
-                      <Shield className="w-4 h-4 shrink-0" />
-                      <span>Admin</span>
-                      {isActive(location, "/admin") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-
-              {isSuperAdmin && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild data-active={isActive(location, "/admin/security")}>
-                    <Link href="/admin/security" data-testid="nav-admin-security">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
-                      <span>Security</span>
-                      {isActive(location, "/admin/security") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
 
             </SidebarMenu>
           </SidebarGroupContent>
@@ -585,15 +422,39 @@ export function AppSidebar() {
               {user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : "User"}
             </Badge>
           </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={logout}
-            data-testid="button-logout"
-            title="Log out"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-          </Button>
+          <div className="flex items-center gap-0.5" data-testid="utility-navigation" aria-label="Utility navigation">
+            {canAccessPortfolio && (
+              <Button size="icon" variant="ghost" asChild title="Portfolio" aria-label="Portfolio" data-testid="nav-utility-portfolio">
+                <Link href="/portfolio"><BarChart3 className="w-3.5 h-3.5" /></Link>
+              </Button>
+            )}
+            <Button size="icon" variant="ghost" asChild title="Help" aria-label="Help" data-testid="nav-utility-help">
+              <Link href="/help"><HelpCircle className="w-3.5 h-3.5" /></Link>
+            </Button>
+            <Button size="icon" variant="ghost" asChild title="Settings" aria-label="Settings" data-testid="nav-utility-settings">
+              <Link href="/settings"><Settings className="w-3.5 h-3.5" /></Link>
+            </Button>
+            {isSuperAdmin && (
+              <Button size="icon" variant="ghost" asChild title="Admin" aria-label="Admin" data-testid="nav-utility-admin">
+                <Link href="/admin"><Shield className="w-3.5 h-3.5" /></Link>
+              </Button>
+            )}
+            {isSuperAdmin && (
+              <Button size="icon" variant="ghost" asChild title="Security" aria-label="Security" data-testid="nav-utility-security">
+                <Link href="/admin/security"><AlertTriangle className="w-3.5 h-3.5" /></Link>
+              </Button>
+            )}
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={logout}
+              data-testid="button-logout"
+              title="Log out"
+              aria-label="Log out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
       </SidebarFooter>
     </Sidebar>
