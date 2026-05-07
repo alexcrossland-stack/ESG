@@ -57,8 +57,47 @@ async function insertGeneratedReportFile(companyId: string, reportRunId: string)
   }
 }
 
+async function prepareReportDownloadTenant(companyId: string, token: string): Promise<void> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  try {
+    await client.query("UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1", [companyId]);
+  } finally {
+    await client.end();
+  }
+
+  const metricsRes = await apiRequest("GET", "/api/metrics", undefined, token);
+  if (metricsRes.status !== 200) {
+    throw new Error(`GET /api/metrics failed before report test: status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
+  }
+
+  const metrics = JSON.parse(metricsRes.body) as Array<{ id: string }>;
+  const metricId = Array.isArray(metrics) ? metrics[0]?.id : undefined;
+  if (!metricId) {
+    throw new Error(`No metrics available before report test: body=${metricsRes.body.slice(0, 200)}`);
+  }
+
+  const dataEntryRes = await apiRequest("POST", "/api/data-entry", {
+    metricId,
+    period: "2024-01",
+    value: 10,
+    notes: "seed for report API test",
+  }, token);
+  if (![200, 201].includes(dataEntryRes.status)) {
+    throw new Error(`POST /api/data-entry failed before report test: status=${dataEntryRes.status} body=${dataEntryRes.body.slice(0, 200)}`);
+  }
+}
+
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA, tenantB } = tenants;
+
+  try {
+    await prepareReportDownloadTenant(tenantA.companyId, tenantA.adminToken);
+  } catch (err) {
+    fail("prepare tenant for generated report download tests", err instanceof Error ? err.message : String(err));
+  }
 
   // ── 1. Admin can generate a report ───────────────────────────────────────
   let generatedReportId: string | null = null;
