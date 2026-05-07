@@ -68,16 +68,17 @@ test.describe("Navigation structure", () => {
     await context.close();
   });
 
-  test("Policy Register is under Data and Evidence, then Data and Metrics", async ({ browser }) => {
+  test("Data and Evidence exposes children directly without Data and Metrics", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
-    await ensureGroupOpen(page, "nav-group-data-evidence", "Data and Metrics");
-    await ensureGroupOpen(page, "nav-group-data-and-metrics", "Policy Register");
+    await ensureGroupOpen(page, "nav-group-data-evidence", "Policy Register");
 
-    await expect(page.getByTestId("nav-data-and-metrics-items").getByText("Policy Register", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("nav-group-data-and-metrics")).toHaveCount(0);
+    await expect(page.getByTestId("nav-metrics")).toBeVisible();
+    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
+    await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
     await expectMovedItemNavigation(page, "nav-esg-policy-register", /\/esg-policy-register$/, [
       "Data and Evidence",
-      "Data and Metrics",
       "Policy Register",
     ]);
 
@@ -89,8 +90,7 @@ test.describe("Navigation structure", () => {
 
     await ensureGroupOpen(page, "nav-group-esg-setup", "Advanced");
     await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
-    await ensureGroupOpen(page, "nav-group-data-evidence", "Data and Metrics");
-    await ensureGroupOpen(page, "nav-group-data-and-metrics", "Policy Register");
+    await ensureGroupOpen(page, "nav-group-data-evidence", "Policy Register");
 
     await expect(page.getByTestId("nav-frameworks")).toBeVisible();
     await expect(page.getByTestId("nav-materiality")).toBeVisible();
@@ -101,6 +101,7 @@ test.describe("Navigation structure", () => {
     await expect(page.getByTestId("nav-framework-settings")).toHaveCount(0);
     await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
     await expect(page.getByTestId("nav-my-approvals")).toHaveCount(0);
+    await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
 
     await context.close();
   });
