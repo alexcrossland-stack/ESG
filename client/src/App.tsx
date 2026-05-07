@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect, useLocation } from "wouter";
+import { Switch, Route, Redirect, useLocation, Link } from "wouter";
 import { queryClient, authFetch, StepUpRequiredError } from "./lib/queryClient";
 import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -8,8 +8,16 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun, TriangleAlert } from "lucide-react";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { SupportAssistant } from "@/components/support-assistant";
-import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, type ComponentType } from "react";
+import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, Fragment, type ComponentType } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { StepUpDialog } from "@/pages/settings";
 import NotFound from "@/pages/not-found";
@@ -62,6 +70,7 @@ import FrameworkSettingsPage from "@/pages/framework-settings";
 import FrameworkReadinessPage from "@/pages/framework-readiness";
 import PortfolioPage from "@/pages/portfolio";
 import CreateCompanyPage from "@/pages/create-company";
+import { getBreadcrumbs } from "@/lib/navigation";
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -249,6 +258,41 @@ function ThemeToggle() {
   );
 }
 
+function AppBreadcrumbs() {
+  const [location] = useLocation();
+  const items = getBreadcrumbs(location);
+
+  if (items.length === 0) return null;
+
+  return (
+    <Breadcrumb data-testid="app-breadcrumbs">
+      <BreadcrumbList>
+        {items.map((item, index) => {
+          const isLast = index === items.length - 1;
+          return (
+            <Fragment key={`${item.label}-${index}`}>
+              <BreadcrumbItem>
+                {isLast || !item.href ? (
+                  <BreadcrumbPage data-testid={`breadcrumb-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                    {item.label}
+                  </BreadcrumbPage>
+                ) : (
+                  <BreadcrumbLink asChild>
+                    <Link href={item.href} data-testid={`breadcrumb-${item.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                      {item.label}
+                    </Link>
+                  </BreadcrumbLink>
+                )}
+              </BreadcrumbItem>
+              {!isLast && <BreadcrumbSeparator />}
+            </Fragment>
+          );
+        })}
+      </BreadcrumbList>
+    </Breadcrumb>
+  );
+}
+
 function usePageTracking() {
   const [location] = useLocation();
   const lastTracked = useRef("");
@@ -404,8 +448,11 @@ function ProtectedApp() {
         <div className="flex flex-col flex-1 min-w-0">
           <ImpersonationBanner />
           <ConsentBanner />
-          <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-background shrink-0">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
+          <header className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border bg-background shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <SidebarTrigger data-testid="button-sidebar-toggle" />
+              <AppBreadcrumbs />
+            </div>
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
