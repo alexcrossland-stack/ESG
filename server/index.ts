@@ -312,6 +312,26 @@ app.use((req, res, next) => {
     process.exit(1);
   }
   try {
+    await db.execute(sql`ALTER TABLE evidence_files ADD COLUMN IF NOT EXISTS mime_type text`);
+    await db.execute(sql`ALTER TABLE evidence_files ADD COLUMN IF NOT EXISTS file_size integer`);
+    await db.execute(sql`ALTER TABLE evidence_files ADD COLUMN IF NOT EXISTS storage_path text`);
+    await db.execute(sql`ALTER TABLE evidence_files ADD COLUMN IF NOT EXISTS metric_id varchar`);
+    await db.execute(sql`ALTER TABLE evidence_files ADD COLUMN IF NOT EXISTS tags text[]`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_evidence_files_metric_id ON evidence_files(metric_id)`);
+    await db.execute(sql`
+      UPDATE evidence_files ef
+      SET metric_id = mv.metric_id
+      FROM metric_values mv
+      WHERE ef.metric_id IS NULL
+        AND ef.linked_module = 'metric_value'
+        AND ef.linked_entity_id = mv.id
+    `);
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not ensure evidence_files attachment metadata columns exist");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
     const result = await db.execute(sql`SELECT id FROM users WHERE role = 'super_admin' LIMIT 1`);
     const rows = (result as any).rows ?? [];
     if (rows.length === 0) {

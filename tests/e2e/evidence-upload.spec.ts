@@ -23,27 +23,42 @@ function readSeedInfo() {
 }
 
 test.describe("REGR-EV: Evidence upload and retrieval", () => {
+  test.describe.configure({ mode: "serial" });
   let uploadedId: string | null = null;
-  const uniqueFilename = `e2e-evidence-${Date.now()}.pdf`;
+  let metricId: string | null = null;
+  const period = `2026-05-${String((Date.now() % 20) + 1).padStart(2, "0")}`;
+  const uniqueFilename = `e2e-evidence-${Date.now()}.txt`;
 
   test("admin can upload an evidence record (POST /api/evidence)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
+    const metricsRes = await request.get("/api/metrics", {
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+    expect(metricsRes.status()).toBe(200);
+    const metrics = await metricsRes.json() as Array<{ id: string }>;
+    metricId = metrics[0]?.id || null;
+    expect(metricId).toBeTruthy();
 
     const res = await request.post("/api/evidence", {
-      data: {
-        filename: uniqueFilename,
-        fileUrl: "https://example.com/e2e-test-doc.pdf",
-        fileType: "pdf",
-        linkedModule: "metric_value",
-        description: "Evidence upload E2E test",
+      multipart: {
+        metricId: metricId!,
+        period,
+        notes: "Evidence upload E2E test",
+        file: {
+          name: uniqueFilename,
+          mimeType: "text/plain",
+          buffer: Buffer.from("e2e evidence upload"),
+        },
       },
       headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     expect(res.status()).not.toBe(500);
     expect(res.status()).toBe(200);
-    const body = await res.json() as { id?: string; filename?: string };
+    const body = await res.json() as { id?: string; filename?: string; metricId?: string; fileUrl?: string };
     expect(body.id).toBeTruthy();
     expect(body.filename).toBe(uniqueFilename);
+    expect(body.metricId).toBe(metricId);
+    expect(body.fileUrl).toBeTruthy();
     uploadedId = body.id!;
   });
 
@@ -89,12 +104,17 @@ test.describe("REGR-EV: Evidence upload and retrieval", () => {
 
   test("viewer cannot upload evidence (403)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
+    expect(metricId).toBeTruthy();
 
     const res = await request.post("/api/evidence", {
-      data: {
-        filename: `viewer-blocked-${Date.now()}.pdf`,
-        fileType: "pdf",
-        linkedModule: "metric_value",
+      multipart: {
+        metricId: metricId!,
+        period,
+        file: {
+          name: `viewer-blocked-${Date.now()}.txt`,
+          mimeType: "text/plain",
+          buffer: Buffer.from("viewer blocked"),
+        },
       },
       headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
@@ -103,13 +123,17 @@ test.describe("REGR-EV: Evidence upload and retrieval", () => {
 
   test("contributor can upload evidence", async ({ request }) => {
     const { tenantA } = readSeedInfo();
+    expect(metricId).toBeTruthy();
 
     const res = await request.post("/api/evidence", {
-      data: {
-        filename: `contrib-e2e-${Date.now()}.pdf`,
-        fileUrl: "https://example.com/contrib-doc.pdf",
-        fileType: "pdf",
-        linkedModule: "metric_value",
+      multipart: {
+        metricId: metricId!,
+        period,
+        file: {
+          name: `contrib-e2e-${Date.now()}.txt`,
+          mimeType: "text/plain",
+          buffer: Buffer.from("contributor evidence"),
+        },
       },
       headers: { Authorization: `Bearer ${tenantA.contributorToken}` },
     });
@@ -117,18 +141,19 @@ test.describe("REGR-EV: Evidence upload and retrieval", () => {
     expect([200, 201]).toContain(res.status());
   });
 
-  test("POST /api/evidence without filename returns 400 (not 500)", async ({ request }) => {
+  test("POST /api/evidence without file returns 400 (not 500)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
+    expect(metricId).toBeTruthy();
 
     const res = await request.post("/api/evidence", {
-      data: { linkedModule: "metric_value" },
-      headers: {
-        Authorization: `Bearer ${tenantA.adminToken}`,
-        "Content-Type": "application/json",
+      multipart: {
+        metricId: metricId!,
+        period,
       },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     expect(res.status()).not.toBe(500);
-    expect([400, 403]).toContain(res.status());
+    expect(res.status()).toBe(400);
   });
 
   test("GET /api/evidence/coverage returns 200 or 404, never 500", async ({ request }) => {

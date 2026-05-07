@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -17,15 +17,15 @@ import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { EmptyState } from "@/components/empty-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
-import { ContextualHelpLink } from "@/components/help";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
-  Trash2, Eye, FileText, BarChart3, Shield, PieChart,
-  Calendar, XCircle,
+  Trash2, Eye, FileText, PieChart,
+  XCircle, ArrowRight, Filter, Link2Off,
 } from "lucide-react";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { authFetch } from "@/lib/queryClient";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
+import { Link } from "wouter";
 
 type MetricDefinitionActivation = {
   id: string;
@@ -59,6 +59,7 @@ const STATUS_CONFIG: Record<string, { label: string; icon: any; className: strin
 };
 
 const MODULE_LABELS: Record<string, string> = {
+  metric: "Metric",
   metric_value: "Metric Value",
   raw_data: "Raw Data",
   policy: "Policy",
@@ -71,6 +72,15 @@ const SOURCE_CONFIG: Record<string, { label: string; className: string }> = {
   estimated: { label: "Estimated", className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" },
   manual: { label: "Manual", className: "bg-muted text-muted-foreground" },
 };
+
+const METRIC_EVIDENCE_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp,.svg,.ppt,.pptx,.odt,.ods,.odp,.zip,.eml,.msg";
+
+function formatAttachmentSize(size?: number | null) {
+  if (!size) return null;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function EvidenceStatusBadge({ status }: { status: string }) {
   const config = STATUS_CONFIG[status] || STATUS_CONFIG.uploaded;
@@ -92,132 +102,164 @@ export function DataSourceBadge({ type }: { type?: string | null }) {
   );
 }
 
-function UploadEvidenceDialog({ onUploaded, forceOpen, onOpenChange }: { onUploaded?: () => void; forceOpen?: boolean; onOpenChange?: (v: boolean) => void }) {
-  const [internalOpen, setInternalOpen] = useState(false);
-  const open = forceOpen !== undefined ? forceOpen : internalOpen;
-  const setOpen = (v: boolean) => { setInternalOpen(v); onOpenChange?.(v); };
-  const [filename, setFilename] = useState("");
-  const [description, setDescription] = useState("");
-  const [linkedModule, setLinkedModule] = useState("");
-  const [linkedPeriod, setLinkedPeriod] = useState("");
-  const [expiryDate, setExpiryDate] = useState("");
-  const [fileType, setFileType] = useState("");
+function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
   const { toast } = useToast();
   const { activeSiteId, activeSites } = useSiteContext();
-  const isMultiSite = activeSites.length >= 1;
-  const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [metricId, setMetricId] = useState("");
+  const [period, setPeriod] = useState("");
+  const [notes, setNotes] = useState("");
+  const [tags, setTags] = useState("");
+  const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || "");
+
+  const { data: metrics = [] } = useQuery<CompanyMetric[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
+  });
+
+  const metricOptions = metrics
+    .filter((metric) => metric.enabled !== false)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const reset = () => {
+    setFile(null);
+    setMetricId("");
+    setPeriod("");
+    setNotes("");
+    setTags("");
+    setSelectedSiteId(activeSiteId || "");
+  };
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
-      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : null;
-      const res = await apiRequest("POST", "/api/evidence", {
-        filename,
-        fileType: fileType || null,
-        description: description || null,
-        linkedModule: linkedModule || null,
-        linkedPeriod: linkedPeriod || null,
-        expiryDate: expiryDate || null,
-        siteId: resolvedSiteId,
-      });
+      if (!file) throw new Error("Choose an evidence file to upload.");
+      const formData = new FormData();
+      formData.append("file", file, file.name);
+      formData.append("metricId", metricId);
+      formData.append("period", period.trim());
+      if (notes.trim()) formData.append("notes", notes.trim());
+      if (tags.trim()) formData.append("tags", tags.trim());
+      if (selectedSiteId) formData.append("siteId", selectedSiteId);
+      const res = await apiRequest("POST", "/api/evidence", formData);
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Evidence uploaded successfully" });
+      toast({ title: "Evidence uploaded", description: "The file is stored and linked to the selected metric." });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/metrics", metricId, "evidence"] });
+      reset();
       setOpen(false);
-      setFilename("");
-      setDescription("");
-      setLinkedModule("");
-      setLinkedPeriod("");
-      setExpiryDate("");
-      setFileType("");
-      onUploaded?.();
     },
-    onError: (e: any) => {
+    onError: (e: Error) => {
       toast({ title: "Upload failed", description: e.message, variant: "destructive" });
     },
   });
 
+  const selectedFileSize = formatAttachmentSize(file?.size);
+  const isMultiSite = activeSites.length >= 1;
+  const canUpload = Boolean(file && metricId && period.trim()) && !uploadMutation.isPending && !disabled;
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) reset(); }}>
       <DialogTrigger asChild>
-        <Button data-testid="button-upload-evidence">
+        <Button disabled={disabled} data-testid="button-upload-evidence">
           <Upload className="w-4 h-4 mr-2" />
-          Upload Evidence
+          Upload evidence
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg" data-testid="dialog-upload-evidence">
         <DialogHeader>
-          <div className="flex items-center justify-between pr-6">
-            <DialogTitle>Upload Evidence</DialogTitle>
-            <ContextualHelpLink slug="upload-supporting-evidence" label="What counts as evidence?" />
-          </div>
+          <DialogTitle>Upload Evidence</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          <div className="space-y-1">
+            <Label htmlFor="evidence-file">File *</Label>
+            <Input
+              id="evidence-file"
+              type="file"
+              accept={METRIC_EVIDENCE_ACCEPT}
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              data-testid="input-evidence-file"
+            />
+            {file && (
+              <p className="text-xs text-muted-foreground" data-testid="text-selected-evidence-file">
+                {file.name}{selectedFileSize ? ` · ${selectedFileSize}` : ""}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <Label>Metric *</Label>
+            <Select value={metricId} onValueChange={setMetricId}>
+              <SelectTrigger data-testid="select-evidence-metric">
+                <SelectValue placeholder="Select the metric this supports" />
+              </SelectTrigger>
+              <SelectContent>
+                {metricOptions.map((metric) => (
+                  <SelectItem key={metric.id} value={metric.id}>{metric.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="evidence-period">Reporting period or evidence date *</Label>
+            <Input
+              id="evidence-period"
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              placeholder="e.g. 2026-04 or 2026-04-30"
+              data-testid="input-evidence-period"
+            />
+          </div>
+
           {isMultiSite && (
-            <div>
-              <Label>Site *</Label>
+            <div className="space-y-1">
+              <Label>Site</Label>
               <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
                 <SelectTrigger data-testid="select-evidence-site">
-                  <SelectValue placeholder="Select a site" />
+                  <SelectValue placeholder="Company-wide evidence" />
                 </SelectTrigger>
                 <SelectContent>
-                  {activeSites.map(s => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  {activeSites.map((site: any) => (
+                    <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           )}
-          <div>
-            <Label>Filename *</Label>
-            <Input value={filename} onChange={e => setFilename(e.target.value)} placeholder="e.g. electricity-bill-jan-2025.pdf" data-testid="input-evidence-filename" />
+
+          <div className="space-y-1">
+            <Label htmlFor="evidence-notes">Notes</Label>
+            <Textarea
+              id="evidence-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional context for reviewers"
+              data-testid="input-evidence-notes"
+            />
           </div>
-          <div>
-            <Label>File Type</Label>
-            <Select value={fileType} onValueChange={setFileType}>
-              <SelectTrigger data-testid="select-evidence-filetype">
-                <SelectValue placeholder="Select type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pdf">PDF</SelectItem>
-                <SelectItem value="image">Image</SelectItem>
-                <SelectItem value="spreadsheet">Spreadsheet</SelectItem>
-                <SelectItem value="document">Document</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+
+          <div className="space-y-1">
+            <Label htmlFor="evidence-tags">Tags</Label>
+            <Input
+              id="evidence-tags"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="invoice, supplier, assurance"
+              data-testid="input-evidence-tags"
+            />
           </div>
-          <div>
-            <Label>Description</Label>
-            <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="What does this evidence support?" data-testid="input-evidence-description" />
-          </div>
-          <div>
-            <Label>Linked Module</Label>
-            <Select value={linkedModule} onValueChange={setLinkedModule}>
-              <SelectTrigger data-testid="select-evidence-module">
-                <SelectValue placeholder="Select module" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="metric_value">Metric Value</SelectItem>
-                <SelectItem value="raw_data">Raw Data</SelectItem>
-                <SelectItem value="policy">Policy</SelectItem>
-                <SelectItem value="questionnaire_answer">Questionnaire Answer</SelectItem>
-                <SelectItem value="report">Report</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Linked Period</Label>
-            <Input value={linkedPeriod} onChange={e => setLinkedPeriod(e.target.value)} placeholder="e.g. 2025-01" data-testid="input-evidence-period" />
-          </div>
-          <div>
-            <Label>Expiry / Review Date</Label>
-            <Input type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} data-testid="input-evidence-expiry" />
-          </div>
-          <Button onClick={() => uploadMutation.mutate()} disabled={!filename || uploadMutation.isPending || (isMultiSite && !selectedSiteId)} className="w-full" data-testid="button-submit-evidence">
-            {uploadMutation.isPending ? "Uploading..." : "Upload Evidence"}
+
+          <Button
+            className="w-full"
+            disabled={!canUpload}
+            onClick={() => uploadMutation.mutate()}
+            data-testid="button-submit-evidence"
+          >
+            {uploadMutation.isPending ? "Uploading..." : "Upload and link evidence"}
           </Button>
         </div>
       </DialogContent>
@@ -366,15 +408,51 @@ function MetricCoverageTable() {
   );
 }
 
-function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId: string; setViewSiteId: (v: string) => void; onUploadClick?: () => void }) {
+type EvidenceListItem = {
+  id: string;
+  filename: string;
+  description?: string | null;
+  linkedModule?: string | null;
+  linkedEntityId?: string | null;
+  linkedPeriod?: string | null;
+  resolvedLinkedPeriod?: string | null;
+  evidenceStatus?: string | null;
+  uploadedAt?: string | null;
+  expiryDate?: string | null;
+  fileUrl?: string | null;
+  downloadUrl?: string | null;
+  fileType?: string | null;
+  fileSize?: number | null;
+  assignedUserId?: string | null;
+  siteId?: string | null;
+  metricId?: string | null;
+  metricName?: string | null;
+  companyName?: string | null;
+  uploaderName?: string | null;
+  uploaderEmail?: string | null;
+  tags?: string[] | null;
+  isOrphaned?: boolean;
+};
+
+function EvidenceManagementView({
+  viewSiteId,
+  setViewSiteId,
+}: {
+  viewSiteId: string;
+  setViewSiteId: (v: string) => void;
+}) {
   const { sites } = useSiteContext();
+  const { can } = usePermissions();
+  const { toast } = useToast();
   const hasMultipleSites = sites.length >= 1;
   const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId;
   const viewedSite = resolvedSiteId ? sites.find((s: any) => s.id === resolvedSiteId) : null;
-  const isArchivedSiteSelected = viewedSite?.status === "archived";
-  const { can } = usePermissions();
+  const [metricFilter, setMetricFilter] = useState("__all__");
+  const [periodFilter, setPeriodFilter] = useState("__all__");
+  const [companyFilter, setCompanyFilter] = useState("__all__");
+  const [showOrphansOnly, setShowOrphansOnly] = useState("false");
 
-  const { data: files = [], isLoading } = useQuery<any[]>({
+  const { data: files = [], isLoading } = useQuery<EvidenceListItem[]>({
     queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
     queryFn: async () => {
       const url = resolvedSiteId ? `/api/evidence?siteId=${resolvedSiteId}` : "/api/evidence";
@@ -383,7 +461,38 @@ function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId
       return res.json();
     },
   });
-  const { toast } = useToast();
+
+  const metricOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const file of files) {
+      if (file.metricId && file.metricName && !seen.has(file.metricId)) {
+        seen.set(file.metricId, file.metricName);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [files]);
+
+  const periodOptions = useMemo(() => {
+    return Array.from(new Set(files.map((file) => file.resolvedLinkedPeriod).filter(Boolean) as string[])).sort().reverse();
+  }, [files]);
+
+  const companyOptions = useMemo(() => {
+    return Array.from(new Set(files.map((file) => file.companyName).filter(Boolean) as string[])).sort();
+  }, [files]);
+
+  const filteredFiles = useMemo(() => {
+    return files.filter((file) => {
+      if (metricFilter !== "__all__" && file.metricId !== metricFilter) return false;
+      if (periodFilter !== "__all__" && file.resolvedLinkedPeriod !== periodFilter) return false;
+      if (companyFilter !== "__all__" && file.companyName !== companyFilter) return false;
+      if (showOrphansOnly === "true" && !file.isOrphaned) return false;
+      return true;
+    });
+  }, [companyFilter, files, metricFilter, periodFilter, showOrphansOnly]);
+
+  const orphanCount = files.filter((file) => file.isOrphaned).length;
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
@@ -416,102 +525,237 @@ function EvidenceList({ viewSiteId, setViewSiteId, onUploadClick }: { viewSiteId
         icon={FileCheck}
         title={viewedSite ? "No evidence for this site yet" : "No evidence files yet"}
         description={viewedSite
-          ? `Upload documents that back up the ESG data for ${viewedSite.name}. The more you add, the more credible your reports become.`
-          : "Add documents like energy bills, certificates, or HR records to show your ESG figures are based on real data. Customers, banks, and buyers often ask for this."}
-        helpText={isArchivedSiteSelected
-          ? "This site is archived. Historical records are available but new uploads are disabled."
-          : "Good starting documents: your most recent electricity bill, last month's gas invoice, or an HR headcount record."}
-        actionLabel={(!isArchivedSiteSelected && can("metrics_data_entry")) ? "Upload your first file" : undefined}
-        onAction={(!isArchivedSiteSelected && can("metrics_data_entry")) ? onUploadClick : undefined}
+          ? `Upload a document and link it to a metric for ${viewedSite.name}.`
+          : "Upload a document and link it to the metric it supports. Evidence added from Data Entry also appears here."}
+        helpText="Use Upload evidence above, or attach evidence directly from a metric row in Data Entry."
       />
     );
   }
 
-  const isExpired = (f: any) => f.expiryDate && new Date(f.expiryDate) < new Date();
+  const isExpired = (f: EvidenceListItem) => f.expiryDate && new Date(f.expiryDate) < new Date();
 
   return (
-    <div className="space-y-2">
-      {hasMultipleSites && (
-        <div className="flex items-center gap-2 pb-1">
-          <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-evidence-site-filter">
-            <SelectTrigger className="w-48" data-testid="trigger-evidence-site-filter">
-              <SelectValue placeholder="All sites" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">All sites</SelectItem>
-              {sites.map(s => (
-                <SelectItem key={s.id} value={s.id} data-testid={`option-evidence-site-${s.id}`}>
-                  {s.name}{s.status === "archived" ? " (Archived)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-      {files.map((f: any) => (
-        <Card key={f.id} className={isExpired(f) ? "border-red-300 dark:border-red-800" : ""} data-testid={`card-evidence-${f.id}`}>
-          <CardContent className="py-3 px-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                  <span className="font-medium text-sm truncate" data-testid={`text-evidence-filename-${f.id}`}>{f.filename}</span>
-                  <EvidenceStatusBadge status={isExpired(f) ? "expired" : (f.evidenceStatus || "uploaded")} />
-                  {f.siteId && (() => {
-                    const evSite = sites.find(s => s.id === f.siteId);
-                    return (
-                      <Badge variant="secondary" className="text-xs" data-testid={`badge-site-evidence-${f.id}`}>
-                        {evSite ? evSite.name : f.siteId}
-                        {evSite?.status === "archived" && " (Archived)"}
+    <div className="space-y-4">
+      <Card className="border-dashed">
+        <CardContent className="pt-6 space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-muted-foreground" />
+                <p className="text-sm font-medium">Audit filters</p>
+                {orphanCount > 0 && (
+                  <Badge variant="destructive" className="text-xs" data-testid="badge-orphaned-evidence-count">
+                    {orphanCount} orphaned
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Uploads are metric-linked here, and files attached in Data Entry appear in the same audit trail.
+              </p>
+            </div>
+            <Link href="/data-entry">
+              <Button size="sm" variant="outline" data-testid="button-evidence-open-data-entry">
+                Go to Data Entry
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            {hasMultipleSites && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Site</Label>
+                <Select value={viewSiteId} onValueChange={setViewSiteId} data-testid="select-evidence-site-filter">
+                  <SelectTrigger data-testid="trigger-evidence-site-filter">
+                    <SelectValue placeholder="All sites" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All sites</SelectItem>
+                    {sites.map((s) => (
+                      <SelectItem key={s.id} value={s.id} data-testid={`option-evidence-site-${s.id}`}>
+                        {s.name}{s.status === "archived" ? " (Archived)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Metric</Label>
+              <Select value={metricFilter} onValueChange={setMetricFilter} data-testid="select-evidence-metric-filter">
+                <SelectTrigger>
+                  <SelectValue placeholder="All metrics" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All metrics</SelectItem>
+                  {metricOptions.map((metric) => (
+                    <SelectItem key={metric.id} value={metric.id}>{metric.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Period</Label>
+              <Select value={periodFilter} onValueChange={setPeriodFilter} data-testid="select-evidence-period-filter">
+                <SelectTrigger>
+                  <SelectValue placeholder="All periods" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All periods</SelectItem>
+                  {periodOptions.map((period) => (
+                    <SelectItem key={period} value={period}>{period}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Company</Label>
+              <Select value={companyFilter} onValueChange={setCompanyFilter} data-testid="select-evidence-company-filter">
+                <SelectTrigger>
+                  <SelectValue placeholder="Current company" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All companies</SelectItem>
+                  {companyOptions.map((company) => (
+                    <SelectItem key={company} value={company}>{company}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <Select value={showOrphansOnly} onValueChange={setShowOrphansOnly} data-testid="select-evidence-link-status-filter">
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="false">All evidence</SelectItem>
+                  <SelectItem value="true">Orphaned only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {filteredFiles.length === 0 ? (
+        <EmptyState
+          icon={FileCheck}
+          title="No evidence matches these filters"
+          description="Try clearing one of the audit filters or return to Data Entry to attach evidence to a metric."
+        />
+      ) : (
+        filteredFiles.map((f) => (
+          <Card key={f.id} className={isExpired(f) ? "border-red-300 dark:border-red-800" : ""} data-testid={`card-evidence-${f.id}`}>
+            <CardContent className="py-3 px-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span className="font-medium text-sm truncate" data-testid={`text-evidence-filename-${f.id}`}>{f.filename}</span>
+                    <EvidenceStatusBadge status={isExpired(f) ? "expired" : (f.evidenceStatus || "uploaded")} />
+                    {f.companyName && (
+                      <Badge variant="secondary" className="text-xs">{f.companyName}</Badge>
+                    )}
+                    {f.siteId && (() => {
+                      const evSite = sites.find((site) => site.id === f.siteId);
+                      return (
+                        <Badge variant="secondary" className="text-xs" data-testid={`badge-site-evidence-${f.id}`}>
+                          {evSite ? evSite.name : f.siteId}
+                          {evSite?.status === "archived" && " (Archived)"}
+                        </Badge>
+                      );
+                    })()}
+                    {f.isOrphaned ? (
+                      <Badge variant="destructive" className="text-xs gap-1" data-testid={`badge-orphaned-evidence-${f.id}`}>
+                        <Link2Off className="w-3 h-3" />
+                        Orphaned
                       </Badge>
-                    );
-                  })()}
-                  {f.linkedModule && (
-                    <Badge variant="outline" className="text-xs">{MODULE_LABELS[f.linkedModule] || f.linkedModule}</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-xs">
+                        {MODULE_LABELS[f.linkedModule || "metric_value"] || f.linkedModule}
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
+                    <div className="rounded-md border bg-muted/30 px-2.5 py-2">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Metric</p>
+                      <p className="mt-1 font-medium text-foreground">
+                        {f.metricName || "Not linked to a metric"}
+                      </p>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 px-2.5 py-2">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Reporting period</p>
+                      <p className="mt-1 font-medium text-foreground">
+                        {f.resolvedLinkedPeriod || "Not set"}
+                      </p>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 px-2.5 py-2">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Link status</p>
+                      <p className={`mt-1 font-medium ${f.isOrphaned ? "text-destructive" : "text-foreground"}`}>
+                        {f.isOrphaned ? "Needs metric linkage" : "Linked to metric entry"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {f.description && <p className="text-xs text-muted-foreground">{f.description}</p>}
+                  {f.tags && f.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {f.tags.map((tag) => (
+                        <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>
+                      ))}
+                    </div>
                   )}
-                  {f.linkedPeriod && (
-                    <Badge variant="outline" className="text-xs">{f.linkedPeriod}</Badge>
-                  )}
+                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                    <span>Uploaded {f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString() : "Unknown"}</span>
+                    <span>By {f.uploaderName || f.uploaderEmail || "Unknown user"}</span>
+                    {formatAttachmentSize(f.fileSize) && <span>{formatAttachmentSize(f.fileSize)}</span>}
+                    {f.expiryDate && (
+                      <span className={isExpired(f) ? "text-red-600 font-medium" : ""}>
+                        {isExpired(f) ? "Expired" : "Expires"} {new Date(f.expiryDate).toLocaleDateString()}
+                      </span>
+                    )}
+                    <OwnerAssignment
+                      entityType="evidence_files"
+                      entityId={f.id}
+                      currentUserId={f.assignedUserId}
+                      invalidateKeys={[["/api/evidence"]]}
+                    />
+                  </div>
                 </div>
-                {f.description && <p className="text-xs text-muted-foreground mt-1">{f.description}</p>}
-                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  <span>Uploaded {f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString() : "Unknown"}</span>
-                  {f.expiryDate && (
-                    <span className={isExpired(f) ? "text-red-600 font-medium" : ""}>
-                      {isExpired(f) ? "Expired" : "Expires"} {new Date(f.expiryDate).toLocaleDateString()}
-                    </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <a href={f.downloadUrl || f.fileUrl || `/api/evidence/${f.id}/download`} target="_blank" rel="noopener noreferrer">
+                    <Button size="sm" variant="outline" data-testid={`button-download-evidence-${f.id}`}>
+                      <Eye className="w-3 h-3 mr-1" />
+                      Open
+                    </Button>
+                  </a>
+                  {can("metrics_data_entry") && (
+                    <>
+                    {f.evidenceStatus === "uploaded" && (
+                      <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "reviewed" } })} data-testid={`button-review-evidence-${f.id}`}>
+                        <Eye className="w-3 h-3 mr-1" />
+                        Review
+                      </Button>
+                    )}
+                    {(f.evidenceStatus === "uploaded" || f.evidenceStatus === "reviewed") && (
+                      <Button size="sm" variant="outline" className="text-green-600" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "approved" } })} data-testid={`button-approve-evidence-${f.id}`}>
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Approve
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this evidence file?")) deleteMutation.mutate(f.id); }} data-testid={`button-delete-evidence-${f.id}`}>
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                    </>
                   )}
-                  <OwnerAssignment
-                    entityType="evidence_files"
-                    entityId={f.id}
-                    currentUserId={f.assignedUserId}
-                    invalidateKeys={[["/api/evidence"]]}
-                  />
                 </div>
               </div>
-              {can("metrics_data_entry") && (
-                <div className="flex items-center gap-1 shrink-0">
-                  {f.evidenceStatus === "uploaded" && (
-                    <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "reviewed" } })} data-testid={`button-review-evidence-${f.id}`}>
-                      <Eye className="w-3 h-3 mr-1" />
-                      Review
-                    </Button>
-                  )}
-                  {(f.evidenceStatus === "uploaded" || f.evidenceStatus === "reviewed") && (
-                    <Button size="sm" variant="outline" className="text-green-600" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "approved" } })} data-testid={`button-approve-evidence-${f.id}`}>
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Approve
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this evidence file?")) deleteMutation.mutate(f.id); }} data-testid={`button-delete-evidence-${f.id}`}>
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+            </CardContent>
+          </Card>
+        ))
+      )}
     </div>
   );
 }
@@ -522,50 +766,38 @@ export default function Evidence() {
   const { activeSiteId, sites } = useSiteContext();
   const { data: coverage } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
   const fileCount = coverage?.totalEvidence ?? 0;
-  const atLimit = !isPro && fileCount >= 10;
 
-  // Lifted site-view state so upload button and list are in sync
   const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
-  const [uploadOpen, setUploadOpen] = useState(false);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("upload") === "1") {
-      setUploadOpen(true);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, []);
 
   const resolvedViewSite = viewSiteId === "__all__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
   const isArchivedView = resolvedViewSite?.status === "archived";
-  const canUpload = can("metrics_data_entry") && !atLimit && !isArchivedView;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <PageGuidance
         pageKey="evidence"
         title="Supporting Documents — what this page does"
-        summary="This is where you keep the documents that back up your ESG data — things like energy bills, payroll records, board minutes, and certificates. The more documents you add, the more trustworthy your reports become."
-        goodLooksLike="At least one document linked to each metric or policy, with files reviewed and confirmed."
+        summary="Upload evidence documents, link them to the metric they support, and review the audit trail by metric, period, site, and company context."
+        goodLooksLike="Each evidence item has a stored file, a linked metric, a reporting period, and a clear download path for review."
         steps={[
-          "Upload key documents — energy invoices, payroll data, policy certificates",
-          "Link each file to the relevant metric, policy, or data entry",
-          "Check the Coverage tab to see which metrics still need a supporting document",
-          "Use evidence requests to ask team members to submit documents",
+          "Upload a document and select the metric it supports",
+          "Set the reporting period or evidence date and add optional notes or tags",
+          "Open or download evidence from this audit view or from the metric detail view",
+          "Use the Coverage tab to see which metrics still need supporting documentation",
         ]}
       />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Supporting Documents <EsgTooltip term="evidence" /></h1>
-          <p className="text-sm text-muted-foreground mt-1">Keep the documents that back up your ESG data in one place</p>
+          <p className="text-sm text-muted-foreground mt-1">Review linked evidence by metric and reporting period</p>
         </div>
-        {canUpload && (
-          <UploadEvidenceDialog forceOpen={uploadOpen} onOpenChange={setUploadOpen} />
-        )}
         {isArchivedView && (
           <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 dark:border-amber-700">
             Archived site — uploads disabled
           </Badge>
+        )}
+        {can("metrics_data_entry") && !isArchivedView && (
+          <UploadEvidenceDialog />
         )}
       </div>
 
@@ -584,7 +816,7 @@ export default function Evidence() {
 
       <Tabs defaultValue="files">
         <TabsList>
-          <TabsTrigger value="files" data-testid="tab-evidence-files">All Evidence</TabsTrigger>
+          <TabsTrigger value="files" data-testid="tab-evidence-files">Audit View</TabsTrigger>
           <TabsTrigger value="coverage" data-testid="tab-evidence-coverage">Coverage</TabsTrigger>
           <TabsTrigger value="requests" data-testid="tab-evidence-requests">
             Evidence Requests
@@ -592,10 +824,9 @@ export default function Evidence() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="files" className="mt-4">
-          <EvidenceList
+          <EvidenceManagementView
             viewSiteId={viewSiteId}
             setViewSiteId={setViewSiteId}
-            onUploadClick={canUpload ? () => setUploadOpen(true) : undefined}
           />
         </TabsContent>
         <TabsContent value="coverage" className="mt-4">

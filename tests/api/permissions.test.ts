@@ -13,7 +13,7 @@
  * Run: npx tsx tests/api/permissions.test.ts
  */
 
-import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
+import { seedTestTenants, apiMultipartRequest, apiRequest } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
@@ -215,29 +215,34 @@ async function run(tenants: SeededTenants): Promise<void> {
   // ════════════════════════════════════════════════════════════════════════
   // ENDPOINT 5: POST /api/evidence (upload)
   // ════════════════════════════════════════════════════════════════════════
-  const evidencePayload = { filename: `perm-test-${Date.now()}.pdf`, fileType: "pdf", linkedModule: "metric_value" };
+  const evidenceForm = (filename: string) => {
+    const form = new FormData();
+    form.append("metricId", metricId);
+    form.append("period", "2026-05");
+    form.append("file", new Blob(["permission evidence"], { type: "text/plain" }), filename);
+    return form;
+  };
 
-  await assertPermission({
-    name: "PERM-05a: POST /api/evidence — unauthenticated → 401",
-    method: "POST", path: "/api/evidence",
-    body: evidencePayload, actor: "unauthed",
-    tenants, expectedStatus: 401,
-  });
+  {
+    const name = "PERM-05a: POST /api/evidence — unauthenticated → 401";
+    const res = await apiMultipartRequest("POST", "/api/evidence", evidenceForm(`perm-unauthed-${Date.now()}.txt`));
+    if (res.status !== 401) fail(name, `expected=401 got=${res.status}`);
+    else pass(name, `status=${res.status}`);
+  }
 
-  await assertPermission({
-    name: "PERM-05b: POST /api/evidence — viewer → 403",
-    method: "POST", path: "/api/evidence",
-    body: evidencePayload, actor: "viewer",
-    tenants, expectedStatus: 403,
-  });
+  {
+    const name = "PERM-05b: POST /api/evidence — viewer → 403";
+    const res = await apiMultipartRequest("POST", "/api/evidence", evidenceForm(`perm-viewer-${Date.now()}.txt`), tenantA.viewerToken);
+    if (res.status !== 403) fail(name, `expected=403 got=${res.status}`);
+    else pass(name, `status=${res.status}`);
+  }
 
-  await assertPermission({
-    name: "PERM-05c: POST /api/evidence — admin → 200/201",
-    method: "POST", path: "/api/evidence",
-    body: { ...evidencePayload, filename: `perm-admin-${Date.now()}.pdf`, fileUrl: "https://example.com/test.pdf" },
-    actor: "admin",
-    tenants, expectedStatus: [200, 201],
-  });
+  {
+    const name = "PERM-05c: POST /api/evidence — admin → 200/201";
+    const res = await apiMultipartRequest("POST", "/api/evidence", evidenceForm(`perm-admin-${Date.now()}.txt`), tenantA.adminToken);
+    if (![200, 201].includes(res.status)) fail(name, `expected=[200,201] got=${res.status}`);
+    else pass(name, `status=${res.status}`);
+  }
 
   // ════════════════════════════════════════════════════════════════════════
   // ENDPOINT 6: GET /api/admin/users — super_admin only

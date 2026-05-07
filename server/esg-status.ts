@@ -130,7 +130,7 @@ export async function evaluateEsgStatus(
     totalMetrics > 0 ? Math.round((estimatedMetrics / totalMetrics) * 100) : 0;
 
   const evidenceLinked = evidenceFiles.filter(
-    (e) => e.linkedModule === "metric_value" || e.linkedModule === "metrics"
+    (e: any) => e.metricId || e.linkedModule === "metric" || e.linkedModule === "metric_value" || e.linkedModule === "metrics"
   );
   const evidenceCoverage =
     totalMetrics > 0
