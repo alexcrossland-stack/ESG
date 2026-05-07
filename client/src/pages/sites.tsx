@@ -21,6 +21,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Building2, Plus, Pencil, Archive, MapPin, Globe, AlertCircle, ArrowRightLeft, CheckCircle2, Layers } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { usePermissions } from "@/lib/permissions";
+import { PermissionBanner } from "@/components/permission-gate";
 import type { OrganisationSite } from "@shared/schema";
 
 const SITE_TYPES = [
@@ -223,7 +225,17 @@ function ArchiveDialog({ site, onClose }: ArchiveDialogProps) {
   );
 }
 
-function SiteCard({ site, onEdit, onArchive }: { site: OrganisationSite; onEdit: () => void; onArchive: () => void }) {
+function SiteCard({
+  site,
+  canManage,
+  onEdit,
+  onArchive,
+}: {
+  site: OrganisationSite;
+  canManage: boolean;
+  onEdit: () => void;
+  onArchive: () => void;
+}) {
   const isArchived = site.status === "archived";
   return (
     <Card data-testid={`card-site-${site.id}`} className={isArchived ? "opacity-60" : ""}>
@@ -255,25 +267,39 @@ function SiteCard({ site, onEdit, onArchive }: { site: OrganisationSite; onEdit:
               View Dashboard
             </Button>
           </Link>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onEdit}
-            data-testid={`button-edit-site-${site.id}`}
-          >
-            <Pencil className="w-3.5 h-3.5 mr-1.5" />
-            Edit
-          </Button>
-          {!isArchived && (
+          {canManage && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onEdit}
+                data-testid={`button-edit-site-${site.id}`}
+              >
+                <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                Edit
+              </Button>
+              {!isArchived && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onArchive}
+                  data-testid={`button-archive-site-${site.id}`}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Archive className="w-3.5 h-3.5 mr-1.5" />
+                  Archive
+                </Button>
+              )}
+            </>
+          )}
+          {!canManage && isArchived && (
             <Button
               variant="outline"
               size="sm"
-              onClick={onArchive}
-              data-testid={`button-archive-site-${site.id}`}
-              className="text-destructive hover:text-destructive"
+              disabled
+              data-testid={`button-site-readonly-${site.id}`}
             >
-              <Archive className="w-3.5 h-3.5 mr-1.5" />
-              Archive
+              Read only
             </Button>
           )}
         </div>
@@ -352,6 +378,8 @@ function MigrateLegacyDataPanel({ activeSites }: { activeSites: OrganisationSite
 
 export default function SitesPage() {
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const canManageSites = can("settings_admin");
   const [showForm, setShowForm] = useState(false);
   const [editSite, setEditSite] = useState<OrganisationSite | null>(null);
   const [archiveSite, setArchiveSite] = useState<OrganisationSite | null>(null);
@@ -378,11 +406,21 @@ export default function SitesPage() {
             Manage your organisation's physical sites and locations
           </p>
         </div>
-        <Button onClick={() => setShowForm(true)} data-testid="button-add-site">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Site
-        </Button>
+        {canManageSites && (
+          <Button onClick={() => setShowForm(true)} data-testid="button-add-site">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Site
+          </Button>
+        )}
       </div>
+
+      {!canManageSites && (
+        <PermissionBanner
+          module="settings_admin"
+          action="add or change sites"
+          customMessage="You can view sites and dashboards here, but only Company Admins can add, edit, or archive sites."
+        />
+      )}
 
       {/* Toggle archived */}
       <div className="flex items-center gap-2 text-sm">
@@ -407,9 +445,11 @@ export default function SitesPage() {
         <EmptyState
           icon={Layers}
           title="No sites yet"
-          description="Add your organisation's physical sites to track ESG data independently across locations."
-          actionLabel="Add your first site"
-          onAction={() => setShowForm(true)}
+          description={canManageSites
+            ? "Add your organisation's physical sites to track ESG data independently across locations."
+            : "No physical sites have been configured for this organisation yet. Ask a Company Admin to add sites."}
+          actionLabel={canManageSites ? "Add your first site" : undefined}
+          onAction={canManageSites ? () => setShowForm(true) : undefined}
         />
       ) : (
         <div className="space-y-6">
@@ -423,6 +463,7 @@ export default function SitesPage() {
                   <SiteCard
                     key={site.id}
                     site={site}
+                    canManage={canManageSites}
                     onEdit={() => setEditSite(site)}
                     onArchive={() => setArchiveSite(site)}
                   />
@@ -441,6 +482,7 @@ export default function SitesPage() {
                   <SiteCard
                     key={site.id}
                     site={site}
+                    canManage={canManageSites}
                     onEdit={() => setEditSite(site)}
                     onArchive={() => {}}
                   />
