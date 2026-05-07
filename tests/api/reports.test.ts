@@ -9,6 +9,9 @@
 
 import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
+import { Client } from "pg";
+
+const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -20,6 +23,38 @@ function pass(name: string, detail?: string) {
 function fail(name: string, detail?: string) {
   results.push({ name, passed: false, detail });
   console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+async function apiRequestBinary(method: string, path: string, body?: object, token?: string) {
+  const headers: Record<string, string> = {};
+  const bodyStr = body ? JSON.stringify(body) : undefined;
+  if (bodyStr) headers["Content-Type"] = "application/json";
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(new URL(path, BASE_URL), { method, headers, body: bodyStr });
+  return {
+    status: res.status,
+    headers: res.headers,
+    body: Buffer.from(await res.arrayBuffer()),
+  };
+}
+
+async function insertGeneratedReportFile(companyId: string, reportRunId: string): Promise<string> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  try {
+    const fileData = Buffer.from("%PDF-1.4\n% test tenant report\n").toString("base64");
+    const res = await client.query<{ id: string }>(
+      `INSERT INTO generated_files (report_run_id, company_id, file_type, filename, file_data, file_size)
+       VALUES ($1, $2, 'pdf', 'tenant-b-report.pdf', $3, $4)
+       RETURNING id`,
+      [reportRunId, companyId, fileData, Buffer.byteLength(fileData)]
+    );
+    return res.rows[0].id;
+  } finally {
+    await client.end();
+  }
 }
 
 async function run(tenants: SeededTenants): Promise<void> {
@@ -129,6 +164,47 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
+  {
+    const name = "GET generated report download route returns file for matching report/file IDs";
+    if (!generatedReportId || !generatedFileId) {
+      pass(name, "skipped — generated file unavailable");
+    } else {
+      const res = await apiRequestBinary("GET", `/api/reports/${generatedReportId}/download/${generatedFileId}`, undefined, tenantA.adminToken);
+      const contentType = res.headers.get("content-type") || "";
+      if (res.status !== 200) fail(name, `status=${res.status} body=${res.body.toString("utf8").slice(0, 200)}`);
+      else if (!contentType.includes("application/pdf")) fail(name, `unexpected content-type=${contentType}`);
+      else if (res.body.length === 0) fail(name, "empty report download body");
+      else pass(name, `${res.body.length} bytes`);
+    }
+  }
+
+  {
+    const name = "GET generated report download rejects a fileId from a different report";
+    if (!generatedFileId) {
+      pass(name, "skipped — generated file unavailable");
+    } else {
+      const secondReportRes = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "management",
+        period: "2024-01",
+        includeMetrics: true,
+        includePolicy: false,
+        includeTopics: false,
+      }, tenantA.adminToken);
+      if (![200, 201].includes(secondReportRes.status)) {
+        pass(name, `skipped — second report generation status=${secondReportRes.status}`);
+      } else {
+        const secondReportId = (JSON.parse(secondReportRes.body) as { report?: { id?: string } }).report?.id;
+        if (!secondReportId) fail(name, "missing second report id");
+        else {
+          const res = await apiRequest("GET", `/api/reports/${secondReportId}/download/${generatedFileId}`, undefined, tenantA.adminToken);
+          if (res.status !== 404) fail(name, `expected 404 got ${res.status}`);
+          else pass(name);
+        }
+      }
+    }
+  }
+
   // ── 5. Viewer blocked from generating reports → 403 ──────────────────────
   {
     const name = "viewer POST /api/reports/generate returns 403";
@@ -201,6 +277,18 @@ async function run(tenants: SeededTenants): Promise<void> {
       const res = await apiRequest("GET", `/api/reports/${tenantB.reportId}/files`, undefined, tenantA.adminToken);
       if (![403, 404].includes(res.status)) fail(name, `expected 403/404 got ${res.status}`);
       else pass(name, `status=${res.status}`);
+    }
+  }
+
+  {
+    const name = "Tenant A cannot download Tenant B generated report file";
+    if (!tenantB.reportId) {
+      pass(name, "skipped — Tenant B reportId unavailable");
+    } else {
+      const tenantBFileId = await insertGeneratedReportFile(tenantB.companyId, tenantB.reportId);
+      const res = await apiRequest("GET", `/api/reports/${tenantB.reportId}/download/${tenantBFileId}`, undefined, tenantA.adminToken);
+      if (res.status !== 404) fail(name, `expected 404 got ${res.status}`);
+      else pass(name);
     }
   }
 
