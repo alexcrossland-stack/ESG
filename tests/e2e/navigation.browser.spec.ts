@@ -45,6 +45,8 @@ test.describe("Navigation structure", () => {
       "Data and Evidence",
       "Reports",
     ]);
+    await expect(page.getByTestId("nav-admin-console")).toBeVisible();
+    await expect(page.getByTestId("nav-admin-console")).toHaveAttribute("href", "/team");
 
     await context.close();
   });
