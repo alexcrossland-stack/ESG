@@ -5,6 +5,7 @@ import {
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
+  canShowAdminMenu,
   getBreadcrumbs,
   isGroupActive,
 } from "../../client/src/lib/navigation";
@@ -64,9 +65,9 @@ function run() {
       "Policy Register",
     ]);
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyRegister, "/esg-policy-register");
-    pass("Policy Register is nested with Data and Metrics while retaining its route");
+    pass("Policy Register is directly under Data and Evidence while retaining its route");
   } catch (error: any) {
-    fail("Policy Register is nested with Data and Metrics while retaining its route", error.message);
+    fail("Policy Register is directly under Data and Evidence while retaining its route", error.message);
   }
 
   try {
@@ -77,7 +78,6 @@ function run() {
     ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
       "Data and Evidence",
-      "Data and Metrics",
       "Policy Register",
     ]);
     pass("Moved pages resolve to the updated breadcrumb hierarchy");
@@ -91,6 +91,16 @@ function run() {
     pass("Active route matching recognizes moved items in their new groups");
   } catch (error: any) {
     fail("Active route matching recognizes moved items in their new groups", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("super_admin"), true);
+    assert.equal(canShowAdminMenu("admin"), false);
+    assert.equal(canShowAdminMenu("viewer"), false);
+    assert.equal(canShowAdminMenu(undefined), false);
+    pass("Admin navigation is visible only to authorised platform admins");
+  } catch (error: any) {
+    fail("Admin navigation is visible only to authorised platform admins", error.message);
   }
 }
 
