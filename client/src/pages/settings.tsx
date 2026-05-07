@@ -23,7 +23,7 @@ import {
   ChevronRight, BarChart3, Lock, Users, Shield, ToggleLeft,
   Scale, Leaf, Palette, ClipboardCheck, Search, Calendar, Copy, LockIcon, UserPlus,
   Key, KeyRound, Trash2, Plus, AlertCircle, CheckCircle, XCircle,
-  Monitor, Smartphone, Globe, RefreshCw, LogOut, Crown,
+  Monitor, Smartphone, Globe, RefreshCw, LogOut, Crown, MapPin,
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -200,6 +200,37 @@ export default function Settings() {
                   )}
                 </form>
               </Form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-primary" />
+                Sites &amp; Locations
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Add physical sites so ESG data, evidence, dashboards, and reports can be tracked by location
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {can("settings_admin") ? (
+                <Button asChild size="sm" data-testid="button-manage-sites">
+                  <Link href="/sites">
+                    Manage Sites
+                    <ChevronRight className="w-3.5 h-3.5 ml-1.5" />
+                  </Link>
+                </Button>
+              ) : (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-muted-foreground">
+                    Only Company Admins can add or change sites.
+                  </p>
+                  <Button size="sm" variant="outline" disabled data-testid="button-manage-sites-disabled">
+                    Manage Sites
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -988,7 +1019,7 @@ function PrivacyDataTab() {
           <p>AI features (policy generation, questionnaire autofill) send limited context to OpenAI for processing under a data processing agreement. Personal details are not included in these requests.</p>
           <div className="pt-1">
             <Link href="/privacy">
-              <Button size="sm" variant="link" className="p-0 h-auto text-xs" data-testid="link-full-privacy-policy">Read the full Privacy Policy</Button>
+              <Button size="sm" variant="ghost" className="p-0 h-auto text-xs underline hover:bg-transparent" data-testid="link-full-privacy-policy">Read the full Privacy Policy</Button>
             </Link>
           </div>
         </CardContent>
