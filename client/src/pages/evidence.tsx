@@ -456,7 +456,7 @@ function EvidenceManagementView({
     queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
     queryFn: async () => {
       const url = resolvedSiteId ? `/api/evidence?siteId=${resolvedSiteId}` : "/api/evidence";
-      const res = await fetch(url, { credentials: "include" });
+      const res = await authFetch(url);
       if (!res.ok) throw new Error("Failed to load evidence");
       return res.json();
     },
@@ -583,7 +583,7 @@ function EvidenceManagementView({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Metric</Label>
               <Select value={metricFilter} onValueChange={setMetricFilter} data-testid="select-evidence-metric-filter">
-                <SelectTrigger>
+                <SelectTrigger data-testid="trigger-evidence-metric-filter">
                   <SelectValue placeholder="All metrics" />
                 </SelectTrigger>
                 <SelectContent>
@@ -597,7 +597,7 @@ function EvidenceManagementView({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Period</Label>
               <Select value={periodFilter} onValueChange={setPeriodFilter} data-testid="select-evidence-period-filter">
-                <SelectTrigger>
+                <SelectTrigger data-testid="trigger-evidence-period-filter">
                   <SelectValue placeholder="All periods" />
                 </SelectTrigger>
                 <SelectContent>
@@ -611,7 +611,7 @@ function EvidenceManagementView({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Company</Label>
               <Select value={companyFilter} onValueChange={setCompanyFilter} data-testid="select-evidence-company-filter">
-                <SelectTrigger>
+                <SelectTrigger data-testid="trigger-evidence-company-filter">
                   <SelectValue placeholder="Current company" />
                 </SelectTrigger>
                 <SelectContent>
@@ -625,7 +625,7 @@ function EvidenceManagementView({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Status</Label>
               <Select value={showOrphansOnly} onValueChange={setShowOrphansOnly} data-testid="select-evidence-link-status-filter">
-                <SelectTrigger>
+                <SelectTrigger data-testid="trigger-evidence-link-status-filter">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

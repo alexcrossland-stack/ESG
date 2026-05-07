@@ -12,7 +12,7 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users, metricValues, generatedFiles,
+  users, metrics, metricValues, generatedFiles,
   type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
@@ -6831,24 +6831,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const metricValueContext = new Map<string, { metricId: string; metricName: string; metricCategory: string | null; period: string | null }>();
       if (metricValueIds.length > 0) {
-        const metricContextResult = await db.execute(sql`
-          SELECT
-            mv.id AS metric_value_id,
-            mv.metric_id,
-            mv.period,
-            m.name AS metric_name,
-            m.category AS metric_category
-          FROM metric_values mv
-          INNER JOIN metrics m ON m.id = mv.metric_id
-          WHERE m.company_id = ${companyId}
-            AND mv.id = ANY(${metricValueIds}::uuid[])
-        `);
+        const metricContextResult = await db
+          .select({
+            metricValueId: metricValues.id,
+            metricId: metricValues.metricId,
+            period: metricValues.period,
+            metricName: metrics.name,
+            metricCategory: metrics.category,
+          })
+          .from(metricValues)
+          .innerJoin(metrics, eq(metrics.id, metricValues.metricId))
+          .where(and(
+            eq(metrics.companyId, companyId),
+            inArray(metricValues.id, metricValueIds),
+          ));
 
-        for (const row of ((metricContextResult as any).rows ?? [])) {
-          metricValueContext.set(row.metric_value_id, {
-            metricId: row.metric_id,
-            metricName: row.metric_name,
-            metricCategory: row.metric_category ?? null,
+        for (const row of metricContextResult) {
+          metricValueContext.set(row.metricValueId, {
+            metricId: row.metricId,
+            metricName: row.metricName,
+            metricCategory: row.metricCategory ?? null,
             period: row.period ?? null,
           });
         }
@@ -6861,13 +6863,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ));
       const metricContextById = new Map<string, { metricId: string; metricName: string; metricCategory: string | null }>();
       if (directMetricIds.length > 0) {
-        const metricContextResult = await db.execute(sql`
-          SELECT id, name, category
-          FROM metrics
-          WHERE company_id = ${companyId}
-            AND id = ANY(${directMetricIds}::uuid[])
-        `);
-        for (const row of ((metricContextResult as any).rows ?? [])) {
+        const metricContextResult = await db
+          .select({
+            id: metrics.id,
+            name: metrics.name,
+            category: metrics.category,
+          })
+          .from(metrics)
+          .where(and(
+            eq(metrics.companyId, companyId),
+            inArray(metrics.id, directMetricIds),
+          ));
+        for (const row of metricContextResult) {
           metricContextById.set(row.id, {
             metricId: row.id,
             metricName: row.name,
@@ -9186,7 +9193,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
     } catch {}
     if (!res.headersSent) {
-      sendServerError(res, e);
+      sendServerError(res, err);
     }
   });
 

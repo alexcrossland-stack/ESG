@@ -69,9 +69,10 @@ test.describe("Evidence audit workflow", () => {
     }
 
     await page.getByTestId("tab-manual-entry").click();
-    const editableRow = page.locator('[data-testid^="manual-row-"]').filter({
-      has: page.locator('[data-testid^="button-save-manual-"]'),
-    }).first();
+    const editableRow = page.locator('[data-testid^="manual-row-"]')
+      .filter({ has: page.locator('[data-testid^="button-save-manual-"]') })
+      .filter({ has: page.locator('[data-testid^="input-manual-"]:not(:disabled)') })
+      .first();
     await expect(editableRow).toBeVisible({ timeout: 10000 });
 
     const metricName = (await editableRow.locator("label.text-sm.font-medium").first().innerText()).trim();
@@ -102,31 +103,37 @@ test.describe("Evidence audit workflow", () => {
 
     await page.goto("/evidence");
     await page.waitForLoadState("networkidle");
+    const evidenceFilename = (filename: string) => page
+      .getByTestId(/^text-evidence-filename-/)
+      .filter({ hasText: filename });
+    const evidenceCard = (filename: string) => page
+      .locator('[data-testid^="card-evidence-"]')
+      .filter({ has: evidenceFilename(filename) });
 
     await expect(page.getByTestId("tab-evidence-files")).toContainText("Audit View");
-    await expect(page.getByText(auditFileA)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(auditMetricA.name)).toBeVisible();
-    await expect(page.getByText(auditPeriodA)).toBeVisible();
-    await expect(page.getByText(companyName!)).toBeVisible();
+    await expect(evidenceFilename(auditFileA)).toBeVisible({ timeout: 10000 });
+    await expect(evidenceCard(auditFileA).getByText(auditMetricA.name)).toBeVisible();
+    await expect(evidenceCard(auditFileA).getByText(auditPeriodA)).toBeVisible();
+    await expect(evidenceCard(auditFileA).getByText(companyName!)).toBeVisible();
 
-    await page.getByTestId("select-evidence-period-filter").click();
+    await page.getByTestId("trigger-evidence-period-filter").click();
     await page.getByRole("option", { name: auditPeriodA }).click();
-    await expect(page.getByText(auditFileA)).toBeVisible();
-    await expect(page.getByText(auditFileB)).toHaveCount(0);
+    await expect(evidenceFilename(auditFileA)).toBeVisible();
+    await expect(evidenceFilename(auditFileB)).toHaveCount(0);
 
-    await page.getByTestId("select-evidence-metric-filter").click();
+    await page.getByTestId("trigger-evidence-metric-filter").click();
     await page.getByRole("option", { name: auditMetricA.name }).click();
-    await expect(page.getByText(auditFileA)).toBeVisible();
+    await expect(evidenceFilename(auditFileA)).toBeVisible();
 
-    await page.getByTestId("select-evidence-company-filter").click();
+    await page.getByTestId("trigger-evidence-company-filter").click();
     await page.getByRole("option", { name: companyName! }).click();
-    await expect(page.getByText(auditFileA)).toBeVisible();
-    await expect(page.getByText(centralFile)).toBeVisible();
+    await expect(evidenceFilename(auditFileA)).toBeVisible();
+    await expect(evidenceFilename(centralFile)).toBeVisible();
 
-    await page.getByTestId("select-evidence-link-status-filter").click();
+    await page.getByTestId("trigger-evidence-link-status-filter").click();
     await page.getByRole("option", { name: "Orphaned only" }).click();
-    await expect(page.getByText(auditFileA)).toHaveCount(0);
-    await expect(page.getByText(centralFile)).toHaveCount(0);
+    await expect(evidenceFilename(auditFileA)).toHaveCount(0);
+    await expect(evidenceFilename(centralFile)).toHaveCount(0);
 
     await context.close();
   });

@@ -149,7 +149,7 @@ async function run(tenants: SeededTenants): Promise<void> {
   // ════════════════════════════════════════════════════════════════════════
   // ENDPOINT 3: POST /api/reports/generate
   // ════════════════════════════════════════════════════════════════════════
-  const reportPayload = { reportType: "pdf", reportTemplate: "management", period: "2024-01" };
+  const reportPayload = { reportType: "pdf", reportTemplate: "management", period: dataEntryPayload.period };
 
   await assertPermission({
     name: "PERM-03a: POST /api/reports/generate — unauthenticated → 401",

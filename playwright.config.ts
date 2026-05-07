@@ -18,9 +18,6 @@ export default defineConfig({
     {
       name: "api",
       testMatch: /^(?!.*\.browser\.spec\.ts$).*\.spec\.ts$/,
-      use: {
-        extraHTTPHeaders: { "Content-Type": "application/json" },
-      },
     },
     {
       name: "chromium",
