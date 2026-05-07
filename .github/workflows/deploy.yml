@@ -59,19 +59,19 @@ jobs:
 
             verify_dependency_resolution() {
               sync
-              node <<'NODE'
-const packages = [
-  "@vitejs/plugin-react",
-  "class-variance-authority",
-  "lodash/max",
-  "recharts",
-];
+              node -e '
+                const packages = [
+                  "@vitejs/plugin-react",
+                  "class-variance-authority",
+                  "lodash/max",
+                  "recharts",
+                ];
 
-for (const packageName of packages) {
-  const resolved = require.resolve(packageName);
-  console.log(`${packageName} -> ${resolved}`);
-}
-NODE
+                for (const packageName of packages) {
+                  const resolved = require.resolve(packageName);
+                  console.log(`${packageName} -> ${resolved}`);
+                }
+              '
             }
 
             DEPLOY_STAGE="initialising"
