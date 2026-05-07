@@ -37,6 +37,26 @@ jobs:
               echo "==> $1"
             }
 
+            wait_for_url() {
+              local name="$1"
+              local url="$2"
+              local attempts="${3:-30}"
+              local delay_seconds="${4:-2}"
+
+              for attempt in $(seq 1 "$attempts"); do
+                if curl --fail --silent --show-error --max-time 15 "$url"; then
+                  echo
+                  echo "$name is responding"
+                  return 0
+                fi
+                echo "$name not ready yet (${attempt}/${attempts}); retrying in ${delay_seconds}s"
+                sleep "$delay_seconds"
+              done
+
+              echo "::error::$name did not respond after ${attempts} attempts" >&2
+              return 1
+            }
+
             DEPLOY_STAGE="initialising"
             trap 'echo "::error::Deployment failed during: ${DEPLOY_STAGE}" >&2' ERR
 
@@ -84,11 +104,11 @@ jobs:
 
             DEPLOY_STAGE="checking health endpoint"
             log "$DEPLOY_STAGE"
-            curl --fail --silent --show-error --max-time 15 http://127.0.0.1:5000/health
+            wait_for_url "health endpoint" "http://127.0.0.1:5000/health"
 
             DEPLOY_STAGE="checking app shell"
             log "$DEPLOY_STAGE"
-            curl --fail --silent --show-error --max-time 15 --output /dev/null http://127.0.0.1:5000/
+            wait_for_url "app shell" "http://127.0.0.1:5000/"
 
             log "deployment completed"
           EOF
