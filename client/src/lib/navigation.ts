@@ -95,8 +95,31 @@ export function isGroupActive(location: string, routes: string[]) {
   return routes.some(route => isActive(location, route));
 }
 
-export function canShowAdminMenu(role: string | undefined) {
+export const PLATFORM_ADMIN_ROUTES = ["/admin"];
+export const TENANT_ADMIN_ROUTES = ["/team", "/settings", "/settings/sites", "/sites"];
+
+export function canAccessPlatformAdmin(role: string | undefined) {
   return role === "super_admin";
+}
+
+export function canAccessTenantAdmin(role: string | undefined) {
+  return role === "admin" || role === "super_admin";
+}
+
+export function canShowAdminMenu(role: string | undefined) {
+  return canAccessPlatformAdmin(role) || canAccessTenantAdmin(role);
+}
+
+export function getAdminMenuHref(role: string | undefined) {
+  if (canAccessPlatformAdmin(role)) return "/admin";
+  if (canAccessTenantAdmin(role)) return "/team";
+  return "/admin";
+}
+
+export function getAdminMenuRoutes(role: string | undefined) {
+  if (canAccessPlatformAdmin(role)) return PLATFORM_ADMIN_ROUTES;
+  if (canAccessTenantAdmin(role)) return TENANT_ADMIN_ROUTES;
+  return [];
 }
 
 const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {

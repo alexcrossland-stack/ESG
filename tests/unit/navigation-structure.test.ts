@@ -6,6 +6,8 @@ import {
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
   canShowAdminMenu,
+  getAdminMenuHref,
+  getAdminMenuRoutes,
   getBreadcrumbs,
   isGroupActive,
 } from "../../client/src/lib/navigation";
@@ -95,12 +97,39 @@ function run() {
 
   try {
     assert.equal(canShowAdminMenu("super_admin"), true);
-    assert.equal(canShowAdminMenu("admin"), false);
-    assert.equal(canShowAdminMenu("viewer"), false);
-    assert.equal(canShowAdminMenu(undefined), false);
-    pass("Admin navigation is visible only to authorised platform admins");
+    assert.equal(getAdminMenuHref("super_admin"), "/admin");
+    assert.deepEqual(getAdminMenuRoutes("super_admin"), ["/admin"]);
+    pass("Super admins see the platform Admin menu");
   } catch (error: any) {
-    fail("Admin navigation is visible only to authorised platform admins", error.message);
+    fail("Super admins see the platform Admin menu", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("admin"), true);
+    assert.equal(getAdminMenuHref("admin"), "/team");
+    assert.deepEqual(getAdminMenuRoutes("admin"), ["/team", "/settings", "/settings/sites", "/sites"]);
+    pass("Company admins see the tenant Admin menu");
+  } catch (error: any) {
+    fail("Company admins see the tenant Admin menu", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("viewer"), false);
+    assert.equal(canShowAdminMenu("contributor"), false);
+    assert.equal(canShowAdminMenu("approver"), false);
+    assert.deepEqual(getAdminMenuRoutes("viewer"), []);
+    pass("Standard users do not see the Admin menu");
+  } catch (error: any) {
+    fail("Standard users do not see the Admin menu", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu(undefined), false);
+    assert.equal(getAdminMenuHref(undefined), "/admin");
+    assert.deepEqual(getAdminMenuRoutes(undefined), []);
+    pass("Unauthenticated users do not see the Admin menu");
+  } catch (error: any) {
+    fail("Unauthenticated users do not see the Admin menu", error.message);
   }
 }
 

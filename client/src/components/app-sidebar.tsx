@@ -36,6 +36,8 @@ import {
   ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
   ESG_SETUP_ROUTES,
   canShowAdminMenu,
+  getAdminMenuHref,
+  getAdminMenuRoutes,
   isActive,
   isGroupActive,
   type NavItem,
@@ -199,6 +201,8 @@ export function AppSidebar() {
   const advancedPrimaryItems = ESG_SETUP_ADVANCED_PRIMARY_ITEMS.filter(item => canShowItem(item, can));
   const advancedSupportItems = ESG_SETUP_ADVANCED_SUPPORT_ITEMS.filter(item => canShowItem(item, can));
   const dataMetricItems = DATA_AND_METRICS_ITEMS.filter(item => canShowItem(item, can));
+  const adminMenuHref = getAdminMenuHref(role);
+  const adminMenuActive = isGroupActive(location, getAdminMenuRoutes(role));
 
   return (
     <Sidebar>
@@ -387,11 +391,11 @@ export function AppSidebar() {
             {canShowAdminMenu(role) && (
               <SidebarMenu className="mt-2" data-testid="admin-navigation" aria-label="Admin navigation">
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild data-active={isActive(location, "/admin")}>
-                    <Link href="/admin" data-testid="nav-admin-console" aria-current={isActive(location, "/admin") ? "page" : undefined}>
+                  <SidebarMenuButton asChild data-active={adminMenuActive}>
+                    <Link href={adminMenuHref} data-testid="nav-admin-console" aria-current={adminMenuActive ? "page" : undefined}>
                       <Shield className="w-4 h-4 shrink-0" />
                       <span>Admin</span>
-                      {isActive(location, "/admin") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                      {adminMenuActive && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
