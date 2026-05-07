@@ -49,23 +49,19 @@ const mockedReports = [
 async function mockReportsPageApis(page: Page) {
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
 
-  await page.route(/\/api\/reports(?:\?.*)?$/, async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mockedReports) });
-  });
-
-  await page.route("**/api/reports/report-available/download/file-available", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/pdf",
-      headers: { "content-disposition": 'attachment; filename="Management_Report_2024-01.pdf"' },
-      body: "%PDF-1.4\n% mock report\n",
-    });
-  });
-
   await page.route(/\/api\//, async (route) => {
     const url = new URL(route.request().url());
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
+    if (url.pathname === "/api/reports") return json(mockedReports);
+    if (url.pathname === "/api/reports/report-available/download/file-available") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        headers: { "content-disposition": 'attachment; filename="Management_Report_2024-01.pdf"' },
+        body: "%PDF-1.4\n% mock report\n",
+      });
+    }
     if (url.pathname === "/api/auth/me") {
       return json({
         user: { id: "user-admin", role: "admin", username: "Mock Admin" },
@@ -97,7 +93,14 @@ async function mockReportsPageApis(page: Page) {
         stateLabel: "Confirmed",
         stateExplanation: "Ready",
         blockingFactors: [],
-        missingCategories: {},
+        missingCategories: {
+          missingMetrics: [],
+          missingEvidenceCount: 0,
+          highEstimateLoad: false,
+          estimatedPercent: 0,
+          policyNotPublished: false,
+          overdueActions: 0,
+        },
       });
     }
     if (url.pathname === "/api/reports/preflight") {
