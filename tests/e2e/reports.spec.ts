@@ -4,13 +4,112 @@
  * Uses the Tenant A admin and viewer tokens from the shared seed (global-setup)
  * to avoid per-test user creation and register rate-limit issues.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import fs from "fs";
 
 function readSeedInfo() {
   return JSON.parse(fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")) as {
     tenantA: { adminToken: string; viewerToken: string };
   };
+}
+
+const mockedReports = [
+  {
+    id: "report-available",
+    period: "2024-01",
+    reportType: "pdf",
+    reportTemplate: "management",
+    generatedAt: "2026-05-07T09:30:00.000Z",
+    workflowStatus: "draft",
+    latestFileId: "file-available",
+    latestFilename: "Management_Report_2024-01.pdf",
+    latestFileType: "pdf",
+    latestFileSize: 4096,
+    latestDownloadUrl: "/api/reports/report-available/download/file-available",
+    fileAvailability: "available",
+    fileUnavailableReason: null,
+  },
+  {
+    id: "report-unavailable",
+    period: "2024-02",
+    reportType: "pdf",
+    reportTemplate: "customer",
+    generatedAt: "2026-05-07T10:30:00.000Z",
+    workflowStatus: "rejected",
+    latestFileId: null,
+    latestFilename: null,
+    latestFileType: null,
+    latestFileSize: null,
+    latestDownloadUrl: null,
+    fileAvailability: "unavailable",
+    fileUnavailableReason: "missing",
+  },
+];
+
+async function mockReportsPageApis(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
+
+  await page.route(/\/api\//, async (route) => {
+    const url = new URL(route.request().url());
+    const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+
+    if (url.pathname === "/api/reports") return json(mockedReports);
+    if (url.pathname === "/api/reports/report-available/download/file-available") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        headers: { "content-disposition": 'attachment; filename="Management_Report_2024-01.pdf"' },
+        body: "%PDF-1.4\n% mock report\n",
+      });
+    }
+    if (url.pathname === "/api/auth/me") {
+      return json({
+        user: { id: "user-admin", role: "admin", username: "Mock Admin" },
+        company: { id: "company-a", name: "Mock Co", onboardingComplete: true },
+      });
+    }
+    if (url.pathname === "/api/admin/impersonation/status") return json({ isImpersonating: false });
+    if (url.pathname === "/api/billing/status") return json({ planTier: "pro" });
+    if (url.pathname === "/api/sites") return json([]);
+    if (url.pathname === "/api/metrics") return json([]);
+    if (url.pathname === "/api/actions") return json([]);
+    if (url.pathname === "/api/policy") return json(null);
+    if (url.pathname === "/api/company") return json({ id: "company-a", name: "Mock Co" });
+    if (url.pathname === "/api/compliance/status") return json({});
+    if (url.pathname === "/api/evidence/coverage") return json({});
+    if (url.pathname === "/api/dashboard/readiness") return json({});
+    if (url.pathname === "/api/onboarding/status") {
+      return json({
+        onboardingComplete: true,
+        hasAddedData: true,
+        hasUploadedEvidence: true,
+        hasGeneratedReport: true,
+        activationComplete: true,
+      });
+    }
+    if (url.pathname === "/api/reports/readiness-detail") {
+      return json({
+        esgState: "CONFIRMED",
+        stateLabel: "Confirmed",
+        stateExplanation: "Ready",
+        blockingFactors: [],
+        missingCategories: {
+          missingMetrics: [],
+          missingEvidenceCount: 0,
+          highEstimateLoad: false,
+          estimatedPercent: 0,
+          policyNotPublished: false,
+          overdueActions: 0,
+        },
+      });
+    }
+    if (url.pathname === "/api/reports/preflight") {
+      return json({ canGenerate: true, metricsWithData: 1, totalMetrics: 1, resolvedPeriod: "2024-01" });
+    }
+    if (url.pathname === "/api/activity/track") return json({ ok: true });
+
+    return json([]);
+  });
 }
 
 test.describe("Report generation", () => {
@@ -54,5 +153,22 @@ test.describe("Report generation", () => {
       headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
     expect(res.status()).toBe(403);
+  });
+
+  test("Report History shows access only for generated reports with files", async ({ page }) => {
+    await mockReportsPageApis(page);
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("report-history-report-available")).toBeVisible();
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
+    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
+
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+    await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");
+    await expect(page.getByTestId("button-download-report-file-report-unavailable")).toHaveCount(0);
+
+    const downloadRequest = page.waitForRequest("**/api/reports/report-available/download/file-available");
+    await page.getByTestId("button-download-report-file-report-available").click();
+    expect((await downloadRequest).url()).toContain("/api/reports/report-available/download/file-available");
   });
 });

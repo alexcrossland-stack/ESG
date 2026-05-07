@@ -7734,7 +7734,10 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const file = await storage.getGeneratedFile(req.params.fileId);
-      if (!file || file.companyId !== companyId) { res.status(404).json({ error: "File not found" }); return; }
+      if (!file || file.companyId !== companyId || file.reportRunId !== req.params.id) {
+        res.status(404).json({ error: "File not found" });
+        return;
+      }
       storage.createAuditLog({
         companyId,
         userId,
