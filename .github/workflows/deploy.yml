@@ -30,13 +30,65 @@ jobs:
       - name: Deploy
         run: |
           ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-            set -e
+            set -Eeuo pipefail
+
+            log() {
+              echo
+              echo "==> $1"
+            }
+
+            DEPLOY_STAGE="initialising"
+            trap 'echo "::error::Deployment failed during: ${DEPLOY_STAGE}" >&2' ERR
+
             cd /root/ESG
+
+            DEPLOY_STAGE="fetching latest main"
+            log "$DEPLOY_STAGE"
             git fetch origin
+
+            DEPLOY_STAGE="resetting checkout"
+            log "$DEPLOY_STAGE"
             git reset --hard origin/main
-            npm ci --include=dev
+
+            DEPLOY_STAGE="removing stale dependencies"
+            log "$DEPLOY_STAGE"
+            rm -rf node_modules
+
+            DEPLOY_STAGE="verifying npm cache"
+            log "$DEPLOY_STAGE"
+            npm cache verify
+
+            DEPLOY_STAGE="installing dependencies"
+            log "$DEPLOY_STAGE"
+            if ! npm ci --include=dev; then
+              echo "::error::npm ci failed; removing partial node_modules before exiting" >&2
+              rm -rf node_modules
+              exit 1
+            fi
+
+            DEPLOY_STAGE="building application"
+            log "$DEPLOY_STAGE"
             npm run build
+
+            DEPLOY_STAGE="copying runtime assets"
+            log "$DEPLOY_STAGE"
             cp node_modules/connect-pg-simple/table.sql dist/table.sql
-            pm2 restart esg
+
+            DEPLOY_STAGE="restarting pm2 process"
+            log "$DEPLOY_STAGE"
+            pm2 restart esg --update-env
+
+            DEPLOY_STAGE="checking pm2 status"
+            log "$DEPLOY_STAGE"
             pm2 status
+
+            DEPLOY_STAGE="checking health endpoint"
+            log "$DEPLOY_STAGE"
+            curl --fail --silent --show-error --max-time 15 http://127.0.0.1:5000/health
+
+            DEPLOY_STAGE="checking app shell"
+            log "$DEPLOY_STAGE"
+            curl --fail --silent --show-error --max-time 15 --output /dev/null http://127.0.0.1:5000/
+
+            log "deployment completed"
           EOF
