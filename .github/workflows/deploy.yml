@@ -57,6 +57,23 @@ jobs:
               return 1
             }
 
+            verify_dependency_resolution() {
+              sync
+              node <<'NODE'
+const packages = [
+  "@vitejs/plugin-react",
+  "class-variance-authority",
+  "lodash/max",
+  "recharts",
+];
+
+for (const packageName of packages) {
+  const resolved = require.resolve(packageName);
+  console.log(`${packageName} -> ${resolved}`);
+}
+NODE
+            }
+
             DEPLOY_STAGE="initialising"
             trap 'echo "::error::Deployment failed during: ${DEPLOY_STAGE}" >&2' ERR
 
@@ -86,9 +103,17 @@ jobs:
               exit 1
             fi
 
+            DEPLOY_STAGE="verifying dependency resolution"
+            log "$DEPLOY_STAGE"
+            verify_dependency_resolution
+
             DEPLOY_STAGE="building application"
             log "$DEPLOY_STAGE"
-            npm run build
+            if ! npm run build; then
+              echo "::warning::Initial build failed after clean install; rechecking dependency resolution and retrying once" >&2
+              verify_dependency_resolution
+              npm run build
+            fi
 
             DEPLOY_STAGE="copying runtime assets"
             log "$DEPLOY_STAGE"
