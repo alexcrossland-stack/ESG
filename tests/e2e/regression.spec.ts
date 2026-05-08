@@ -445,18 +445,27 @@ test.describe("REGR-08: Evidence upload and retrieval", () => {
     expect([200, 404]).toContain(res.status());
   });
 
-  test("admin can upload evidence record (filename + fileUrl) and it appears in the list", async ({ request }) => {
+  test("admin can upload evidence file and it appears in the list", async ({ request }) => {
     const { tenantA } = readSeedInfo();
+    const metricsRes = await request.get("/api/metrics", {
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+    expect(metricsRes.status()).toBe(200);
+    const metrics = await metricsRes.json() as Array<{ id: string }>;
+    const metricId = metrics[0]?.id;
+    expect(metricId).toBeTruthy();
 
-    // Upload a metadata-only evidence record (no binary file needed — server stores the URL reference)
-    const uniqueFilename = `regression-test-${Date.now()}.pdf`;
+    const uniqueFilename = `regression-test-${Date.now()}.txt`;
     const uploadRes = await request.post("/api/evidence", {
-      data: {
-        filename: uniqueFilename,
-        fileUrl: "https://example.com/regression-test.pdf",
-        fileType: "pdf",
-        linkedModule: "metric_value",
-        description: "Regression pack evidence test",
+      multipart: {
+        metricId: metricId!,
+        period: `2026-05-${String((Date.now() % 20) + 1).padStart(2, "0")}`,
+        notes: "Regression pack evidence test",
+        file: {
+          name: uniqueFilename,
+          mimeType: "text/plain",
+          buffer: Buffer.from("regression evidence"),
+        },
       },
       headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
@@ -477,21 +486,22 @@ test.describe("REGR-08: Evidence upload and retrieval", () => {
     expect(found, "Uploaded evidence should appear in the evidence list").toBeTruthy();
   });
 
-  test("POST /api/evidence without filename returns 400 (not 500)", async ({ request }) => {
+  test("POST /api/evidence without file returns 400 (not 500)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
-
-    // Send JSON body with linkedModule but no filename — server should return 400
-    const res = await request.post("/api/evidence", {
-      data: { linkedModule: "metric_value" },
-      headers: {
-        Authorization: `Bearer ${tenantA.adminToken}`,
-        "Content-Type": "application/json",
-      },
+    const metricsRes = await request.get("/api/metrics", {
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
-    // Must not crash the server
+    const metrics = await metricsRes.json() as Array<{ id: string }>;
+
+    const res = await request.post("/api/evidence", {
+      multipart: {
+        metricId: metrics[0]?.id,
+        period: "2026-05",
+      },
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
     expect(res.status()).not.toBe(500);
-    // Missing filename should produce a 400 client error
-    expect([400, 403]).toContain(res.status());
+    expect(res.status()).toBe(400);
   });
 
   test("viewer cannot upload evidence (403)", async ({ request }) => {
@@ -499,11 +509,16 @@ test.describe("REGR-08: Evidence upload and retrieval", () => {
 
     // Viewer does not have metrics_data_entry permission — must be blocked at the permission guard
     const res = await request.post("/api/evidence", {
-      data: { filename: "test.pdf", linkedModule: "metric_value" },
-      headers: {
-        Authorization: `Bearer ${tenantA.viewerToken}`,
-        "Content-Type": "application/json",
+      multipart: {
+        metricId: "00000000-0000-0000-0000-000000000000",
+        period: "2026-05",
+        file: {
+          name: "viewer-blocked.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("blocked"),
+        },
       },
+      headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
     expect(res.status()).toBe(403);
   });

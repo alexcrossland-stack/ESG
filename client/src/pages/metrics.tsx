@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import {
   BarChart3, Leaf, Users, Shield, ArrowUp, ArrowDown,
-  Minus, Calculator, PenLine, GitBranch, ChevronRight,
+  Minus, Calculator, PenLine, GitBranch, ChevronRight, FileText, ExternalLink,
 } from "lucide-react";
 
 type MetricSummary = {
@@ -59,6 +59,19 @@ type MetricValueRow = {
   percentChange?: string | number | null;
 };
 
+type MetricEvidenceFile = {
+  id: string;
+  filename: string;
+  fileType?: string | null;
+  fileSize?: number | null;
+  uploadedAt?: string | null;
+  resolvedLinkedPeriod?: string | null;
+  linkedPeriod?: string | null;
+  downloadUrl?: string | null;
+  fileUrl?: string | null;
+  description?: string | null;
+};
+
 type MetricDefinitionActivation = {
   id: string;
   name: string;
@@ -81,6 +94,13 @@ const TYPE_CONFIG: Record<string, { label: string; icon: any; color: string }> =
   calculated: { label: "Calculated", icon: Calculator, color: "text-blue-500" },
   derived: { label: "Derived", icon: GitBranch, color: "text-purple-500" },
 };
+
+function formatEvidenceSize(size?: number | null) {
+  if (!size) return null;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function StatusDot({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -116,6 +136,11 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
     queryFn: () => {
         return authFetch(`/api/metrics/${metric?.id}/history`).then(r => r.json());
       },
+    enabled: !!metric?.id,
+  });
+  const { data: evidence = [] } = useQuery<MetricEvidenceFile[]>({
+    queryKey: ["/api/metrics", metric?.id, "evidence"],
+    queryFn: () => authFetch(`/api/metrics/${metric?.id}/evidence`).then(r => r.json()),
     enabled: !!metric?.id,
   });
 
@@ -187,6 +212,41 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
             <p className="text-sm text-blue-800 dark:text-blue-300">{metric.formulaText}</p>
           </div>
         )}
+
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">Linked evidence</p>
+          {evidence.length === 0 ? (
+            <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+              No evidence is linked to this metric yet.
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {evidence.map((file) => {
+                const size = formatEvidenceSize(file.fileSize);
+                return (
+                  <div
+                    key={file.id}
+                    className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-xs"
+                    data-testid={`metric-detail-evidence-${file.id}`}
+                  >
+                    <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{file.filename}</p>
+                      <p className="truncate text-muted-foreground">
+                        {[file.resolvedLinkedPeriod || file.linkedPeriod, file.uploadedAt ? new Date(file.uploadedAt).toLocaleDateString() : null, size].filter(Boolean).join(" · ")}
+                      </p>
+                    </div>
+                    <a href={file.downloadUrl || file.fileUrl || `/api/evidence/${file.id}/download`} target="_blank" rel="noopener noreferrer">
+                      <Button size="icon" variant="ghost" className="h-7 w-7" data-testid={`button-open-metric-evidence-${file.id}`}>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </Button>
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         {chartData.length > 1 && (
           <div>

@@ -411,7 +411,7 @@ export async function scoreManagementMaturity(companyId: string): Promise<Manage
   }
 
   const evidenceLinkedToMetrics = evidenceFiles.filter(e =>
-    e.linkedModule === "metric_value" || e.linkedModule === "metrics"
+    (e as any).metricId || e.linkedModule === "metric" || e.linkedModule === "metric_value" || e.linkedModule === "metrics"
   );
   const evidenceCoveragePercent = enabledMetrics.length > 0
     ? Math.round((evidenceLinkedToMetrics.length / enabledMetrics.length) * 100)

@@ -451,10 +451,15 @@ export const evidenceFiles = pgTable("evidence_files", {
   filename: text("filename").notNull(),
   fileUrl: text("file_url"),
   fileType: text("file_type"),
+  mimeType: text("mime_type"),
+  fileSize: integer("file_size"),
+  storagePath: text("storage_path"),
   description: text("description"),
+  metricId: varchar("metric_id"),
   linkedModule: text("linked_module"),
   linkedEntityId: varchar("linked_entity_id"),
   linkedPeriod: text("linked_period"),
+  tags: text("tags").array(),
   evidenceStatus: evidenceStatusEnum("evidence_status").default("pending"),
   reviewDate: timestamp("review_date"),
   expiryDate: timestamp("expiry_date"),
@@ -468,6 +473,7 @@ export const evidenceFiles = pgTable("evidence_files", {
   scanResult: text("scan_result"),
 }, (table) => ({
   siteIdIdx: index("idx_evidence_files_site_id").on(table.siteId),
+  metricIdIdx: index("idx_evidence_files_metric_id").on(table.metricId),
 }));
 
 export const actionPlans = pgTable("action_plans", {

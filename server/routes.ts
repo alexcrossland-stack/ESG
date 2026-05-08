@@ -12,7 +12,7 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users, metricValues, generatedFiles,
+  users, metrics, metricValues, generatedFiles,
   type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
@@ -88,7 +88,38 @@ function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
 
 const BLOCKED_EXTENSIONS = /\.(exe|bat|cmd|sh|ps1|msi|vbs|js|jsx|ts|tsx|py|rb|pl|php|java|class|jar|dll|so|elf|dmg|pkg|app|cpl|scr|pif|com|gadget|reg|inf|sys|drv|bin|run|deb|rpm|apk)$/i;
 const ALLOWED_FILE_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "png", "jpg", "jpeg", "gif", "webp", "svg", "ppt", "pptx", "odt", "ods", "odp", "zip", "eml", "msg"];
+const EVIDENCE_MAX_SIZE_BYTES = 25 * 1024 * 1024;
 const EVIDENCE_UPLOAD_ROOT = path.resolve(process.cwd(), "uploads", "evidence");
+const EVIDENCE_MIME_TYPES: Record<string, string[]> = {
+  pdf: ["application/pdf"],
+  doc: ["application/msword", "application/doc", "application/vnd.ms-office"],
+  docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"],
+  xls: ["application/vnd.ms-excel", "application/xls", "application/vnd.ms-office"],
+  xlsx: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip"],
+  csv: ["text/csv", "application/csv", "application/vnd.ms-excel"],
+  txt: ["text/plain"],
+  png: ["image/png"],
+  jpg: ["image/jpeg"],
+  jpeg: ["image/jpeg"],
+  gif: ["image/gif"],
+  webp: ["image/webp"],
+  svg: ["image/svg+xml"],
+  ppt: ["application/vnd.ms-powerpoint", "application/vnd.ms-office"],
+  pptx: ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"],
+  odt: ["application/vnd.oasis.opendocument.text"],
+  ods: ["application/vnd.oasis.opendocument.spreadsheet"],
+  odp: ["application/vnd.oasis.opendocument.presentation"],
+  zip: ["application/zip", "application/x-zip-compressed"],
+  eml: ["message/rfc822", "text/plain"],
+  msg: ["application/vnd.ms-outlook", "application/octet-stream"],
+};
+const POLICY_ATTACHMENT_ALLOWED_TYPES = ["pdf", "doc", "docx"] as const;
+const POLICY_ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const POLICY_ATTACHMENT_MIME_TYPES: Record<string, string[]> = {
+  pdf: ["application/pdf"],
+  doc: ["application/msword", "application/doc", "application/vnd.ms-office"],
+  docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"],
+};
 
 function isMultipartRequest(req: Request) {
   return (req.headers["content-type"] || "").includes("multipart/form-data");
@@ -121,6 +152,64 @@ function resolveEvidenceFileType(filename: string, contentType?: string | null) 
   return subtype === "svg+xml" ? "svg" : subtype;
 }
 
+function validateEvidenceAttachment(file: File) {
+  const safeFilename = sanitizeAttachmentName(file.name || `evidence-${Date.now()}`);
+  if (!safeFilename) {
+    return { ok: false as const, error: "Evidence filename is required" };
+  }
+  if (BLOCKED_EXTENSIONS.test(safeFilename)) {
+    return { ok: false as const, error: "File type not allowed. Executable and script files cannot be uploaded." };
+  }
+  if (file.size <= 0) {
+    return { ok: false as const, error: "Evidence file is empty" };
+  }
+  if (file.size > EVIDENCE_MAX_SIZE_BYTES) {
+    return { ok: false as const, error: `Evidence file exceeds the ${Math.round(EVIDENCE_MAX_SIZE_BYTES / (1024 * 1024))}MB size limit.` };
+  }
+
+  const fileType = resolveEvidenceFileType(safeFilename, file.type);
+  if (!fileType || !ALLOWED_FILE_TYPES.includes(fileType)) {
+    return { ok: false as const, error: `File type '${fileType || "unknown"}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}` };
+  }
+
+  const normalizedMime = (file.type || "").toLowerCase();
+  const allowedMimeTypes = EVIDENCE_MIME_TYPES[fileType] || [];
+  if (!normalizedMime || !allowedMimeTypes.includes(normalizedMime)) {
+    return { ok: false as const, error: "Uploaded file content type does not match an allowed evidence format." };
+  }
+
+  return {
+    ok: true as const,
+    fileName: safeFilename,
+    fileType,
+    mimeType: normalizedMime,
+  };
+}
+
+function parseEvidenceTags(formData: FormData) {
+  return formData
+    .getAll("tags")
+    .flatMap((value) => typeof value === "string" ? value.split(",") : [])
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function resolveDownloadContentType(file: { mimeType?: string | null; fileType?: string | null }) {
+  if (file.mimeType) return file.mimeType;
+  switch (file.fileType) {
+    case "jpg": return "image/jpeg";
+    case "png": return "image/png";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "svg": return "image/svg+xml";
+    case "pdf": return "application/pdf";
+    case "doc": return "application/msword";
+    case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    default: return "application/octet-stream";
+  }
+}
+
 function buildEvidenceDownloadUrl(evidenceId: string) {
   return `/api/evidence/${evidenceId}/download`;
 }
@@ -141,6 +230,120 @@ async function removeEvidenceFileIfPresent(companyId: string, evidenceId: string
   const diskPath = buildEvidenceDiskPath(companyId, evidenceId, filename);
   await fs.rm(diskPath, { force: true }).catch(() => {});
   await fs.rmdir(path.dirname(diskPath)).catch(() => {});
+}
+
+function normalizeAttachmentRecord(file: any) {
+  if (!file) return null;
+  return {
+    id: file.id,
+    fileName: file.filename,
+    storagePath: file.storagePath ?? null,
+    objectKey: file.storagePath ?? null,
+    mimeType: file.mimeType ?? resolveDownloadContentType(file),
+    size: file.fileSize ?? null,
+    uploadedBy: file.uploadedBy ?? null,
+    uploadedAt: file.uploadedAt ?? null,
+    downloadUrl: buildEvidenceDownloadUrl(file.id),
+  };
+}
+
+function validatePolicyAttachment(file: File) {
+  const safeFilename = sanitizeAttachmentName(file.name || `policy-attachment-${Date.now()}`);
+  if (!safeFilename) {
+    return { ok: false as const, error: "Attachment filename is required" };
+  }
+  if (BLOCKED_EXTENSIONS.test(safeFilename)) {
+    return { ok: false as const, error: "File type not allowed. Executable and script files cannot be uploaded." };
+  }
+  if (file.size > POLICY_ATTACHMENT_MAX_SIZE_BYTES) {
+    return { ok: false as const, error: `Attachment exceeds the ${Math.round(POLICY_ATTACHMENT_MAX_SIZE_BYTES / (1024 * 1024))}MB size limit.` };
+  }
+
+  const fileType = resolveEvidenceFileType(safeFilename, file.type);
+  if (!fileType || !POLICY_ATTACHMENT_ALLOWED_TYPES.includes(fileType as typeof POLICY_ATTACHMENT_ALLOWED_TYPES[number])) {
+    return { ok: false as const, error: "Only PDF, DOC, and DOCX files can be uploaded for policy attachments." };
+  }
+
+  const normalizedMime = (file.type || "").toLowerCase();
+  const allowedMimeTypes = POLICY_ATTACHMENT_MIME_TYPES[fileType] || [];
+  if (normalizedMime && !allowedMimeTypes.includes(normalizedMime)) {
+    return { ok: false as const, error: "Uploaded file content type does not match an allowed policy document format." };
+  }
+
+  return {
+    ok: true as const,
+    fileName: safeFilename,
+    fileType,
+    mimeType: normalizedMime || resolveDownloadContentType({ fileType }),
+  };
+}
+
+function createBadRequestError(message: string) {
+  const error = new Error(message) as Error & { statusCode?: number };
+  error.statusCode = 400;
+  return error;
+}
+
+async function attachPolicyUpload({
+  companyId,
+  userId,
+  policyId,
+  file,
+  existingAttachment,
+}: {
+  companyId: string;
+  userId: string;
+  policyId: string;
+  file: File;
+  existingAttachment?: any | null;
+}) {
+  const validation = validatePolicyAttachment(file);
+  if (!validation.ok) {
+    throw createBadRequestError(validation.error);
+  }
+
+  if (existingAttachment) {
+    await storage.deleteEvidenceFile(existingAttachment.id);
+    await removeEvidenceFileIfPresent(companyId, existingAttachment.id, existingAttachment.filename);
+  }
+
+  const created = await storage.createEvidenceFile({
+    companyId,
+    filename: validation.fileName,
+    fileUrl: null,
+    fileType: validation.fileType,
+    mimeType: validation.mimeType,
+    fileSize: file.size,
+    storagePath: null,
+    description: null,
+    metricId: null,
+    linkedModule: "policy",
+    linkedEntityId: policyId,
+    linkedPeriod: null,
+    tags: [],
+    evidenceStatus: "uploaded",
+    reviewDate: null,
+    expiryDate: null,
+    uploadedBy: userId,
+    siteId: null,
+    fileStatusChangedAt: new Date(),
+  } as any);
+
+  try {
+    const storagePath = await persistEvidenceFile(companyId, created.id, file, validation.fileName);
+    return await storage.updateEvidenceFile(created.id, {
+      fileUrl: buildEvidenceDownloadUrl(created.id),
+      storagePath,
+      mimeType: validation.mimeType,
+      fileSize: file.size,
+      evidenceStatus: "uploaded",
+      fileStatusChangedAt: new Date(),
+    } as any);
+  } catch (error) {
+    await storage.deleteEvidenceFile(created.id).catch(() => {});
+    await removeEvidenceFileIfPresent(companyId, created.id, validation.fileName);
+    throw error;
+  }
 }
 
 async function rollbackMetricSave({
@@ -245,6 +448,30 @@ function normalizePolicyRecordPayload(input: unknown) {
       ownerUserId: parsed.data.ownerUserId ?? null,
     },
   };
+}
+
+async function buildPolicyRecordResponse(companyId: string, record: any) {
+  const attachments = await storage.getEvidenceByEntity(companyId, "policy", record.id);
+  return {
+    ...record,
+    attachment: normalizeAttachmentRecord(attachments[0] ?? null),
+  };
+}
+
+async function buildPolicyRecordResponses(companyId: string, records: any[]) {
+  const evidence = await storage.getEvidenceFiles(companyId);
+  const policyAttachmentMap = new Map<string, any>();
+  for (const file of evidence) {
+    if (file.linkedModule !== "policy" || !file.linkedEntityId) continue;
+    if (!policyAttachmentMap.has(file.linkedEntityId)) {
+      policyAttachmentMap.set(file.linkedEntityId, file);
+    }
+  }
+
+  return records.map((record) => ({
+    ...record,
+    attachment: normalizeAttachmentRecord(policyAttachmentMap.get(record.id) ?? null),
+  }));
 }
 
 const { Pool } = pg;
@@ -1307,6 +1534,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ user: { ...user, password: undefined }, company, token });
       });
     } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
       sendServerError(res, e);
     }
   });
@@ -1513,6 +1741,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ ok: true });
     } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
       sendServerError(res, e);
     }
   });
@@ -1546,6 +1775,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       res.json({ ok: true });
     } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
       sendServerError(res, e);
     }
   });
@@ -1571,6 +1801,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true });
     } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
       sendServerError(res, e);
     }
   });
@@ -2732,6 +2963,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/metrics/:id/evidence", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const metric = await storage.getMetric(req.params.id);
+      if (!metric || metric.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
+      }
+
+      const values = await storage.getMetricValues(req.params.id);
+      const metricValueIds = new Set(values.map((value) => value.id));
+      const metricValuePeriod = new Map(values.map((value) => [value.id, value.period]));
+      const files = await storage.getEvidenceFiles(companyId);
+      const evidence = files
+        .filter((file: any) =>
+          file.linkedModule !== "policy" && (
+            file.metricId === req.params.id ||
+            (file.linkedModule === "metric" && file.linkedEntityId === req.params.id) ||
+            (file.linkedModule === "metric_value" && file.linkedEntityId && metricValueIds.has(file.linkedEntityId))
+          )
+        )
+        .map((file: any) => ({
+          ...file,
+          metricId: req.params.id,
+          metricName: metric.name,
+          metricCategory: metric.category,
+          resolvedLinkedPeriod: file.linkedPeriod ?? (file.linkedEntityId ? metricValuePeriod.get(file.linkedEntityId) : null) ?? null,
+          downloadUrl: buildEvidenceDownloadUrl(file.id),
+        }));
+
+      res.json(evidence);
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
   app.get("/api/data-entry/bulk-grid", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
@@ -2762,17 +3028,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const allMetrics = await storage.getMetrics(companyId);
     const evidence = await storage.getEvidenceFiles(companyId, undefined, req.params.period);
     const evidenceByMetricValueId = new Map<string, any[]>();
+    const evidenceByMetricId = new Map<string, any[]>();
     for (const file of evidence) {
-      if (file.linkedModule !== "metric_value" || !file.linkedEntityId) continue;
-      const current = evidenceByMetricValueId.get(file.linkedEntityId) || [];
-      current.push(file);
-      evidenceByMetricValueId.set(file.linkedEntityId, current);
+      if (file.linkedModule === "metric_value" && file.linkedEntityId) {
+        const current = evidenceByMetricValueId.get(file.linkedEntityId) || [];
+        current.push(file);
+        evidenceByMetricValueId.set(file.linkedEntityId, current);
+      }
+      const metricId = (file as any).metricId || (file.linkedModule === "metric" ? file.linkedEntityId : null);
+      if (metricId) {
+        const current = evidenceByMetricId.get(metricId) || [];
+        current.push(file);
+        evidenceByMetricId.set(metricId, current);
+      }
     }
 
     res.json({
       values: values.map((value: any) => ({
         ...value,
-        attachments: evidenceByMetricValueId.get(value.id) || [],
+        attachments: [
+          ...(evidenceByMetricValueId.get(value.id) || []),
+          ...(evidenceByMetricId.get(value.metricId) || []),
+        ].filter((file, index, all) => all.findIndex((item) => item.id === file.id) === index),
       })),
       metrics: allMetrics.filter(m => m.enabled),
     });
@@ -2888,31 +3165,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "This period is locked and cannot be edited" });
       }
 
+      // Metric-row uploads allow multiple evidence files per metric value.
+      // New uploads append to the existing attachment set rather than replacing it.
       const createdAttachments: any[] = [];
       try {
         for (const file of attachments) {
-          const safeFilename = sanitizeAttachmentName(file.name || `metric-evidence-${Date.now()}`);
-          if (!safeFilename) {
-            throw new Error("Attachment filename is required");
-          }
-          if (BLOCKED_EXTENSIONS.test(safeFilename)) {
-            throw new Error(`File type not allowed for '${safeFilename}'`);
-          }
-
-          const resolvedFileType = resolveEvidenceFileType(safeFilename, file.type);
-          if (!resolvedFileType || !ALLOWED_FILE_TYPES.includes(resolvedFileType)) {
-            throw new Error(`File type '${resolvedFileType || "unknown"}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}`);
+          const validation = validateEvidenceAttachment(file);
+          if (!validation.ok) {
+            throw new Error(validation.error);
           }
 
           const created = await storage.createEvidenceFile({
             companyId,
-            filename: safeFilename,
+            filename: validation.fileName,
             fileUrl: null,
-            fileType: resolvedFileType,
+            fileType: validation.fileType,
+            mimeType: validation.mimeType,
+            fileSize: file.size,
+            storagePath: null,
             description: notes || null,
+            metricId: metric.id,
             linkedModule: "metric_value",
             linkedEntityId: result.id,
             linkedPeriod: period,
+            tags: [],
             evidenceStatus: "uploaded",
             reviewDate: null,
             expiryDate: null,
@@ -2922,14 +3198,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } as any);
 
           try {
-            await persistEvidenceFile(companyId, created.id, file, safeFilename);
+            await persistEvidenceFile(companyId, created.id, file, validation.fileName);
             const updated = await storage.updateEvidenceFile(created.id, {
               fileUrl: buildEvidenceDownloadUrl(created.id),
+              storagePath: buildEvidenceDiskPath(companyId, created.id, validation.fileName),
             } as any);
             createdAttachments.push(updated || { ...created, fileUrl: buildEvidenceDownloadUrl(created.id) });
           } catch (error) {
             await storage.deleteEvidenceFile(created.id).catch(() => {});
-            await removeEvidenceFileIfPresent(companyId, created.id, safeFilename);
+            await removeEvidenceFileIfPresent(companyId, created.id, validation.fileName);
             throw error;
           }
         }
@@ -2970,7 +3247,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }).catch(() => {});
       }
 
-      res.json({ ...result, attachments: createdAttachments });
+      const allAttachments = await storage.getEvidenceByEntity(companyId, "metric_value", result.id);
+      res.json({
+        ...result,
+        attachmentMode: "multiple",
+        attachments: allAttachments,
+        newlyCreatedAttachments: createdAttachments,
+      });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -3271,6 +3554,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // GET /api/metric-evidence/:metricValueId — evidence for a value
   app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const metricValueResult = await db.execute(sql`
+        SELECT mv.id
+        FROM metric_values mv
+        INNER JOIN metrics m ON m.id = mv.metric_id
+        WHERE mv.id = ${req.params.metricValueId}
+          AND m.company_id = ${companyId}
+        LIMIT 1
+      `);
+      if (!((metricValueResult as any).rows ?? [])[0]) {
+        return res.status(404).json({ error: "Metric value not found" });
+      }
       const evidence = await storage.getMetricEvidence(req.params.metricValueId);
       res.json(evidence);
     } catch (e: any) {
@@ -3281,9 +3576,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // POST /api/metric-evidence — attach evidence to a metric value
   app.post("/api/metric-evidence", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = req.body;
       if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
+      const metricValueResult = await db.execute(sql`
+        SELECT mv.id
+        FROM metric_values mv
+        INNER JOIN metrics m ON m.id = mv.metric_id
+        WHERE mv.id = ${metricValueId}
+          AND m.company_id = ${companyId}
+        LIMIT 1
+      `);
+      if (!((metricValueResult as any).rows ?? [])[0]) {
+        return res.status(404).json({ error: "Metric value not found" });
+      }
       const evidence = await storage.createMetricEvidence({
         metricValueId,
         fileName,
@@ -3302,6 +3609,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // DELETE /api/metric-evidence/:id — remove an evidence attachment
   app.delete("/api/metric-evidence/:id", requireAuth, requireProvisioningPermission("delete_evidence"), async (req, res) => {
     try {
+      const companyId = (req.session as any).companyId;
+      const evidenceResult = await db.execute(sql`
+        SELECT me.id
+        FROM metric_evidence me
+        INNER JOIN metric_values mv ON mv.id = me.metric_value_id
+        INNER JOIN metrics m ON m.id = mv.metric_id
+        WHERE me.id = ${req.params.id}
+          AND m.company_id = ${companyId}
+        LIMIT 1
+      `);
+      if (!((evidenceResult as any).rows ?? [])[0]) {
+        return res.status(404).json({ error: "Evidence not found" });
+      }
       await storage.deleteMetricEvidence(req.params.id);
       res.json({ success: true });
     } catch (e: any) {
@@ -3723,7 +4043,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const evidenceFiles = await storage.getEvidenceFiles(companyId);
-      const uniqueMetricsWithEvidence = new Set(evidenceFiles.filter(e => e.linkedModule === "metric_value" && e.linkedEntityId).map(e => e.linkedEntityId)).size;
+      const uniqueMetricsWithEvidence = new Set(
+        evidenceFiles
+          .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
+          .filter(Boolean)
+      ).size;
       const evidenceCoverage = enabledMetrics.length > 0 ? Math.min(100, Math.round((uniqueMetricsWithEvidence / enabledMetrics.length) * 100)) : 0;
 
       const submittedCount = metricSummaries.filter(m => m.status !== "missing").length;
@@ -4191,8 +4515,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Evidence gap: which metrics have no linked evidence?
       const metricsWithEvidence = new Set(
         evidenceFiles
-          .filter((e: any) => e.linkedModule === "metric_value" || e.linkedModule === "metrics")
-          .map((e: any) => e.linkedId)
+          .map((e: any) => e.metricId || (e.linkedModule === "metric" || e.linkedModule === "metrics" ? e.linkedEntityId : null))
+          .filter(Boolean)
       );
       const missingEvidenceCount = enabledMetrics.length - metricsWithEvidence.size;
       const evidenceCoveragePercent = esgStatus.evidenceCoverage;
@@ -4408,6 +4732,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const evidencedEntityIds = new Set(
         allEvidence.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId)
       );
+      const directEvidenceMetricIds = new Set(
+        allEvidence
+          .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
+          .filter(Boolean)
+      );
       const metricsWithEvidence = new Set<string>();
       // For aggregated values (1 row per metric), check if original scoped rows had evidence
       for (const v of values) {
@@ -4415,6 +4744,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           metricsWithEvidence.add((v as any).metricId);
         }
       }
+      directEvidenceMetricIds.forEach((metricId) => metricsWithEvidence.add(metricId as string));
       const periodCoverage: Record<string, number> = {};
       allEvidence.filter((e: any) => e.linkedPeriod).forEach((e: any) => {
         periodCoverage[e.linkedPeriod] = (periodCoverage[e.linkedPeriod] || 0) + 1;
@@ -6476,6 +6806,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/evidence", requireAuth, async (req, res) => {
     try {
+      // Evidence is always scoped to the active company in session.
+      // Super-admins inherit the same rule and must switch company context explicitly.
       const companyId = (req.session as any).companyId;
       // Optional siteId filter — "null" string means unassigned only; omitted means all
       const siteIdParam = req.query.siteId as string | undefined;
@@ -6485,8 +6817,114 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
       const period = req.query.period as string | undefined;
-      const files = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, period);
-      res.json(files);
+      const files = (await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, period))
+        .filter((file: any) => file.linkedModule !== "policy");
+      const company = await storage.getCompany(companyId);
+
+      const metricValueIds = Array.from(
+        new Set(
+          files
+            .filter((file: any) => file.linkedModule === "metric_value" && file.linkedEntityId)
+            .map((file: any) => file.linkedEntityId)
+        )
+      );
+
+      const metricValueContext = new Map<string, { metricId: string; metricName: string; metricCategory: string | null; period: string | null }>();
+      if (metricValueIds.length > 0) {
+        const metricContextResult = await db
+          .select({
+            metricValueId: metricValues.id,
+            metricId: metricValues.metricId,
+            period: metricValues.period,
+            metricName: metrics.name,
+            metricCategory: metrics.category,
+          })
+          .from(metricValues)
+          .innerJoin(metrics, eq(metrics.id, metricValues.metricId))
+          .where(and(
+            eq(metrics.companyId, companyId),
+            inArray(metricValues.id, metricValueIds),
+          ));
+
+        for (const row of metricContextResult) {
+          metricValueContext.set(row.metricValueId, {
+            metricId: row.metricId,
+            metricName: row.metricName,
+            metricCategory: row.metricCategory ?? null,
+            period: row.period ?? null,
+          });
+        }
+      }
+
+      const directMetricIds = Array.from(new Set(
+        files
+          .map((file: any) => file.metricId || (file.linkedModule === "metric" ? file.linkedEntityId : null))
+          .filter(Boolean)
+      ));
+      const metricContextById = new Map<string, { metricId: string; metricName: string; metricCategory: string | null }>();
+      if (directMetricIds.length > 0) {
+        const metricContextResult = await db
+          .select({
+            id: metrics.id,
+            name: metrics.name,
+            category: metrics.category,
+          })
+          .from(metrics)
+          .where(and(
+            eq(metrics.companyId, companyId),
+            inArray(metrics.id, directMetricIds),
+          ));
+        for (const row of metricContextResult) {
+          metricContextById.set(row.id, {
+            metricId: row.id,
+            metricName: row.name,
+            metricCategory: row.category ?? null,
+          });
+        }
+      }
+
+      const uploaderIds = Array.from(new Set(files.map((file: any) => file.uploadedBy).filter(Boolean)));
+      const uploaderContext = new Map<string, { name: string; email: string | null }>();
+      if (uploaderIds.length > 0) {
+        const uploaderResult = await db.select({
+          id: users.id,
+          username: users.username,
+          email: users.email,
+        }).from(users).where(inArray(users.id, uploaderIds));
+        for (const user of uploaderResult) {
+          uploaderContext.set(user.id, {
+            name: user.username || user.email || "Unknown user",
+            email: user.email ?? null,
+          });
+        }
+      }
+
+      const enrichedFiles = files.map((file: any) => {
+        const metricContextFromValue = file.linkedModule === "metric_value" && file.linkedEntityId
+          ? metricValueContext.get(file.linkedEntityId)
+          : undefined;
+        const directMetricId = file.metricId || (file.linkedModule === "metric" ? file.linkedEntityId : null);
+        const metricContext = metricContextFromValue || (directMetricId ? metricContextById.get(directMetricId) : undefined);
+        const uploader = file.uploadedBy ? uploaderContext.get(file.uploadedBy) : undefined;
+        const isMetricLinked = Boolean(metricContext);
+        const isOrphaned = !isMetricLinked;
+
+        return {
+          ...file,
+          companyName: company?.name ?? "Current company",
+          metricId: metricContext?.metricId ?? null,
+          metricName: metricContext?.metricName ?? null,
+          metricCategory: metricContext?.metricCategory ?? null,
+          resolvedLinkedPeriod: file.linkedPeriod ?? metricContextFromValue?.period ?? null,
+          uploaderName: uploader?.name ?? null,
+          uploaderEmail: uploader?.email ?? null,
+          downloadUrl: buildEvidenceDownloadUrl(file.id),
+          isMetricLinked,
+          isOrphaned,
+        };
+      });
+
+      res.json(enrichedFiles);
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -6515,6 +6953,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/evidence/:id/download", requireAuth, async (req, res) => {
     try {
+      // Downloads remain company-scoped even for elevated roles.
       const companyId = (req.session as any).companyId;
       const files = await storage.getEvidenceFiles(companyId);
       const file = files.find((item) => item.id === req.params.id);
@@ -6525,15 +6964,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const diskPath = buildEvidenceDiskPath(companyId, file.id, file.filename);
-      const contentType = file.fileType ? (
-        file.fileType === "jpg" ? "image/jpeg" :
-        file.fileType === "png" ? "image/png" :
-        file.fileType === "gif" ? "image/gif" :
-        file.fileType === "webp" ? "image/webp" :
-        file.fileType === "svg" ? "image/svg+xml" :
-        file.fileType === "pdf" ? "application/pdf" :
-        "application/octet-stream"
-      ) : "application/octet-stream";
+      const contentType = resolveDownloadContentType(file);
 
       await fs.access(diskPath);
       res.setHeader("Content-Type", contentType);
@@ -6549,21 +6980,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { filename, fileUrl, fileType, description, linkedModule, linkedEntityId, linkedPeriod, expiryDate, siteId: requestedSiteId } = req.body;
-      let bodySiteId = requestedSiteId || null;
-      // Enforce siteId when company has any active sites
-      if (!bodySiteId && !(linkedModule === "metric_value" && linkedEntityId)) {
-        const _evSites = await storage.getSites(companyId);
-        const _evActiveSites = _evSites.filter(s => s.status === "active");
-        if (_evActiveSites.length >= 1) {
-          return res.status(400).json({ error: "Please select a site. Evidence must be assigned to a specific site." });
-        }
-      }
-      // Validate siteId ownership if provided (write: true blocks archived sites)
-      if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
-        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-      }
       const _evCo = await storage.getCompany(companyId);
       if (!_evCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _evTier } = await getEffectivePlanTier(_evCo);
@@ -6573,61 +6989,80 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return upgradeRequired(req, res, "Free plan is limited to 10 evidence files. Upgrade to Pro for unlimited uploads.");
         }
       }
-      if (!filename) {
-        return res.status(400).json({ error: "Filename is required" });
+
+      if (!isMultipartRequest(req)) {
+        return res.status(415).json({ error: "Evidence uploads must use multipart/form-data with a file and metricId." });
       }
-      if (BLOCKED_EXTENSIONS.test(filename)) {
-        return res.status(400).json({ error: "File type not allowed. Executable and script files cannot be uploaded." });
+
+      const formData = await parseMultipartFormData(req);
+      const upload = formData.get("file") || formData.get("attachment") || formData.get("evidenceFile");
+      const file = upload instanceof File && upload.size > 0 ? upload : null;
+      if (!file) {
+        return res.status(400).json({ error: "Evidence file is required" });
       }
-      const resolvedFileType = fileType || filename.split(".").pop() || "";
-      const normalizedType = resolvedFileType.toLowerCase().replace(/^\./, "");
-      if (!normalizedType || !ALLOWED_FILE_TYPES.includes(normalizedType)) {
-        return res.status(400).json({ error: `File type '${resolvedFileType || "unknown"}' is not permitted. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}` });
+
+      const metricId = getFormValue(formData, "metricId");
+      if (!metricId) {
+        return res.status(400).json({ error: "Metric selection is required" });
       }
-      const validModules = ["metric_value", "raw_data", "policy", "questionnaire_answer", "report"];
-      if (linkedModule && !validModules.includes(linkedModule)) {
-        return res.status(400).json({ error: "Invalid linkedModule" });
+      const metric = await storage.getMetric(metricId);
+      if (!metric || metric.companyId !== companyId) {
+        return res.status(404).json({ error: "Metric not found" });
       }
-      if (linkedModule === "metric_value" && linkedEntityId) {
-        const metricValueResult = await db.execute(sql`
-          SELECT mv.site_id, m.company_id
-          FROM metric_values mv
-          INNER JOIN metrics m ON m.id = mv.metric_id
-          WHERE mv.id = ${linkedEntityId}
-          LIMIT 1
-        `);
-        const metricValue = (metricValueResult as any).rows?.[0];
-        if (!metricValue) return res.status(404).json({ error: "Metric value not found" });
-        if (metricValue.company_id !== companyId) {
-          return res.status(404).json({ error: "Metric value not found" });
-        }
-        bodySiteId = metricValue.site_id ?? null;
+
+      const linkedPeriod = getFormValue(formData, "period") || getFormValue(formData, "linkedPeriod");
+      if (!linkedPeriod) {
+        return res.status(400).json({ error: "Reporting period or evidence date is required" });
       }
-      const file = await storage.createEvidenceFile({
+
+      const validation = validateEvidenceAttachment(file);
+      if (!validation.ok) {
+        return res.status(400).json({ error: validation.error });
+      }
+
+      const requestedSiteId = getFormValue(formData, "siteId") || null;
+      if (requestedSiteId) {
+        const ownership = await validateSiteOwnership(requestedSiteId, companyId, { write: true });
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      const description = getFormValue(formData, "notes") || getFormValue(formData, "description") || null;
+      const expiryDate = getFormValue(formData, "expiryDate");
+      const tags = parseEvidenceTags(formData);
+
+      const created = await storage.createEvidenceFile({
         companyId,
-        filename,
-        fileUrl: fileUrl || null,
-        fileType: fileType || null,
+        filename: validation.fileName,
+        fileUrl: null,
+        fileType: validation.fileType,
+        mimeType: validation.mimeType,
+        fileSize: file.size,
+        storagePath: null,
         description: description || null,
-        linkedModule: linkedModule || null,
-        linkedEntityId: linkedEntityId || null,
+        metricId,
+        linkedModule: "metric",
+        linkedEntityId: metricId,
         linkedPeriod: linkedPeriod || null,
-        evidenceStatus: "pending",
+        tags,
+        evidenceStatus: "uploaded",
         reviewDate: null,
         expiryDate: expiryDate ? new Date(expiryDate) : null,
         uploadedBy: userId,
-        siteId: bodySiteId || null,
+        siteId: requestedSiteId || null,
         fileStatusChangedAt: new Date(),
       } as any);
 
-      if (linkedModule === "metric_value" && linkedEntityId) {
-        await storage.updateMetricValue(linkedEntityId, { dataSourceType: "evidenced" } as any);
-      }
-      if (linkedModule === "raw_data" && linkedEntityId) {
-        await storage.updateRawDataInput(linkedEntityId, { dataSourceType: "evidenced" } as any);
-      }
-      if (linkedModule === "questionnaire_answer" && linkedEntityId) {
-        await storage.updateQuestionnaireQuestion(linkedEntityId, { dataSourceType: "evidenced" } as any);
+      let savedFile = created;
+      try {
+        await persistEvidenceFile(companyId, created.id, file, validation.fileName);
+        savedFile = await storage.updateEvidenceFile(created.id, {
+          fileUrl: buildEvidenceDownloadUrl(created.id),
+          storagePath: buildEvidenceDiskPath(companyId, created.id, validation.fileName),
+        } as any) || created;
+      } catch (error) {
+        await storage.deleteEvidenceFile(created.id).catch(() => {});
+        await removeEvidenceFileIfPresent(companyId, created.id, validation.fileName);
+        throw error;
       }
 
       auditLog({
@@ -6636,10 +7071,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorType: "user",
         action: "evidence_uploaded",
         entityType: "evidence_file",
-        entityId: file.id,
+        entityId: savedFile.id,
         details: {
           before: null,
-          after: { filename, linkedModule: linkedModule ?? null, linkedEntityId: linkedEntityId ?? null, linkedPeriod: linkedPeriod ?? null },
+          after: { filename: validation.fileName, metricId, linkedModule: "metric", linkedEntityId: metricId, linkedPeriod, tags },
         },
         req,
       });
@@ -6650,7 +7085,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
         }
       }).catch(() => {});
-      res.json(file);
+      res.json(savedFile);
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -6704,6 +7139,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/evidence/:id", requireAuth, requireProvisioningPermission("delete_evidence"), async (req, res) => {
     try {
+      // Deletes remain company-scoped even for elevated roles.
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const allFiles = await storage.getEvidenceFiles(companyId);
@@ -7481,7 +7917,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const scored = valid.map((e: any) => {
         let relevance = 0;
         const eStatus = e.evidenceStatus || e.status;
-        if (metricId && (e.linkedEntityId === metricId || e.linkedModule === "metric_value")) relevance = 50;
+        if (metricId && (e.metricId === metricId || (e.linkedModule === "metric" && e.linkedEntityId === metricId) || e.linkedModule === "metric_value")) relevance = 50;
         else if (policySection && e.linkedModule === "policy") relevance = 40;
         else if (complianceReqId && e.linkedModule === "compliance") relevance = 30;
         else if (category && e.linkedModule === category) relevance = 20;
@@ -8757,7 +9193,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       });
     } catch {}
     if (!res.headersSent) {
-      sendServerError(res, e);
+      sendServerError(res, err);
     }
   });
 
@@ -10627,7 +11063,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
       const records = await storage.getPolicyRecords(companyId);
-      res.json(records);
+      res.json(await buildPolicyRecordResponses(companyId, records));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -10636,14 +11072,41 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.post("/api/policy-records", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const normalized = normalizePolicyRecordPayload(req.body);
+      let payloadInput: unknown = req.body;
+      let attachment: File | null = null;
+      if (isMultipartRequest(req)) {
+        const formData = await parseMultipartFormData(req);
+        payloadInput = {
+          title: getFormValue(formData, "title"),
+          policyType: getFormValue(formData, "policyType") || undefined,
+          owner: getFormValue(formData, "owner") || null,
+          status: getFormValue(formData, "status") || undefined,
+          effectiveDate: getFormValue(formData, "effectiveDate") || null,
+          reviewDate: getFormValue(formData, "reviewDate") || null,
+          documentLink: getFormValue(formData, "documentLink") || null,
+          notes: getFormValue(formData, "notes") || null,
+        };
+        const uploaded = formData.get("attachment");
+        attachment = uploaded instanceof File && uploaded.size > 0 ? uploaded : null;
+      }
+      const normalized = normalizePolicyRecordPayload(payloadInput);
       if (!normalized.success) {
         return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
       }
       const r = await storage.createPolicyRecord({ ...normalized.data, companyId });
-      res.json(r);
+      if (attachment) {
+        try {
+          await attachPolicyUpload({ companyId, userId, policyId: r.id, file: attachment });
+        } catch (error) {
+          await storage.deletePolicyRecord(r.id, companyId).catch(() => {});
+          throw error;
+        }
+      }
+      res.json(await buildPolicyRecordResponse(companyId, r));
     } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
       sendServerError(res, e);
     }
   });
@@ -10651,13 +11114,75 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.patch("/api/policy-records/:id", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const normalized = normalizePolicyRecordPayload(req.body);
+      const existingRecord = await storage.getPolicyRecord(req.params.id, companyId);
+      if (!existingRecord) return res.status(404).json({ error: "Policy record not found" });
+
+      let payloadInput: unknown = req.body;
+      let attachment: File | null = null;
+      let removeAttachment = false;
+      if (isMultipartRequest(req)) {
+        const formData = await parseMultipartFormData(req);
+        payloadInput = {
+          title: getFormValue(formData, "title"),
+          policyType: getFormValue(formData, "policyType") || undefined,
+          owner: getFormValue(formData, "owner") || null,
+          status: getFormValue(formData, "status") || undefined,
+          effectiveDate: getFormValue(formData, "effectiveDate") || null,
+          reviewDate: getFormValue(formData, "reviewDate") || null,
+          documentLink: getFormValue(formData, "documentLink") || null,
+          notes: getFormValue(formData, "notes") || null,
+        };
+        const uploaded = formData.get("attachment");
+        attachment = uploaded instanceof File && uploaded.size > 0 ? uploaded : null;
+        removeAttachment = getFormValue(formData, "removeAttachment") === "true";
+      } else if (req.body?.removeAttachment === true) {
+        removeAttachment = true;
+      }
+
+      const normalized = normalizePolicyRecordPayload(payloadInput);
       if (!normalized.success) {
         return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
       }
+      const existingAttachments = await storage.getEvidenceByEntity(companyId, "policy", req.params.id);
+      const currentAttachment = existingAttachments[0] ?? null;
+
+      if (removeAttachment && currentAttachment) {
+        await storage.deleteEvidenceFile(currentAttachment.id);
+        await removeEvidenceFileIfPresent(companyId, currentAttachment.id, currentAttachment.filename);
+      }
+      if (attachment) {
+        await attachPolicyUpload({
+          companyId,
+          userId,
+          policyId: req.params.id,
+          file: attachment,
+          existingAttachment: removeAttachment ? null : currentAttachment,
+        });
+      }
+
       const r = await storage.updatePolicyRecord(req.params.id, companyId, normalized.data);
-      res.json(r);
+      if (!r) return res.status(404).json({ error: "Policy record not found" });
+      res.json(await buildPolicyRecordResponse(companyId, r));
+    } catch (e: any) {
+      if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
+      sendServerError(res, e);
+    }
+  });
+
+  app.delete("/api/policy-records/:id/attachment", requireAuth, requireProvisioningPermission("manage_policies"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const existingRecord = await storage.getPolicyRecord(req.params.id, companyId);
+      if (!existingRecord) return res.status(404).json({ error: "Policy record not found" });
+      const attachments = await storage.getEvidenceByEntity(companyId, "policy", req.params.id);
+      const attachment = attachments[0];
+      if (!attachment) return res.status(404).json({ error: "Attachment not found" });
+      await storage.deleteEvidenceFile(attachment.id);
+      await removeEvidenceFileIfPresent(companyId, attachment.id, attachment.filename);
+      res.json({ success: true });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -10667,6 +11192,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const attachments = await storage.getEvidenceByEntity(companyId, "policy", req.params.id);
+      for (const attachment of attachments) {
+        await storage.deleteEvidenceFile(attachment.id);
+        await removeEvidenceFileIfPresent(companyId, attachment.id, attachment.filename);
+      }
       await storage.deletePolicyRecord(req.params.id, companyId);
       res.json({ success: true });
     } catch (e: any) {

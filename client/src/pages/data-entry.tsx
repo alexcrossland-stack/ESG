@@ -33,7 +33,6 @@ import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
-import { Link } from "wouter";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
@@ -172,6 +171,7 @@ export default function DataEntry() {
   const [editEstimateValue, setEditEstimateValue] = useState("");
   const [editSaveAsActual, setEditSaveAsActual] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<Record<string, File[]>>({});
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const { data: evidenceCoverage } = useQuery<any>({
     queryKey: ["/api/evidence/coverage"],
@@ -499,10 +499,11 @@ export default function DataEntry() {
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && (metric.metricType === "manual" || !metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
   const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
-  const getMetricEvidence = (metricValueId?: string) =>
-    metricValueId
-      ? evidenceFiles.filter((file) => file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId)
-      : [];
+  const getMetricEvidence = (metricValueId?: string, metricId?: string | null) =>
+    evidenceFiles.filter((file: any) => (
+      (metricValueId && file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId) ||
+      (metricId && (file.metricId === metricId || (file.linkedModule === "metric" && file.linkedEntityId === metricId)))
+    ));
   const queueMetricAttachments = (metricKey: string, files: FileList | null) => {
     if (!files || files.length === 0) return;
     setPendingAttachments((prev) => ({
@@ -1047,14 +1048,18 @@ export default function DataEntry() {
               <div className="flex items-center gap-2 min-w-0">
                 <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <p className="text-sm text-blue-800 dark:text-blue-200 leading-snug">
-                  Data saved! Back it up with an evidence file — an invoice or utility bill proves the figure is accurate.
+                  Data saved. Add evidence from the relevant metric row in Manual entry so the file stays linked to the exact value and period.
                 </p>
               </div>
-              <Link href="/evidence">
-                <Button size="sm" variant="outline" className="shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300" data-testid="button-goto-evidence">
-                  Upload evidence <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                </Button>
-              </Link>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
+                onClick={() => setActiveTab("manual")}
+                data-testid="button-open-manual-entry-for-evidence"
+              >
+                Open metric rows <ArrowRight className="w-3.5 h-3.5 ml-1" />
+              </Button>
             </div>
           )}
 
@@ -1152,7 +1157,7 @@ export default function DataEntry() {
                     const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
                     const isCurrentlyEstimated = currentSourceType === "estimated";
-                    const attachedEvidence = getMetricEvidence(metricValue?.id);
+                    const attachedEvidence = getMetricEvidence(metricValue?.id, metricId);
                     const queuedAttachments = pendingAttachments[metricKey] || [];
 
                     return (
@@ -1263,16 +1268,38 @@ export default function DataEntry() {
                           </div>
                           <div className="space-y-2">
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                                <Paperclip className="w-3 h-3" />
-                                Evidence files
-                              </Label>
-                              <Input
+                              <div className="flex items-center justify-between gap-2">
+                                <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                  <Paperclip className="w-3 h-3" />
+                                  Evidence files
+                                </Label>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 text-xs"
+                                  disabled={editDisabled || !isEligible}
+                                  onClick={() => fileInputRefs.current[metricKey]?.click()}
+                                  data-testid={`button-attach-evidence-${metricKey}`}
+                                >
+                                  <Paperclip className="w-3.5 h-3.5 mr-1.5" />
+                                  Attach evidence
+                                  {(attachedEvidence.length > 0 || queuedAttachments.length > 0) && (
+                                    <span className="ml-1 text-[10px] text-muted-foreground">
+                                      {attachedEvidence.length + queuedAttachments.length}
+                                    </span>
+                                  )}
+                                </Button>
+                              </div>
+                              <input
+                                ref={(node) => {
+                                  fileInputRefs.current[metricKey] = node;
+                                }}
                                 type="file"
                                 multiple
                                 accept={METRIC_EVIDENCE_ACCEPT}
                                 disabled={editDisabled || !isEligible}
-                                className="h-9 text-xs"
+                                className="hidden"
                                 data-testid={`input-evidence-files-${metricKey}`}
                                 onChange={(e) => {
                                   queueMetricAttachments(metricKey, e.target.files);
@@ -1286,6 +1313,7 @@ export default function DataEntry() {
 
                             {queuedAttachments.length > 0 && (
                               <div className="space-y-1">
+                                <p className="text-[11px] font-medium text-muted-foreground">Ready to upload</p>
                                 {queuedAttachments.map((file, index) => (
                                   <div
                                     key={`${file.name}-${file.size}-${index}`}
@@ -1314,6 +1342,7 @@ export default function DataEntry() {
 
                             {attachedEvidence.length > 0 && (
                               <div className="space-y-1">
+                                <p className="text-[11px] font-medium text-muted-foreground">Attached to this metric</p>
                                 {attachedEvidence.map((evidence) => (
                                   <div
                                     key={evidence.id}

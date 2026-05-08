@@ -1000,8 +1000,13 @@ export class DatabaseStorage implements IStorage {
       ? allMetricValues.filter(v => v.period === period)
       : allMetricValues;
 
-    const evidenceByModule = allEvidence.filter(e => e.linkedModule === "metric_value");
-    const evidencedEntityIds = new Set(evidenceByModule.map(e => e.linkedEntityId));
+    const evidenceByMetricValue = allEvidence.filter(e => e.linkedModule === "metric_value");
+    const evidencedEntityIds = new Set(evidenceByMetricValue.map(e => e.linkedEntityId));
+    const directEvidenceMetricIds = new Set(
+      allEvidence
+        .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
+        .filter(Boolean)
+    );
 
     const metricsWithEvidence = new Set<string>();
     for (const mv of relevantValues) {
@@ -1009,6 +1014,9 @@ export class DatabaseStorage implements IStorage {
         metricsWithEvidence.add(mv.metricId);
       }
     }
+    directEvidenceMetricIds.forEach((metricId) => {
+      metricsWithEvidence.add(metricId as string);
+    });
 
     const metricCoverage = allMetrics.map(m => {
       const mvs = relevantValues.filter(v => v.metricId === m.id);

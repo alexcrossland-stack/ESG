@@ -98,7 +98,7 @@ export async function getScoreReadiness(companyId: string): Promise<ScoreReadine
   }
 
   const evidenceLinkedCount = evidenceFiles.filter(e =>
-    e.linkedModule === "metric_value" || e.linkedModule === "metrics" || e.linkedModule === "raw_data"
+    (e as any).metricId || e.linkedModule === "metric" || e.linkedModule === "metric_value" || e.linkedModule === "metrics" || e.linkedModule === "raw_data"
   ).length;
 
   const estimatedCoveragePercent = totalEntries > 0
