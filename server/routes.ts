@@ -853,6 +853,111 @@ function requireProvisioningPermission(action: ProvisioningAction) {
   };
 }
 
+const ROADMAP_STATUSES = ["planned", "in_progress", "blocked", "completed"] as const;
+type RoadmapStatus = typeof ROADMAP_STATUSES[number];
+
+const roadmapItemInputSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(1000).optional().nullable(),
+  targetLabel: z.string().trim().max(80).optional().nullable(),
+  targetMonth: z.coerce.number().int().min(1).max(12).optional().nullable(),
+  dueDate: z.string().trim().max(30).optional().nullable(),
+  status: z.enum(ROADMAP_STATUSES).default("planned"),
+  owner: z.string().trim().max(120).optional().nullable(),
+  ownerUserId: z.string().trim().max(80).optional().nullable(),
+  category: z.string().trim().max(80).optional().nullable(),
+});
+
+function inferRoadmapCategory(text: string) {
+  const value = text.toLowerCase();
+  if (value.includes("carbon") || value.includes("energy") || value.includes("waste") || value.includes("environment")) return "environmental";
+  if (value.includes("employee") || value.includes("diversity") || value.includes("health") || value.includes("social")) return "social";
+  if (value.includes("governance") || value.includes("board") || value.includes("ethics") || value.includes("supplier")) return "governance";
+  if (value.includes("data") || value.includes("metric") || value.includes("evidence")) return "data";
+  if (value.includes("policy") || value.includes("policies")) return "policy";
+  if (value.includes("report")) return "reporting";
+  return "general";
+}
+
+function normaliseRoadmapItem(input: unknown, existing?: any, order = 0) {
+  const parsed = roadmapItemInputSchema.safeParse(input);
+  if (!parsed.success) return null;
+  const data = parsed.data;
+  const now = new Date().toISOString();
+  const dueDate = data.dueDate && !Number.isNaN(Date.parse(data.dueDate))
+    ? new Date(data.dueDate).toISOString().slice(0, 10)
+    : null;
+
+  return {
+    id: existing?.id || randomUUID(),
+    title: data.title,
+    description: data.description || "",
+    targetLabel: data.targetLabel || (data.targetMonth ? `Month ${data.targetMonth}` : ""),
+    targetMonth: data.targetMonth || null,
+    dueDate,
+    status: data.status as RoadmapStatus,
+    owner: data.owner || "",
+    ownerUserId: data.ownerUserId || null,
+    category: data.category || inferRoadmapCategory(`${data.title} ${data.description || ""}`),
+    order: Number.isFinite(existing?.order) ? existing.order : order,
+    source: existing?.source || "manual",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function normaliseRoadmap(raw: any) {
+  if (!raw) return null;
+
+  const existingItems = Array.isArray(raw.items)
+    ? raw.items
+        .map((item: any, index: number) => normaliseRoadmapItem(item, item, index))
+        .filter(Boolean)
+    : [];
+
+  const generatedItems = existingItems.length > 0 ? [] : (Array.isArray(raw.months) ? raw.months : []).flatMap((month: any, monthIndex: number) => {
+    const monthNum = Number(month?.month) || monthIndex + 1;
+    const actions = Array.isArray(month?.actions) && month.actions.length > 0 ? month.actions : [month?.title].filter(Boolean);
+    return actions.map((action: any, actionIndex: number) => {
+      const title = String(action || month?.title || `Roadmap action ${actionIndex + 1}`).trim();
+      return {
+        id: randomUUID(),
+        title: title.slice(0, 200),
+        description: String(month?.title || "").trim(),
+        targetLabel: `Month ${monthNum}`,
+        targetMonth: monthNum >= 1 && monthNum <= 12 ? monthNum : null,
+        dueDate: null,
+        status: "planned" as RoadmapStatus,
+        owner: "",
+        ownerUserId: null,
+        category: inferRoadmapCategory(`${month?.title || ""} ${title}`),
+        order: monthIndex * 10 + actionIndex,
+        source: "generated",
+        createdAt: raw.generatedAt || new Date().toISOString(),
+        updatedAt: raw.updatedAt || raw.generatedAt || new Date().toISOString(),
+      };
+    });
+  });
+
+  const items = [...existingItems, ...generatedItems].sort((a: any, b: any) => {
+    const aMonth = a.targetMonth ?? 999;
+    const bMonth = b.targetMonth ?? 999;
+    if (aMonth !== bMonth) return aMonth - bMonth;
+    return (a.order ?? 0) - (b.order ?? 0);
+  });
+
+  return {
+    ...raw,
+    items,
+    months: Array.isArray(raw.months) ? raw.months : [],
+    updatedAt: raw.updatedAt || raw.generatedAt || null,
+  };
+}
+
+async function saveCompanyRoadmap(companyId: string, roadmap: any) {
+  await db.execute(sql`UPDATE companies SET esg_roadmap = ${JSON.stringify(roadmap)}::jsonb WHERE id = ${companyId}`);
+}
+
 async function requireSuperAdmin(req: Request, res: Response, next: Function) {
   // If requireAuth already ran (most cases: requireAuth, requireSuperAdmin in chain), reuse its auth.
   // If called standalone, run the full requireAuth lifecycle guard first.
@@ -9050,7 +9155,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
-      res.json({ roadmap: (company as any).esgRoadmap || null });
+      res.json({ roadmap: normaliseRoadmap((company as any).esgRoadmap) });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -9159,9 +9264,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       }
 
       roadmap.generatedAt = new Date().toISOString();
+      roadmap.updatedAt = roadmap.generatedAt;
       roadmap.maturityLevel = maturityLevel;
+      roadmap = normaliseRoadmap(roadmap);
 
-      await db.execute(sql`UPDATE companies SET esg_roadmap = ${JSON.stringify(roadmap)}::jsonb WHERE id = ${companyId}`);
+      await saveCompanyRoadmap(companyId, roadmap);
 
       await storage.createAuditLog({
         companyId,
@@ -9169,9 +9276,105 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         action: "ESG roadmap generated",
         entityType: "esg_roadmap",
         details: { maturityLevel, months: roadmap.months?.length || 0, generationSource },
-      });
+      } as any);
 
       res.json({ roadmap });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.post("/api/esg/roadmap/items", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const roadmap = normaliseRoadmap((company as any).esgRoadmap) || { items: [], months: [], generatedAt: null };
+      const item = normaliseRoadmapItem(req.body, undefined, roadmap.items.length);
+      if (!item) return res.status(400).json({ error: "Invalid roadmap item" });
+
+      const nextRoadmap = {
+        ...roadmap,
+        items: [...roadmap.items, item],
+        updatedAt: new Date().toISOString(),
+      };
+      await saveCompanyRoadmap(companyId, nextRoadmap);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "ESG roadmap item created",
+        entityType: "esg_roadmap",
+        entityId: item.id,
+        details: { title: item.title, status: item.status, targetLabel: item.targetLabel },
+      } as any);
+      res.status(201).json({ item, roadmap: nextRoadmap });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.patch("/api/esg/roadmap/items/:itemId", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const roadmap = normaliseRoadmap((company as any).esgRoadmap);
+      const items = roadmap?.items || [];
+      const index = items.findIndex((item: any) => item.id === req.params.itemId);
+      if (index === -1) return res.status(404).json({ error: "Roadmap item not found" });
+
+      const item = normaliseRoadmapItem({ ...items[index], ...req.body }, items[index], index);
+      if (!item) return res.status(400).json({ error: "Invalid roadmap item" });
+
+      const nextItems = [...items];
+      nextItems[index] = item;
+      const nextRoadmap = { ...roadmap, items: nextItems, updatedAt: new Date().toISOString() };
+      await saveCompanyRoadmap(companyId, nextRoadmap);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "ESG roadmap item updated",
+        entityType: "esg_roadmap",
+        entityId: item.id,
+        details: { title: item.title, status: item.status, targetLabel: item.targetLabel },
+      } as any);
+      res.json({ item, roadmap: nextRoadmap });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.delete("/api/esg/roadmap/items/:itemId", requireAuth, requireProvisioningPermission("manage_esg_actions"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const roadmap = normaliseRoadmap((company as any).esgRoadmap);
+      const items = roadmap?.items || [];
+      const item = items.find((candidate: any) => candidate.id === req.params.itemId);
+      if (!item) return res.status(404).json({ error: "Roadmap item not found" });
+
+      const nextRoadmap = {
+        ...roadmap,
+        items: items.filter((candidate: any) => candidate.id !== req.params.itemId),
+        updatedAt: new Date().toISOString(),
+      };
+      await saveCompanyRoadmap(companyId, nextRoadmap);
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "ESG roadmap item deleted",
+        entityType: "esg_roadmap",
+        entityId: item.id,
+        details: { title: item.title, status: item.status, targetLabel: item.targetLabel },
+      } as any);
+      res.json({ ok: true, roadmap: nextRoadmap });
     } catch (e: any) {
       sendServerError(res, e);
     }

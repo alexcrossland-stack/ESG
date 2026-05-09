@@ -40,6 +40,7 @@ async function openWithMockRole(
     if (path === "/api/notifications/count") return json({ count: 0 });
     if (path === "/api/programme/status") return json({ nextBestActions });
     if (path === "/api/recommendations") return json({ recommendations: [], total: 0, limited: false });
+    if (path === "/api/esg/roadmap") return json({ roadmap: { items: [], generatedAt: null, updatedAt: null } });
     if (path === "/api/sites") return json([]);
     if (path === "/api/admin/impersonation/status") return json({ isImpersonating: false });
     if (path === "/api/activity/track" && method === "POST") return json({ ok: true });
@@ -143,12 +144,13 @@ test.describe("Navigation structure", () => {
     await context.close();
   });
 
-  test("policy and control items sit directly under ESG Setup", async ({ browser }) => {
+  test("Roadmap, policy, and control items sit directly under ESG Setup", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
     await ensureGroupOpen(page, "nav-group-esg-setup", "Policy Generator");
 
     const setupItems = page.getByTestId("nav-esg-setup-items");
+    await expect(setupItems.getByText("Roadmap", { exact: true })).toBeVisible();
     await expect(setupItems.getByText("Policy Generator", { exact: true })).toBeVisible();
     await expect(setupItems.getByText("Policy Templates", { exact: true })).toBeVisible();
     await expect(setupItems.getByText("Control Centre", { exact: true })).toBeVisible();
@@ -163,6 +165,7 @@ test.describe("Navigation structure", () => {
     await expect(advancedItems.getByText("Control Centre", { exact: true })).toHaveCount(0);
     await expect(advancedItems.getByText("Recommendations", { exact: true })).toHaveCount(0);
 
+    await expectMovedItemNavigation(page, "nav-roadmap", /\/roadmap$/, ["ESG Setup", "Roadmap"]);
     await expectMovedItemNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["ESG Setup", "Policy Generator"]);
     await expectMovedItemNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["ESG Setup", "Policy Templates"]);
     await expectMovedItemNavigation(page, "nav-control-centre", /\/control-centre$/, ["ESG Setup", "Control Centre"]);
@@ -234,6 +237,7 @@ test.describe("Navigation structure", () => {
     await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
     await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
     await expect(page.getByTestId("nav-control-centre")).toBeVisible();
+    await expect(page.getByTestId("nav-roadmap")).toBeVisible();
     await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
     await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
 

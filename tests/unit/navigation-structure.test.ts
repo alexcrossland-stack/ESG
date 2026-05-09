@@ -50,14 +50,17 @@ function run() {
     assert.deepEqual(labels(ESG_SETUP_BASE_ITEMS), [
       "Topics",
       "ESG Profile",
+      "Roadmap",
       "Team",
       "Policy Generator",
       "Policy Templates",
       "Control Centre",
     ]);
     assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Team")?.href, "/team");
+    assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Roadmap")?.href, "/roadmap");
     assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
     assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Recommendations"), false);
+    assert.equal(MOVED_MENU_ITEM_TARGETS.roadmap, "/roadmap");
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
     assert.equal(MOVED_MENU_ITEM_TARGETS.controlCentre, "/control-centre");
@@ -112,6 +115,10 @@ function run() {
     assert.deepEqual(getBreadcrumbs("/control-centre").map(item => item.label), [
       "ESG Setup",
       "Control Centre",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/roadmap").map(item => item.label), [
+      "ESG Setup",
+      "Roadmap",
     ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
       "Data and Evidence",

@@ -45,6 +45,7 @@ import AnswerLibrary from "@/pages/answer-library";
 import ControlCentre from "@/pages/control-centre";
 import BenchmarksPage from "@/pages/benchmarks";
 import EsgProfilePage from "@/pages/esg-profile";
+import RoadmapPage from "@/pages/roadmap";
 import PublicProfilePage from "@/pages/public-profile";
 import AdminHealthPage from "@/pages/admin-health";
 import AdminAnalyticsPage from "@/pages/admin-analytics";
@@ -479,6 +480,7 @@ function ProtectedApp() {
                 <Route path="/answer-library" component={AnswerLibrary} />
                 <Route path="/benchmarks" component={BenchmarksPage} />
                 <Route path="/esg-profile" component={EsgProfilePage} />
+                <Route path="/roadmap" component={RoadmapPage} />
                 <Route path="/admin" component={() => <SuperAdminRoute component={AdminPage} />} />
                 <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminCompanyPage} />} />
                 <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
