@@ -29,6 +29,12 @@ async function seedProfileMetrics(companyId: string) {
   await client.connect();
   try {
     const suffix = Date.now().toString();
+    await client.query(
+      `INSERT INTO reporting_periods (company_id, name, period_type, start_date, end_date, status)
+       VALUES ($1, '2099-01', 'monthly', '2099-01-01', '2099-01-31', 'open')`,
+      [companyId],
+    );
+
     const metricRows = await client.query<{ id: string; name: string }>(
       `INSERT INTO metrics (company_id, name, category, unit, enabled, display_order)
        VALUES
@@ -63,6 +69,7 @@ async function seedProfileMetrics(companyId: string) {
       `INSERT INTO metric_values (metric_id, period, value, status, site_id)
        VALUES
          ($1, '2099-01', '4990.0000', 'green', NULL),
+         ($1, '2099-02', '100.1000', 'red', NULL),
          ($2, '2099-01', '0.5040', 'amber', NULL),
          ($3, '2099-01', '52.2800', 'green', NULL),
          ($4, '2099-01', '0.0000', 'red', NULL),
@@ -110,8 +117,26 @@ async function run(tenants: SeededTenants): Promise<void> {
     return;
   }
 
-  const profile = JSON.parse(res.body) as { key_metrics?: Array<{ id?: string; name: string; value: string | null; unit?: string | null; hasValue?: boolean }> };
+  const profile = JSON.parse(res.body) as {
+    reporting_period?: { period?: string; label?: string; source?: string; hasActivePeriod?: boolean };
+    key_metrics?: Array<{ id?: string; name: string; value: string | null; unit?: string | null; hasValue?: boolean }>;
+  };
   const keyMetrics = profile.key_metrics ?? [];
+
+  try {
+    if (profile.reporting_period?.period !== "2099-01") {
+      throw new Error(`expected active period 2099-01, got ${profile.reporting_period?.period}`);
+    }
+    if (profile.reporting_period?.label !== "2099-01") {
+      throw new Error(`expected reporting period label 2099-01, got ${profile.reporting_period?.label}`);
+    }
+    if (profile.reporting_period?.source !== "active") {
+      throw new Error(`expected active period source, got ${profile.reporting_period?.source}`);
+    }
+    pass("ESG Profile exposes the active reporting period");
+  } catch (error: any) {
+    fail("ESG Profile exposes the active reporting period", error.message);
+  }
 
   try {
     if (keyMetrics.length !== seeded.enabledMetricCount) {
@@ -150,6 +175,49 @@ async function run(tenants: SeededTenants): Promise<void> {
     } catch (error: any) {
       fail(testName, error.message);
     }
+  }
+
+  try {
+    const selectedRes = await apiRequest("GET", "/api/company/esg-profile?period=2099-02", undefined, tenants.tenantA.adminToken);
+    if (selectedRes.status !== 200) throw new Error(`status=${selectedRes.status} body=${selectedRes.body.slice(0, 200)}`);
+    const selectedProfile = JSON.parse(selectedRes.body) as typeof profile;
+    const electricity = selectedProfile.key_metrics?.find(item => item.name === `Profile Electricity ${seeded.suffix}`);
+    const ratio = selectedProfile.key_metrics?.find(item => item.name === `Profile Ratio ${seeded.suffix}`);
+    if (selectedProfile.reporting_period?.period !== "2099-02") {
+      throw new Error(`expected selected period 2099-02, got ${selectedProfile.reporting_period?.period}`);
+    }
+    if (electricity?.value !== "100.10") throw new Error(`expected 2099-02 electricity value 100.10, got ${electricity?.value}`);
+    if (ratio?.value !== null || ratio?.hasValue !== false) {
+      throw new Error("2099-01-only ratio value leaked into selected 2099-02 profile");
+    }
+    pass("ESG Profile switches metric values with the selected reporting period");
+  } catch (error: any) {
+    fail("ESG Profile switches metric values with the selected reporting period", error.message);
+  }
+
+  try {
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+    const client = new Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      await client.query("UPDATE reporting_periods SET status = 'closed' WHERE company_id = $1", [tenants.tenantB.companyId]);
+    } finally {
+      await client.end();
+    }
+    const emptyPeriodRes = await apiRequest("GET", "/api/company/esg-profile", undefined, tenants.tenantB.adminToken);
+    if (emptyPeriodRes.status !== 200) throw new Error(`status=${emptyPeriodRes.status} body=${emptyPeriodRes.body.slice(0, 200)}`);
+    const emptyPeriodProfile = JSON.parse(emptyPeriodRes.body) as typeof profile;
+    if (!emptyPeriodProfile.reporting_period?.period) throw new Error("missing fallback reporting period");
+    if (emptyPeriodProfile.reporting_period?.source !== "default") {
+      throw new Error(`expected default period source, got ${emptyPeriodProfile.reporting_period?.source}`);
+    }
+    if (emptyPeriodProfile.reporting_period?.hasActivePeriod !== false) {
+      throw new Error("expected hasActivePeriod=false when no reporting period is open");
+    }
+    pass("ESG Profile returns a safe default when no active reporting period exists", emptyPeriodProfile.reporting_period.period);
+  } catch (error: any) {
+    fail("ESG Profile returns a safe default when no active reporting period exists", error.message);
   }
 
   try {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
   Leaf, Shield, Users, Factory, FileText, Share2, Copy,
@@ -47,13 +48,54 @@ function hasMetricValue(metric: any) {
   return metric?.hasValue !== false && metric?.value !== null && metric?.value !== undefined && metric?.value !== "";
 }
 
+function generateProfilePeriods() {
+  const periods: string[] = [];
+  const now = new Date();
+  const startYear = 2020;
+  for (let year = now.getFullYear(); year >= startYear; year--) {
+    const maxMonth = year === now.getFullYear() ? now.getMonth() : 11;
+    for (let month = maxMonth; month >= 0; month--) {
+      periods.push(`${year}-${String(month + 1).padStart(2, "0")}`);
+    }
+  }
+  return periods;
+}
+
+function getReportingPeriodLabel(profile: any) {
+  return profile?.reporting_period?.label || profile?.reporting_period?.period || "No reporting period";
+}
+
 export default function EsgProfilePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [expiryDays, setExpiryDays] = useState("30");
   const [selectedSections, setSelectedSections] = useState<string[]>(["esg_scores", "key_metrics", "policy_status", "carbon_summary"]);
+  const [selectedPeriod, setSelectedPeriod] = useState("");
 
-  const { data: profile, isLoading } = useQuery<any>({ queryKey: ["/api/company/esg-profile"] });
+  const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
+  const { data: profile, isLoading } = useQuery<any>({
+    queryKey: ["/api/company/esg-profile", selectedPeriod || "__default__"],
+    queryFn: async () => {
+      const path = selectedPeriod ? `/api/company/esg-profile?period=${encodeURIComponent(selectedPeriod)}` : "/api/company/esg-profile";
+      const response = await apiRequest("GET", path);
+      return response.json();
+    },
+  });
+
+  useEffect(() => {
+    if (!selectedPeriod && profile?.reporting_period?.period) {
+      setSelectedPeriod(profile.reporting_period.period);
+    }
+  }, [profile?.reporting_period?.period, selectedPeriod]);
+
+  const periodOptions = useMemo(() => {
+    const options = [
+      ...reportingPeriods.map((period: any) => period.name).filter(Boolean),
+      ...(profile?.reporting_period?.period ? [profile.reporting_period.period] : []),
+      ...generateProfilePeriods(),
+    ];
+    return Array.from(new Set(options));
+  }, [profile?.reporting_period?.period, reportingPeriods]);
 
   const shareMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/company/esg-profile/share", data).then(r => r.json()),
@@ -80,6 +122,7 @@ export default function EsgProfilePage() {
   const shareEnabled = profile?.shareSettings?.enabled || false;
   const shareToken = profile?.shareSettings?.token;
   const shareUrl = shareToken ? `${window.location.origin}/public/esg/${shareToken}` : null;
+  const reportingPeriodLabel = getReportingPeriodLabel(profile);
 
   function toggleSection(key: string) {
     setSelectedSections(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
@@ -87,9 +130,29 @@ export default function EsgProfilePage() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold" data-testid="text-profile-title">ESG Company Profile</h1>
-        <p className="text-sm text-muted-foreground mt-1">Your company's ESG performance at a glance</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold" data-testid="text-profile-title">ESG Company Profile</h1>
+          <p className="text-sm text-muted-foreground mt-1">Your company's ESG performance at a glance</p>
+          <div className="mt-2">
+            <Badge variant="outline" className="text-xs" data-testid="text-profile-reporting-period">
+              Reporting Period: {reportingPeriodLabel}
+            </Badge>
+          </div>
+        </div>
+        <div className="w-full sm:w-56">
+          <Label className="text-xs text-muted-foreground">Reporting Period</Label>
+          <Select value={selectedPeriod || profile?.reporting_period?.period || ""} onValueChange={setSelectedPeriod}>
+            <SelectTrigger className="mt-1 h-9" data-testid="select-profile-reporting-period">
+              <SelectValue placeholder="No reporting period" />
+            </SelectTrigger>
+            <SelectContent>
+              {periodOptions.map(period => (
+                <SelectItem key={period} value={period}>{period}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <Card>
@@ -118,7 +181,10 @@ export default function EsgProfilePage() {
 
       {profile?.key_metrics?.length > 0 && (
         <Card>
-          <CardHeader><CardTitle className="text-sm">Key Metrics</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle className="text-sm">Key Metrics</CardTitle>
+            <p className="text-xs text-muted-foreground">Values shown for {reportingPeriodLabel}</p>
+          </CardHeader>
           <CardContent>
             <div className="max-h-[34rem] overflow-y-auto pr-1">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
