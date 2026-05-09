@@ -43,6 +43,10 @@ function ScoreBadge({ label, score, icon: Icon }: { label: string; score: number
   );
 }
 
+function hasMetricValue(metric: any) {
+  return metric?.hasValue !== false && metric?.value !== null && metric?.value !== undefined && metric?.value !== "";
+}
+
 export default function EsgProfilePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -116,16 +120,21 @@ export default function EsgProfilePage() {
         <Card>
           <CardHeader><CardTitle className="text-sm">Key Metrics</CardTitle></CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {profile.key_metrics.map((m: any, i: number) => (
-                <div key={i} className="p-3 rounded-lg border" data-testid={`metric-card-${i}`}>
-                  <p className="text-xs text-muted-foreground truncate">{m.name}</p>
-                  <p className="text-lg font-bold mt-1">{m.value} <span className="text-xs font-normal text-muted-foreground">{m.unit}</span></p>
-                  <Badge variant="secondary" className="text-[10px] mt-1">
-                    {m.category}
-                  </Badge>
-                </div>
-              ))}
+            <div className="max-h-[34rem] overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {profile.key_metrics.map((m: any, i: number) => (
+                  <div key={m.id || i} className="p-3 rounded-lg border min-h-28 flex flex-col justify-between gap-3" data-testid={`metric-card-${i}`}>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{m.name}</p>
+                    <p className={`text-lg font-bold leading-tight ${hasMetricValue(m) ? "" : "text-muted-foreground"}`}>
+                      {hasMetricValue(m) ? m.value : "No data"}
+                      {hasMetricValue(m) && m.unit && <span className="text-xs font-normal text-muted-foreground"> {m.unit}</span>}
+                    </p>
+                    <Badge variant="secondary" className="text-[10px] mt-1">
+                      {m.category}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
             </div>
           </CardContent>
         </Card>
