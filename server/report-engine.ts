@@ -454,6 +454,61 @@ function labelDataSource(v: { dataSourceType?: string | null; isDerived?: boolea
   }
 }
 
+function formatMetricValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  return numeric.toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function aggregateValuesByMetric(values: any[]): any[] {
+  const grouped = new Map<string, any[]>();
+  const passthrough: any[] = [];
+
+  for (const value of values) {
+    const metricId = value.metricId || value.id;
+    if (!metricId) {
+      passthrough.push(value);
+      continue;
+    }
+    const current = grouped.get(metricId) ?? [];
+    current.push(value);
+    grouped.set(metricId, current);
+  }
+
+  const aggregated = Array.from(grouped.entries()).map(([metricId, rows]) => {
+    if (rows.length === 1) return rows[0];
+    const numericRows = rows
+      .map((row) => Number(row.value))
+      .filter((value) => Number.isFinite(value));
+    if (numericRows.length !== rows.length) return rows[0];
+    const total = numericRows.reduce((sum, value) => sum + value, 0);
+    const dataSourceTypes = new Set(rows.map((row) => row.dataSourceType).filter(Boolean));
+    const dataSourceType = dataSourceTypes.has("estimated")
+      ? "estimated"
+      : dataSourceTypes.has("calculated")
+        ? "calculated"
+        : dataSourceTypes.has("evidenced")
+          ? "evidenced"
+          : rows[0].dataSourceType;
+    return {
+      ...rows[0],
+      metricId,
+      value: total.toFixed(4),
+      siteId: undefined,
+      dataSourceType,
+      workflowLabel: rows.every((row) => row.workflowLabel === rows[0].workflowLabel)
+        ? rows[0].workflowLabel
+        : "Mixed",
+    };
+  });
+
+  return [...passthrough, ...aggregated];
+}
+
 /**
  * Build ESG Metrics Summary report data
  * Clearly distinguishes: measured, derived, estimated, missing
@@ -464,16 +519,18 @@ export function buildEsgMetricsSummaryReport(data: {
   values: any[];
   period?: string;
   siteName?: string;
+  aggregateValues?: boolean;
   dateFrom?: string | null;
   dateTo?: string | null;
   reportedCount?: number;
   missingCount?: number;
 }): ReportData {
   const { company, metrics, values, period, siteName, dateFrom, dateTo } = data;
+  const displayValues = data.aggregateValues ? aggregateValuesByMetric(values) : values;
 
   const metricsByCategory: Record<string, { metric: any; value: any }[]> = {};
   for (const m of metrics) {
-    const v = values.find((val: any) => val.metricId === m.id || val.metricName === m.name);
+    const v = displayValues.find((val: any) => val.metricId === m.id || val.metricName === m.name);
     const cat = m.category || "other";
     if (!metricsByCategory[cat]) metricsByCategory[cat] = [];
     metricsByCategory[cat].push({ metric: m, value: v });
@@ -510,7 +567,7 @@ export function buildEsgMetricsSummaryReport(data: {
       tableHeaders: ["Metric", "Value", "Unit", "Source Type", "Status"],
       tableRows: entries.map(({ metric, value }) => [
         metric.name,
-        value ? String(parseFloat(value.value ?? "0").toLocaleString()) : "—",
+        value ? formatMetricValue(value.value) : "—",
         metric.unit || "—",
         value ? labelDataSource(value) : "Missing",
         value?.workflowLabel || (value ? "Draft" : "Not reported"),
