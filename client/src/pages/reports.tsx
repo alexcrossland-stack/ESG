@@ -1315,6 +1315,7 @@ export default function Reports() {
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [downloadErrorReportId, setDownloadErrorReportId] = useState<string | null>(null);
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
+  const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
 
   const templateConfig = REPORT_TEMPLATES.find(t => t.id === selectedTemplate) || REPORT_TEMPLATES[0];
   const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
@@ -1360,7 +1361,7 @@ export default function Reports() {
     queryKey: ["/api/reports/preflight", selectedPeriod, effectiveSiteId ?? "all"],
     queryFn: async () => {
       const params = new URLSearchParams({ period: selectedPeriod });
-      if (effectiveSiteId) params.set("siteId", effectiveSiteId);
+      params.set("siteId", reportScopeId === "__org__" ? "__all__" : effectiveSiteId!);
       const res = await authFetch(`/api/reports/preflight?${params}`);
       if (!res.ok) throw new Error("preflight check failed");
       return res.json();
@@ -1374,7 +1375,21 @@ export default function Reports() {
   const [exportingAssurance, setExportingAssurance] = useState(false);
   const [showFirstReportMilestone, setShowFirstReportMilestone] = useState(false);
   const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
-  const { data: readinessDetail } = useQuery<any>({ queryKey: ["/api/reports/readiness-detail"], staleTime: 30_000 });
+  const reportReadinessScopeParam = reportScopeId === "__org__" ? "__all__" : effectiveSiteId;
+  const reportReadinessScopeLabel = reportScopeId === "__org__"
+    ? "All scopes (whole organisation)"
+    : reportScopeSite
+      ? `Site: ${reportScopeSite.name}`
+      : "Selected site";
+  const { data: readinessDetail } = useQuery<any>({
+    queryKey: ["/api/reports/readiness-detail", reportReadinessScopeParam ?? "__all__", selectedPeriod],
+    queryFn: () => {
+      const params = new URLSearchParams({ period: selectedPeriod });
+      params.set("siteId", reportReadinessScopeParam ?? "__all__");
+      return authFetch(`/api/reports/readiness-detail?${params.toString()}`).then((r) => r.json());
+    },
+    staleTime: 30_000,
+  });
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -1840,7 +1855,11 @@ export default function Reports() {
         </p>
       </div>
 
-      <ReportReadinessPanel />
+      <ReportReadinessPanel
+        siteId={reportReadinessScopeParam ?? "__all__"}
+        period={selectedPeriod}
+        scopeLabel={reportReadinessScopeLabel}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="space-y-4">
@@ -1905,7 +1924,7 @@ export default function Reports() {
                   <Select value={reportScopeId} onValueChange={(v) => { setReportScopeId(v); setReportData(null); }}>
                     <SelectTrigger data-testid="select-report-scope"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__org__">Whole organisation</SelectItem>
+                      <SelectItem value="__org__">All scopes (whole organisation)</SelectItem>
                       {activeSites.length > 0 && (
                         <>
                           <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Active Sites</div>

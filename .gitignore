@@ -8,3 +8,4 @@ vite.config.ts.*
 tests/e2e/.auth/
 test-results/
 attached_assets/
+uploads/

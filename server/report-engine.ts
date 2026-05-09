@@ -32,6 +32,46 @@ interface ReportData {
 
 const PDF_CONTENT_WIDTH = 495;
 const PDF_PAGE_BREAK_Y = 720;
+function sanitizeDocxText(value: unknown): string {
+  if (value == null) return "";
+  const normalized = String(value).replace(/\r\n?/g, "\n");
+  let sanitized = "";
+
+  for (let index = 0; index < normalized.length; index++) {
+    const codeUnit = normalized.charCodeAt(index);
+
+    // Preserve well-formed surrogate pairs only if they represent valid XML chars.
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+      const nextCodeUnit = normalized.charCodeAt(index + 1);
+      if (nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF) {
+        const codePoint = ((codeUnit - 0xD800) * 0x400) + (nextCodeUnit - 0xDC00) + 0x10000;
+        if (codePoint <= 0x10FFFF) {
+          sanitized += normalized[index] + normalized[index + 1];
+        }
+        index += 1;
+      }
+      continue;
+    }
+
+    // Drop lone low surrogates.
+    if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
+      continue;
+    }
+
+    const isValidXmlChar =
+      codeUnit === 0x09 ||
+      codeUnit === 0x0A ||
+      codeUnit === 0x0D ||
+      (codeUnit >= 0x20 && codeUnit <= 0xD7FF) ||
+      (codeUnit >= 0xE000 && codeUnit <= 0xFFFD);
+
+    if (isValidXmlChar) {
+      sanitized += normalized[index];
+    }
+  }
+
+  return sanitized;
+}
 
 function ensurePdfSpace(doc: any, minHeight = 36) {
   if (doc.y > PDF_PAGE_BREAK_Y - minHeight) doc.addPage();
@@ -166,7 +206,7 @@ function docxRunsFromMarkdownRuns(runs: GeneratedInlineRun[], size = 22): TextRu
   if (!runs.length) return [new TextRun({ text: "", size })];
 
   return runs.map((run) => new TextRun({
-    text: run.text,
+    text: sanitizeDocxText(run.text),
     size,
     bold: run.bold,
     italics: run.italic,
@@ -182,7 +222,7 @@ function paragraphFromMarkdownRuns(
   return new Paragraph({
     children: runs.length > 0
       ? runs.map((run) => new TextRun({
-          text: run.text,
+          text: sanitizeDocxText(run.text),
           size: options.size ?? 22,
           bold: run.bold,
           italics: run.italic,
@@ -202,13 +242,13 @@ function buildDocxTable(headers: string[], rows: string[][]) {
   const colPercent = Math.floor(100 / Math.max(headers.length, 1));
   const headerRow = new TableRow({
     children: headers.map((header) => new TableCell({
-      children: [new Paragraph({ children: [new TextRun({ text: stripMarkdownToText(header) || "-", bold: true, size: 20 })] })],
+      children: [new Paragraph({ children: [new TextRun({ text: sanitizeDocxText(stripMarkdownToText(header)) || "-", bold: true, size: 20 })] })],
       width: { size: colPercent, type: WidthType.PERCENTAGE },
     })),
   });
   const dataRows = rows.map((row) => new TableRow({
     children: row.map((cell) => new TableCell({
-      children: [new Paragraph({ children: [new TextRun({ text: stripMarkdownToText(cell) || "-", size: 20 })] })],
+      children: [new Paragraph({ children: [new TextRun({ text: sanitizeDocxText(stripMarkdownToText(cell)) || "-", size: 20 })] })],
       width: { size: colPercent, type: WidthType.PERCENTAGE },
     })),
   }));
@@ -939,18 +979,18 @@ export async function generateDocx(reportData: ReportData, reportType: string, c
 
   children.push(
     new Paragraph({
-      children: [new TextRun({ text: companyName, bold: true, size: 36, color: "1a7a52" })],
+      children: [new TextRun({ text: sanitizeDocxText(companyName), bold: true, size: 36, color: "1a7a52" })],
       alignment: AlignmentType.CENTER,
       spacing: { after: 100 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: formatReportType(reportType), size: 28, color: "333333" })],
+      children: [new TextRun({ text: sanitizeDocxText(formatReportType(reportType)), size: 28, color: "333333" })],
       alignment: AlignmentType.CENTER,
       spacing: { after: 100 },
     }),
     new Paragraph({
       children: [new TextRun({
-        text: `Generated: ${new Date().toLocaleDateString("en-GB")}${reportData.period ? ` | Period: ${reportData.period}` : ""}`,
+        text: sanitizeDocxText(`Generated: ${new Date().toLocaleDateString("en-GB")}${reportData.period ? ` | Period: ${reportData.period}` : ""}`),
         size: 20, color: "666666", italics: true,
       })],
       alignment: AlignmentType.CENTER,
@@ -964,7 +1004,7 @@ export async function generateDocx(reportData: ReportData, reportType: string, c
 
   for (const section of reportData.sections) {
     children.push(new Paragraph({
-      text: section.title,
+      text: sanitizeDocxText(section.title),
       heading: HeadingLevel.HEADING_2,
       spacing: { before: 300, after: 150 },
     }));
@@ -983,7 +1023,7 @@ export async function generateDocx(reportData: ReportData, reportType: string, c
     if (section.type === "metrics" && section.rows) {
       children.push(buildDocxTable(
         ["Metric", "Value", "Status"],
-        section.rows.map((row) => [row.label, row.value, row.status || "-"]),
+        section.rows.map((row) => [sanitizeDocxText(row.label), sanitizeDocxText(row.value), sanitizeDocxText(row.status || "-")]),
       ));
     }
 

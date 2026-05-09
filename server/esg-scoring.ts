@@ -120,7 +120,7 @@ export async function scoreCompleteness(companyId: string, period?: string): Pro
     const targetDate = new Date(targetYear, (targetMonth || 1) - 1, 1);
     const oldestAcceptable = periodNMonthsAgo(targetDate, lookbackMonths);
 
-    const vals = await storage.getMetricValues(metric.id);
+    const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
     // Submitted = has a non-null value in a period between oldestAcceptable and targetPeriod (inclusive)
     const hasSubmission = vals.some(v =>
       v.value !== null &&
@@ -209,26 +209,19 @@ export async function scorePerformance(
 
   for (const metric of enabledMetrics) {
     const cat = metric.category as string;
-    const allVals = await storage.getMetricValues(metric.id);
-
-    let valsToConsider: typeof allVals;
-
-    if (isSiteSpecific) {
-      // Site-specific: only values for the selected site (no fallback)
-      valsToConsider = allVals.filter(v => v.siteId === siteId);
-    } else if (isOrgLevel) {
-      // Org-level only: records with siteId null
-      valsToConsider = allVals.filter(v => v.siteId === null || v.siteId === undefined);
-    } else {
-      // Company-wide: prefer org-level (siteId null) values; fall back to site-level if none exist.
-      // This ensures: companies using org-level data get org-level scores,
-      // and companies entering data entirely at site level are also scored correctly.
-      valsToConsider = allVals; // set initial pool to all values for fallback logic below
-    }
+    const valsToConsider = await storage.getMetricValuesForMetric(
+      companyId,
+      metric.id,
+      isSiteSpecific
+        ? { scope: "site", siteId }
+        : isOrgLevel
+          ? { scope: "organisation" }
+          : { scope: "all" },
+    );
 
     // Find the most recent value at or before targetPeriod with a non-null value.
     // For company-wide scope: prefer org-level records; if no org-level record exists, use any site record.
-    let valWithData: (typeof allVals)[0] | undefined;
+    let valWithData: (typeof valsToConsider)[0] | undefined;
     if (isCompanyWide) {
       const candidatePeriod = valsToConsider
         .filter(v => v.value !== null && v.value !== undefined && v.period <= targetPeriod);

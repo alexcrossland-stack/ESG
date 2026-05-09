@@ -83,6 +83,11 @@ import {
 } from "@shared/schema";
 import { isPlatformSuperAdmin } from "./permissions";
 
+export type MetricValueScope =
+  | { scope: "all" }
+  | { scope: "organisation" }
+  | { scope: "site"; siteId: string };
+
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool);
@@ -159,9 +164,9 @@ export interface IStorage {
   upsertMetricTarget(metricId: string, targetValue: string, targetYear: number): Promise<MetricTarget>;
 
   // Metric Values
-  getMetricValues(metricId: string): Promise<MetricValue[]>;
+  getMetricValuesForMetric(companyId: string, metricId: string, scope: MetricValueScope): Promise<MetricValue[]>;
   getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null): Promise<MetricValue | undefined>;
-  getMetricValuesByPeriod(companyId: string, period: string): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
+  getMetricValuesByPeriod(companyId: string, period: string, siteId?: string | null): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
   hasAnyData(companyId: string): Promise<boolean>;
   countEstimatedValues(companyId: string): Promise<number>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
@@ -179,8 +184,8 @@ export interface IStorage {
 
   // Evidence Files
   getEvidenceFiles(companyId: string, siteId?: string | null, period?: string): Promise<EvidenceFile[]>;
-  getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string): Promise<EvidenceFile[]>;
-  getEvidenceCoverage(companyId: string, period?: string): Promise<any>;
+  getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string, siteId?: string | null): Promise<EvidenceFile[]>;
+  getEvidenceCoverage(companyId: string, period?: string, siteId?: string | null): Promise<any>;
   createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
   updateEvidenceFile(id: string, data: Partial<EvidenceFile>): Promise<EvidenceFile | undefined>;
   deleteEvidenceFile(id: string): Promise<void>;
@@ -685,8 +690,17 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getMetricValues(metricId: string) {
-    return db.select().from(metricValues).where(eq(metricValues.metricId, metricId)).orderBy(desc(metricValues.period));
+  async getMetricValuesForMetric(companyId: string, metricId: string, scope: MetricValueScope) {
+    const conditions: any[] = [
+      eq(metricValues.metricId, metricId),
+      sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
+    ];
+    if (scope.scope === "organisation") {
+      conditions.push(isNull(metricValues.siteId));
+    } else if (scope.scope === "site") {
+      conditions.push(eq(metricValues.siteId, scope.siteId));
+    }
+    return db.select().from(metricValues).where(and(...conditions)).orderBy(desc(metricValues.period));
   }
 
   async getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null) {
@@ -700,7 +714,12 @@ export class DatabaseStorage implements IStorage {
     return v;
   }
 
-  async getMetricValuesByPeriod(companyId: string, period: string) {
+  async getMetricValuesByPeriod(companyId: string, period: string, siteId?: string | null) {
+    const conditions: any[] = [eq(metrics.companyId, companyId), eq(metricValues.period, period)];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(metricValues.siteId) : eq(metricValues.siteId, siteId));
+    }
+
     const result = await db
       .select({
         id: metricValues.id,
@@ -723,7 +742,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(metricValues)
       .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
-      .where(and(eq(metrics.companyId, companyId), eq(metricValues.period, period)));
+      .where(and(...conditions));
     return result as any[];
   }
 
@@ -973,20 +992,35 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(evidenceFiles).where(and(...conditions)).orderBy(desc(evidenceFiles.uploadedAt));
   }
 
-  async getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string) {
+  async getEvidenceByEntity(companyId: string, linkedModule: string, linkedEntityId: string, siteId?: string | null) {
+    const conditions: any[] = [
+      eq(evidenceFiles.companyId, companyId),
+      eq(evidenceFiles.linkedModule, linkedModule),
+      eq(evidenceFiles.linkedEntityId, linkedEntityId),
+    ];
+    if (siteId !== undefined) {
+      conditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
+    }
     return db.select().from(evidenceFiles).where(
-      and(
-        eq(evidenceFiles.companyId, companyId),
-        eq(evidenceFiles.linkedModule, linkedModule),
-        eq(evidenceFiles.linkedEntityId, linkedEntityId)
-      )
+      and(...conditions)
     ).orderBy(desc(evidenceFiles.uploadedAt));
   }
 
-  async getEvidenceCoverage(companyId: string, period?: string) {
-    const allEvidence = await db.select().from(evidenceFiles).where(eq(evidenceFiles.companyId, companyId));
+  async getEvidenceCoverage(companyId: string, period?: string, siteId?: string | null) {
+    const evidenceConditions: any[] = [eq(evidenceFiles.companyId, companyId)];
+    if (period) {
+      evidenceConditions.push(eq(evidenceFiles.linkedPeriod, period));
+    }
+    if (siteId !== undefined) {
+      evidenceConditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
+    }
+    const allEvidence = await db.select().from(evidenceFiles).where(and(...evidenceConditions));
     const allMetrics = await db.select({ id: metrics.id, name: metrics.name, category: metrics.category }).from(metrics).where(eq(metrics.companyId, companyId));
 
+    const metricValueConditions: any[] = [eq(metrics.companyId, companyId)];
+    if (siteId !== undefined) {
+      metricValueConditions.push(siteId === null ? isNull(metricValues.siteId) : eq(metricValues.siteId, siteId));
+    }
     const allMetricValues = await db.select({
       id: metricValues.id,
       metricId: metricValues.metricId,
@@ -994,7 +1028,7 @@ export class DatabaseStorage implements IStorage {
       dataSourceType: metricValues.dataSourceType,
     }).from(metricValues)
       .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
-      .where(eq(metrics.companyId, companyId));
+      .where(and(...metricValueConditions));
 
     const relevantValues = period
       ? allMetricValues.filter(v => v.period === period)
