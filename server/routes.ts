@@ -14014,11 +14014,10 @@ async function generateScheduledReminders(companyId: string, storage: any, db: a
 }
 
 async function buildEsgProfile(companyId: string) {
-  const company = await storage.getCompany(companyId);
   const metrics = await storage.getMetrics(companyId);
-  const enabledMetrics = metrics.filter((m: any) => m.enabled);
-  const now = new Date();
-  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const enabledMetrics = Array.from(
+    new Map(metrics.filter((m: any) => m.enabled).map((m: any) => [m.id, m])).values()
+  );
   const policy = await storage.getPolicy(companyId);
   const evidence = await storage.getEvidenceFiles(companyId);
   const carbonCalcs = await storage.getCarbonCalculations(companyId);
@@ -14028,17 +14027,38 @@ async function buildEsgProfile(companyId: string) {
   let envCount = 0, socCount = 0, govCount = 0;
   const keyMetrics: any[] = [];
 
-  for (const m of enabledMetrics.slice(0, 20)) {
-    const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
-    const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
-    if (latest?.value) {
+  const metricValuesByMetric = await Promise.all(
+    enabledMetrics.map(async (metric: any) => ({
+      metric,
+      values: await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" }),
+    }))
+  );
+
+  for (const { metric: m, values: vals } of metricValuesByMetric) {
+    const latest = vals.sort((a: any, b: any) => {
+      const periodCompare = (b.period || "").localeCompare(a.period || "");
+      if (periodCompare !== 0) return periodCompare;
+      return new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime();
+    })[0];
+    const formattedValue = formatProfileMetricValue(latest?.value);
+    const hasValue = formattedValue !== null;
+
+    keyMetrics.push({
+      id: m.id,
+      name: m.name,
+      value: formattedValue,
+      hasValue,
+      unit: m.unit,
+      category: m.category,
+      status: latest?.status || null,
+      period: latest?.period || null,
+    });
+
+    if (hasValue) {
       const score = latest.status === "green" ? 100 : latest.status === "amber" ? 60 : latest.status === "red" ? 20 : 50;
       if (m.category === "environmental") { envScore += score; envCount++; }
       else if (m.category === "social") { socScore += score; socCount++; }
       else if (m.category === "governance") { govScore += score; govCount++; }
-      if (keyMetrics.length < 6) {
-        keyMetrics.push({ name: m.name, value: latest.value, unit: m.unit, category: m.category, status: latest.status });
-      }
     }
   }
 
@@ -14077,6 +14097,13 @@ async function buildEsgProfile(companyId: string) {
       visibleSections: (companyInfo as any)?.profileVisibleSections || [],
     },
   };
+}
+
+function formatProfileMetricValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+  return numericValue.toFixed(2);
 }
 
 function sanitizeQuestionText(text: string): string {
