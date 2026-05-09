@@ -12,7 +12,11 @@ async function openWithState(browser: import("@playwright/test").Browser, storag
   return { context, page };
 }
 
-async function openWithMockRole(browser: import("@playwright/test").Browser, role: "admin" | "super_admin") {
+async function openWithMockRole(
+  browser: import("@playwright/test").Browser,
+  role: "admin" | "super_admin",
+  nextBestActions: { url: string }[] = [],
+) {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.route("**/api/**", async route => {
@@ -34,7 +38,7 @@ async function openWithMockRole(browser: import("@playwright/test").Browser, rol
       });
     }
     if (path === "/api/notifications/count") return json({ count: 0 });
-    if (path === "/api/programme/status") return json({ nextBestActions: [] });
+    if (path === "/api/programme/status") return json({ nextBestActions });
     if (path === "/api/sites") return json([]);
     if (path === "/api/admin/impersonation/status") return json({ isImpersonating: false });
     if (path === "/api/activity/track" && method === "POST") return json({ ok: true });
@@ -161,6 +165,26 @@ test.describe("Navigation structure", () => {
     await expectMovedItemNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["ESG Setup", "Policy Templates"]);
     await expectMovedItemNavigation(page, "nav-control-centre", /\/control-centre$/, ["ESG Setup", "Control Centre"]);
     await expectMovedItemNavigation(page, "nav-recommendations", /\/recommendations$/, ["ESG Setup", "Recommendations"]);
+
+    await context.close();
+  });
+
+  test("Policy Generator label stays single-line with NEXT badge", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin", [{ url: "/policy-generator" }]);
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await ensureGroupOpen(page, "nav-group-esg-setup", "Policy Generator");
+
+    const policyGenerator = page.getByTestId("nav-policy-generator");
+    const label = policyGenerator.getByText("Policy Generator", { exact: true });
+    const badge = policyGenerator.getByText("Next", { exact: true });
+
+    await expect(policyGenerator).toHaveCSS("align-items", "center");
+    await expect(label).toHaveCSS("white-space", "nowrap");
+    await expect(label).toHaveCSS("overflow", "hidden");
+    await expect(label).toHaveCSS("text-overflow", "ellipsis");
+    await expect.poll(async () => label.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await expect(badge).toBeVisible();
 
     await context.close();
   });
