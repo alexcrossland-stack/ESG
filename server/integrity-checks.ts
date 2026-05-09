@@ -23,7 +23,7 @@ export async function checkDashboardVsMetrics(companyId: string): Promise<Discre
     checked = enabledMetrics.length;
 
     for (const metric of enabledMetrics) {
-      const vals = await storage.getMetricValues(metric.id);
+      const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
       const latest = vals.sort((a, b) => b.period.localeCompare(a.period))[0];
       if (!latest) continue;
 
@@ -85,7 +85,7 @@ export async function checkReportVsDashboard(companyId: string): Promise<Discrep
     checked = enabledMetrics.length;
 
     for (const metric of enabledMetrics) {
-      const vals = await storage.getMetricValues(metric.id);
+      const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
       const periodVal = vals.find((v) => v.period === reportPeriod);
       if (!periodVal || periodVal.value === null) continue;
 

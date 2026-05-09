@@ -399,6 +399,8 @@ export const metricValues = pgTable("metric_values", {
   enteredByUserId: varchar("entered_by_user_id"),
 }, (table) => ({
   siteIdIdx: index("idx_metric_values_site_id").on(table.siteId),
+  metricSiteIdx: index("idx_metric_values_metric_site").on(table.metricId, table.siteId),
+  metricReportingPeriodSiteIdx: index("idx_metric_values_metric_reporting_period_site").on(table.metricId, table.reportingPeriodId, table.siteId),
   metricDefIdIdx: index("idx_metric_values_metric_def_id").on(table.metricDefinitionId),
   orgNaturalKeyIdx: uniqueIndex("idx_metric_values_metric_period_org_unique")
     .on(table.metricId, table.period)
@@ -441,6 +443,8 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   lastEstimatedAt: timestamp("last_estimated_at"),
 }, (table) => ({
   siteIdIdx: index("idx_raw_data_site_id").on(table.siteId),
+  companyReportingPeriodSiteIdx: index("idx_raw_data_company_reporting_period_site").on(table.companyId, table.reportingPeriodId, table.siteId),
+  companyPeriodSiteIdx: index("idx_raw_data_company_period_site").on(table.companyId, table.period, table.siteId),
 }));
 
 export const evidenceStatusEnum = pgEnum("evidence_status", ["pending", "available", "quarantined", "rejected", "deleted", "uploaded", "reviewed", "approved", "expired"]);
@@ -473,6 +477,8 @@ export const evidenceFiles = pgTable("evidence_files", {
   scanResult: text("scan_result"),
 }, (table) => ({
   siteIdIdx: index("idx_evidence_files_site_id").on(table.siteId),
+  companySitePeriodIdx: index("idx_evidence_files_company_site_period").on(table.companyId, table.siteId, table.linkedPeriod),
+  linkedEntitySiteIdx: index("idx_evidence_files_linked_entity_site").on(table.linkedModule, table.linkedEntityId, table.siteId),
   metricIdIdx: index("idx_evidence_files_metric_id").on(table.metricId),
 }));
 
@@ -518,6 +524,7 @@ export const reportRuns = pgTable("report_runs", {
   siteId: varchar("site_id"),
 }, (table) => ({
   siteIdIdx: index("idx_report_runs_site_id").on(table.siteId),
+  companySiteGeneratedIdx: index("idx_report_runs_company_site_generated").on(table.companyId, table.siteId, table.generatedAt),
 }));
 
 export const notifications = pgTable("notifications", {

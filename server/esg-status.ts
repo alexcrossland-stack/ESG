@@ -89,12 +89,17 @@ function buildNextAction(
 
 export async function evaluateEsgStatus(
   companyId: string,
-  _period?: string,
-  _siteId?: number
+  period?: string,
+  siteId?: string | null
 ): Promise<EsgStatusResult> {
+  const metricScope = siteId === undefined
+    ? { scope: "all" as const }
+    : siteId === null
+      ? { scope: "organisation" as const }
+      : { scope: "site" as const, siteId };
   const [allMetrics, evidenceFiles] = await Promise.all([
     storage.getMetrics(companyId),
-    storage.getEvidenceFiles(companyId),
+    storage.getEvidenceFiles(companyId, siteId, period),
   ]);
 
   const enabledMetrics = allMetrics.filter((m) => m.enabled);
@@ -106,8 +111,9 @@ export async function evaluateEsgStatus(
   const missingMetricNames: string[] = [];
 
   for (const metric of enabledMetrics) {
-    const vals = await storage.getMetricValues(metric.id);
+    const vals = await storage.getMetricValuesForMetric(companyId, metric.id, metricScope);
     const latestVal = vals
+      .filter((v) => !period || v.period === period)
       .sort((a, b) => (b.period ?? "").localeCompare(a.period ?? ""))
       .find((v) => v.value !== null && v.value !== undefined);
 
@@ -119,7 +125,7 @@ export async function evaluateEsgStatus(
         measuredMetrics++;
       }
     } else {
-      missingMetricNames.push(metric.name ?? metric.key ?? "Unknown metric");
+      missingMetricNames.push(metric.name ?? (metric as any).key ?? "Unknown metric");
     }
   }
 

@@ -50,12 +50,19 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_org_sites_company_status ON organisation_sites(company_id, status)",
   // site_id indexes on ESG data tables
   "CREATE INDEX IF NOT EXISTS idx_metric_values_site_id ON metric_values(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_site ON metric_values(metric_id, site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_reporting_period_site ON metric_values(metric_id, reporting_period_id, site_id)",
   "CREATE INDEX IF NOT EXISTS idx_raw_data_site_id ON raw_data_inputs(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_raw_data_company_reporting_period_site ON raw_data_inputs(company_id, reporting_period_id, site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_raw_data_company_period_site ON raw_data_inputs(company_id, period, site_id)",
   "CREATE INDEX IF NOT EXISTS idx_evidence_files_site_id ON evidence_files(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_evidence_files_company_site_period ON evidence_files(company_id, site_id, linked_period)",
+  "CREATE INDEX IF NOT EXISTS idx_evidence_files_linked_entity_site ON evidence_files(linked_module, linked_entity_id, site_id)",
   "CREATE INDEX IF NOT EXISTS idx_questionnaires_site_id ON questionnaires(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_generated_policies_site_id ON generated_policies(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_carbon_calcs_site_id ON carbon_calculations(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_report_runs_site_id ON report_runs(site_id)",
+  "CREATE INDEX IF NOT EXISTS idx_report_runs_company_site_generated ON report_runs(company_id, site_id, generated_at)",
   "CREATE INDEX IF NOT EXISTS idx_agent_runs_site_id ON agent_runs(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_chat_sessions_site_id ON chat_sessions(site_id)",
   "CREATE INDEX IF NOT EXISTS idx_user_activity_site_id ON user_activity(site_id)",
@@ -90,8 +97,8 @@ async function verifyRequiredUniqueIndexes() {
         'idx_metric_definition_values_business_metric_period_site_unique'
       )
   `);
-  const rows = (result as any).rows ?? [] as Array<{ indexname: string; indexdef: string }>;
-  const found = new Map(rows.map((row) => [row.indexname, row.indexdef]));
+  const rows = ((result as any).rows ?? []) as Array<{ indexname: string; indexdef: string }>;
+  const found = new Map<string, string>(rows.map((row) => [row.indexname, row.indexdef]));
   const missing = REQUIRED_UNIQUE_INDEXES.filter((name) => !found.has(name));
   if (missing.length > 0) {
     throw new Error(

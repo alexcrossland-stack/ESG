@@ -134,13 +134,13 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
   const { data: historyData } = useQuery<any>({
     queryKey: ["/api/metrics", metric?.id, "history"],
     queryFn: () => {
-        return authFetch(`/api/metrics/${metric?.id}/history`).then(r => r.json());
+        return authFetch(`/api/metrics/${metric?.id}/history?siteId=__all__`).then(r => r.json());
       },
     enabled: !!metric?.id,
   });
   const { data: evidence = [] } = useQuery<MetricEvidenceFile[]>({
     queryKey: ["/api/metrics", metric?.id, "evidence"],
-    queryFn: () => authFetch(`/api/metrics/${metric?.id}/evidence`).then(r => r.json()),
+    queryFn: () => authFetch(`/api/metrics/${metric?.id}/evidence?siteId=__all__`).then(r => r.json()),
     enabled: !!metric?.id,
   });
 
@@ -328,7 +328,7 @@ export default function Metrics() {
   const historyQueries = useQueries({
     queries: enabledMetricsWithRows.map((metric) => ({
       queryKey: ["/api/metrics", metric.id, "values"],
-      queryFn: () => authFetch(`/api/metrics/${metric.id}/values`).then((r) => r.json() as Promise<MetricValueRow[]>),
+      queryFn: () => authFetch(`/api/metrics/${metric.id}/values?siteId=__all__`).then((r) => r.json() as Promise<MetricValueRow[]>),
       staleTime: 60_000,
     })),
   });
@@ -361,7 +361,7 @@ export default function Metrics() {
       id: metric.id ?? metric.key,
       name: metric.name,
       category: metric.category,
-      unit: metric.unit,
+      unit: metric.unit ?? null,
       metricType: metric.metricType || "manual",
       direction: metric.direction || "higher_is_better",
       latestValue,

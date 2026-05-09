@@ -2956,7 +2956,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!existing || existing.companyId !== companyId) {
         return res.status(404).json({ error: "Metric not found" });
       }
-      const values = await storage.getMetricValues(req.params.id);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const values = await storage.getMetricValuesForMetric(
+        companyId,
+        req.params.id,
+        siteId === undefined ? { scope: "all" } : siteId === null ? { scope: "organisation" } : { scope: "site", siteId },
+      );
       res.json(values);
     } catch (e: any) {
       sendServerError(res, e);
@@ -2971,10 +2981,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(404).json({ error: "Metric not found" });
       }
 
-      const values = await storage.getMetricValues(req.params.id);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const values = await storage.getMetricValuesForMetric(
+        companyId,
+        req.params.id,
+        siteId === undefined ? { scope: "all" } : siteId === null ? { scope: "organisation" } : { scope: "site", siteId },
+      );
       const metricValueIds = new Set(values.map((value) => value.id));
       const metricValuePeriod = new Map(values.map((value) => [value.id, value.period]));
-      const files = await storage.getEvidenceFiles(companyId);
+      const files = await storage.getEvidenceFiles(companyId, siteId);
       const evidence = files
         .filter((file: any) =>
           file.linkedModule !== "policy" && (
@@ -3024,9 +3044,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Metric Values (data entry)
   app.get(DATA_ENTRY_PERIOD_ROUTE, requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const values = await storage.getMetricValuesByPeriod(companyId, req.params.period);
+    const siteIdParam = req.query.siteId as string | undefined;
+    const siteId = siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+    if (siteId) {
+      const own = await validateSiteOwnership(siteId, companyId);
+      if (!own.valid) return res.status(own.status).json({ error: own.message });
+    }
+    const values = await storage.getMetricValuesByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
     const allMetrics = await storage.getMetrics(companyId);
-    const evidence = await storage.getEvidenceFiles(companyId, undefined, req.params.period);
+    const evidence = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, req.params.period);
     const evidenceByMetricValueId = new Map<string, any[]>();
     const evidenceByMetricId = new Map<string, any[]>();
     for (const file of evidence) {
@@ -3109,6 +3135,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let notes: string | null = null;
       let dataSourceType: string | null = null;
       let bodySiteId: string | null = null;
+      let siteScopeProvided = false;
       let attachments: File[] = [];
 
       if (isMultipartRequest(req)) {
@@ -3119,7 +3146,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         value = valueField === "" ? null : valueField;
         notes = getFormValue(formData, "notes") || null;
         dataSourceType = getFormValue(formData, "dataSourceType") || null;
-        bodySiteId = getFormValue(formData, "siteId") || null;
+        const rawSiteId = getFormValue(formData, "siteId");
+        siteScopeProvided = formData.has("siteId");
+        bodySiteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
         attachments = formData
           .getAll("attachments")
           .filter((entry): entry is File => entry instanceof File && entry.size > 0);
@@ -3129,7 +3158,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         value = req.body.value;
         notes = req.body.notes ?? null;
         dataSourceType = req.body.dataSourceType ?? null;
-        bodySiteId = req.body.siteId || null;
+        siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
+        const rawSiteId = req.body.siteId;
+        bodySiteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
       }
       if (!metricId) return res.status(400).json({ error: "metricId is required" });
       if (!period) return res.status(400).json({ error: "period is required" });
@@ -3140,6 +3171,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const metric = await storage.getMetric(metricId);
       if (!metric || metric.companyId !== companyId) {
         return res.status(404).json({ error: "Metric not found" });
+      }
+      const activeSitesForEntry = await storage.getSites(companyId);
+      if (activeSitesForEntry.length >= 1 && !siteScopeProvided) {
+        return res.status(400).json({ error: "Please select a site or choose Organisation-wide before saving data." });
       }
       // Validate siteId if provided (write: true blocks archived sites centrally)
       if (bodySiteId) {
@@ -3247,7 +3282,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }).catch(() => {});
       }
 
-      const allAttachments = await storage.getEvidenceByEntity(companyId, "metric_value", result.id);
+      const allAttachments = await storage.getEvidenceByEntity(companyId, "metric_value", result.id, result.siteId ?? null);
       res.json({
         ...result,
         attachmentMode: "multiple",
@@ -3298,7 +3333,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { inputs, period, siteId: bodySiteId } = req.body;
+      const { inputs, period } = req.body;
+      const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
+      const rawSiteId = req.body?.siteId;
+      const bodySiteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
+      if (!siteScopeProvided) {
+        const activeSitesForRaw = await storage.getSites(companyId);
+        if (activeSitesForRaw.length >= 1) {
+          return res.status(400).json({ error: "Please select a site or choose Organisation-wide before saving data." });
+        }
+      }
       // Validate siteId if provided (write: true blocks archived sites centrally)
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
@@ -3335,8 +3379,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const period = req.params.period;
+      const rawSiteId = req.body?.siteId;
+      const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
+      const siteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
+      if (!siteScopeProvided) {
+        const activeSitesForRecalc = await storage.getSites(companyId);
+        if (activeSitesForRecalc.length >= 1) {
+          return res.status(400).json({ error: "Please select a site or choose Organisation-wide before recalculating metrics." });
+        }
+      }
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const metricValueScope = siteScopeProvided
+        ? siteId === null
+          ? { scope: "organisation" as const }
+          : { scope: "site" as const, siteId }
+        : { scope: "all" as const };
 
-      const rawData = await storage.getRawDataByPeriod(companyId, period);
+      const rawData = await storage.getRawDataByPeriod(companyId, period, siteScopeProvided ? siteId : undefined);
       const rawInputs: RawInputs = {};
       for (const d of rawData) {
         rawInputs[d.inputName] = d.value !== null && d.value !== undefined ? Number(d.value) : undefined;
@@ -3345,8 +3407,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allMetrics = await storage.getMetrics(companyId);
       const existingValues: Record<string, number | null> = {};
       for (const m of allMetrics) {
-        const vals = await storage.getMetricValues(m.id);
-        const periodVal = vals.find(v => v.period === period);
+        const scopedVals = await storage.getMetricValuesForMetric(companyId, m.id, metricValueScope);
+        const periodVal = scopedVals.find(v => v.period === period);
         if (periodVal) existingValues[m.name] = periodVal.value !== null ? Number(periodVal.value) : null;
       }
 
@@ -3360,9 +3422,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const metric = allMetrics.find(m => m.name === metricName && (m.metricType === "calculated" || m.metricType === "derived"));
         if (!metric) continue;
 
-        const vals = await storage.getMetricValues(metric.id);
-        const existingForPeriod = vals.find(v => v.period === period);
-        const sortedPrev = vals.filter(v => v.period < period).sort((a, b) => a.period.localeCompare(b.period));
+        const scopedVals = await storage.getMetricValuesForMetric(companyId, metric.id, metricValueScope);
+        const existingForPeriod = scopedVals.find(v => v.period === period);
+        const sortedPrev = scopedVals.filter(v => v.period < period).sort((a, b) => a.period.localeCompare(b.period));
         const previousPeriodVal = sortedPrev.length > 0 ? sortedPrev[sortedPrev.length - 1] : null;
         const prevVal = previousPeriodVal?.value !== null && previousPeriodVal?.value !== undefined ? Number(previousPeriodVal.value) : null;
         const pctChange = prevVal && prevVal !== 0 ? Math.round(((calcValue - prevVal) / Math.abs(prevVal)) * 10000) / 100 : null;
@@ -3383,6 +3445,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             previousValue: prevVal?.toString() || null,
             status,
             percentChange: pctChange?.toString() || null,
+            siteId,
           });
           updated.push({ metric: metricName, value: calcValue, status, updated: true });
         } else {
@@ -3397,6 +3460,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             submittedBy: userId,
             notes: "Auto-calculated",
             locked: false,
+            siteId,
           });
           updated.push({ metric: metricName, value: calcValue, status, created: true });
         }
@@ -3413,7 +3477,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const companyId = (req.session as any).companyId;
     const metric = await storage.getMetric(req.params.id);
     if (!metric || metric.companyId !== companyId) return res.status(404).json({ error: "Metric not found" });
-    const values = await storage.getMetricValues(req.params.id);
+    const siteIdParam = req.query.siteId as string | undefined;
+    const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+    if (siteId) {
+      const ownership = await validateSiteOwnership(siteId, companyId);
+      if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+    }
+    const values = await storage.getMetricValuesForMetric(
+      companyId,
+      req.params.id,
+      siteId === undefined ? { scope: "all" } : siteId === null ? { scope: "organisation" } : { scope: "site", siteId },
+    );
     const sortedValues = values.sort((a, b) => a.period.localeCompare(b.period));
     const history = sortedValues.map((v, i) => {
       const val = v.value ? Number(v.value) : null;
@@ -3735,6 +3809,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const siteId = siteIdParam === "null" ? null
         : typeof siteIdParam === "string" ? siteIdParam
         : undefined;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
       const result = await scorePerformance(companyId, period, siteId);
       res.json(result);
     } catch (e: any) {
@@ -3776,6 +3854,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const siteId = siteIdParam === "null" ? null
         : typeof siteIdParam === "string" ? siteIdParam
         : undefined;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
       const { completeness, performance, managementMaturity: maturity, frameworkReadiness, scoreConfidenceLabel } = await getEsgScoreWithConfidence(companyId, period, siteId);
       res.json({ completeness, performance, maturity, frameworkReadiness, scoreConfidenceLabel });
     } catch (e: any) {
@@ -3886,7 +3968,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let latestPeriod = forcedPeriod || "";
       if (!forcedPeriod) {
         for (const metric of enabledMetrics) {
-          const vals = await storage.getMetricValues(metric.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
           for (const v of vals) {
             // Only consider active-site or org-level values when determining latest period
             if ((v.siteId === null || _activeSiteIdsForPeriod.has(v.siteId)) && v.period > latestPeriod) {
@@ -3930,7 +4012,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _fallbackHeadcount = _companyForHC?.employeeCount ?? 0;
 
       for (const metric of enabledMetrics) {
-        const values = await storage.getMetricValues(metric.id);
+        const values = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
         // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
         const periodValues = values.filter(v =>
           v.period === latestPeriod &&
@@ -4249,7 +4331,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!metric.enabled || metric.metricType === "calculated" || metric.metricType === "derived") continue;
 
         // Check if metric already has actual data
-        const vals = await storage.getMetricValues(metric.id);
+        const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
         const existingActual = vals.find(v =>
           v.value !== null &&
           v.value !== undefined &&
@@ -4460,12 +4542,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         latestFileByReportId.set(file.reportRunId, file);
       }
 
+      const reportSiteIds = Array.from(new Set(reports.map((report: any) => report.siteId).filter(Boolean)));
+      const sitesById = new Map<string, any>();
+      if (reportSiteIds.length > 0) {
+        const sites = await storage.getSites(companyId, true);
+        for (const site of sites) sitesById.set(site.id, site);
+      }
+
       const retentionCutoff = new Date(Date.now() - GENERATED_FILE_RETENTION_DAYS * 86400000);
       res.json(reports.map((report) => {
         const latestFile = latestFileByReportId.get(report.id) ?? null;
+        const site = report.siteId ? sitesById.get(report.siteId) : null;
         const isRetainedHistoryOnly = !latestFile && !!report.generatedAt && new Date(report.generatedAt) < retentionCutoff;
         return {
           ...report,
+          siteName: site?.name ?? null,
+          siteCountry: site?.country ?? null,
+          siteStatus: site?.status ?? null,
           latestFileId: latestFile?.id ?? null,
           latestFilename: latestFile?.filename ?? null,
           latestFileType: latestFile?.fileType ?? null,
@@ -4486,7 +4579,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const period = req.query.period as string | undefined;
       const rawSiteId = req.query.siteId as string | undefined;
-      const siteId = rawSiteId === "null" || rawSiteId === "__org__" ? null : rawSiteId || null;
+      const siteId = rawSiteId === "__all__" ? undefined : rawSiteId === "null" || rawSiteId === "__org__" ? null : rawSiteId || null;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
       const eligibility = await checkReportEligibility(companyId, period, siteId);
       res.json(eligibility);
     } catch (e: any) {
@@ -4501,13 +4598,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const { evaluateEsgStatus } = await import("./esg-status");
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      let selectedSiteName: string | null = null;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        selectedSiteName = ownership.site?.name ?? null;
+      }
+      const scopeLabel = siteId === undefined
+        ? "All scopes (whole organisation)"
+        : siteId === null
+          ? "Organisation-wide records only"
+          : selectedSiteName ? `Site: ${selectedSiteName}` : "Selected site";
 
       const [esgStatus, policy, actions, allMetrics, evidenceFiles] = await Promise.all([
-        evaluateEsgStatus(companyId),
+        evaluateEsgStatus(companyId, period, siteId),
         storage.getPolicy(companyId).catch(() => null),
         storage.getActionPlans(companyId).catch(() => []),
         storage.getMetrics(companyId),
-        storage.getEvidenceFiles(companyId),
+        storage.getEvidenceFiles(companyId, siteId, period),
       ]);
 
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
@@ -4570,6 +4681,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const canGenerateConfirmed = esgStatus.state === "CONFIRMED";
 
       res.json({
+        scope: siteId === undefined ? "all" : siteId === null ? "organisation" : "site",
+        scopeLabel,
+        siteId: siteId ?? null,
+        period: period ?? null,
         esgState: esgStatus.state,
         stateLabel: esgStatus.label,
         stateExplanation: esgStatus.explanation,
@@ -5882,7 +5997,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Get recent metric values
       const metricData: Record<string, any> = {};
       for (const m of allMetrics.filter(m => m.enabled)) {
-        const vals = await storage.getMetricValues(m.id);
+        const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
         if (vals.length > 0) {
           metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
         }
@@ -6934,7 +7049,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const period = req.query.period as string | undefined;
-      const coverage = await storage.getEvidenceCoverage(companyId, period);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+      const coverage = await storage.getEvidenceCoverage(companyId, period, siteIdParam !== undefined ? siteId : undefined);
       res.json(coverage);
     } catch (e: any) {
       sendServerError(res, e);
@@ -6944,7 +7065,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/evidence/entity/:module/:entityId", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const files = await storage.getEvidenceByEntity(companyId, req.params.module, req.params.entityId);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      const isDirectMetricEntity = req.params.module === "metric" || req.params.module === "metrics";
+      if (isDirectMetricEntity && siteIdParam === undefined) {
+        const activeSites = await storage.getSites(companyId);
+        if (activeSites.length > 0) {
+          return res.status(400).json({ error: "siteId is required for direct metric evidence when company has active sites" });
+        }
+      }
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const files = await storage.getEvidenceByEntity(companyId, req.params.module, req.params.entityId, siteId);
       res.json(files);
     } catch (e: any) {
       sendServerError(res, e);
@@ -7020,7 +7154,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: validation.error });
       }
 
-      const requestedSiteId = getFormValue(formData, "siteId") || null;
+      const requestedSiteRaw = getFormValue(formData, "siteId");
+      const explicitOrgWide = requestedSiteRaw === "__org__" || requestedSiteRaw === "null";
+      const requestedSiteId = explicitOrgWide ? null : requestedSiteRaw || null;
+      const activeSitesForEvidence = await storage.getSites(companyId);
+      if (activeSitesForEvidence.length >= 1 && !requestedSiteId && !explicitOrgWide) {
+        return res.status(400).json({ error: "Please select a site or choose Organisation-wide before uploading evidence." });
+      }
       if (requestedSiteId) {
         const ownership = await validateSiteOwnership(requestedSiteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
@@ -7182,7 +7322,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let totalWeight = 0;
 
       for (const metric of enabledMetrics) {
-        const values = await storage.getMetricValues(metric.id);
+        const values = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
         const latestVal = values.length > 0 ? values.sort((a, b) => b.period.localeCompare(a.period))[0] : null;
 
         let score = 0;
@@ -7632,7 +7772,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       let maturityStage: "starter" | "developing" | "established" = "starter";
-      const allMetricValues = await storage.getMetricValues(companyId);
+      const allMetricValues = (await Promise.all(
+        enabledMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" }))
+      )).flat();
       const metricsWithValuesSet = new Set(allMetricValues.map((v: any) => v.metricId));
       const totalMetricsWithData = enabledMetrics.filter(m => metricsWithValuesSet.has(m.id)).length;
 
@@ -7912,7 +8054,19 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const { metricId, policySection, complianceReqId, category } = req.query;
-      const allEvidence = await storage.getEvidenceFiles(companyId);
+      const siteIdParam = req.query.siteId as string | undefined;
+      const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
+      if (metricId && siteIdParam === undefined) {
+        const activeSites = await storage.getSites(companyId);
+        if (activeSites.length > 0) {
+          return res.status(400).json({ error: "siteId is required for metric evidence suggestions when company has active sites" });
+        }
+      }
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const allEvidence = await storage.getEvidenceFiles(companyId, siteId);
       const valid = allEvidence.filter((e: any) => !e.expiryDate || new Date(e.expiryDate) > new Date());
       const scored = valid.map((e: any) => {
         let relevance = 0;
@@ -8367,7 +8521,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const metricData: Record<string, any> = {};
       const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
       for (const m of allMetrics.filter((m: any) => m.enabled)) {
-        const vals = await storage.getMetricValues(m.id);
+        const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
         if (vals.length > 0) {
           metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
         }
@@ -8674,27 +8828,27 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       for (const m of metrics) {
         const name = m.name.toLowerCase();
         if (name.includes("recycl") || name.includes("waste recycl")) {
-          const vals = await storage.getMetricValues(m.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
           const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
           if (latest?.value) companyMetrics.push({ metricKey: "waste_recycling_rate", value: parseFloat(latest.value) });
         }
         if (name.includes("absence") || name.includes("sickness")) {
-          const vals = await storage.getMetricValues(m.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
           const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
           if (latest?.value) companyMetrics.push({ metricKey: "absence_rate", value: parseFloat(latest.value) });
         }
         if (name.includes("training hours") || name.includes("training")) {
-          const vals = await storage.getMetricValues(m.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
           const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
           if (latest?.value) companyMetrics.push({ metricKey: "training_hours", value: parseFloat(latest.value) / employeeCount });
         }
         if (name.includes("gender") || name.includes("diversity")) {
-          const vals = await storage.getMetricValues(m.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
           const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
           if (latest?.value) companyMetrics.push({ metricKey: "gender_diversity", value: parseFloat(latest.value) });
         }
         if (name.includes("living wage")) {
-          const vals = await storage.getMetricValues(m.id);
+          const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
           const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
           if (latest?.value) companyMetrics.push({ metricKey: "living_wage", value: parseFloat(latest.value) });
         }
@@ -8846,7 +9000,9 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter(m => m.enabled);
-      const metricValues = await storage.getMetricValues(companyId);
+      const metricValues = (await Promise.all(
+        enabledMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" }))
+      )).flat();
       const metricsWithValues = new Set(metricValues.map((v: any) => v.metricId));
       const metricsWithData = enabledMetrics.filter(m => metricsWithValues.has(m.id)).length;
 
@@ -10893,7 +11049,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { metricDefinitionId, siteId, periodStart, periodEnd } = req.query;
       const filters: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date } = {};
       if (metricDefinitionId) filters.metricDefinitionId = metricDefinitionId as string;
-      if (siteId !== undefined) filters.siteId = siteId === "null" ? null : siteId as string;
+      if (siteId !== undefined) {
+        filters.siteId = siteId === "null" || siteId === "__org__" ? null : siteId as string;
+        if (filters.siteId) {
+          const ownership = await validateSiteOwnership(filters.siteId, companyId);
+          if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        }
+      }
       if (periodStart) filters.periodStart = new Date(periodStart as string);
       if (periodEnd) filters.periodEnd = new Date(periodEnd as string);
       const values = await storage.getMetricDefinitionValues(companyId, filters);
@@ -11404,6 +11566,12 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { format: fmt = "pdf", period, siteId, dateFrom, dateTo } = req.body;
+      const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
+      const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
+      if (requestedSiteId) {
+        const ownership = await validateSiteOwnership(requestedSiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
 
       const VALID_TYPES = ["esg_metrics_summary", "framework_readiness_summary", "target_progress_summary", "policy_register_summary", "risk_register_summary", "site_comparison_summary"];
       if (!VALID_TYPES.includes(reportType)) {
@@ -11415,10 +11583,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const dateToObj = dateTo ? new Date(dateTo) : null;
 
       // Helper: filter values by date range (period string "YYYY-MM" comparison) and siteId
-      function filterValues(values: any[], opts: { siteId?: string; dateFrom?: Date | null; dateTo?: Date | null }): any[] {
+      function filterValues(values: any[], opts: { siteId?: string | null; siteScopeProvided?: boolean; dateFrom?: Date | null; dateTo?: Date | null }): any[] {
         return values.filter(v => {
-          // Site filter: if siteId given, only include values for that site
-          if (opts.siteId && v.siteId !== opts.siteId) return false;
+          // Site filter: omitted means all scopes, null means organisation-wide only.
+          if (opts.siteScopeProvided) {
+            if (opts.siteId === null && v.siteId !== null && v.siteId !== undefined) return false;
+            if (opts.siteId && v.siteId !== opts.siteId) return false;
+          }
           // Date range filter: period is "YYYY-MM" or "YYYY-QN" or "YYYY"
           if (opts.dateFrom || opts.dateTo) {
             if (v.period) {
@@ -11462,23 +11633,33 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
         let site: any = null;
-        if (siteId) site = await storage.getSite(siteId, companyId);
+        if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
 
         // Fetch values: use period if given, else use date range if given, else all values
         let allValues: any[] = [];
+        const exportMetricScope = requestedSiteId === undefined
+          ? { scope: "all" as const }
+          : requestedSiteId === null
+            ? { scope: "organisation" as const }
+            : { scope: "site" as const, siteId: requestedSiteId };
+
         if (period) {
-          allValues = await storage.getMetricValuesByPeriod(companyId, period);
+          allValues = await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined);
         } else {
           // Fetch all values across all metrics for the company
           const allMetricIds = enabledMetrics.map((m: any) => m.id);
           for (const metricId of allMetricIds) {
-            const vals = await storage.getMetricValues(metricId);
+            const vals = await storage.getMetricValuesForMetric(
+              companyId,
+              metricId,
+              exportMetricScope,
+            );
             allValues.push(...vals.map((v: any) => ({ ...v, metricId })));
           }
         }
 
         // Apply site and date range filters
-        const values = filterValues(allValues, { siteId, dateFrom: dateFromObj, dateTo: dateToObj });
+        const values = filterValues(allValues, { siteId: requestedSiteId, siteScopeProvided: siteScopeProvided && requestedSiteId !== undefined, dateFrom: dateFromObj, dateTo: dateToObj });
 
         // Compute accurate metric counts: only count metrics that have reported values in the filtered set
         const reportedMetricIds = new Set(values.map((v: any) => v.metricId));
@@ -11549,7 +11730,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         // Get all active sites
         let sites = await storage.getSites(companyId, false);
         // If siteId specified, filter to just that site (for narrowed comparison)
-        if (siteId) sites = sites.filter((s: any) => s.id === siteId);
+        if (requestedSiteId) sites = sites.filter((s: any) => s.id === requestedSiteId);
 
         const allSitesSummary = await storage.getSitesSummary(companyId, period);
         // Filter sitesSummary to only include scoped sites
@@ -11573,7 +11754,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           });
         } else {
           for (const m of enabledMetrics) {
-            const vals = await storage.getMetricValues(m.id);
+            const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
             allValues.push(...vals.map((v: any) => ({
               ...v,
               metricId: m.id,
@@ -11670,15 +11851,23 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { period, siteId } = req.query as { period?: string; siteId?: string };
+      const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, "siteId");
+      const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
+      if (requestedSiteId) {
+        const ownership = await validateSiteOwnership(requestedSiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
 
       const company = await storage.getCompany(companyId);
 
       if (reportType === "esg_metrics_summary") {
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
-        const values = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
+        const values = period
+          ? await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined)
+          : [];
         let site: any = null;
-        if (siteId) site = await storage.getSite(siteId, companyId);
+        if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
         res.json({ metrics: enabledMetrics, values, site, period });
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
@@ -13840,7 +14029,7 @@ async function buildEsgProfile(companyId: string) {
   const keyMetrics: any[] = [];
 
   for (const m of enabledMetrics.slice(0, 20)) {
-    const vals = await storage.getMetricValues(m.id);
+    const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
     const latest = vals.sort((a: any, b: any) => (b.period || "").localeCompare(a.period || ""))[0];
     if (latest?.value) {
       const score = latest.status === "green" ? 100 : latest.status === "amber" ? 60 : latest.status === "red" ? 20 : 50;

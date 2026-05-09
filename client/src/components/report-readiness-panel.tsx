@@ -8,10 +8,15 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { EsgStatusBadge } from "@/components/esg-status-badge";
+import { authFetch } from "@/lib/queryClient";
 
 type EsgState = "IN_PROGRESS" | "DRAFT" | "PROVISIONAL" | "CONFIRMED";
 
 export interface ReadinessDetail {
+  scope?: "all" | "organisation" | "site";
+  scopeLabel?: string;
+  siteId?: string | null;
+  period?: string | null;
   esgState: EsgState;
   stateLabel: string;
   stateExplanation: string;
@@ -105,11 +110,19 @@ function MissingItem({ text, href, linkLabel }: { text: string; href?: string; l
   );
 }
 
-export function ReportReadinessPanel() {
+export function ReportReadinessPanel({ siteId, period, scopeLabel }: { siteId?: string | null; period?: string; scopeLabel?: string }) {
   const [showMissing, setShowMissing] = useState(false);
+  const scopeKey = siteId === null ? "__org__" : siteId ?? "__all__";
 
   const { data, isLoading } = useQuery<ReadinessDetail>({
-    queryKey: ["/api/reports/readiness-detail"],
+    queryKey: ["/api/reports/readiness-detail", scopeKey, period ?? "__latest__"],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (period) params.set("period", period);
+      if (siteId !== undefined) params.set("siteId", siteId ?? "null");
+      const qs = params.toString();
+      return authFetch(`/api/reports/readiness-detail${qs ? `?${qs}` : ""}`).then(r => r.json());
+    },
     staleTime: 30_000,
   });
 
@@ -151,6 +164,9 @@ export function ReportReadinessPanel() {
               </p>
               <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-readiness-explanation">
                 {data.stateExplanation}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5" data-testid="text-readiness-scope">
+                Scope: {scopeLabel || data.scopeLabel || "All scopes (whole organisation)"}
               </p>
             </div>
           </div>

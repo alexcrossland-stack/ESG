@@ -8,17 +8,20 @@ import { useState } from "react";
 interface EvidenceSuggestionsProps {
   metricId?: string;
   category?: string;
+  siteId?: string | null;
   onLink?: (evidenceId: string) => void;
 }
 
-export function EvidenceSuggestions({ metricId, category, onLink }: EvidenceSuggestionsProps) {
+export function EvidenceSuggestions({ metricId, category, siteId, onLink }: EvidenceSuggestionsProps) {
   const [expanded, setExpanded] = useState(false);
   const params = new URLSearchParams();
   if (metricId) params.set("metricId", metricId);
   if (category) params.set("category", category);
+  if (siteId !== undefined) params.set("siteId", siteId ?? "null");
+  const scopeKey = siteId === null ? "__org__" : siteId ?? "__all__";
 
   const { data: suggestions = [] } = useQuery<any[]>({
-    queryKey: ["/api/evidence/suggestions", metricId, category],
+    queryKey: ["/api/evidence/suggestions", metricId, category, scopeKey],
     queryFn: () => authFetch(`/api/evidence/suggestions?${params.toString()}`).then(r => r.json()),
     enabled: !!(metricId || category),
   });

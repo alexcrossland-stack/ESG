@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -111,7 +111,7 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
   const [period, setPeriod] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
-  const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || "");
+  const [selectedSiteScope, setSelectedSiteScope] = useState(activeSiteId || "__org__");
 
   const { data: metrics = [] } = useQuery<CompanyMetric[]>({
     queryKey: ["/api/metrics"],
@@ -128,8 +128,12 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
     setPeriod("");
     setNotes("");
     setTags("");
-    setSelectedSiteId(activeSiteId || "");
+    setSelectedSiteScope(activeSiteId || "__org__");
   };
+
+  useEffect(() => {
+    if (open) setSelectedSiteScope(activeSiteId || "__org__");
+  }, [activeSiteId, open]);
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -140,7 +144,7 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
       formData.append("period", period.trim());
       if (notes.trim()) formData.append("notes", notes.trim());
       if (tags.trim()) formData.append("tags", tags.trim());
-      if (selectedSiteId) formData.append("siteId", selectedSiteId);
+      formData.append("siteId", selectedSiteScope);
       const res = await apiRequest("POST", "/api/evidence", formData);
       return res.json();
     },
@@ -159,7 +163,7 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
 
   const selectedFileSize = formatAttachmentSize(file?.size);
   const isMultiSite = activeSites.length >= 1;
-  const canUpload = Boolean(file && metricId && period.trim()) && !uploadMutation.isPending && !disabled;
+  const canUpload = Boolean(file && metricId && period.trim() && (!isMultiSite || selectedSiteScope)) && !uploadMutation.isPending && !disabled;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) reset(); }}>
@@ -217,17 +221,21 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
 
           {isMultiSite && (
             <div className="space-y-1">
-              <Label>Site</Label>
-              <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+              <Label>Site / Scope *</Label>
+              <Select value={selectedSiteScope} onValueChange={setSelectedSiteScope}>
                 <SelectTrigger data-testid="select-evidence-site">
-                  <SelectValue placeholder="Company-wide evidence" />
+                  <SelectValue placeholder="Select where this evidence applies" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__org__">Organisation-wide</SelectItem>
                   {activeSites.map((site: any) => (
                     <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Required when sites exist. Choose Organisation-wide only when the file applies to the whole company.
+              </p>
             </div>
           )}
 
@@ -267,9 +275,16 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
   );
 }
 
-function CoverageOverview() {
+function coverageUrlForScope(viewSiteId: string) {
+  if (viewSiteId === "__all__") return "/api/evidence/coverage";
+  const params = new URLSearchParams({ siteId: viewSiteId === "__org__" ? "null" : viewSiteId });
+  return `/api/evidence/coverage?${params.toString()}`;
+}
+
+function CoverageOverview({ viewSiteId }: { viewSiteId: string }) {
   const { data: coverage, isLoading } = useQuery<any>({
-    queryKey: ["/api/evidence/coverage"],
+    queryKey: ["/api/evidence/coverage", viewSiteId],
+    queryFn: () => authFetch(coverageUrlForScope(viewSiteId)).then((r) => r.json()),
   });
   const { data: definitions = [] } = useQuery<MetricDefinitionActivation[]>({
     queryKey: ["/api/metric-definitions"],
@@ -346,9 +361,10 @@ function CoverageOverview() {
   );
 }
 
-function MetricCoverageTable() {
+function MetricCoverageTable({ viewSiteId }: { viewSiteId: string }) {
   const { data: coverage } = useQuery<any>({
-    queryKey: ["/api/evidence/coverage"],
+    queryKey: ["/api/evidence/coverage", viewSiteId],
+    queryFn: () => authFetch(coverageUrlForScope(viewSiteId)).then((r) => r.json()),
   });
   const { data: definitions = [] } = useQuery<MetricDefinitionActivation[]>({
     queryKey: ["/api/metric-definitions"],
@@ -445,7 +461,7 @@ function EvidenceManagementView({
   const { can } = usePermissions();
   const { toast } = useToast();
   const hasMultipleSites = sites.length >= 1;
-  const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId;
+  const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId === "__org__" ? null : viewSiteId;
   const viewedSite = resolvedSiteId ? sites.find((s: any) => s.id === resolvedSiteId) : null;
   const [metricFilter, setMetricFilter] = useState("__all__");
   const [periodFilter, setPeriodFilter] = useState("__all__");
@@ -453,9 +469,9 @@ function EvidenceManagementView({
   const [showOrphansOnly, setShowOrphansOnly] = useState("false");
 
   const { data: files = [], isLoading } = useQuery<EvidenceListItem[]>({
-    queryKey: ["/api/evidence", resolvedSiteId ?? "all"],
+    queryKey: ["/api/evidence", viewSiteId],
     queryFn: async () => {
-      const url = resolvedSiteId ? `/api/evidence?siteId=${resolvedSiteId}` : "/api/evidence";
+      const url = resolvedSiteId === undefined ? "/api/evidence" : `/api/evidence?siteId=${resolvedSiteId ?? "null"}`;
       const res = await authFetch(url);
       if (!res.ok) throw new Error("Failed to load evidence");
       return res.json();
@@ -523,9 +539,11 @@ function EvidenceManagementView({
     return (
       <EmptyState
         icon={FileCheck}
-        title={viewedSite ? "No evidence for this site yet" : "No evidence files yet"}
+        title={viewedSite ? "No evidence for this site yet" : viewSiteId === "__org__" ? "No organisation-wide evidence yet" : "No evidence files yet"}
         description={viewedSite
           ? `Upload a document and link it to a metric for ${viewedSite.name}.`
+          : viewSiteId === "__org__"
+            ? "Upload a document and choose Organisation-wide when it applies to the whole company."
           : "Upload a document and link it to the metric it supports. Evidence added from Data Entry also appears here."}
         helpText="Use Upload evidence above, or attach evidence directly from a metric row in Data Entry."
       />
@@ -570,7 +588,8 @@ function EvidenceManagementView({
                     <SelectValue placeholder="All sites" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__all__">All sites</SelectItem>
+                    <SelectItem value="__org__">Organisation-wide</SelectItem>
+                    <SelectItem value="__all__">All scopes</SelectItem>
                     {sites.map((s) => (
                       <SelectItem key={s.id} value={s.id} data-testid={`option-evidence-site-${s.id}`}>
                         {s.name}{s.status === "archived" ? " (Archived)" : ""}
@@ -767,9 +786,13 @@ export default function Evidence() {
   const { data: coverage } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
   const fileCount = coverage?.totalEvidence ?? 0;
 
-  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__all__");
+  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__org__");
 
-  const resolvedViewSite = viewSiteId === "__all__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
+  useEffect(() => {
+    setViewSiteId(activeSiteId || "__org__");
+  }, [activeSiteId]);
+
+  const resolvedViewSite = viewSiteId === "__all__" || viewSiteId === "__org__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
   const isArchivedView = resolvedViewSite?.status === "archived";
 
   return (
@@ -812,7 +835,7 @@ export default function Evidence() {
         />
       )}
 
-      <CoverageOverview />
+      <CoverageOverview viewSiteId={viewSiteId} />
 
       <Tabs defaultValue="files">
         <TabsList>
@@ -830,7 +853,7 @@ export default function Evidence() {
           />
         </TabsContent>
         <TabsContent value="coverage" className="mt-4">
-          <MetricCoverageTable />
+          <MetricCoverageTable viewSiteId={viewSiteId} />
         </TabsContent>
         <TabsContent value="requests" className="mt-4">
           <EvidenceRequestsPanel />

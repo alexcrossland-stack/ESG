@@ -54,7 +54,7 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
 
   const enabledMetrics = metrics.filter(m => m.enabled);
   const metricValues = await Promise.all(
-    enabledMetrics.map(m => storage.getMetricValues(m.id))
+    enabledMetrics.map(m => storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" }))
   );
   const allMetricValues = metricValues.flat().filter(v => v.value !== null && v.value !== undefined);
 

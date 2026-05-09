@@ -20,7 +20,7 @@ import {
   AlertCircle, Calculator, CheckCircle2, Zap, Info,
   Upload, Download, FileSpreadsheet, Table, Eye,
   Send, Check, X, FileCheck, Loader2, ArrowRight, Sparkles, Pencil,
-  Paperclip, Trash2, ExternalLink, FileText,
+  Paperclip, Trash2, ExternalLink, FileText, Globe, MapPin,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -147,7 +147,12 @@ export default function DataEntry() {
   const queryClient = useQueryClient();
   const { can, isApprover } = usePermissions();
   const { isPro } = useBillingStatus();
-  const { activeSiteId } = useSiteContext();
+  const { activeSiteId, activeSite, activeSites, setActiveSiteId, isLoading: sitesLoading } = useSiteContext();
+  const hasActiveSites = activeSites.length > 0;
+  const selectedScopeSiteId = activeSiteId ?? null;
+  const selectedScopeKey = activeSiteId ?? "__org__";
+  const selectedScopeParam = activeSiteId ?? "null";
+  const selectedScopeLabel = activeSite ? activeSite.name : "Organisation-wide";
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const highlightEstimated = searchParams.get("highlight") === "estimated";
@@ -174,17 +179,25 @@ export default function DataEntry() {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const { data: evidenceCoverage } = useQuery<any>({
-    queryKey: ["/api/evidence/coverage"],
+    queryKey: ["/api/evidence/coverage", selectedScopeKey],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
+      const qs = params.toString();
+      return authFetch(`/api/evidence/coverage${qs ? `?${qs}` : ""}`).then((r) => r.json());
+    },
+    enabled: !sitesLoading,
   });
 
   const { data: evidenceFiles = [] } = useQuery<EvidenceAttachment[]>({
-    queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"],
+    queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("period", selectedPeriod);
-      if (activeSiteId) params.set("siteId", activeSiteId);
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
       return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
     },
+    enabled: !sitesLoading,
   });
 
   const { data: dataQuality } = useQuery<any>({
@@ -204,17 +217,25 @@ export default function DataEntry() {
   const isReportingPeriodLocked = activeReportingPeriod?.status === "locked";
 
   const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
-    queryKey: ["/api/raw-data", selectedPeriod],
+    queryKey: ["/api/raw-data", selectedPeriod, selectedScopeKey],
     queryFn: () => {
-        return authFetch(`/api/raw-data/${selectedPeriod}`).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
+        const params = new URLSearchParams();
+        if (hasActiveSites) params.set("siteId", selectedScopeParam);
+        const qs = params.toString();
+        return authFetch(`/api/raw-data/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
       },
+    enabled: !sitesLoading,
   });
 
   const { data: entryData, isLoading: entryLoading } = useQuery<any>({
-    queryKey: ["/api/data-entry", selectedPeriod],
+    queryKey: ["/api/data-entry", selectedPeriod, selectedScopeKey],
     queryFn: () => {
-        return authFetch(`/api/data-entry/${selectedPeriod}`).then(r => r.json());
+        const params = new URLSearchParams();
+        if (hasActiveSites) params.set("siteId", selectedScopeParam);
+        const qs = params.toString();
+        return authFetch(`/api/data-entry/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(r => r.json());
       },
+    enabled: !sitesLoading,
   });
 
   useEffect(() => {
@@ -265,7 +286,7 @@ export default function DataEntry() {
   });
 
   const recalcMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/metrics/recalculate/${selectedPeriod}`, {}).then(r => r.json()),
+    mutationFn: () => apiRequest("POST", `/api/metrics/recalculate/${selectedPeriod}`, { siteId: selectedScopeSiteId }).then(r => r.json()),
     onSuccess: (data: any) => {
       setRecalcResults(data.updated || []);
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
@@ -284,7 +305,7 @@ export default function DataEntry() {
         formData.append("value", data.value);
         formData.append("notes", data.notes || "");
         if (data.dataSourceType) formData.append("dataSourceType", data.dataSourceType);
-        if (data.siteId) formData.append("siteId", data.siteId);
+        formData.append("siteId", data.siteId ?? "__org__");
         data.attachments.forEach((file) => formData.append("attachments", file, file.name));
         return apiRequest("POST", "/api/data-entry", formData).then((response) => response.json());
       }
@@ -300,7 +321,7 @@ export default function DataEntry() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
-      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
     },
   });
@@ -308,7 +329,7 @@ export default function DataEntry() {
   const deleteEvidenceMutation = useMutation({
     mutationFn: (evidenceId: string) => apiRequest("DELETE", `/api/evidence/${evidenceId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, activeSiteId || "__all__"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
       toast({ title: "Evidence removed" });
@@ -352,9 +373,9 @@ export default function DataEntry() {
 
   const acceptEstimateMutation = useMutation({
     mutationFn: (estimate: { metricId: string; value: number; notes: string }) =>
-      apiRequest("POST", "/api/data-entry", { ...estimate, period: selectedPeriod, dataSourceType: "estimated", siteId: activeSiteId || null }),
+      apiRequest("POST", "/api/data-entry", { ...estimate, period: selectedPeriod, dataSourceType: "estimated", siteId: selectedScopeSiteId }),
     onSuccess: (_, vars) => {
-      setAcceptedEstimates(prev => new Set([...prev, vars.metricId]));
+      setAcceptedEstimates(prev => new Set([...Array.from(prev), vars.metricId]));
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
     },
     onError: () => toast({ title: "Could not save estimate", variant: "destructive" }),
@@ -362,9 +383,9 @@ export default function DataEntry() {
 
   const replaceEstimateMutation = useMutation({
     mutationFn: (data: { metricId: string; value: number; notes: string; saveAsActual: boolean }) =>
-      apiRequest("POST", "/api/data-entry", { metricId: data.metricId, value: data.value, notes: data.notes, period: selectedPeriod, dataSourceType: data.saveAsActual ? "manual" : "estimated", siteId: activeSiteId || null }),
+      apiRequest("POST", "/api/data-entry", { metricId: data.metricId, value: data.value, notes: data.notes, period: selectedPeriod, dataSourceType: data.saveAsActual ? "manual" : "estimated", siteId: selectedScopeSiteId }),
     onSuccess: (_, vars) => {
-      setAcceptedEstimates(prev => new Set([...prev, vars.metricId]));
+      setAcceptedEstimates(prev => new Set([...Array.from(prev), vars.metricId]));
       setEditingEstimate(null);
       setEditEstimateValue("");
       setEditSaveAsActual(false);
@@ -377,7 +398,7 @@ export default function DataEntry() {
   useEffect(() => {
     if (autoEstimateTriggered || estimateBannerDismissed) return;
     if (!entryData || entryLoading) return;
-    const prefillKey = `estimate_prefill_shown_${selectedPeriod}`;
+    const prefillKey = `estimate_prefill_shown_${selectedPeriod}_${selectedScopeKey}`;
     if (localStorage.getItem(prefillKey) === "true") return;
     const allMetrics = entryData?.metrics || [];
     const filledValues = (entryData?.values || []).filter((v: any) => v.value !== null && v.value !== undefined);
@@ -387,9 +408,9 @@ export default function DataEntry() {
     if (entryEligibleMetrics.length > 0 && emptyMetrics.length > 0) {
       setAutoEstimateTriggered(true);
       localStorage.setItem(prefillKey, "true");
-      fetchEstimatesMutation.mutate();
+      fetchEstimatesMutation.mutate({});
     }
-  }, [entryData, entryLoading, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod]);
+  }, [entryData, entryLoading, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod, selectedScopeKey]);
 
   const lockMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/data-entry/${selectedPeriod}/lock`, {}),
@@ -453,7 +474,7 @@ export default function DataEntry() {
     for (const [k, v] of Object.entries(rawInputs)) {
       if (v !== undefined && v !== null && v.trim() !== "") nonEmpty[k] = v;
     }
-    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: activeSiteId || null });
+    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: selectedScopeSiteId });
     await recalcMutation.mutateAsync();
   };
 
@@ -468,7 +489,7 @@ export default function DataEntry() {
       value: val.value,
       notes: val.notes,
       dataSourceType,
-      siteId: activeSiteId || null,
+      siteId: selectedScopeSiteId,
       attachments,
     });
     if (attachments.length > 0) {
@@ -491,6 +512,10 @@ export default function DataEntry() {
 
   const metrics = entryData?.metrics || [];
   const existingValues = entryData?.values || [];
+  const isSelectedScopeValue = (value: any) =>
+    selectedScopeSiteId === null
+      ? value?.siteId === null || value?.siteId === undefined
+      : value?.siteId === selectedScopeSiteId;
   const isLocked = existingValues.some((v: any) => v.locked);
   const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
   const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
@@ -518,7 +543,7 @@ export default function DataEntry() {
     }));
   };
 
-  const isLoading = rawLoading || entryLoading || definitionsLoading;
+  const isLoading = rawLoading || entryLoading || definitionsLoading || sitesLoading;
   if (isLoading) {
     return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>;
   }
@@ -632,6 +657,48 @@ export default function DataEntry() {
         </div>
       </div>
 
+      {hasActiveSites && (
+        <div className="rounded-md border border-primary/20 bg-primary/5 p-3" data-testid="data-entry-site-scope-panel">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-sm font-medium flex items-center gap-1.5">
+                {activeSite ? <MapPin className="w-3.5 h-3.5 text-primary" /> : <Globe className="w-3.5 h-3.5 text-muted-foreground" />}
+                Data scope *
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Values and evidence on this page are saved to {selectedScopeLabel}.
+              </p>
+            </div>
+            <Select
+              value={selectedScopeKey}
+              onValueChange={(value) => {
+                setActiveSiteId(value === "__org__" ? null : value);
+                setManualValues({});
+                setManualDataSourceTypes({});
+                setRawInputs({});
+                setPendingAttachments({});
+                setRecalcResults(null);
+                setAutoEstimateTriggered(false);
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-64 bg-background" data-testid="select-data-entry-site-scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__org__">
+                  <span className="flex items-center gap-1.5"><Globe className="w-3 h-3" /> Organisation-wide</span>
+                </SelectItem>
+                {activeSites.map((site) => (
+                  <SelectItem key={site.id} value={site.id} data-testid={`option-data-entry-site-${site.id}`}>
+                    <span className="flex items-center gap-1.5"><MapPin className="w-3 h-3" /> {site.name}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         {canEdit && !isApproved && (
           <Button
@@ -684,7 +751,7 @@ export default function DataEntry() {
                 size="sm"
                 variant="outline"
                 className="border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
-                onClick={() => fetchEstimatesMutation.mutate()}
+                onClick={() => fetchEstimatesMutation.mutate({})}
                 disabled={fetchEstimatesMutation.isPending}
                 data-testid="button-load-estimates"
               >
@@ -821,7 +888,7 @@ export default function DataEntry() {
                               const noteText = [est.explanation, est.methodology].filter(Boolean).join(" | ") || `Sector estimate (${est.source})`;
                               acceptEstimateMutation.mutate({ metricId: est.metricId, value: est.value, notes: noteText });
                             } else {
-                              setAcceptedEstimates(prev => new Set([...prev, key]));
+                              setAcceptedEstimates(prev => new Set([...Array.from(prev), key]));
                               if (est.inputKey) {
                                 setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
                               }
@@ -847,7 +914,7 @@ export default function DataEntry() {
                           size="sm"
                           variant="ghost"
                           className="h-7 text-xs text-muted-foreground"
-                          onClick={() => setSkippedEstimates(prev => new Set([...prev, key]))}
+                          onClick={() => setSkippedEstimates(prev => new Set([...Array.from(prev), key]))}
                           data-testid={`button-skip-estimate-${key}`}
                         >
                           Skip
@@ -1152,7 +1219,7 @@ export default function DataEntry() {
                     const isEligible = isMetricEntryEligible(metric);
                     const localVal = manualValues[metricKey] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
-                    const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId) : undefined;
+                    const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId && isSelectedScopeValue(v)) : undefined;
                     const metricPriority = getManualMetricPriority(metric.name);
                     const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
@@ -1198,7 +1265,7 @@ export default function DataEntry() {
                               />
                             )}
                           </div>
-                          {metricId && <EvidenceSuggestions metricId={metricId} category={metric.category} />}
+                          {metricId && <EvidenceSuggestions metricId={metricId} category={metric.category} siteId={selectedScopeSiteId} />}
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
                           )}
@@ -1407,7 +1474,7 @@ export default function DataEntry() {
             />
           )}
 
-          {allEnabledMetrics.length > 0 && activeSiteId && existingValues.filter((v: any) => v.siteId === activeSiteId).length === 0 && (
+          {allEnabledMetrics.length > 0 && activeSiteId && existingValues.filter(isSelectedScopeValue).length === 0 && (
             <EmptyState
               icon={ClipboardList}
               title="No data entered for this site"
