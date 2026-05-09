@@ -103,11 +103,15 @@ function navTestId(label: string) {
   return `nav-${label.toLowerCase().replace(/&/g, "and").replace(/\s+/g, "-")}`;
 }
 
+function NavItemLabel({ children }: { children: string }) {
+  return <span className="min-w-0 flex-1 truncate whitespace-nowrap">{children}</span>;
+}
+
 interface NavBadgeProps { show: boolean }
 function NextBadge({ show }: NavBadgeProps) {
   if (!show) return null;
   return (
-    <span className="ml-auto shrink-0 text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary/10 text-primary leading-tight">
+    <span className="ml-auto shrink-0 text-[9px] font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-primary/10 text-primary leading-tight">
       Next
     </span>
   );
@@ -154,7 +158,7 @@ function AdvancedNavLink({ item, location }: { item: NavItem; location: string }
       aria-current={isActive(location, item.href) ? "page" : undefined}
     >
       <Icon className="w-3.5 h-3.5 shrink-0" />
-      <span>{item.label}</span>
+      <NavItemLabel>{item.label}</NavItemLabel>
     </Link>
   );
 }
@@ -263,16 +267,16 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <SidebarMenuSub>
+                    <SidebarMenuSub className="mx-2 px-1">
                       <div className="space-y-0.5" data-testid="nav-esg-setup-items">
                         {esgSetupItems.map(item => {
                           const Icon = ICON_BY_HREF[item.href] ?? FileText;
                           return (
                             <SidebarMenuSubItem key={item.href}>
-                              <SidebarMenuSubButton asChild data-active={isActive(location, item.href)}>
+                              <SidebarMenuSubButton asChild data-active={isActive(location, item.href)} className="gap-1 px-1">
                                 <Link href={item.href} data-testid={navTestId(item.label)} aria-current={isActive(location, item.href) ? "page" : undefined}>
                                   <Icon className="w-3.5 h-3.5 shrink-0" />
-                                  <span>{item.label}</span>
+                                  <NavItemLabel>{item.label}</NavItemLabel>
                                   <NextBadge show={nextUrls.has(item.href)} />
                                 </Link>
                               </SidebarMenuSubButton>
@@ -288,7 +292,7 @@ export function AppSidebar() {
                               <SidebarMenuSubButton
                                 data-active={isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES) && !advancedOpen}
                                 data-testid="nav-group-esg-advanced"
-                                className="w-full"
+                                className="w-full gap-1.5 px-1.5"
                               >
                                 <Gauge className="w-3.5 h-3.5 shrink-0" />
                                 <span>Advanced</span>
@@ -341,7 +345,7 @@ export function AppSidebar() {
                                 aria-current={isActive(location, item.href) ? "page" : undefined}
                               >
                                 <Icon className="w-3.5 h-3.5 shrink-0" />
-                                <span>{item.label}</span>
+                                <NavItemLabel>{item.label}</NavItemLabel>
                                 <NextBadge show={nextUrls.has(item.href)} />
                               </Link>
                             </SidebarMenuSubButton>
@@ -352,7 +356,7 @@ export function AppSidebar() {
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/evidence")}>
                           <Link href="/evidence" data-testid="nav-evidence" aria-current={isActive(location, "/evidence") ? "page" : undefined}>
                             <FileCheck className="w-3.5 h-3.5 shrink-0" />
-                            <span>Evidence</span>
+                            <NavItemLabel>Evidence</NavItemLabel>
                             <NextBadge show={nextUrls.has("/evidence")} />
                           </Link>
                         </SidebarMenuSubButton>
