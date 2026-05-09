@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 
 import {
   DATA_AND_METRICS_ITEMS,
+  ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
+  ESG_SETUP_BASE_ITEMS,
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
@@ -43,6 +45,26 @@ function run() {
   }
 
   try {
+    assert.deepEqual(labels(ESG_SETUP_BASE_ITEMS), [
+      "Topics",
+      "ESG Profile",
+      "Team",
+      "Policy Generator",
+      "Policy Templates",
+      "Control Centre",
+      "Recommendations",
+    ]);
+    assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
+    assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.controlCentre, "/control-centre");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.recommendations, "/recommendations");
+    pass("ESG Setup exposes moved policy and control items without the old Policy link");
+  } catch (error: any) {
+    fail("ESG Setup exposes moved policy and control items without the old Policy link", error.message);
+  }
+
+  try {
     assert.deepEqual(labels(ESG_SETUP_ADVANCED_PRIMARY_ITEMS).slice(0, 5), [
       "Frameworks",
       "Framework Settings",
@@ -54,6 +76,9 @@ function run() {
     assert.equal(MOVED_MENU_ITEM_TARGETS.materiality, "/materiality");
     assert.equal(MOVED_MENU_ITEM_TARGETS.targetsAndActions, "/esg-targets");
     assert.equal(MOVED_MENU_ITEM_TARGETS.riskRegister, "/esg-risks");
+    for (const movedLabel of ["Policy Generator", "Policy Templates", "Control Centre", "Recommendations"]) {
+      assert.equal(labels(ESG_SETUP_ADVANCED_SUPPORT_ITEMS).includes(movedLabel), false);
+    }
     pass("Moved ESG Setup advanced items keep their existing page targets");
   } catch (error: any) {
     fail("Moved ESG Setup advanced items keep their existing page targets", error.message);
@@ -78,9 +103,20 @@ function run() {
       "Advanced",
       "Materiality",
     ]);
+    assert.deepEqual(getBreadcrumbs("/policy-generator").map(item => item.label), [
+      "ESG Setup",
+      "Policy Generator",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/control-centre").map(item => item.label), [
+      "ESG Setup",
+      "Control Centre",
+    ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
       "Data and Evidence",
       "Policy Register",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/admin").map(item => item.label), [
+      "Settings",
     ]);
     pass("Moved pages resolve to the updated breadcrumb hierarchy");
   } catch (error: any) {
@@ -99,18 +135,18 @@ function run() {
     assert.equal(canShowAdminMenu("super_admin"), true);
     assert.equal(getAdminMenuHref("super_admin"), "/admin");
     assert.deepEqual(getAdminMenuRoutes("super_admin"), ["/admin"]);
-    pass("Super admins see the platform Admin menu");
+    pass("Super admins keep platform settings access");
   } catch (error: any) {
-    fail("Super admins see the platform Admin menu", error.message);
+    fail("Super admins keep platform settings access", error.message);
   }
 
   try {
     assert.equal(canShowAdminMenu("admin"), true);
     assert.equal(getAdminMenuHref("admin"), "/team");
     assert.deepEqual(getAdminMenuRoutes("admin"), ["/team", "/settings", "/settings/sites", "/sites"]);
-    pass("Company admins see the tenant Admin menu");
+    pass("Company admins keep tenant settings access");
   } catch (error: any) {
-    fail("Company admins see the tenant Admin menu", error.message);
+    fail("Company admins keep tenant settings access", error.message);
   }
 
   try {
@@ -118,18 +154,18 @@ function run() {
     assert.equal(canShowAdminMenu("contributor"), false);
     assert.equal(canShowAdminMenu("approver"), false);
     assert.deepEqual(getAdminMenuRoutes("viewer"), []);
-    pass("Standard users do not see the Admin menu");
+    pass("Standard users do not see the Settings admin menu");
   } catch (error: any) {
-    fail("Standard users do not see the Admin menu", error.message);
+    fail("Standard users do not see the Settings admin menu", error.message);
   }
 
   try {
     assert.equal(canShowAdminMenu(undefined), false);
     assert.equal(getAdminMenuHref(undefined), "/admin");
     assert.deepEqual(getAdminMenuRoutes(undefined), []);
-    pass("Unauthenticated users do not see the Admin menu");
+    pass("Unauthenticated users do not see the Settings admin menu");
   } catch (error: any) {
-    fail("Unauthenticated users do not see the Admin menu", error.message);
+    fail("Unauthenticated users do not see the Settings admin menu", error.message);
   }
 }
 

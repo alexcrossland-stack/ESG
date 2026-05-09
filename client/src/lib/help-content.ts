@@ -527,7 +527,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "Add data for metrics that currently show no value. Each metric with a value counts towards your completeness score — this is the biggest driver of improvement.",
           "Upload evidence for the data you have entered. Evidence files increase your data quality score and make your data more credible to auditors.",
           "Set targets for your most important metrics. Go to Data and Evidence > Metrics, open a metric, and add a target value.",
-          "Add a policy if you do not have one yet. Go to ESG Setup > Policies and create or upload an ESG policy.",
+          "Add a policy if you do not have one yet. Go to ESG Setup > Policy Generator or Policy Templates and create an ESG policy.",
           "Assign data owners to your metrics. Each metric assigned to a named person contributes to your maturity score.",
           "Review any outstanding actions in ESG Setup > Advanced > Targets and Actions and mark completed ones as done.",
         ],
