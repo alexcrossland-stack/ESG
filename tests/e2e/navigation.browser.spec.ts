@@ -39,6 +39,7 @@ async function openWithMockRole(
     }
     if (path === "/api/notifications/count") return json({ count: 0 });
     if (path === "/api/programme/status") return json({ nextBestActions });
+    if (path === "/api/recommendations") return json({ recommendations: [], total: 0, limited: false });
     if (path === "/api/sites") return json([]);
     if (path === "/api/admin/impersonation/status") return json({ isImpersonating: false });
     if (path === "/api/activity/track" && method === "POST") return json({ ok: true });
@@ -151,7 +152,8 @@ test.describe("Navigation structure", () => {
     await expect(setupItems.getByText("Policy Generator", { exact: true })).toBeVisible();
     await expect(setupItems.getByText("Policy Templates", { exact: true })).toBeVisible();
     await expect(setupItems.getByText("Control Centre", { exact: true })).toBeVisible();
-    await expect(setupItems.getByText("Recommendations", { exact: true })).toBeVisible();
+    await expect(setupItems.getByText("Recommendations", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
     await expect(setupItems.getByText("Policies", { exact: true })).toHaveCount(0);
 
     await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
@@ -164,7 +166,19 @@ test.describe("Navigation structure", () => {
     await expectMovedItemNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["ESG Setup", "Policy Generator"]);
     await expectMovedItemNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["ESG Setup", "Policy Templates"]);
     await expectMovedItemNavigation(page, "nav-control-centre", /\/control-centre$/, ["ESG Setup", "Control Centre"]);
-    await expectMovedItemNavigation(page, "nav-recommendations", /\/recommendations$/, ["ESG Setup", "Recommendations"]);
+
+    await context.close();
+  });
+
+  test("Recommendations route remains directly accessible outside sidebar", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin");
+
+    await page.goto("/recommendations");
+    await page.waitForLoadState("networkidle");
+
+    await expect(page).toHaveURL(/\/recommendations$/);
+    await expect(page.getByTestId("page-recommendations")).toBeVisible();
+    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
 
     await context.close();
   });
@@ -220,7 +234,7 @@ test.describe("Navigation structure", () => {
     await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
     await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
     await expect(page.getByTestId("nav-control-centre")).toBeVisible();
-    await expect(page.getByTestId("nav-recommendations")).toBeVisible();
+    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
     await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
 
     await expect(page.getByTestId("nav-policies")).toHaveCount(0);

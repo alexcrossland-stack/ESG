@@ -25,7 +25,6 @@ export const ESG_SETUP_BASE_ITEMS: NavItem[] = [
   { label: "Policy Generator", href: "/policy-generator" },
   { label: "Policy Templates", href: "/policy-templates" },
   { label: "Control Centre", href: "/control-centre" },
-  { label: "Recommendations", href: "/recommendations" },
 ];
 
 export const ESG_SETUP_BASE_ROUTES = ESG_SETUP_BASE_ITEMS.map(item => item.href);
@@ -91,7 +90,6 @@ export const MOVED_MENU_ITEM_TARGETS = {
   policyGenerator: "/policy-generator",
   policyTemplates: "/policy-templates",
   controlCentre: "/control-centre",
-  recommendations: "/recommendations",
 } as const;
 
 export function isActive(location: string, href: string) {

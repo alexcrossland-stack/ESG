@@ -54,17 +54,16 @@ function run() {
       "Policy Generator",
       "Policy Templates",
       "Control Centre",
-      "Recommendations",
     ]);
     assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Team")?.href, "/team");
     assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
+    assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Recommendations"), false);
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
     assert.equal(MOVED_MENU_ITEM_TARGETS.controlCentre, "/control-centre");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.recommendations, "/recommendations");
-    pass("ESG Setup exposes moved policy and control items without the old Policy link");
+    pass("ESG Setup exposes moved policy and control items without redundant Recommendations link");
   } catch (error: any) {
-    fail("ESG Setup exposes moved policy and control items without the old Policy link", error.message);
+    fail("ESG Setup exposes moved policy and control items without redundant Recommendations link", error.message);
   }
 
   try {
