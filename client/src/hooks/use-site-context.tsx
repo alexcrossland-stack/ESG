@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { OrganisationSite } from "@shared/schema";
+import { authFetch } from "@/lib/queryClient";
 
 const STORAGE_KEY = "activeSiteId";
 
@@ -37,7 +38,7 @@ export function SiteProvider({ children }: { children: ReactNode }) {
   const { data: allSitesData, isLoading: isLoadingAll } = useQuery<OrganisationSite[]>({
     queryKey: ["/api/sites", "includeArchived"],
     queryFn: async () => {
-      const res = await fetch("/api/sites?includeArchived=true", { credentials: "include" });
+      const res = await authFetch("/api/sites?includeArchived=true");
       if (!res.ok) throw new Error("Failed to load sites");
       return res.json();
     },
