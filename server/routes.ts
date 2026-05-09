@@ -11822,6 +11822,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const company = await storage.getCompany(companyId);
       const companyName = company?.name || "Organisation";
+      let requestedSiteName: string | null = null;
 
       const {
         buildEsgMetricsSummaryReport,
@@ -11840,7 +11841,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
         let site: any = null;
-        if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
+        if (requestedSiteId) {
+          site = await storage.getSite(requestedSiteId, companyId);
+          requestedSiteName = site?.name ?? null;
+        }
 
         // Fetch values: use period if given, else use date range if given, else all values
         let allValues: any[] = [];
@@ -11877,6 +11881,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         reportData = buildEsgMetricsSummaryReport({
           company, metrics: enabledMetrics, values, period,
           siteName: site?.name,
+          aggregateValues: requestedSiteId === undefined,
           dateFrom: dateFrom || null,
           dateTo: dateTo || null,
           reportedCount,
@@ -11995,17 +12000,24 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       try {
         const { evaluateEsgStatus } = await import("./esg-status");
         const { buildStandaloneMetaSections } = await import("./report-engine");
-        const esgStatus = await evaluateEsgStatus(companyId);
+        const esgStatus = await evaluateEsgStatus(companyId, period, requestedSiteId);
         const estimatedPercent = esgStatus.totalMetrics > 0
           ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100)
           : 0;
+        const reportingPeriodLabel = period || (dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : "All periods");
+        const scopeStatement = requestedSiteId === undefined
+          ? `This report covers the ESG performance of ${companyName} for the reporting period ${reportingPeriodLabel}. It includes data from all active sites and organisational-level metric entries. The reporting boundary is the legal entity of ${companyName}.`
+          : requestedSiteId === null
+            ? `This report covers organisation-wide ESG metric entries for ${companyName} for the reporting period ${reportingPeriodLabel}. It excludes site-specific metric entries.`
+            : `This report covers ESG metric entries for ${requestedSiteName || "the selected site"} for the reporting period ${reportingPeriodLabel}. It excludes organisation-wide and other-site metric entries.`;
         const metaSections = buildStandaloneMetaSections({
           companyName,
-          reportingPeriod: period || (dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : "All periods"),
+          reportingPeriod: reportingPeriodLabel,
           esgState: esgStatus.state,
           completenessPercent: esgStatus.completenessPercentage,
           evidenceCoveragePercent: esgStatus.evidenceCoverage,
           estimatedPercent,
+          scopeStatement,
         });
         reportData = { ...reportData, sections: [...metaSections, ...(reportData.sections || [])] };
       } catch (_metaErr) {
