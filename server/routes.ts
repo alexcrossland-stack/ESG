@@ -8864,7 +8864,8 @@ Use the live data above to give accurate, specific advice. If you don't have inf
   app.get("/api/company/esg-profile", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const profile = await buildEsgProfile(companyId);
+      const period = typeof req.query.period === "string" ? req.query.period.trim() : undefined;
+      const profile = await buildEsgProfile(companyId, { period });
       res.json(profile);
     } catch (e: any) {
       sendServerError(res, e);
@@ -8931,6 +8932,9 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const filteredProfile: any = { company: { name: company.name, industry: company.industry, employeeCount: company.employee_count } };
       for (const section of visibleSections) {
         if (profile[section] !== undefined) filteredProfile[section] = profile[section];
+      }
+      if (profile.reporting_period && (visibleSections.includes("esg_scores") || visibleSections.includes("key_metrics"))) {
+        filteredProfile.reporting_period = profile.reporting_period;
       }
 
       try {
@@ -14013,11 +14017,12 @@ async function generateScheduledReminders(companyId: string, storage: any, db: a
   return count;
 }
 
-async function buildEsgProfile(companyId: string) {
+async function buildEsgProfile(companyId: string, options: { period?: string } = {}) {
   const metrics = await storage.getMetrics(companyId);
   const enabledMetrics = Array.from(
     new Map(metrics.filter((m: any) => m.enabled).map((m: any) => [m.id, m])).values()
   );
+  const reportingPeriod = await resolveEsgProfileReportingPeriod(companyId, options.period);
   const policy = await storage.getPolicy(companyId);
   const evidence = await storage.getEvidenceFiles(companyId);
   const carbonCalcs = await storage.getCarbonCalculations(companyId);
@@ -14035,11 +14040,9 @@ async function buildEsgProfile(companyId: string) {
   );
 
   for (const { metric: m, values: vals } of metricValuesByMetric) {
-    const latest = vals.sort((a: any, b: any) => {
-      const periodCompare = (b.period || "").localeCompare(a.period || "");
-      if (periodCompare !== 0) return periodCompare;
-      return new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime();
-    })[0];
+    const latest = vals
+      .filter((value: any) => value.period === reportingPeriod.period)
+      .sort((a: any, b: any) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime())[0];
     const formattedValue = formatProfileMetricValue(latest?.value);
     const hasValue = formattedValue !== null;
 
@@ -14084,6 +14087,7 @@ async function buildEsgProfile(companyId: string) {
 
   return {
     company: { name: companyInfo?.name, industry: companyInfo?.industry, employeeCount: companyInfo?.employeeCount },
+    reporting_period: reportingPeriod,
     esg_scores,
     key_metrics: keyMetrics,
     policy_status: { status: policy?.status || "not_created", publishedAt: policy?.publishedAt, reviewDate: policy?.reviewDate },
@@ -14097,6 +14101,27 @@ async function buildEsgProfile(companyId: string) {
       visibleSections: (companyInfo as any)?.profileVisibleSections || [],
     },
   };
+}
+
+async function resolveEsgProfileReportingPeriod(companyId: string, requestedPeriod?: string) {
+  const periods = await storage.getReportingPeriods(companyId);
+  const activePeriod = periods.find((period: any) => period.status === "open") || null;
+  const selectedPeriod = requestedPeriod || activePeriod?.name || formatCurrentProfilePeriod();
+
+  return {
+    period: selectedPeriod,
+    label: selectedPeriod || "No reporting period",
+    status: requestedPeriod ? null : activePeriod?.status || null,
+    source: requestedPeriod ? "selected" : activePeriod ? "active" : "default",
+    hasActivePeriod: Boolean(activePeriod),
+    startDate: !requestedPeriod ? activePeriod?.startDate || null : null,
+    endDate: !requestedPeriod ? activePeriod?.endDate || null : null,
+  };
+}
+
+function formatCurrentProfilePeriod() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function formatProfileMetricValue(value: unknown): string | null {

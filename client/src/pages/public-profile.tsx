@@ -11,6 +11,10 @@ function hasMetricValue(metric: any) {
   return metric?.hasValue !== false && metric?.value !== null && metric?.value !== undefined && metric?.value !== "";
 }
 
+function getReportingPeriodLabel(profile: any) {
+  return profile?.reporting_period?.label || profile?.reporting_period?.period || "No reporting period";
+}
+
 export default function PublicProfilePage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
@@ -70,7 +74,14 @@ export default function PublicProfilePage() {
               </div>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground mt-4">ESG Performance Profile</p>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <p className="text-xs text-muted-foreground">ESG Performance Profile</p>
+            {profile?.reporting_period && (
+              <Badge variant="outline" className="w-fit text-xs" data-testid="public-profile-reporting-period">
+                Reporting Period: {getReportingPeriodLabel(profile)}
+              </Badge>
+            )}
+          </div>
         </div>
       </div>
 
@@ -96,7 +107,12 @@ export default function PublicProfilePage() {
 
         {profile?.key_metrics?.length > 0 && (
           <Card>
-            <CardHeader><CardTitle className="text-sm">Key Metrics</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="text-sm">Key Metrics</CardTitle>
+              {profile?.reporting_period && (
+                <p className="text-xs text-muted-foreground">Values shown for {getReportingPeriodLabel(profile)}</p>
+              )}
+            </CardHeader>
             <CardContent>
               <div className="max-h-[34rem] overflow-y-auto pr-1">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
