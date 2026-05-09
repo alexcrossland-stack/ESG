@@ -7,6 +7,8 @@ import {
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
+  SETTINGS_MENU_HREF,
+  SETTINGS_MENU_ROUTES,
   canShowAdminMenu,
   getAdminMenuHref,
   getAdminMenuRoutes,
@@ -54,6 +56,7 @@ function run() {
       "Control Centre",
       "Recommendations",
     ]);
+    assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Team")?.href, "/team");
     assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
@@ -133,20 +136,20 @@ function run() {
 
   try {
     assert.equal(canShowAdminMenu("super_admin"), true);
-    assert.equal(getAdminMenuHref("super_admin"), "/admin");
-    assert.deepEqual(getAdminMenuRoutes("super_admin"), ["/admin"]);
-    pass("Super admins keep platform settings access");
+    assert.equal(getAdminMenuHref("super_admin"), SETTINGS_MENU_HREF);
+    assert.deepEqual(getAdminMenuRoutes("super_admin"), SETTINGS_MENU_ROUTES);
+    pass("Super admins see sidebar Settings routed to app settings");
   } catch (error: any) {
-    fail("Super admins keep platform settings access", error.message);
+    fail("Super admins see sidebar Settings routed to app settings", error.message);
   }
 
   try {
     assert.equal(canShowAdminMenu("admin"), true);
-    assert.equal(getAdminMenuHref("admin"), "/team");
-    assert.deepEqual(getAdminMenuRoutes("admin"), ["/team", "/settings", "/settings/sites", "/sites"]);
-    pass("Company admins keep tenant settings access");
+    assert.equal(getAdminMenuHref("admin"), SETTINGS_MENU_HREF);
+    assert.deepEqual(getAdminMenuRoutes("admin"), SETTINGS_MENU_ROUTES);
+    pass("Company admins see sidebar Settings routed to app settings");
   } catch (error: any) {
-    fail("Company admins keep tenant settings access", error.message);
+    fail("Company admins see sidebar Settings routed to app settings", error.message);
   }
 
   try {
@@ -161,7 +164,7 @@ function run() {
 
   try {
     assert.equal(canShowAdminMenu(undefined), false);
-    assert.equal(getAdminMenuHref(undefined), "/admin");
+    assert.equal(getAdminMenuHref(undefined), SETTINGS_MENU_HREF);
     assert.deepEqual(getAdminMenuRoutes(undefined), []);
     pass("Unauthenticated users do not see the Settings admin menu");
   } catch (error: any) {
