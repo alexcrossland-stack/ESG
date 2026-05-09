@@ -21,6 +21,7 @@ export const ESG_SETUP_HOME_HREF = "/topics";
 export const ESG_SETUP_BASE_ITEMS: NavItem[] = [
   { label: "Topics", href: "/topics" },
   { label: "ESG Profile", href: "/esg-profile" },
+  { label: "Roadmap", href: "/roadmap" },
   { label: "Team", href: "/team", permission: "settings_admin" },
   { label: "Policy Generator", href: "/policy-generator" },
   { label: "Policy Templates", href: "/policy-templates" },
@@ -87,6 +88,7 @@ export const MOVED_MENU_ITEM_TARGETS = {
   targetsAndActions: "/esg-targets",
   riskRegister: "/esg-risks",
   policyRegister: "/esg-policy-register",
+  roadmap: "/roadmap",
   policyGenerator: "/policy-generator",
   policyTemplates: "/policy-templates",
   controlCentre: "/control-centre",
@@ -130,6 +132,7 @@ const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   "/policy": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policies" }],
   "/topics": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Topics" }],
   "/esg-profile": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "ESG Profile" }],
+  "/roadmap": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Roadmap" }],
   "/team": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Team" }],
   "/policy-generator": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policy Generator" }],
   "/policy-templates": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policy Templates" }],

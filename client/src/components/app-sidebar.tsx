@@ -16,7 +16,7 @@ import {
   Wand2, Calculator, FileQuestion, Library, FileCheck, Bell,
   ClipboardCheck, ListChecks, Shield, Bookmark, Gauge,
   TrendingUp, Building2, Sparkles, HelpCircle,
-  Users, ChevronRight, MapPin, Globe, BookOpen,
+  Users, ChevronRight, Map, MapPin, Globe, BookOpen,
   Star, AlertTriangle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -75,6 +75,7 @@ const ICON_BY_HREF: Record<string, LucideIcon> = {
   "/policy": FileText,
   "/topics": Target,
   "/esg-profile": Building2,
+  "/roadmap": Map,
   "/team": Users,
   "/framework-readiness": Globe,
   "/framework-settings": Settings,
