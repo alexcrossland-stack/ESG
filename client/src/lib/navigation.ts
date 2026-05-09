@@ -103,6 +103,33 @@ export function isGroupActive(location: string, routes: string[]) {
   return routes.some(route => isActive(location, route));
 }
 
+export const PLATFORM_ADMIN_ROUTES = ["/admin"];
+export const TENANT_ADMIN_ROUTES = ["/team", "/settings", "/settings/sites", "/sites"];
+
+export function canAccessPlatformAdmin(role: string | undefined) {
+  return role === "super_admin";
+}
+
+export function canAccessTenantAdmin(role: string | undefined) {
+  return role === "admin" || role === "super_admin";
+}
+
+export function canShowAdminMenu(role: string | undefined) {
+  return canAccessPlatformAdmin(role) || canAccessTenantAdmin(role);
+}
+
+export function getAdminMenuHref(role: string | undefined) {
+  if (canAccessPlatformAdmin(role)) return "/admin";
+  if (canAccessTenantAdmin(role)) return "/team";
+  return "/admin";
+}
+
+export function getAdminMenuRoutes(role: string | undefined) {
+  if (canAccessPlatformAdmin(role)) return PLATFORM_ADMIN_ROUTES;
+  if (canAccessTenantAdmin(role)) return TENANT_ADMIN_ROUTES;
+  return [];
+}
+
 const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   "/": [{ label: "Dashboard", href: "/" }],
   "/policy": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policies" }],
@@ -141,22 +168,18 @@ const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   ],
   "/metrics": [
     { label: "Data and Evidence", href: "/metrics" },
-    { label: "Data and Metrics", href: "/metrics" },
     { label: "Metrics" },
   ],
   "/metrics-library": [
     { label: "Data and Evidence", href: "/metrics" },
-    { label: "Data and Metrics", href: "/metrics" },
     { label: "Metrics Library" },
   ],
   "/data-entry": [
     { label: "Data and Evidence", href: "/metrics" },
-    { label: "Data and Metrics", href: "/metrics" },
     { label: "Enter Data" },
   ],
   "/esg-policy-register": [
     { label: "Data and Evidence", href: "/metrics" },
-    { label: "Data and Metrics", href: "/metrics" },
     { label: "Policy Register" },
   ],
   "/evidence": [{ label: "Data and Evidence", href: "/metrics" }, { label: "Evidence" }],

@@ -7,6 +7,9 @@ import {
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
+  canShowAdminMenu,
+  getAdminMenuHref,
+  getAdminMenuRoutes,
   getBreadcrumbs,
   isGroupActive,
 } from "../../client/src/lib/navigation";
@@ -89,9 +92,9 @@ function run() {
       "Policy Register",
     ]);
     assert.equal(MOVED_MENU_ITEM_TARGETS.policyRegister, "/esg-policy-register");
-    pass("Policy Register is nested with Data and Metrics while retaining its route");
+    pass("Policy Register is directly under Data and Evidence while retaining its route");
   } catch (error: any) {
-    fail("Policy Register is nested with Data and Metrics while retaining its route", error.message);
+    fail("Policy Register is directly under Data and Evidence while retaining its route", error.message);
   }
 
   try {
@@ -110,7 +113,6 @@ function run() {
     ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
       "Data and Evidence",
-      "Data and Metrics",
       "Policy Register",
     ]);
     assert.deepEqual(getBreadcrumbs("/admin").map(item => item.label), [
@@ -127,6 +129,43 @@ function run() {
     pass("Active route matching recognizes moved items in their new groups");
   } catch (error: any) {
     fail("Active route matching recognizes moved items in their new groups", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("super_admin"), true);
+    assert.equal(getAdminMenuHref("super_admin"), "/admin");
+    assert.deepEqual(getAdminMenuRoutes("super_admin"), ["/admin"]);
+    pass("Super admins keep platform settings access");
+  } catch (error: any) {
+    fail("Super admins keep platform settings access", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("admin"), true);
+    assert.equal(getAdminMenuHref("admin"), "/team");
+    assert.deepEqual(getAdminMenuRoutes("admin"), ["/team", "/settings", "/settings/sites", "/sites"]);
+    pass("Company admins keep tenant settings access");
+  } catch (error: any) {
+    fail("Company admins keep tenant settings access", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu("viewer"), false);
+    assert.equal(canShowAdminMenu("contributor"), false);
+    assert.equal(canShowAdminMenu("approver"), false);
+    assert.deepEqual(getAdminMenuRoutes("viewer"), []);
+    pass("Standard users do not see the Settings admin menu");
+  } catch (error: any) {
+    fail("Standard users do not see the Settings admin menu", error.message);
+  }
+
+  try {
+    assert.equal(canShowAdminMenu(undefined), false);
+    assert.equal(getAdminMenuHref(undefined), "/admin");
+    assert.deepEqual(getAdminMenuRoutes(undefined), []);
+    pass("Unauthenticated users do not see the Settings admin menu");
+  } catch (error: any) {
+    fail("Unauthenticated users do not see the Settings admin menu", error.message);
   }
 }
 

@@ -30,13 +30,110 @@ jobs:
       - name: Deploy
         run: |
           ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-            set -e
+            set -Eeuo pipefail
+
+            log() {
+              echo
+              echo "==> $1"
+            }
+
+            wait_for_url() {
+              local name="$1"
+              local url="$2"
+              local attempts="${3:-30}"
+              local delay_seconds="${4:-2}"
+
+              for attempt in $(seq 1 "$attempts"); do
+                if curl --fail --silent --show-error --max-time 15 "$url"; then
+                  echo
+                  echo "$name is responding"
+                  return 0
+                fi
+                echo "$name not ready yet (${attempt}/${attempts}); retrying in ${delay_seconds}s"
+                sleep "$delay_seconds"
+              done
+
+              echo "::error::$name did not respond after ${attempts} attempts" >&2
+              return 1
+            }
+
+            verify_dependency_resolution() {
+              sync
+              node -e '
+                const packages = [
+                  "@vitejs/plugin-react",
+                  "class-variance-authority",
+                  "lodash/max",
+                  "recharts",
+                ];
+
+                for (const packageName of packages) {
+                  const resolved = require.resolve(packageName);
+                  console.log(`${packageName} -> ${resolved}`);
+                }
+              '
+            }
+
+            DEPLOY_STAGE="initialising"
+            trap 'echo "::error::Deployment failed during: ${DEPLOY_STAGE}" >&2' ERR
+
             cd /root/ESG
+
+            DEPLOY_STAGE="fetching latest main"
+            log "$DEPLOY_STAGE"
             git fetch origin
+
+            DEPLOY_STAGE="resetting checkout"
+            log "$DEPLOY_STAGE"
             git reset --hard origin/main
-            npm ci --include=dev
-            npm run build
+
+            DEPLOY_STAGE="removing stale dependencies"
+            log "$DEPLOY_STAGE"
+            rm -rf node_modules
+
+            DEPLOY_STAGE="verifying npm cache"
+            log "$DEPLOY_STAGE"
+            npm cache verify
+
+            DEPLOY_STAGE="installing dependencies"
+            log "$DEPLOY_STAGE"
+            if ! npm ci --include=dev; then
+              echo "::error::npm ci failed; removing partial node_modules before exiting" >&2
+              rm -rf node_modules
+              exit 1
+            fi
+
+            DEPLOY_STAGE="verifying dependency resolution"
+            log "$DEPLOY_STAGE"
+            verify_dependency_resolution
+
+            DEPLOY_STAGE="building application"
+            log "$DEPLOY_STAGE"
+            if ! npm run build; then
+              echo "::warning::Initial build failed after clean install; rechecking dependency resolution and retrying once" >&2
+              verify_dependency_resolution
+              npm run build
+            fi
+
+            DEPLOY_STAGE="copying runtime assets"
+            log "$DEPLOY_STAGE"
             cp node_modules/connect-pg-simple/table.sql dist/table.sql
-            pm2 restart esg
+
+            DEPLOY_STAGE="restarting pm2 process"
+            log "$DEPLOY_STAGE"
+            pm2 restart esg --update-env
+
+            DEPLOY_STAGE="checking pm2 status"
+            log "$DEPLOY_STAGE"
             pm2 status
+
+            DEPLOY_STAGE="checking health endpoint"
+            log "$DEPLOY_STAGE"
+            wait_for_url "health endpoint" "http://127.0.0.1:5000/health"
+
+            DEPLOY_STAGE="checking app shell"
+            log "$DEPLOY_STAGE"
+            wait_for_url "app shell" "http://127.0.0.1:5000/"
+
+            log "deployment completed"
           EOF

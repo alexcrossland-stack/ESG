@@ -30,13 +30,15 @@ import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import {
   DATA_AND_METRICS_ITEMS,
-  DATA_AND_METRICS_ROUTES,
   DATA_EVIDENCE_ROUTES,
   ESG_SETUP_BASE_ITEMS,
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   ESG_SETUP_ADVANCED_ROUTES,
   ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
   ESG_SETUP_ROUTES,
+  canShowAdminMenu,
+  getAdminMenuHref,
+  getAdminMenuRoutes,
   isActive,
   isGroupActive,
   type NavItem,
@@ -159,7 +161,7 @@ function AdvancedNavLink({ item, location }: { item: NavItem; location: string }
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { can, isSuperAdmin } = usePermissions();
+  const { can, isSuperAdmin, role } = usePermissions();
   const { canAccessPortfolio } = usePortfolioAccess();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
@@ -186,24 +188,23 @@ export function AppSidebar() {
   const esgGroupDefault = isGroupActive(location, ESG_SETUP_ROUTES);
   const dataGroupDefault = isGroupActive(location, DATA_EVIDENCE_ROUTES);
   const advancedGroupDefault = isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES);
-  const dataMetricsGroupDefault = isGroupActive(location, DATA_AND_METRICS_ROUTES);
 
   const [esgOpen, setEsgOpen] = useGroupState("esg_setup", esgGroupDefault);
   const [dataOpen, setDataOpen] = useGroupState("data_evidence", dataGroupDefault);
   const [advancedOpen, setAdvancedOpen] = useGroupState("esg_advanced", advancedGroupDefault);
-  const [dataMetricsOpen, setDataMetricsOpen] = useGroupState("data_metrics", dataMetricsGroupDefault);
 
   useEffect(() => {
     if (isGroupActive(location, ESG_SETUP_ROUTES)) setEsgOpen(true);
     if (isGroupActive(location, DATA_EVIDENCE_ROUTES)) setDataOpen(true);
     if (isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES)) setAdvancedOpen(true);
-    if (isGroupActive(location, DATA_AND_METRICS_ROUTES)) setDataMetricsOpen(true);
   }, [location]);
 
   const advancedPrimaryItems = ESG_SETUP_ADVANCED_PRIMARY_ITEMS.filter(item => canShowItem(item, can));
   const advancedSupportItems = ESG_SETUP_ADVANCED_SUPPORT_ITEMS.filter(item => canShowItem(item, can));
   const esgSetupItems = ESG_SETUP_BASE_ITEMS.filter(item => canShowItem(item, can));
   const dataMetricItems = DATA_AND_METRICS_ITEMS.filter(item => canShowItem(item, can));
+  const adminMenuHref = getAdminMenuHref(role);
+  const adminMenuActive = isGroupActive(location, getAdminMenuRoutes(role));
 
   return (
     <Sidebar>
@@ -329,41 +330,24 @@ export function AppSidebar() {
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <Collapsible open={dataMetricsOpen} onOpenChange={setDataMetricsOpen}>
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuSubButton
-                              data-active={isGroupActive(location, DATA_AND_METRICS_ROUTES) && !dataMetricsOpen}
-                              data-testid="nav-group-data-and-metrics"
-                              className="w-full"
-                            >
-                              <BarChart3 className="w-3.5 h-3.5 shrink-0" />
-                              <span>Data and Metrics</span>
-                              <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${dataMetricsOpen ? "rotate-180" : ""}`} />
+                      {dataMetricItems.map(item => {
+                        const Icon = ICON_BY_HREF[item.href] ?? BarChart3;
+                        return (
+                          <SidebarMenuSubItem key={item.href}>
+                            <SidebarMenuSubButton asChild data-active={isActive(location, item.href)}>
+                              <Link
+                                href={item.href}
+                                data-testid={item.href === "/esg-policy-register" ? "nav-esg-policy-register" : navTestId(item.label)}
+                                aria-current={isActive(location, item.href) ? "page" : undefined}
+                              >
+                                <Icon className="w-3.5 h-3.5 shrink-0" />
+                                <span>{item.label}</span>
+                                <NextBadge show={nextUrls.has(item.href)} />
+                              </Link>
                             </SidebarMenuSubButton>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-data-and-metrics-items">
-                              {dataMetricItems.map(item => {
-                                const Icon = ICON_BY_HREF[item.href] ?? BarChart3;
-                                return (
-                                  <Link
-                                    key={item.href}
-                                    href={item.href}
-                                    data-testid={item.href === "/esg-policy-register" ? "nav-esg-policy-register" : navTestId(item.label)}
-                                    aria-current={isActive(location, item.href) ? "page" : undefined}
-                                    className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
-                                  >
-                                    <Icon className="w-3.5 h-3.5 shrink-0" />
-                                    <span>{item.label}</span>
-                                    <NextBadge show={nextUrls.has(item.href)} />
-                                  </Link>
-                                );
-                              })}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </SidebarMenuSubItem>
+                          </SidebarMenuSubItem>
+                        );
+                      })}
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild data-active={isActive(location, "/evidence")}>
                           <Link href="/evidence" data-testid="nav-evidence" aria-current={isActive(location, "/evidence") ? "page" : undefined}>
@@ -389,6 +373,20 @@ export function AppSidebar() {
               </SidebarMenuItem>
 
             </SidebarMenu>
+
+            {canShowAdminMenu(role) && (
+              <SidebarMenu className="mt-2" data-testid="settings-navigation" aria-label="Settings navigation">
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild data-active={adminMenuActive}>
+                    <Link href={adminMenuHref} data-testid="nav-settings-console" aria-current={adminMenuActive ? "page" : undefined}>
+                      <Shield className="w-4 h-4 shrink-0" />
+                      <span>Settings</span>
+                      {adminMenuActive && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            )}
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
