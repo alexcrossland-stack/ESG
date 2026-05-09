@@ -81,6 +81,44 @@ export function apiRequest(
   });
 }
 
+export async function apiRequestRaw(
+  method: string,
+  path: string,
+  body?: object,
+  token?: string
+): Promise<{ status: number; headers: Headers; body: Buffer }> {
+  const bodyStr = body ? JSON.stringify(body) : undefined;
+  const headers: Record<string, string> = {};
+  if (bodyStr) headers["Content-Type"] = "application/json";
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(new URL(path, BASE_URL), {
+    method,
+    headers,
+    body: bodyStr,
+  });
+  return {
+    status: res.status,
+    headers: res.headers,
+    body: Buffer.from(await res.arrayBuffer()),
+  };
+}
+
+export async function apiMultipartRequest(
+  method: string,
+  path: string,
+  body: FormData,
+  token?: string
+): Promise<{ status: number; body: string }> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(new URL(path, BASE_URL), {
+    method,
+    headers,
+    body,
+  });
+  return { status: res.status, body: await res.text() };
+}
+
 export async function loginAndGetToken(email: string, password: string): Promise<string> {
   const res = await apiRequest("POST", "/api/auth/login", { email, password });
   if (res.status !== 200) {
