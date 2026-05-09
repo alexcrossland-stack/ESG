@@ -12,6 +12,41 @@ async function openWithState(browser: import("@playwright/test").Browser, storag
   return { context, page };
 }
 
+async function openWithMockRole(browser: import("@playwright/test").Browser, role: "admin" | "super_admin") {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.route("**/api/**", async route => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+    const json = (body: unknown, status = 200) => route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+
+    if (path === "/api/auth/me") {
+      return json({
+        user: { id: `mock-${role}`, username: `${role} smoke`, email: `${role}@example.test`, role, companyId: "mock-company" },
+        company: { id: "mock-company", name: "Mock Company", onboardingComplete: true, lifecycleState: "active" },
+        defaultLandingContext: "company",
+        portfolioGroups: [],
+      });
+    }
+    if (path === "/api/notifications/count") return json({ count: 0 });
+    if (path === "/api/programme/status") return json({ nextBestActions: [] });
+    if (path === "/api/sites") return json([]);
+    if (path === "/api/admin/impersonation/status") return json({ isImpersonating: false });
+    if (path === "/api/activity/track" && method === "POST") return json({ ok: true });
+    if (path === "/api/dashboard") return json({});
+    return json([]);
+  });
+  await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+  return { context, page };
+}
+
 async function ensureGroupOpen(page: Page, groupTestId: string, visibleItemText: string) {
   const visibleItem = page.getByText(visibleItemText, { exact: true }).first();
   if (!(await visibleItem.isVisible().catch(() => false))) {
@@ -28,6 +63,14 @@ async function expectMovedItemNavigation(page: Page, testId: string, expectedPat
     await expect(page.getByTestId(`breadcrumb-${label.toLowerCase().replace(/\s+/g, "-")}`)).toBeVisible();
   }
   await expect(page.getByTestId(testId)).toHaveAttribute("aria-current", "page");
+}
+
+async function expectSidebarSettingsMatchesUtility(page: Page, expectedPath: string) {
+  const settingsHref = await page.getByTestId("nav-utility-settings").getAttribute("href");
+  await expect(page.getByTestId("nav-settings-console")).toBeVisible();
+  await expect(page.getByTestId("nav-settings-console")).toHaveText(/Settings/);
+  await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", settingsHref ?? "");
+  await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", expectedPath);
 }
 
 test.describe("Navigation structure", () => {
@@ -48,9 +91,30 @@ test.describe("Navigation structure", () => {
       "Reports",
     ]);
     await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
-    await expect(page.getByTestId("nav-settings-console")).toBeVisible();
-    await expect(page.getByTestId("nav-settings-console")).toHaveText(/Settings/);
-    await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", "/team");
+    await expectSidebarSettingsMatchesUtility(page, "/settings");
+
+    await ensureGroupOpen(page, "nav-group-esg-setup", "Team");
+    await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
+
+    await page.getByTestId("nav-settings-console").click();
+    await page.waitForLoadState("networkidle");
+    await expect(page).toHaveURL(/\/settings$/);
+
+    await context.close();
+  });
+
+  test("super admin sidebar Settings matches bottom-left settings destination", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "super_admin");
+
+    await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
+    await expectSidebarSettingsMatchesUtility(page, "/settings");
+
+    await ensureGroupOpen(page, "nav-group-esg-setup", "Team");
+    await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
+
+    await page.getByTestId("nav-settings-console").click();
+    await page.waitForLoadState("networkidle");
+    await expect(page).toHaveURL(/\/settings$/);
 
     await context.close();
   });

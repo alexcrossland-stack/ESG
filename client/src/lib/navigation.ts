@@ -103,8 +103,8 @@ export function isGroupActive(location: string, routes: string[]) {
   return routes.some(route => isActive(location, route));
 }
 
-export const PLATFORM_ADMIN_ROUTES = ["/admin"];
-export const TENANT_ADMIN_ROUTES = ["/team", "/settings", "/settings/sites", "/sites"];
+export const SETTINGS_MENU_HREF = "/settings";
+export const SETTINGS_MENU_ROUTES = [SETTINGS_MENU_HREF, "/settings/sites", "/sites"];
 
 export function canAccessPlatformAdmin(role: string | undefined) {
   return role === "super_admin";
@@ -119,14 +119,11 @@ export function canShowAdminMenu(role: string | undefined) {
 }
 
 export function getAdminMenuHref(role: string | undefined) {
-  if (canAccessPlatformAdmin(role)) return "/admin";
-  if (canAccessTenantAdmin(role)) return "/team";
-  return "/admin";
+  return SETTINGS_MENU_HREF;
 }
 
 export function getAdminMenuRoutes(role: string | undefined) {
-  if (canAccessPlatformAdmin(role)) return PLATFORM_ADMIN_ROUTES;
-  if (canAccessTenantAdmin(role)) return TENANT_ADMIN_ROUTES;
+  if (canShowAdminMenu(role)) return SETTINGS_MENU_ROUTES;
   return [];
 }
 
