@@ -34,12 +34,14 @@ test.describe("Navigation structure", () => {
   test("primary sidebar has only the four required top-level menu items", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
-    const topLevelLabels = await page
-      .getByTestId("primary-navigation")
-      .locator(':scope > li > [data-sidebar="menu-button"]')
-      .allTextContents();
+    const topLevelLabels = await Promise.all([
+      page.getByTestId("nav-dashboard").textContent(),
+      page.getByTestId("nav-group-esg-setup").textContent(),
+      page.getByTestId("nav-group-data-evidence").textContent(),
+      page.getByTestId("nav-reports").textContent(),
+    ]);
 
-    expect(topLevelLabels.map(label => label.trim())).toEqual([
+    expect(topLevelLabels.map(label => (label ?? "").trim())).toEqual([
       "Dashboard",
       "ESG Setup",
       "Data and Evidence",
@@ -64,6 +66,33 @@ test.describe("Navigation structure", () => {
     await expectMovedItemNavigation(page, "nav-materiality", /\/materiality$/, ["ESG Setup", "Advanced", "Materiality"]);
     await expectMovedItemNavigation(page, "nav-targets-and-actions", /\/esg-targets$/, ["ESG Setup", "Advanced", "Targets and Actions"]);
     await expectMovedItemNavigation(page, "nav-risk-register", /\/esg-risks$/, ["ESG Setup", "Advanced", "Risk Register"]);
+
+    await context.close();
+  });
+
+  test("policy and control items sit directly under ESG Setup", async ({ browser }) => {
+    const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
+
+    await ensureGroupOpen(page, "nav-group-esg-setup", "Policy Generator");
+
+    const setupItems = page.getByTestId("nav-esg-setup-items");
+    await expect(setupItems.getByText("Policy Generator", { exact: true })).toBeVisible();
+    await expect(setupItems.getByText("Policy Templates", { exact: true })).toBeVisible();
+    await expect(setupItems.getByText("Control Centre", { exact: true })).toBeVisible();
+    await expect(setupItems.getByText("Recommendations", { exact: true })).toBeVisible();
+    await expect(setupItems.getByText("Policies", { exact: true })).toHaveCount(0);
+
+    await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
+    const advancedItems = page.getByTestId("nav-esg-advanced-items");
+    await expect(advancedItems.getByText("Policy Generator", { exact: true })).toHaveCount(0);
+    await expect(advancedItems.getByText("Policy Templates", { exact: true })).toHaveCount(0);
+    await expect(advancedItems.getByText("Control Centre", { exact: true })).toHaveCount(0);
+    await expect(advancedItems.getByText("Recommendations", { exact: true })).toHaveCount(0);
+
+    await expectMovedItemNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["ESG Setup", "Policy Generator"]);
+    await expectMovedItemNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["ESG Setup", "Policy Templates"]);
+    await expectMovedItemNavigation(page, "nav-control-centre", /\/control-centre$/, ["ESG Setup", "Control Centre"]);
+    await expectMovedItemNavigation(page, "nav-recommendations", /\/recommendations$/, ["ESG Setup", "Recommendations"]);
 
     await context.close();
   });
@@ -96,8 +125,14 @@ test.describe("Navigation structure", () => {
     await expect(page.getByTestId("nav-materiality")).toBeVisible();
     await expect(page.getByTestId("nav-targets-and-actions")).toBeVisible();
     await expect(page.getByTestId("nav-risk-register")).toBeVisible();
+    await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
+    await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
+    await expect(page.getByTestId("nav-control-centre")).toBeVisible();
+    await expect(page.getByTestId("nav-recommendations")).toBeVisible();
     await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
 
+    await expect(page.getByTestId("nav-policies")).toHaveCount(0);
+    await expect(page.getByTestId("nav-team")).toHaveCount(0);
     await expect(page.getByTestId("nav-framework-settings")).toHaveCount(0);
     await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
     await expect(page.getByTestId("nav-my-approvals")).toHaveCount(0);

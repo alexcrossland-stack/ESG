@@ -32,6 +32,7 @@ import {
   DATA_AND_METRICS_ITEMS,
   DATA_AND_METRICS_ROUTES,
   DATA_EVIDENCE_ROUTES,
+  ESG_SETUP_BASE_ITEMS,
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   ESG_SETUP_ADVANCED_ROUTES,
   ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
@@ -158,7 +159,7 @@ function AdvancedNavLink({ item, location }: { item: NavItem; location: string }
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { can, isAdmin, isSuperAdmin } = usePermissions();
+  const { can, isSuperAdmin } = usePermissions();
   const { canAccessPortfolio } = usePortfolioAccess();
 
   const { data: authData } = useQuery<{ user: any; company: any }>({
@@ -201,6 +202,7 @@ export function AppSidebar() {
 
   const advancedPrimaryItems = ESG_SETUP_ADVANCED_PRIMARY_ITEMS.filter(item => canShowItem(item, can));
   const advancedSupportItems = ESG_SETUP_ADVANCED_SUPPORT_ITEMS.filter(item => canShowItem(item, can));
+  const esgSetupItems = ESG_SETUP_BASE_ITEMS.filter(item => canShowItem(item, can));
   const dataMetricItems = DATA_AND_METRICS_ITEMS.filter(item => canShowItem(item, can));
 
   return (
@@ -261,69 +263,53 @@ export function AppSidebar() {
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/policy")}>
-                          <Link href="/policy" data-testid="nav-policies" aria-current={isActive(location, "/policy") ? "page" : undefined}>
-                            <FileText className="w-3.5 h-3.5 shrink-0" />
-                            <span>Policies</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/topics")}>
-                          <Link href="/topics" data-testid="nav-topics" aria-current={isActive(location, "/topics") ? "page" : undefined}>
-                            <Target className="w-3.5 h-3.5 shrink-0" />
-                            <span>Topics</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/esg-profile")}>
-                          <Link href="/esg-profile" data-testid="nav-esg-profile" aria-current={isActive(location, "/esg-profile") ? "page" : undefined}>
-                            <Building2 className="w-3.5 h-3.5 shrink-0" />
-                            <span>ESG Profile</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      {isAdmin && (
+                      <div className="space-y-0.5" data-testid="nav-esg-setup-items">
+                        {esgSetupItems.map(item => {
+                          const Icon = ICON_BY_HREF[item.href] ?? FileText;
+                          return (
+                            <SidebarMenuSubItem key={item.href}>
+                              <SidebarMenuSubButton asChild data-active={isActive(location, item.href)}>
+                                <Link href={item.href} data-testid={navTestId(item.label)} aria-current={isActive(location, item.href) ? "page" : undefined}>
+                                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{item.label}</span>
+                                  <NextBadge show={nextUrls.has(item.href)} />
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          );
+                        })}
+                      </div>
+
+                      {advancedPrimaryItems.length + advancedSupportItems.length > 0 && (
                         <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild data-active={isActive(location, "/team")}>
-                            <Link href="/team" data-testid="nav-team" aria-current={isActive(location, "/team") ? "page" : undefined}>
-                              <Users className="w-3.5 h-3.5 shrink-0" />
-                              <span>Team</span>
-                            </Link>
-                          </SidebarMenuSubButton>
+                          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                            <CollapsibleTrigger asChild>
+                              <SidebarMenuSubButton
+                                data-active={isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES) && !advancedOpen}
+                                data-testid="nav-group-esg-advanced"
+                                className="w-full"
+                              >
+                                <Gauge className="w-3.5 h-3.5 shrink-0" />
+                                <span>Advanced</span>
+                                <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
+                              </SidebarMenuSubButton>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-esg-advanced-items">
+                                {advancedPrimaryItems.map(item => (
+                                  <AdvancedNavLink key={item.href} item={item} location={location} />
+                                ))}
+                                {advancedSupportItems.length > 0 && (
+                                  <div className="my-1 h-px bg-border" aria-hidden="true" />
+                                )}
+                                {advancedSupportItems.map(item => (
+                                  <AdvancedNavLink key={item.href} item={item} location={location} />
+                                ))}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         </SidebarMenuSubItem>
                       )}
-
-                      <SidebarMenuSubItem>
-                        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuSubButton
-                              data-active={isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES) && !advancedOpen}
-                              data-testid="nav-group-esg-advanced"
-                              className="w-full"
-                            >
-                              <Gauge className="w-3.5 h-3.5 shrink-0" />
-                              <span>Advanced</span>
-                              <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
-                            </SidebarMenuSubButton>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-esg-advanced-items">
-                              {advancedPrimaryItems.map(item => (
-                                <AdvancedNavLink key={item.href} item={item} location={location} />
-                              ))}
-                              {advancedSupportItems.length > 0 && (
-                                <div className="my-1 h-px bg-border" aria-hidden="true" />
-                              )}
-                              {advancedSupportItems.map(item => (
-                                <AdvancedNavLink key={item.href} item={item} location={location} />
-                              ))}
-                            </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </Collapsible>
@@ -435,7 +421,7 @@ export function AppSidebar() {
               <Link href="/settings"><Settings className="w-3.5 h-3.5" /></Link>
             </Button>
             {isSuperAdmin && (
-              <Button size="icon" variant="ghost" asChild title="Admin" aria-label="Admin" data-testid="nav-utility-admin">
+              <Button size="icon" variant="ghost" asChild title="Platform Settings" aria-label="Platform Settings" data-testid="nav-utility-platform-settings">
                 <Link href="/admin"><Shield className="w-3.5 h-3.5" /></Link>
               </Button>
             )}

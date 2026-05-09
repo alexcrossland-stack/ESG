@@ -16,7 +16,19 @@ export const MAIN_NAV_TOP_LEVEL_LABELS = [
   "Reports",
 ] as const;
 
-export const ESG_SETUP_BASE_ROUTES = ["/policy", "/topics", "/esg-profile", "/team"];
+export const ESG_SETUP_HOME_HREF = "/topics";
+
+export const ESG_SETUP_BASE_ITEMS: NavItem[] = [
+  { label: "Topics", href: "/topics" },
+  { label: "ESG Profile", href: "/esg-profile" },
+  { label: "Team", href: "/team", permission: "settings_admin" },
+  { label: "Policy Generator", href: "/policy-generator" },
+  { label: "Policy Templates", href: "/policy-templates" },
+  { label: "Control Centre", href: "/control-centre" },
+  { label: "Recommendations", href: "/recommendations" },
+];
+
+export const ESG_SETUP_BASE_ROUTES = ESG_SETUP_BASE_ITEMS.map(item => item.href);
 export const ESG_SETUP_ADVANCED_ROUTES = [
   "/framework-readiness",
   "/framework-settings",
@@ -25,15 +37,11 @@ export const ESG_SETUP_ADVANCED_ROUTES = [
   "/esg-risks",
   "/compliance",
   "/benchmarks",
-  "/recommendations",
   "/my-tasks",
   "/my-approvals",
   "/questionnaire",
   "/carbon-calculator",
-  "/policy-templates",
-  "/policy-generator",
   "/answer-library",
-  "/control-centre",
 ];
 export const ESG_SETUP_ROUTES = [...ESG_SETUP_BASE_ROUTES, ...ESG_SETUP_ADVANCED_ROUTES];
 
@@ -60,15 +68,11 @@ export const ESG_SETUP_ADVANCED_PRIMARY_ITEMS: NavItem[] = [
 export const ESG_SETUP_ADVANCED_SUPPORT_ITEMS: NavItem[] = [
   { label: "Compliance", href: "/compliance" },
   { label: "Benchmarks", href: "/benchmarks" },
-  { label: "Recommendations", href: "/recommendations" },
   { label: "My Tasks", href: "/my-tasks" },
   { label: "My Approvals", href: "/my-approvals", permission: "report_generation" },
   { label: "Questionnaires", href: "/questionnaire" },
   { label: "Carbon Calculator", href: "/carbon-calculator" },
-  { label: "Policy Templates", href: "/policy-templates" },
-  { label: "Policy Generator", href: "/policy-generator" },
   { label: "Answer Library", href: "/answer-library" },
-  { label: "Control Centre", href: "/control-centre" },
 ];
 
 export const DATA_AND_METRICS_ITEMS: NavItem[] = [
@@ -84,6 +88,10 @@ export const MOVED_MENU_ITEM_TARGETS = {
   targetsAndActions: "/esg-targets",
   riskRegister: "/esg-risks",
   policyRegister: "/esg-policy-register",
+  policyGenerator: "/policy-generator",
+  policyTemplates: "/policy-templates",
+  controlCentre: "/control-centre",
+  recommendations: "/recommendations",
 } as const;
 
 export function isActive(location: string, href: string) {
@@ -97,33 +105,37 @@ export function isGroupActive(location: string, routes: string[]) {
 
 const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   "/": [{ label: "Dashboard", href: "/" }],
-  "/policy": [{ label: "ESG Setup", href: "/policy" }, { label: "Policies" }],
-  "/topics": [{ label: "ESG Setup", href: "/policy" }, { label: "Topics" }],
-  "/esg-profile": [{ label: "ESG Setup", href: "/policy" }, { label: "ESG Profile" }],
-  "/team": [{ label: "ESG Setup", href: "/policy" }, { label: "Team" }],
+  "/policy": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policies" }],
+  "/topics": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Topics" }],
+  "/esg-profile": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "ESG Profile" }],
+  "/team": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Team" }],
+  "/policy-generator": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policy Generator" }],
+  "/policy-templates": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Policy Templates" }],
+  "/control-centre": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Control Centre" }],
+  "/recommendations": [{ label: "ESG Setup", href: ESG_SETUP_HOME_HREF }, { label: "Recommendations" }],
   "/framework-readiness": [
-    { label: "ESG Setup", href: "/policy" },
+    { label: "ESG Setup", href: ESG_SETUP_HOME_HREF },
     { label: "Advanced", href: "/framework-readiness" },
     { label: "Frameworks" },
   ],
   "/framework-settings": [
-    { label: "ESG Setup", href: "/policy" },
+    { label: "ESG Setup", href: ESG_SETUP_HOME_HREF },
     { label: "Advanced", href: "/framework-readiness" },
     { label: "Frameworks", href: "/framework-readiness" },
     { label: "Framework Settings" },
   ],
   "/materiality": [
-    { label: "ESG Setup", href: "/policy" },
+    { label: "ESG Setup", href: ESG_SETUP_HOME_HREF },
     { label: "Advanced", href: "/framework-readiness" },
     { label: "Materiality" },
   ],
   "/esg-targets": [
-    { label: "ESG Setup", href: "/policy" },
+    { label: "ESG Setup", href: ESG_SETUP_HOME_HREF },
     { label: "Advanced", href: "/framework-readiness" },
     { label: "Targets and Actions" },
   ],
   "/esg-risks": [
-    { label: "ESG Setup", href: "/policy" },
+    { label: "ESG Setup", href: ESG_SETUP_HOME_HREF },
     { label: "Advanced", href: "/framework-readiness" },
     { label: "Risk Register" },
   ],
@@ -155,8 +167,8 @@ const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   "/settings/sites": [{ label: "Settings", href: "/settings" }, { label: "Sites" }],
   "/sites": [{ label: "Settings", href: "/settings" }, { label: "Sites" }],
   "/billing": [{ label: "Settings", href: "/settings" }, { label: "Billing" }],
-  "/admin": [{ label: "Admin", href: "/admin" }],
-  "/admin/security": [{ label: "Admin", href: "/admin" }, { label: "Security" }],
+  "/admin": [{ label: "Settings", href: "/admin" }],
+  "/admin/security": [{ label: "Settings", href: "/admin" }, { label: "Security" }],
 };
 
 export function getBreadcrumbs(location: string): BreadcrumbItem[] {

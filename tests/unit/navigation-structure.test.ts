@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 
 import {
   DATA_AND_METRICS_ITEMS,
+  ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
+  ESG_SETUP_BASE_ITEMS,
   ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
   MAIN_NAV_TOP_LEVEL_LABELS,
   MOVED_MENU_ITEM_TARGETS,
@@ -40,6 +42,26 @@ function run() {
   }
 
   try {
+    assert.deepEqual(labels(ESG_SETUP_BASE_ITEMS), [
+      "Topics",
+      "ESG Profile",
+      "Team",
+      "Policy Generator",
+      "Policy Templates",
+      "Control Centre",
+      "Recommendations",
+    ]);
+    assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
+    assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.controlCentre, "/control-centre");
+    assert.equal(MOVED_MENU_ITEM_TARGETS.recommendations, "/recommendations");
+    pass("ESG Setup exposes moved policy and control items without the old Policy link");
+  } catch (error: any) {
+    fail("ESG Setup exposes moved policy and control items without the old Policy link", error.message);
+  }
+
+  try {
     assert.deepEqual(labels(ESG_SETUP_ADVANCED_PRIMARY_ITEMS).slice(0, 5), [
       "Frameworks",
       "Framework Settings",
@@ -51,6 +73,9 @@ function run() {
     assert.equal(MOVED_MENU_ITEM_TARGETS.materiality, "/materiality");
     assert.equal(MOVED_MENU_ITEM_TARGETS.targetsAndActions, "/esg-targets");
     assert.equal(MOVED_MENU_ITEM_TARGETS.riskRegister, "/esg-risks");
+    for (const movedLabel of ["Policy Generator", "Policy Templates", "Control Centre", "Recommendations"]) {
+      assert.equal(labels(ESG_SETUP_ADVANCED_SUPPORT_ITEMS).includes(movedLabel), false);
+    }
     pass("Moved ESG Setup advanced items keep their existing page targets");
   } catch (error: any) {
     fail("Moved ESG Setup advanced items keep their existing page targets", error.message);
@@ -75,10 +100,21 @@ function run() {
       "Advanced",
       "Materiality",
     ]);
+    assert.deepEqual(getBreadcrumbs("/policy-generator").map(item => item.label), [
+      "ESG Setup",
+      "Policy Generator",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/control-centre").map(item => item.label), [
+      "ESG Setup",
+      "Control Centre",
+    ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
       "Data and Evidence",
       "Data and Metrics",
       "Policy Register",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/admin").map(item => item.label), [
+      "Settings",
     ]);
     pass("Moved pages resolve to the updated breadcrumb hierarchy");
   } catch (error: any) {
