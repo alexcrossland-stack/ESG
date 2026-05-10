@@ -2538,21 +2538,32 @@ function ReportingPeriodsAdmin() {
 }
 
 function AuditLogAdmin() {
-  const [filter, setFilter] = useState("");
-  const { data: auditLogs = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/audit-logs"] });
+  const [actionFilter, setActionFilter] = useState("");
+  const [outcomeFilter, setOutcomeFilter] = useState("all");
+  const [entityTypeFilter, setEntityTypeFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
+  const [limitFilter, setLimitFilter] = useState("100");
 
-  const filtered = filter
-    ? auditLogs.filter((log: any) => {
-        const search = filter.toLowerCase();
-        return (
-          (log.action || "").toLowerCase().includes(search) ||
-          (log.entityType || "").toLowerCase().includes(search) ||
-          (log.performedBy || "").toLowerCase().includes(search)
-        );
-      })
-    : auditLogs;
+  const auditParams = new URLSearchParams();
+  auditParams.set("limit", limitFilter || "100");
+  if (actionFilter.trim()) auditParams.set("action", actionFilter.trim());
+  if (outcomeFilter !== "all") auditParams.set("outcome", outcomeFilter);
+  if (entityTypeFilter.trim()) auditParams.set("entityType", entityTypeFilter.trim());
+  if (dateFromFilter) auditParams.set("dateFrom", dateFromFilter);
+  if (dateToFilter) auditParams.set("dateTo", dateToFilter);
+  const auditLogsUrl = `/api/audit-logs?${auditParams.toString()}`;
+  const { data: auditLogs = [], isLoading } = useQuery<any[]>({ queryKey: [auditLogsUrl] });
 
   const entityTypes = [...new Set(auditLogs.map((l: any) => l.entityType).filter(Boolean))];
+  const resetFilters = () => {
+    setActionFilter("");
+    setOutcomeFilter("all");
+    setEntityTypeFilter("");
+    setDateFromFilter("");
+    setDateToFilter("");
+    setLimitFilter("100");
+  };
 
   return (
     <Card data-testid="card-admin-audit">
@@ -2566,29 +2577,76 @@ function AuditLogAdmin() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Input
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-          placeholder="Filter by action, entity type, or user..."
-          className="text-xs"
-          data-testid="input-audit-filter"
-        />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          <Input
+            value={actionFilter}
+            onChange={e => setActionFilter(e.target.value)}
+            placeholder="Action, e.g. export_report"
+            className="text-xs"
+            data-testid="input-audit-action-filter"
+          />
+          <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
+            <SelectTrigger className="text-xs" data-testid="select-audit-outcome-filter">
+              <SelectValue placeholder="Outcome" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All outcomes</SelectItem>
+              <SelectItem value="success">Success</SelectItem>
+              <SelectItem value="failure">Failure</SelectItem>
+            </SelectContent>
+          </Select>
+          <Input
+            value={entityTypeFilter}
+            onChange={e => setEntityTypeFilter(e.target.value)}
+            placeholder="Entity type, e.g. report"
+            className="text-xs"
+            data-testid="input-audit-entity-filter"
+          />
+          <Input
+            type="date"
+            value={dateFromFilter}
+            onChange={e => setDateFromFilter(e.target.value)}
+            className="text-xs"
+            data-testid="input-audit-date-from"
+          />
+          <Input
+            type="date"
+            value={dateToFilter}
+            onChange={e => setDateToFilter(e.target.value)}
+            className="text-xs"
+            data-testid="input-audit-date-to"
+          />
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min="1"
+              max="500"
+              value={limitFilter}
+              onChange={e => setLimitFilter(e.target.value)}
+              className="text-xs"
+              data-testid="input-audit-limit"
+            />
+            <Button type="button" variant="outline" size="sm" className="text-xs" onClick={resetFilters} data-testid="button-audit-reset-filters">
+              Reset
+            </Button>
+          </div>
+        </div>
 
         {entityTypes.length > 0 && (
           <div className="flex flex-wrap gap-1">
             <Badge
-              variant={filter === "" ? "default" : "outline"}
+              variant={entityTypeFilter === "" ? "default" : "outline"}
               className="text-[10px] cursor-pointer"
-              onClick={() => setFilter("")}
+              onClick={() => setEntityTypeFilter("")}
             >
               All
             </Badge>
             {entityTypes.map(et => (
               <Badge
                 key={et}
-                variant={filter === et ? "default" : "outline"}
+                variant={entityTypeFilter === et ? "default" : "outline"}
                 className="text-[10px] cursor-pointer capitalize"
-                onClick={() => setFilter(filter === et ? "" : et)}
+                onClick={() => setEntityTypeFilter(entityTypeFilter === et ? "" : et)}
                 data-testid={`badge-audit-${et}`}
               >
                 {et}
@@ -2599,17 +2657,18 @@ function AuditLogAdmin() {
 
         {isLoading ? (
           <Skeleton className="h-48" />
-        ) : filtered.length === 0 ? (
+        ) : auditLogs.length === 0 ? (
           <p className="text-xs text-muted-foreground">No matching audit log entries.</p>
         ) : (
           <div className="space-y-1 max-h-[500px] overflow-y-auto">
-            {filtered.map((log: any) => (
+            {auditLogs.map((log: any) => (
               <div key={log.id} className="flex items-start gap-3 py-2 px-2 border-b border-border last:border-0 text-xs" data-testid={`audit-log-${log.id}`}>
                 <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="font-medium">{log.action}</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     {log.entityType && <Badge variant="outline" className="text-[10px] capitalize">{log.entityType}</Badge>}
+                    {log.details?.outcome && <Badge variant="outline" className="text-[10px] capitalize">{log.details.outcome}</Badge>}
                     {log.performedBy && <span className="text-muted-foreground">{log.performedBy}</span>}
                   </div>
                 </div>
