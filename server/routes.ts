@@ -547,7 +547,7 @@ function isInviteExpired(expiresAt: Date | string): boolean {
   return new Date(expiresAt).getTime() < Date.now();
 }
 
-async function isInviteExpiredById(id: string, fallbackExpiresAt: Date | string): Promise<boolean> {
+async function isAuthTokenExpiredById(id: string, fallbackExpiresAt: Date | string): Promise<boolean> {
   const result = await db.execute(sql`
     SELECT expires_at <= NOW() AS expired
     FROM auth_tokens
@@ -1371,6 +1371,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   app.set("trust proxy", 1);
+  const secureSessionCookie = process.env.SESSION_COOKIE_SECURE === "true" || process.env.NODE_ENV === "production";
 
   app.use(session({
     store: new PgSession({ pool, createTableIfMissing: true }),
@@ -1378,12 +1379,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     resave: false,
     saveUninitialized: true,
     cookie: {
-      secure: true,
+      secure: secureSessionCookie,
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      sameSite: "none" as const,
+      sameSite: secureSessionCookie ? "none" as const : "lax" as const,
       httpOnly: true,
     },
-    proxy: true,
+    proxy: secureSessionCookie,
   }));
 
   const loginLimiter = rateLimit({
@@ -1481,7 +1482,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     }
 
-    if (await isInviteExpiredById(record.id, record.expiresAt)) {
+    if (await isAuthTokenExpiredById(record.id, record.expiresAt)) {
       return {
         ok: false as const,
         status: 410,
@@ -1905,7 +1906,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const record = await storage.getAuthTokenByHash(hash);
       if (!record || record.type !== "password_reset") return res.status(400).json({ error: "Invalid or expired reset link" });
       if (record.usedAt) return res.status(400).json({ error: "This reset link has already been used" });
-      if (new Date(record.expiresAt) < new Date()) return res.status(400).json({ error: "This reset link has expired" });
+      if (await isAuthTokenExpiredById(record.id, record.expiresAt)) return res.status(400).json({ error: "This reset link has expired" });
       const newHash = await hashPassword(newPassword);
       if (record.userId) await storage.updateUser(record.userId, { password: newHash });
       await storage.markAuthTokenUsed(record.id);
@@ -13063,7 +13064,24 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }
       }
 
-      // Grant step-up — scoped to this session
+      // Grant step-up — scoped to this session. Browser contexts can carry a
+      // persisted bearer token without the matching extended session row, so
+      // create the tracking row before recording step-up when needed.
+      const extSession = await storage.getUserSession(sessionId).catch(() => null);
+      if (extSession) {
+        await storage.updateUserSessionLastSeen(sessionId).catch(() => {});
+      } else {
+        await storage.createUserSession({
+          userId,
+          companyId: companyId || null,
+          sessionId,
+          ipAddress: clientIp,
+          userAgent: clientUa,
+          deviceSummary: parseUserAgent(clientUa),
+          lastSeenAt: new Date(),
+          expiresAt: new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS),
+        }).catch(() => {});
+      }
       await storage.setUserSessionStepUp(sessionId);
       await storage.createAuditLog({
         companyId: companyId || undefined,
