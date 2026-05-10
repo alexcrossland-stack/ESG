@@ -197,6 +197,21 @@ async function run(tenants: SeededTenants): Promise<void> {
     assert(!JSON.stringify(logs).includes(tenantB.adminEmail), "Tenant B user metadata leaked to Tenant A");
   });
 
+  await check("tenant audit-log filters support entity type, date range, and bounded limit", async () => {
+    const now = Date.now();
+    const dateFrom = new Date(now - 86400000).toISOString().slice(0, 10);
+    const dateTo = new Date(now + 86400000).toISOString().slice(0, 10);
+    const logs = await getAuditLogs(
+      `/api/audit-logs?action=export_report&entityType=report&dateFrom=${dateFrom}&dateTo=${dateTo}&limit=1`,
+      tenantA.adminToken,
+    );
+    assert(logs.length <= 1, `limit was not enforced: ${logs.length}`);
+    assert(logs.length > 0, "expected at least one date-filtered export audit log");
+    assert(logs.every((log) => log.companyId === tenantA.companyId), "tenant endpoint returned another company log");
+    assert(logs.every((log) => log.action === "export_report"), "action filter returned non-export_report logs");
+    assert(logs.every((log) => log.entityType === "report"), "entityType filter returned non-report logs");
+  });
+
   await check("contributors and viewers cannot read tenant audit-log endpoint", async () => {
     expectStatus(await apiRequest("GET", "/api/audit-logs", undefined, tenantA.contributorToken), 403, "contributor GET /api/audit-logs");
     expectStatus(await apiRequest("GET", "/api/audit-logs", undefined, tenantA.viewerToken), 403, "viewer GET /api/audit-logs");
