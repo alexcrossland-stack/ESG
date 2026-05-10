@@ -1420,6 +1420,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     proxy: secureSessionCookie,
   }));
 
+  const csrfSafeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
+  const configuredTrustedOrigins = (process.env.CSRF_TRUSTED_ORIGINS || process.env.REPLIT_DOMAINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .flatMap((origin) => {
+      if (/^https?:\/\//i.test(origin)) return [origin];
+      return [`https://${origin}`];
+    });
+
+  function requestOriginFromHeader(value: unknown): string | null {
+    if (!value || typeof value !== "string") return null;
+    try {
+      return new URL(value).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  function isTrustedCsrfOrigin(req: Request, origin: string): boolean {
+    const forwardedProto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim();
+    const proto = forwardedProto || (req.secure ? "https" : "http");
+    const forwardedHost = (req.headers["x-forwarded-host"] as string | undefined)?.split(",")[0]?.trim();
+    const host = forwardedHost || req.headers.host;
+    const expected = host ? `${proto}://${host}` : null;
+    if (expected && origin === expected) return true;
+    return configuredTrustedOrigins.some((trusted) => origin === trusted || origin.startsWith(`${trusted}/`));
+  }
+
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api/") || csrfSafeMethods.has(req.method)) return next();
+    if (!req.headers.cookie?.includes("connect.sid=")) return next();
+    if (req.headers.authorization?.startsWith("Bearer ")) return next();
+
+    const origin = requestOriginFromHeader(req.headers.origin);
+    const referer = requestOriginFromHeader(req.headers.referer);
+    const candidate = origin || referer;
+    if (!candidate) return next();
+    if (isTrustedCsrfOrigin(req, candidate)) return next();
+
+    return res.status(403).json({
+      error: "Request origin is not allowed for cookie-authenticated changes.",
+      code: "CSRF_REJECTED",
+    });
+  });
+
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
@@ -1725,50 +1771,67 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return `${browser} on ${os}`;
   }
 
-  function establishSession(req: any, res: any, user: any, company: any, auditDetails: { ipAddress?: string | null; userAgent?: string | null } = {}) {
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
-    (req.session as any).userId = user.id;
-    (req.session as any).companyId = user.companyId;
-    (req.session as any).role = user.role ?? null;
-    (req.session as any).lastActivity = Date.now();
-    (req.session as any).createdAt = Date.now();
-    const sessionId = req.session.id;
-    // Store sessionId alongside token so revocation checks can reference it
-    tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + SESSION_ABSOLUTE_LIFETIME_MS, sessionId });
-    storage.createAuditLog({
-      companyId: user.companyId || undefined,
-      userId: user.id,
-      actorType: "user",
-      action: "session_created",
-      entityType: "auth",
-      ipAddress: auditDetails.ipAddress || null,
-      userAgent: auditDetails.userAgent || null,
-      details: { email: user.email, sessionId },
-    } as any).catch(() => {});
-    // Upsert extended session tracking record
-    storage.getUserSession(sessionId).then(existing => {
-      if (existing) {
-        storage.updateUserSessionLastSeen(sessionId).catch(() => {});
-      } else {
-        storage.createUserSession({
-          userId: user.id,
-          companyId: user.companyId || null,
-          sessionId,
-          ipAddress: auditDetails.ipAddress || null,
-          userAgent: auditDetails.userAgent || null,
-          deviceSummary: parseUserAgent(auditDetails.userAgent || null),
-          lastSeenAt: new Date(),
-          expiresAt,
-        }).catch(() => {});
+  function moveBearerTokensToSession(userId: string, oldSessionId: string | undefined, newSessionId: string) {
+    if (!oldSessionId || oldSessionId === newSessionId) return;
+    for (const session of tokenSessions.values()) {
+      if (session.userId === userId && session.sessionId === oldSessionId) {
+        session.sessionId = newSessionId;
       }
-    }).catch(() => {});
-    req.session.save((err: Error | null) => {
+    }
+  }
+
+  function establishSession(req: any, res: any, user: any, company: any, auditDetails: { ipAddress?: string | null; userAgent?: string | null } = {}) {
+    const previousSessionId = req.session?.id;
+    const previousUserId = (req.session as any)?.userId;
+
+    req.session.regenerate((regenerateErr: Error | null) => {
+      if (regenerateErr) {
+        sendServerError(res, new Error("session error"), "session");
+        return;
+      }
+
+      const token = generateToken();
+      const expiresAt = new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS);
+      (req.session as any).userId = user.id;
+      (req.session as any).companyId = user.companyId;
+      (req.session as any).role = user.role ?? null;
+      (req.session as any).lastActivity = Date.now();
+      (req.session as any).createdAt = Date.now();
+      const sessionId = req.session.id;
+      if (previousUserId) {
+        storage.revokeUserSession(previousSessionId).catch(() => {});
+      }
+      moveBearerTokensToSession(user.id, previousSessionId, sessionId);
+      // Store sessionId alongside token so revocation checks can reference it
+      tokenSessions.set(token, { userId: user.id, companyId: user.companyId!, expiresAt: Date.now() + SESSION_ABSOLUTE_LIFETIME_MS, sessionId });
+      storage.createAuditLog({
+        companyId: user.companyId || undefined,
+        userId: user.id,
+        actorType: "user",
+        action: "session_created",
+        entityType: "auth",
+        ipAddress: auditDetails.ipAddress || null,
+        userAgent: auditDetails.userAgent || null,
+        details: { email: user.email, sessionId },
+      } as any).catch(() => {});
+      storage.createUserSession({
+        userId: user.id,
+        companyId: user.companyId || null,
+        sessionId,
+        ipAddress: auditDetails.ipAddress || null,
+        userAgent: auditDetails.userAgent || null,
+        deviceSummary: parseUserAgent(auditDetails.userAgent || null),
+        lastSeenAt: new Date(),
+        expiresAt,
+      }).catch(() => {});
+
+      req.session.save((err: Error | null) => {
       if (err) {
         sendServerError(res, new Error("session error"), "session");
         return;
       }
       res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
+      });
     });
   }
 
@@ -13540,25 +13603,34 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }
       }
 
-      // Grant step-up — scoped to this session. Browser contexts can carry a
-      // persisted bearer token without the matching extended session row, so
-      // create the tracking row before recording step-up when needed.
+      // Rotate the browser session id when granting elevated privilege, while
+      // keeping any persisted bearer token linked to the new tracked session.
+      const previousCreatedAt = (req.session as any).createdAt || Date.now();
       const extSession = await storage.getUserSession(sessionId).catch(() => null);
-      if (extSession) {
-        await storage.updateUserSessionLastSeen(sessionId).catch(() => {});
-      } else {
-        await storage.createUserSession({
-          userId,
-          companyId: companyId || null,
-          sessionId,
-          ipAddress: clientIp,
-          userAgent: clientUa,
-          deviceSummary: parseUserAgent(clientUa),
-          lastSeenAt: new Date(),
-          expiresAt: new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS),
-        }).catch(() => {});
+      await new Promise<void>((resolve, reject) => {
+        req.session.regenerate((err: Error | null) => err ? reject(err) : resolve());
+      });
+      (req.session as any).userId = userId;
+      (req.session as any).companyId = companyId;
+      (req.session as any).role = user.role ?? null;
+      (req.session as any).lastActivity = Date.now();
+      (req.session as any).createdAt = previousCreatedAt;
+      const rotatedSessionId = req.session.id;
+      moveBearerTokensToSession(userId, sessionId, rotatedSessionId);
+      if (sessionId !== rotatedSessionId) {
+        await storage.revokeUserSession(sessionId).catch(() => {});
       }
-      await storage.setUserSessionStepUp(sessionId);
+      await storage.createUserSession({
+        userId,
+        companyId: companyId || null,
+        sessionId: rotatedSessionId,
+        ipAddress: clientIp,
+        userAgent: clientUa,
+        deviceSummary: parseUserAgent(clientUa),
+        lastSeenAt: new Date(),
+        expiresAt: extSession?.expiresAt || new Date(Date.now() + SESSION_ABSOLUTE_LIFETIME_MS),
+      });
+      await storage.setUserSessionStepUp(rotatedSessionId);
       await storage.createAuditLog({
         companyId: companyId || undefined,
         userId,
@@ -13567,9 +13639,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         entityType: "auth",
         ipAddress: clientIp,
         userAgent: clientUa,
-        details: { sessionId },
+        details: { sessionId: rotatedSessionId, previousSessionRotated: sessionId !== rotatedSessionId },
       } as any).catch(() => {});
-      res.json({ ok: true, stepUpGranted: true });
+      req.session.save((err: Error | null) => {
+        if (err) {
+          sendServerError(res, new Error("session error"), "session");
+          return;
+        }
+        res.json({ ok: true, stepUpGranted: true });
+      });
     } catch (e: any) {
       sendServerError(res, e);
     }
