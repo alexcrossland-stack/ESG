@@ -10485,16 +10485,20 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const { userId } = req.params;
       const adminUser = (req as any)._superAdmin;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ error: "User not found" });
+      const revokedSessions = await revokeTrackedSessionsForUser(userId).catch(() => 0);
       await storage.createAuditLog({
+        companyId: targetUser.companyId || undefined,
         userId: adminUser.id,
         action: "admin_revoke_user_sessions",
         entityType: "user",
         entityId: userId,
         actorType: "super_admin",
-        details: { revokedBy: adminUser.email },
+        details: { outcome: "success", reason: "admin_revoke_user_sessions", revokedBy: adminUser.email, revokedSessions },
       });
       evaluateSecurityEvent({ action: SECURITY_EVENTS.SESSION_REVOKED, userId: adminUser.id, details: { targetUserId: userId } }).catch(() => {});
-      res.json({ ok: true, message: "Sessions revoked. User will need to log in again." });
+      res.json({ ok: true, revokedSessions, message: "Sessions revoked. User will need to log in again." });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -10507,6 +10511,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
       await storage.updateUser(userId, { password: "DISABLED_" + user.password });
+      const revokedSessions = await revokeTrackedSessionsForUser(userId).catch(() => 0);
       await storage.createAuditLog({
         userId: adminUser.id,
         companyId: user.companyId || undefined,
@@ -10514,10 +10519,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         entityType: "user",
         entityId: userId,
         actorType: "super_admin",
-        details: { disabledBy: adminUser.email, userEmail: user.email },
+        details: { outcome: "success", reason: "admin_disable_user", disabledBy: adminUser.email, userEmail: user.email, revokedSessions },
       });
       evaluateSecurityEvent({ action: SECURITY_EVENTS.SUPER_ADMIN_ACTION, userId: adminUser.id, details: { action: "disable_user", targetUserId: userId } }).catch(() => {});
-      res.json({ ok: true, message: "User account disabled." });
+      res.json({ ok: true, revokedSessions, message: "User account disabled." });
     } catch (e: any) {
       sendServerError(res, e);
     }
