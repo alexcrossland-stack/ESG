@@ -595,6 +595,12 @@ function upgradeRequired(req: Request, res: Response, customMsg?: string) {
   res.status(403).json({ error: customMsg ?? "This feature requires a Pro plan.", code: "UPGRADE_REQUIRED" });
 }
 
+function sanitizeUserForResponse<T extends Record<string, any> | null | undefined>(user: T) {
+  if (!user) return user;
+  const { password, mfaSecretEncrypted, mfaBackupCodesHash, ...safeUser } = user;
+  return safeUser;
+}
+
 /**
  * Centralised 500 handler.
  * - Logs the real error server-side (never send raw exception messages to clients).
@@ -1744,7 +1750,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           sendServerError(res, new Error("session error"), "session");
           return;
         }
-        return res.json({ user: { ...user, password: undefined }, company, token });
+        return res.json({ user: sanitizeUserForResponse(user), company, token });
       });
     } catch (e: any) {
       if (e?.statusCode) return res.status(e.statusCode).json({ error: e.message });
@@ -1830,7 +1836,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         sendServerError(res, new Error("session error"), "session");
         return;
       }
-      res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, token });
+      res.json({ user: sanitizeUserForResponse(user), company, token });
       });
     });
   }
@@ -2289,7 +2295,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.error("[/api/auth/me] Portfolio access resolution failed:", portfolioErr instanceof Error ? portfolioErr.message : String(portfolioErr));
     }
 
-    res.json({ user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined }, company, consentOutdated, currentLegalVersion: CURRENT_LEGAL_VERSION, defaultLandingContext, portfolioGroups });
+    res.json({ user: sanitizeUserForResponse(user), company, consentOutdated, currentLegalVersion: CURRENT_LEGAL_VERSION, defaultLandingContext, portfolioGroups });
   });
 
   app.post("/api/auth/accept-terms", requireAuth, async (req, res) => {
@@ -13224,7 +13230,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           res.json({
             backupCodes,
             loggedIn: true,
-            user: { ...user, password: undefined, mfaSecretEncrypted: undefined, mfaBackupCodesHash: undefined },
+            user: sanitizeUserForResponse(user),
             company,
             token: sessionToken,
           });
@@ -14375,7 +14381,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         userAgent: req.headers["user-agent"],
       });
 
-      res.json({ user: updatedUser });
+      res.json({ user: sanitizeUserForResponse(updatedUser) });
     } catch (e: any) {
       sendServerError(res, e);
     }
