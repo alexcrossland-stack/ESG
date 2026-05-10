@@ -229,8 +229,8 @@ export interface IStorage {
   getNotificationBySourceKey(sourceKey: string, companyId: string): Promise<Notification | undefined>;
 
   getAuditLogs(companyId: string, limit?: number): Promise<AuditLog[]>;
-  getAllAuditLogs(limit?: number, filters?: { action?: string; actorType?: string }): Promise<AuditLog[]>;
-  queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]>;
+  getAllAuditLogs(limit?: number, filters?: { action?: string; actorType?: string; outcome?: string }): Promise<AuditLog[]>;
+  queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; outcome?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]>;
   createAuditLog(log: Omit<AuditLog, "id" | "createdAt">): Promise<AuditLog>;
 
   // Dashboard
@@ -1251,21 +1251,23 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(auditLogs).where(eq(auditLogs.companyId, companyId)).orderBy(desc(auditLogs.createdAt)).limit(limit);
   }
 
-  async getAllAuditLogs(limit = 200, filters?: { action?: string; actorType?: string }) {
+  async getAllAuditLogs(limit = 200, filters?: { action?: string; actorType?: string; outcome?: string }) {
     const conditions: any[] = [];
     if (filters?.action) conditions.push(eq(auditLogs.action, filters.action));
     if (filters?.actorType) conditions.push(eq(auditLogs.actorType, filters.actorType));
+    if (filters?.outcome) conditions.push(sql`${auditLogs.details}->>'outcome' = ${filters.outcome}`);
     let query = db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit) as any;
     if (conditions.length > 0) query = db.select().from(auditLogs).where(and(...conditions)).orderBy(desc(auditLogs.createdAt)).limit(limit) as any;
     return query;
   }
 
-  async queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]> {
+  async queryAuditLogs(filters: { companyId?: string; userId?: string; entityType?: string; action?: string; outcome?: string; dateFrom?: Date; dateTo?: Date; limit?: number }): Promise<AuditLog[]> {
     const conditions: any[] = [];
     if (filters.companyId) conditions.push(eq(auditLogs.companyId, filters.companyId));
     if (filters.userId) conditions.push(eq(auditLogs.userId, filters.userId));
     if (filters.entityType) conditions.push(eq(auditLogs.entityType, filters.entityType));
     if (filters.action) conditions.push(eq(auditLogs.action, filters.action));
+    if (filters.outcome) conditions.push(sql`${auditLogs.details}->>'outcome' = ${filters.outcome}`);
     if (filters.dateFrom) conditions.push(gte(auditLogs.createdAt, filters.dateFrom));
     if (filters.dateTo) conditions.push(lte(auditLogs.createdAt, filters.dateTo));
     const limit = filters.limit ?? 200;
