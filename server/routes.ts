@@ -4599,7 +4599,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     }
 
-    const allPeriodValues = await storage.getMetricValuesByPeriod(companyId, resolvedPeriod);
+    const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
+    const allPeriodValues = (await storage.getMetricValuesByPeriod(companyId, resolvedPeriod))
+      .filter((value: any) => enabledMetricIds.has(value.metricId));
     let values: typeof allPeriodValues;
     if (siteId) {
       values = allPeriodValues.filter((v: any) => v.siteId === siteId);
@@ -4655,6 +4657,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           .where(and(
             eq(generatedFiles.companyId, companyId),
             inArray(generatedFiles.reportRunId, reportIds),
+            sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
           ))
           .orderBy(generatedFiles.reportRunId, desc(generatedFiles.generatedAt))
         : [];
@@ -4866,7 +4869,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
-      const allPeriodValues = period ? await storage.getMetricValuesByPeriod(companyId, period) : [];
+      const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
+      const allPeriodValues = period
+        ? (await storage.getMetricValuesByPeriod(companyId, period)).filter((value: any) => enabledMetricIds.has(value.metricId))
+        : [];
 
       // Apply aggregation scope rules:
       // - Site-scoped: only records with site_id = bodySiteId (archived sites allowed for historical)
@@ -8450,8 +8456,15 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const file = await storage.getGeneratedFile(req.params.fileId);
-      if (!file || file.companyId !== companyId || file.reportRunId !== req.params.id) {
+      const [file] = await db.select().from(generatedFiles)
+        .where(and(
+          eq(generatedFiles.id, req.params.fileId),
+          eq(generatedFiles.companyId, companyId),
+          eq(generatedFiles.reportRunId, req.params.id),
+          sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
+        ))
+        .limit(1);
+      if (!file) {
         res.status(404).json({ error: "File not found" });
         return;
       }
@@ -8486,7 +8499,13 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       if (!ownerCheck.rows.length) {
         return res.status(404).json({ error: "Report not found" });
       }
-      const files = await storage.getGeneratedFilesByReportRun(req.params.id);
+      const files = await db.select().from(generatedFiles)
+        .where(and(
+          eq(generatedFiles.reportRunId, req.params.id),
+          eq(generatedFiles.companyId, companyId),
+          sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
+        ))
+        .orderBy(desc(generatedFiles.generatedAt));
       res.json(files.map(f => ({ id: f.id, filename: f.filename, fileType: f.fileType, fileSize: f.fileSize, generatedAt: f.generatedAt })));
     } catch (e: any) {
       sendServerError(res, e);
@@ -11866,6 +11885,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (reportType === "esg_metrics_summary") {
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
+        const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
         let site: any = null;
         if (requestedSiteId) {
           site = await storage.getSite(requestedSiteId, companyId);
@@ -11894,6 +11914,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             allValues.push(...vals.map((v: any) => ({ ...v, metricId })));
           }
         }
+        allValues = allValues.filter((value: any) => enabledMetricIds.has(value.metricId));
 
         // Apply site and date range filters
         const values = filterValues(allValues, { siteId: requestedSiteId, siteScopeProvided: siteScopeProvided && requestedSiteId !== undefined, dateFrom: dateFromObj, dateTo: dateToObj });
@@ -11986,7 +12007,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         if (period) {
           const periodVals = await storage.getMetricValuesByPeriod(companyId, period);
           // Enrich with metric metadata by matching metricId
-          allValues = periodVals.map((v: any) => {
+          allValues = periodVals.filter((v: any) => metricMetaMap.has(v.metricId)).map((v: any) => {
             const meta = metricMetaMap.get(v.metricId) || {};
             return { ...v, ...meta };
           });
@@ -12096,6 +12117,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { period, siteId } = req.query as { period?: string; siteId?: string };
+      const rawFormat = (req.query as Record<string, unknown>).format;
+      const requestedFormat = Array.isArray(rawFormat) ? rawFormat[0] : rawFormat;
+      if (requestedFormat !== undefined && String(requestedFormat).toLowerCase() !== "json") {
+        return res.status(400).json({ error: "Format must be json" });
+      }
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, "siteId");
       const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
       if (requestedSiteId) {
@@ -12108,12 +12134,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (reportType === "esg_metrics_summary") {
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
+        const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
         const values = period
           ? await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined)
           : [];
+        const enabledValues = values.filter((value: any) => enabledMetricIds.has(value.metricId));
         let site: any = null;
         if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
-        res.json({ metrics: enabledMetrics, values, site, period });
+        res.json({ metrics: enabledMetrics, values: enabledValues, site, period });
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
         const allFrameworks = await storage.getFrameworks(true);
