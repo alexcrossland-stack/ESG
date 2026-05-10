@@ -660,9 +660,38 @@ function parseEmployeeCountInput(value: unknown): { ok: true; value: number } | 
   return { ok: false, error: "Invalid employee count. Use a numeric value or a supported range such as 1-10 or 11-50." };
 }
 
+async function auditTokenAuthFailure(req: Request, input: {
+  reason: string;
+  userId?: string | null;
+  companyId?: string | null;
+  sessionId?: string | null;
+}) {
+  await storage.createAuditLog({
+    companyId: input.companyId || undefined,
+    userId: input.userId || undefined,
+    actorType: "user",
+    action: "token_auth_failed",
+    entityType: "auth",
+    entityId: input.sessionId || undefined,
+    ipAddress: getClientIp(req),
+    userAgent: req.headers["user-agent"] || null,
+    details: {
+      outcome: "failure",
+      reason: input.reason,
+      sessionId: input.sessionId || null,
+      method: req.method,
+      path: req.path,
+    },
+  } as any).catch(() => {});
+}
+
 async function requireAuth(req: Request, res: Response, next: Function) {
   const auth = resolveAuth(req);
   if (!auth) {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      await auditTokenAuthFailure(req, { reason: "invalid_or_expired_bearer" });
+    }
     return res.status(401).json({ error: "Not authenticated" });
   }
   (req as any)._auth = auth;
@@ -685,10 +714,12 @@ async function requireAuth(req: Request, res: Response, next: Function) {
         const extSession = await storage.getUserSession(tokenSession.sessionId).catch(() => null);
         if (extSession && extSession.revokedAt) {
           tokenSessions.delete(token);
+          await auditTokenAuthFailure(req, { reason: "session_revoked", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
           return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
         }
         if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
           tokenSessions.delete(token);
+          await auditTokenAuthFailure(req, { reason: "session_expired", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
           return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
         }
         if (!isExempt && extSession) {
@@ -697,10 +728,12 @@ async function requireAuth(req: Request, res: Response, next: Function) {
           const ageMs = timestampAgeMs(extSession.createdAt);
           if (idleMs !== null && idleMs > IDLE_TIMEOUT) {
             tokenSessions.delete(token);
+            await auditTokenAuthFailure(req, { reason: "session_idle_timeout", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
             return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
           }
           if (ageMs !== null && ageMs > ABSOLUTE_LIFETIME) {
             tokenSessions.delete(token);
+            await auditTokenAuthFailure(req, { reason: "session_absolute_timeout", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
             return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
           }
           // Update last seen for bearer sessions
@@ -735,10 +768,12 @@ async function requireAuth(req: Request, res: Response, next: Function) {
       const extSession = await storage.getUserSession(expressSessionId).catch(() => null);
       if (extSession && extSession.revokedAt) {
         req.session.destroy(() => {});
+        await auditTokenAuthFailure(req, { reason: "session_revoked", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
         return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
       }
       if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
         req.session.destroy(() => {});
+        await auditTokenAuthFailure(req, { reason: "session_expired", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
         return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
       }
       // Update last seen asynchronously
@@ -1832,17 +1867,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userId = (req.session as any).userId;
     const companyId = (req.session as any).companyId;
     const sessionId = req.session?.id;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const bearerSession = bearerToken ? tokenSessions.get(bearerToken) : null;
     if (userId) {
       await storage.createAuditLog({
         companyId,
         userId,
         action: "logout",
         entityType: "auth",
+        entityId: sessionId || bearerSession?.sessionId || undefined,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          outcome: "success",
+          reason: "user_logout",
+          sessionId: sessionId || null,
+          bearerSessionId: bearerSession?.sessionId || null,
+        },
       });
     }
-    const authHeader = req.headers.authorization;
-    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    const bearerSession = bearerToken ? tokenSessions.get(bearerToken) : null;
     if (authHeader?.startsWith("Bearer ")) {
       tokenSessions.delete(authHeader.slice(7));
     }
@@ -1936,14 +1980,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const newHash = await hashPassword(newPassword);
       if (record.userId) await storage.updateUser(record.userId, { password: newHash });
       await storage.markAuthTokenUsed(record.id);
-      if (record.userId) {
-        await revokeTrackedSessionsForUser(record.userId).catch(() => {});
-      }
+      const user = record.userId ? await storage.getUser(record.userId).catch(() => null) : null;
+      const revokedSessions = record.userId
+        ? await revokeTrackedSessionsForUser(record.userId).catch(() => 0)
+        : 0;
       await storage.createAuditLog({
+        companyId: user?.companyId || undefined,
         userId: record.userId || undefined,
         action: "password_reset",
         entityType: "auth",
-        details: { email: record.email },
+        entityId: record.id,
+        details: { outcome: "success", reason: "password_reset_completed", email: record.email, revokedSessions },
       });
       res.json({ ok: true });
     } catch (e: any) {
@@ -5597,7 +5644,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: key.id,
         ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
         userAgent: req.headers["user-agent"] || null,
-        details: { keyPrefix: prefix, label: label.trim(), scopes: keyScopes },
+        details: { outcome: "success", reason: "created", keyPrefix: prefix, label: label.trim(), scopes: keyScopes },
       } as any).catch(() => {});
       res.status(201).json({
         id: key.id,
@@ -5631,7 +5678,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: req.params.id,
         ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
         userAgent: req.headers["user-agent"] || null,
-        details: { keyPrefix: key.keyPrefix, label: key.label },
+        details: { outcome: "success", reason: "revoked", keyPrefix: key.keyPrefix, label: key.label },
       } as any).catch(() => {});
       res.json({ ok: true });
     } catch (e: any) {
@@ -6756,7 +6803,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         role,
         ...(targetCompanyId ? { companyId: targetCompanyId } : {}),
       });
-      await revokeTrackedSessionsForUser(req.params.id).catch(() => {});
+      const revokedSessions = await revokeTrackedSessionsForUser(req.params.id).catch(() => 0);
       await auditLog({
         companyId: targetCompanyId || companyId,
         userId,
@@ -6764,6 +6811,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityType: "user",
         entityId: req.params.id,
         details: {
+          outcome: "success",
+          reason: "role_changed",
+          revokedSessions,
           before: { role: previousRole, companyId: previousCompanyId },
           after: { role, companyId: targetCompanyId, targetUsername: targetUser.username },
         },
@@ -13044,14 +13094,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         mfaEnabledAt: new Date(),
         mfaBackupCodesHash: hashed,
       });
-      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
+      const revokedSessions = await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => 0);
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
         action: "mfa_enabled",
         entityType: "user",
         entityId: userId,
-        details: { method: "totp" },
+        details: { outcome: "success", reason: "mfa_setup_completed", method: "totp", revokedSessions },
       });
       if ((req as any)._mfaPending && user.companyId) {
         delete (req.session as any).mfaPendingUserId;
@@ -13165,13 +13215,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         mfaBackupCodesHash: null,
         mfaEnabledAt: null,
       });
-      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
+      const revokedSessions = await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => 0);
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
         action: "mfa_disabled",
         entityType: "user",
         entityId: userId,
+        details: { outcome: "success", reason: "mfa_disabled", revokedSessions },
       });
       res.json({ ok: true });
     } catch (e: any) {
@@ -13192,13 +13243,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const backupCodes = generateBackupCodes();
       const hashed = await hashBackupCodes(backupCodes);
       await storage.updateUser(userId, { mfaBackupCodesHash: hashed });
-      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
+      const revokedSessions = await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => 0);
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
         action: "mfa_backup_codes_regenerated",
         entityType: "user",
         entityId: userId,
+        details: { outcome: "success", reason: "mfa_backup_codes_regenerated", revokedSessions },
       });
       res.json({ backupCodes });
     } catch (e: any) {
@@ -13336,9 +13388,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         actorType: "user",
         action: "session_revoked",
         entityType: "auth",
+        entityId: sessionId,
         ipAddress: clientIp,
         userAgent: req.headers["user-agent"] || null,
-        details: { revokedSessionId: sessionId, isCurrent },
+        details: { outcome: "success", reason: "session_revoked_by_user", revokedSessionId: sessionId, isCurrent },
       } as any);
       if (isCurrent) {
         req.session.destroy(() => {});
@@ -13366,9 +13419,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         actorType: "user",
         action: "logout_all_other_sessions",
         entityType: "auth",
+        entityId: currentSessionId,
         ipAddress: clientIp,
         userAgent: req.headers["user-agent"] || null,
-        details: { revokedCount: count, currentSessionPreserved: true },
+        details: { outcome: "success", reason: "logout_all_other_sessions", revokedCount: count, currentSessionPreserved: true },
       } as any);
       res.json({ ok: true, revokedCount: count });
     } catch (e: any) {
@@ -14206,6 +14260,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         entityType: "user",
         entityId: parsed.data.userId,
         details: {
+          outcome: "success",
+          reason: "role_assigned",
           before: { role: previousRole, companyId: previousCompanyId },
           after: { role: parsed.data.role, companyId: targetCompanyId, targetUsername: targetUser.username },
         },
