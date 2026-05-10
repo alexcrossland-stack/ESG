@@ -1720,6 +1720,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   }
 
+  async function revokeTrackedSessionsForUser(userId: string, options: { exceptSessionId?: string } = {}) {
+    const sessions = await storage.getUserSessions(userId);
+    let revokedCount = 0;
+    for (const session of sessions) {
+      if (options.exceptSessionId && session.sessionId === options.exceptSessionId) continue;
+      await storage.revokeUserSession(session.sessionId);
+      revokedCount += 1;
+    }
+    for (const [token, session] of tokenSessions.entries()) {
+      if (session.userId === userId && (!options.exceptSessionId || session.sessionId !== options.exceptSessionId)) {
+        tokenSessions.delete(token);
+      }
+    }
+    return revokedCount;
+  }
+
   app.post("/api/auth/login", loginLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -1815,6 +1831,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/auth/logout", async (req, res) => {
     const userId = (req.session as any).userId;
     const companyId = (req.session as any).companyId;
+    const sessionId = req.session?.id;
     if (userId) {
       await storage.createAuditLog({
         companyId,
@@ -1824,8 +1841,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
     const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const bearerSession = bearerToken ? tokenSessions.get(bearerToken) : null;
     if (authHeader?.startsWith("Bearer ")) {
       tokenSessions.delete(authHeader.slice(7));
+    }
+    if (sessionId) {
+      await storage.revokeUserSession(sessionId).catch(() => {});
+      for (const [token, session] of tokenSessions.entries()) {
+        if (session.sessionId === sessionId) tokenSessions.delete(token);
+      }
+    }
+    if (bearerSession?.sessionId && bearerSession.sessionId !== sessionId) {
+      await storage.revokeUserSession(bearerSession.sessionId).catch(() => {});
     }
     req.session.destroy(() => res.json({ ok: true }));
   });
@@ -1908,6 +1936,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const newHash = await hashPassword(newPassword);
       if (record.userId) await storage.updateUser(record.userId, { password: newHash });
       await storage.markAuthTokenUsed(record.id);
+      if (record.userId) {
+        await revokeTrackedSessionsForUser(record.userId).catch(() => {});
+      }
       await storage.createAuditLog({
         userId: record.userId || undefined,
         action: "password_reset",
@@ -6725,6 +6756,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         role,
         ...(targetCompanyId ? { companyId: targetCompanyId } : {}),
       });
+      await revokeTrackedSessionsForUser(req.params.id).catch(() => {});
       await auditLog({
         companyId: targetCompanyId || companyId,
         userId,
@@ -13012,6 +13044,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         mfaEnabledAt: new Date(),
         mfaBackupCodesHash: hashed,
       });
+      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
@@ -13132,6 +13165,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         mfaBackupCodesHash: null,
         mfaEnabledAt: null,
       });
+      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
@@ -13158,6 +13192,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const backupCodes = generateBackupCodes();
       const hashed = await hashBackupCodes(backupCodes);
       await storage.updateUser(userId, { mfaBackupCodesHash: hashed });
+      await revokeTrackedSessionsForUser(userId, { exceptSessionId: req.session?.id }).catch(() => {});
       await storage.createAuditLog({
         companyId: user.companyId || undefined,
         userId,
