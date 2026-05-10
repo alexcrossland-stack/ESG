@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
+import { isAgentApiKeyExpiredById } from "./auth-token-timestamps";
 
 const KEY_PREFIX_MARKER = "esgk_";
 const KEY_PREFIX_DISPLAY_LEN = 8;
@@ -32,7 +33,7 @@ export async function requireAgentAuth(req: Request, res: Response, next: NextFu
   if (keyRecord.revokedAt) {
     return res.status(401).json({ error: "API key has been revoked" });
   }
-  if (keyRecord.expiresAt && keyRecord.expiresAt < new Date()) {
+  if (await isAgentApiKeyExpiredById(keyRecord.id, keyRecord.expiresAt)) {
     return res.status(401).json({ error: "API key has expired" });
   }
 
