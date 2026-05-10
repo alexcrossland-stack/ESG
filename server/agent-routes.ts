@@ -214,6 +214,7 @@ export function registerAgentRoutes(app: Express) {
         expiresAt: parsedExpiresAt,
       } as any);
       storage.createAuditLog({
+        companyId: body.companyId || undefined,
         userId: actorUserId || null,
         actorType: "user",
         action: "api_key_created",
@@ -221,7 +222,7 @@ export function registerAgentRoutes(app: Express) {
         entityId: key.id,
         ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
         userAgent: req.headers["user-agent"] || null,
-        details: { keyPrefix: prefix, agentType: body.agentType, label: body.label, scopes: body.scopes },
+        details: { outcome: "success", reason: "created", keyPrefix: prefix, agentType: body.agentType, label: body.label, scopes: body.scopes },
       } as any).catch(() => {});
       return res.status(201).json({
         id: key.id,
@@ -263,8 +264,10 @@ export function registerAgentRoutes(app: Express) {
   app.delete("/api/internal/agent/keys/:id", requireInternalKeyAdmin, async (req: Request, res: Response) => {
     try {
       const actorUserId = (req.session as any)?.userId;
+      const key = await storage.getAgentApiKey(req.params.id).catch(() => null);
       await storage.revokeAgentApiKey(req.params.id);
       storage.createAuditLog({
+        companyId: key?.companyId || undefined,
         userId: actorUserId || null,
         actorType: "user",
         action: "api_key_revoked",
@@ -272,7 +275,13 @@ export function registerAgentRoutes(app: Express) {
         entityId: req.params.id,
         ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null,
         userAgent: req.headers["user-agent"] || null,
-        details: {},
+        details: {
+          outcome: "success",
+          reason: "revoked",
+          keyPrefix: key?.keyPrefix || null,
+          agentType: key?.agentType || null,
+          label: key?.label || null,
+        },
       } as any).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
