@@ -17,7 +17,10 @@
     "test:preflight:standalone": "npm run test:security-db && npm run test:metric-upsert && npm run test:e2e:release",
     "test:api": "tsx tests/api-security.test.ts",
     "test:e2e": "playwright test",
-    "test:all": "tsx tests/api-security.test.ts && playwright test"
+    "test:all": "tsx tests/api-security.test.ts && playwright test",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "check:lockfile": "npm ci --ignore-scripts --dry-run",
+    "check:secrets": "node scripts/check-secrets.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
