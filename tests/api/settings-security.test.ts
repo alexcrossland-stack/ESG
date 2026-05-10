@@ -170,6 +170,137 @@ async function run(tenants: SeededTenants): Promise<void> {
     expectStatus(await apiRequest("POST", "/api/company/api-keys", { label: "blocked", scopes: ["read:metrics"] }, tenantA.contributorToken), 403, "contributor POST /api/company/api-keys");
   });
 
+  await check("settings/admin direct APIs enforce tenant isolation and role boundaries", async () => {
+    const settingsMarkerA = `settings-admin-a-${suffix}`;
+    const settingsMarkerB = `settings-admin-b-${suffix}`;
+    const idpNameB = `Tenant B SSO ${suffix}`;
+    const idpMarkerB = `idp-b-${suffix}.test-esg.example`;
+
+    expectStatus(
+      await apiRequest("PUT", "/api/company/settings", { reportBrandingName: "blocked viewer" }, tenantA.viewerToken),
+      403,
+      "viewer PUT /api/company/settings",
+    );
+    expectStatus(
+      await apiRequest("PUT", "/api/company/settings", { reportBrandingName: "blocked contributor" }, tenantA.contributorToken),
+      403,
+      "contributor PUT /api/company/settings",
+    );
+    expectStatus(
+      await apiRequest("PUT", "/api/company/settings", { reportBrandingName: settingsMarkerA }, tenantA.adminToken),
+      200,
+      "Tenant A admin PUT /api/company/settings",
+    );
+    expectStatus(
+      await apiRequest("PUT", "/api/company/settings", { reportBrandingName: settingsMarkerB }, tenantB.adminToken),
+      200,
+      "Tenant B admin PUT /api/company/settings",
+    );
+    const settingsA = parseJson<any>(
+      await apiRequest("GET", "/api/company/settings", undefined, tenantA.adminToken),
+      "Tenant A GET /api/company/settings",
+    );
+    const settingsB = parseJson<any>(
+      await apiRequest("GET", "/api/company/settings", undefined, tenantB.adminToken),
+      "Tenant B GET /api/company/settings",
+    );
+    assert(settingsA.reportBrandingName === settingsMarkerA, "Tenant A settings did not return Tenant A marker");
+    assert(settingsB.reportBrandingName === settingsMarkerB, "Tenant B settings did not return Tenant B marker");
+    assert(JSON.stringify(settingsA).includes(settingsMarkerB) === false, "Tenant A settings leaked Tenant B marker");
+    assert(JSON.stringify(settingsB).includes(settingsMarkerA) === false, "Tenant B settings leaked Tenant A marker");
+
+    expectStatus(await apiRequest("GET", "/api/users", undefined, tenantA.viewerToken), 403, "viewer GET /api/users");
+    expectStatus(await apiRequest("GET", "/api/users", undefined, tenantA.contributorToken), 403, "contributor GET /api/users");
+    const usersA = parseJson<Array<{ email?: string; companyId?: string; password?: string }>>(
+      await apiRequest("GET", "/api/users", undefined, tenantA.adminToken),
+      "Tenant A GET /api/users",
+    );
+    const usersB = parseJson<Array<{ email?: string; companyId?: string; password?: string }>>(
+      await apiRequest("GET", "/api/users", undefined, tenantB.adminToken),
+      "Tenant B GET /api/users",
+    );
+    assert(usersA.some((user) => user.email === tenantA.adminEmail), "Tenant A users missing Tenant A admin");
+    assert(usersA.every((user) => user.companyId === tenantA.companyId), "Tenant A users response included another company");
+    assert(!usersA.some((user) => user.email === tenantB.adminEmail), "Tenant A users leaked Tenant B admin");
+    assert(usersA.every((user) => !("password" in user)), "Tenant A users response leaked password hashes");
+    assert(usersB.some((user) => user.email === tenantB.adminEmail), "Tenant B users missing Tenant B admin");
+    assert(usersB.every((user) => user.companyId === tenantB.companyId), "Tenant B users response included another company");
+    assert(!usersB.some((user) => user.email === tenantA.adminEmail), "Tenant B users leaked Tenant A admin");
+
+    expectStatus(
+      await apiRequest("POST", "/api/users/invite", { email: `blocked-viewer-${suffix}@test-esg.example`, role: "viewer" }, tenantA.viewerToken),
+      403,
+      "viewer POST /api/users/invite",
+    );
+    expectStatus(
+      await apiRequest("POST", "/api/users/invite", { email: `blocked-contributor-${suffix}@test-esg.example`, role: "viewer" }, tenantA.contributorToken),
+      403,
+      "contributor POST /api/users/invite",
+    );
+    expectStatus(
+      await apiRequest("POST", `/api/companies/${tenantB.companyId}/invites`, { email: `cross-invite-${suffix}@test-esg.example`, role: "viewer" }, tenantA.adminToken),
+      403,
+      "Tenant A admin POST /api/companies/:tenantB/invites",
+    );
+
+    expectStatus(await apiRequest("GET", "/api/admin/users/mfa-status", undefined, tenantA.viewerToken), 403, "viewer GET /api/admin/users/mfa-status");
+    expectStatus(await apiRequest("GET", "/api/admin/users/mfa-status", undefined, tenantA.contributorToken), 403, "contributor GET /api/admin/users/mfa-status");
+    const mfaStatusA = parseJson<Array<{ email?: string; companyId?: string }>>(
+      await apiRequest("GET", "/api/admin/users/mfa-status", undefined, tenantA.adminToken),
+      "Tenant A GET /api/admin/users/mfa-status",
+    );
+    assert(mfaStatusA.some((user) => user.email === tenantA.adminEmail), "Tenant A MFA status missing Tenant A admin");
+    assert(!mfaStatusA.some((user) => user.email === tenantB.adminEmail), "Tenant A MFA status leaked Tenant B admin");
+
+    expectStatus(await apiRequest("GET", "/api/admin/identity-providers", undefined, tenantA.viewerToken), 403, "viewer GET /api/admin/identity-providers");
+    expectStatus(await apiRequest("GET", "/api/admin/identity-providers", undefined, tenantA.contributorToken), 403, "contributor GET /api/admin/identity-providers");
+    const providerB = parseJson<{ id: string; companyId: string; domain?: string }>(
+      await apiRequest("POST", "/api/admin/identity-providers", {
+        name: idpNameB,
+        providerType: "saml",
+        domain: idpMarkerB,
+        config: { ssoUrl: "https://idp.test-esg.example/sso" },
+      }, tenantB.adminToken),
+      "Tenant B POST /api/admin/identity-providers",
+    );
+    assert(providerB.companyId === tenantB.companyId, "Tenant B identity provider stored against wrong company");
+    const providersA = parseJson<Array<{ id: string; companyId: string; domain?: string }>>(
+      await apiRequest("GET", "/api/admin/identity-providers", undefined, tenantA.adminToken),
+      "Tenant A GET /api/admin/identity-providers",
+    );
+    const providersB = parseJson<Array<{ id: string; companyId: string; domain?: string }>>(
+      await apiRequest("GET", "/api/admin/identity-providers", undefined, tenantB.adminToken),
+      "Tenant B GET /api/admin/identity-providers",
+    );
+    assert(providersA.every((provider) => provider.companyId === tenantA.companyId), "Tenant A identity providers response included another company");
+    assert(!providersA.some((provider) => provider.id === providerB.id || provider.domain === idpMarkerB), "Tenant A identity providers leaked Tenant B provider");
+    assert(providersB.some((provider) => provider.id === providerB.id && provider.domain === idpMarkerB), "Tenant B identity providers missing Tenant B provider");
+    expectStatus(
+      await apiRequest("PATCH", `/api/admin/identity-providers/${providerB.id}`, { name: "cross tenant edit" }, tenantA.adminToken),
+      404,
+      "Tenant A admin PATCH Tenant B identity provider",
+    );
+    expectStatus(
+      await apiRequest("DELETE", `/api/admin/identity-providers/${providerB.id}`, undefined, tenantA.adminToken),
+      404,
+      "Tenant A admin DELETE Tenant B identity provider",
+    );
+
+    expectStatus(await apiRequest("GET", "/api/audit-logs", undefined, tenantA.viewerToken), 403, "viewer GET /api/audit-logs");
+    expectStatus(await apiRequest("GET", "/api/audit-logs", undefined, tenantA.contributorToken), 403, "contributor GET /api/audit-logs");
+    const tenantAAuditLogs = parseJson<Array<{ companyId: string; action: string; details?: unknown }>>(
+      await apiRequest("GET", "/api/audit-logs?action=identity_provider_created&entityType=identity_provider", undefined, tenantA.adminToken),
+      "Tenant A filtered audit logs",
+    );
+    const tenantBAuditLogs = parseJson<Array<{ companyId: string; action: string; details?: unknown }>>(
+      await apiRequest("GET", "/api/audit-logs?action=identity_provider_created&entityType=identity_provider", undefined, tenantB.adminToken),
+      "Tenant B filtered audit logs",
+    );
+    assert(tenantAAuditLogs.every((log) => log.companyId === tenantA.companyId), "Tenant A audit logs response included another company");
+    assert(!JSON.stringify(tenantAAuditLogs).includes(idpNameB), "Tenant A audit logs leaked Tenant B identity provider details");
+    assert(tenantBAuditLogs.some((log) => log.companyId === tenantB.companyId && JSON.stringify(log).includes(idpNameB)), "Tenant B audit logs missing Tenant B identity provider event");
+  });
+
   await check("step-up protects sensitive settings actions", async () => {
     const admin = new CookieSession();
     await admin.login(tenantA.adminEmail);
@@ -206,6 +337,16 @@ async function run(tenants: SeededTenants): Promise<void> {
     parseJson(await adminA.stepUp(), "Tenant A step-up");
     parseJson(await adminB.stepUp(), "Tenant B step-up");
 
+    const tenantBLabel = `Settings security Tenant B key ${suffix}`;
+    const createdTenantB = parseJson<{ id: string; key?: string; keyPrefix?: string }>(
+      await adminB.request("POST", "/api/company/api-keys", {
+        label: tenantBLabel,
+        scopes: ["read:metrics"],
+      }),
+      "Tenant B POST /api/company/api-keys",
+    );
+    assert(createdTenantB.id && createdTenantB.key, "Tenant B API key create response missing id/plaintext key");
+
     const created = parseJson<{ id: string; key?: string; keyPrefix?: string }>(
       await adminA.request("POST", "/api/company/api-keys", {
         label: `Settings security smoke ${suffix}`,
@@ -222,6 +363,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     const listedKey = listed.find((key) => key.id === created.id);
     assert(listedKey, "created API key missing from list");
     assert(!("key" in listedKey), "API key list leaked plaintext key");
+    assert(!listed.some((key) => key.id === createdTenantB.id), "Tenant A API key list leaked Tenant B key");
+    assert(!JSON.stringify(listed).includes(tenantBLabel), "Tenant A API key list leaked Tenant B key label");
 
     expectStatus(await adminB.request("DELETE", `/api/company/api-keys/${created.id}`), 404, "Tenant B delete Tenant A API key");
     expectStatus(await adminA.request("DELETE", `/api/company/api-keys/${created.id}`), 200, "Tenant A delete own API key");
