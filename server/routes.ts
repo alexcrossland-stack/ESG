@@ -43,6 +43,14 @@ import { getEffectivePlanTier, getActiveGrant } from "./billing/entitlement";
 import { insertAccessGrantSchema } from "@shared/schema";
 import { commitBulkMetricPaste, getBulkMetricGrid, validateBulkMetricPaste } from "./bulk-metric-entry";
 import { DATA_ENTRY_PERIOD_ROUTE } from "./data-entry-route-patterns";
+import {
+  getUserSessionStepUpState,
+  isAuthTokenExpiredById,
+  isTimestampInFuture,
+  isUserSessionExpiredBySessionId,
+  timestampToDate,
+  timestampAgeMs,
+} from "./auth-token-timestamps";
 
 const CURRENT_LEGAL_VERSION = "1.0";
 import { generateAgentApiKey } from "./agent-auth";
@@ -543,21 +551,6 @@ async function generateInvitedUsername(email: string, inviteeName?: string | nul
   return `${base}_${Date.now()}`;
 }
 
-function isInviteExpired(expiresAt: Date | string): boolean {
-  return new Date(expiresAt).getTime() < Date.now();
-}
-
-async function isAuthTokenExpiredById(id: string, fallbackExpiresAt: Date | string): Promise<boolean> {
-  const result = await db.execute(sql`
-    SELECT expires_at <= NOW() AS expired
-    FROM auth_tokens
-    WHERE id = ${id}
-    LIMIT 1
-  `);
-  const expired = (result as any).rows?.[0]?.expired;
-  return typeof expired === "boolean" ? expired : isInviteExpired(fallbackExpiresAt);
-}
-
 function parseInvitationMetadata(metadata: unknown): InvitationTokenMetadata | null {
   const parsed = invitationMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
@@ -580,7 +573,7 @@ function resolveAuth(req: Request): { userId: string; companyId: string } | null
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
     const session = tokenSessions.get(token);
-    if (session && session.expiresAt > Date.now()) {
+    if (session && isTimestampInFuture(session.expiresAt)) {
       return { userId: session.userId, companyId: session.companyId };
     }
     if (session) tokenSessions.delete(token);
@@ -694,18 +687,19 @@ async function requireAuth(req: Request, res: Response, next: Function) {
           tokenSessions.delete(token);
           return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
         }
+        if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
+          tokenSessions.delete(token);
+          return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+        }
         if (!isExempt && extSession) {
           // Enforce idle/absolute timeout for bearer sessions using server-side timestamps
-          const now = Date.now();
-          const createdMs = extSession.createdAt ? new Date(extSession.createdAt).getTime() : 0;
-          const lastSeenMs = extSession.lastSeenAt ? new Date(extSession.lastSeenAt).getTime() : 0;
-          const idleMs = now - lastSeenMs;
-          const ageMs = createdMs > 0 ? now - createdMs : 0;
-          if (lastSeenMs > 0 && idleMs > IDLE_TIMEOUT) {
+          const idleMs = timestampAgeMs(extSession.lastSeenAt);
+          const ageMs = timestampAgeMs(extSession.createdAt);
+          if (idleMs !== null && idleMs > IDLE_TIMEOUT) {
             tokenSessions.delete(token);
             return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
           }
-          if (ageMs > 0 && ageMs > ABSOLUTE_LIFETIME) {
+          if (ageMs !== null && ageMs > ABSOLUTE_LIFETIME) {
             tokenSessions.delete(token);
             return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
           }
@@ -742,6 +736,10 @@ async function requireAuth(req: Request, res: Response, next: Function) {
       if (extSession && extSession.revokedAt) {
         req.session.destroy(() => {});
         return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+      }
+      if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
+        req.session.destroy(() => {});
+        return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
       }
       // Update last seen asynchronously
       if (extSession) {
@@ -809,8 +807,8 @@ async function requireStepUp(req: Request, res: Response, next: Function) {
     } as any).catch(() => {});
     return res.status(403).json({ error: "This action requires re-authentication. Please verify your identity first.", code: "STEP_UP_REQUIRED" });
   }
-  const stepUpAge = Date.now() - new Date(extSession.stepUpAt).getTime();
-  if (stepUpAge > STEP_UP_VALIDITY) {
+  const stepUpState = await getUserSessionStepUpState(sessionId, extSession.stepUpAt, STEP_UP_VALIDITY);
+  if (!stepUpState.valid) {
     storage.createAuditLog({
       companyId: auth?.companyId || undefined,
       userId: auth?.userId,
@@ -2080,6 +2078,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           req.session.destroy(() => {});
           return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
         }
+        if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
+          req.session.destroy(() => {});
+          return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+        }
       }
       // Check bearer token revocation
       const authHeader = req.headers.authorization;
@@ -2091,6 +2093,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (extSession && extSession.revokedAt) {
             tokenSessions.delete(token);
             return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+          }
+          if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
+            tokenSessions.delete(token);
+            return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
           }
         }
       }
@@ -5359,6 +5365,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const allowedScopes = ["read:metrics", "write:metrics", "read:reports", "read:evidence", "write:evidence"];
       const keyScopes: string[] = Array.isArray(scopes) ? scopes.filter((s: string) => allowedScopes.includes(s)) : [];
+      const parsedExpiresAt = expiresAt ? timestampToDate(expiresAt) : null;
+      if (expiresAt && !parsedExpiresAt) {
+        return res.status(400).json({ error: "Invalid API key expiry timestamp" });
+      }
       const { plaintext, hash, prefix } = generateAgentApiKey();
       const key = await storage.createAgentApiKey({
         agentType: "technical_agent" as any,
@@ -5367,7 +5377,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         keyPrefix: prefix,
         scopes: keyScopes,
         companyId,
-        expiresAt: expiresAt ? new Date(expiresAt) : null,
+        expiresAt: parsedExpiresAt,
       } as any);
       storage.createAuditLog({
         companyId,
@@ -12899,9 +12909,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { userId } = (req as any)._auth;
       const currentSessionId = req.session?.id;
       const sessions = await storage.getUserSessions(userId);
-      const now = new Date();
       const result = sessions
-        .filter(s => !s.revokedAt && new Date(s.expiresAt) > now)
+        .filter(s => !s.revokedAt && isTimestampInFuture(s.expiresAt))
         .map(s => ({
           id: s.id,
           sessionId: s.sessionId,
@@ -13109,17 +13118,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const extSession = await storage.getUserSession(sessionId).catch(() => null);
       const { userId } = (req as any)._auth;
       const user = await storage.getUser(userId);
-      let stepUpValid = false;
-      if (extSession?.stepUpAt) {
-        const age = Date.now() - new Date(extSession.stepUpAt).getTime();
-        stepUpValid = age < STEP_UP_VALIDITY;
-      }
+      const stepUpState = extSession?.stepUpAt
+        ? await getUserSessionStepUpState(sessionId, extSession.stepUpAt, STEP_UP_VALIDITY)
+        : { valid: false, remainingMs: 0 };
       res.json({
-        stepUpValid,
+        stepUpValid: stepUpState.valid,
         stepUpAt: extSession?.stepUpAt || null,
-        stepUpExpiresIn: extSession?.stepUpAt
-          ? Math.max(0, STEP_UP_VALIDITY - (Date.now() - new Date(extSession.stepUpAt).getTime()))
-          : 0,
+        stepUpExpiresIn: extSession?.stepUpAt ? stepUpState.remainingMs : 0,
         requiresMfa: user?.mfaEnabled ?? false,
       });
     } catch (e: any) {

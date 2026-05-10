@@ -3561,7 +3561,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUserSession(data: InsertUserSession): Promise<UserSession> {
-    const [s] = await db.insert(userSessions).values(data).returning();
+    const [s] = await db.insert(userSessions).values({ ...data, lastSeenAt: sql`NOW()` } as any).returning();
     return s;
   }
 
@@ -3577,16 +3577,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateUserSessionLastSeen(sessionId: string): Promise<void> {
-    await db.update(userSessions).set({ lastSeenAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+    await db.update(userSessions).set({ lastSeenAt: sql`NOW()` } as any).where(eq(userSessions.sessionId, sessionId));
   }
 
   async revokeUserSession(sessionId: string): Promise<void> {
-    await db.update(userSessions).set({ revokedAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+    await db.update(userSessions).set({ revokedAt: sql`NOW()` } as any).where(eq(userSessions.sessionId, sessionId));
   }
 
   async revokeAllUserSessionsExcept(userId: string, currentSessionId: string): Promise<number> {
     const result = await db.update(userSessions)
-      .set({ revokedAt: new Date() })
+      .set({ revokedAt: sql`NOW()` } as any)
       .where(and(
         eq(userSessions.userId, userId),
         isNull(userSessions.revokedAt),
@@ -3597,7 +3597,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async setUserSessionStepUp(sessionId: string): Promise<void> {
-    await db.update(userSessions).set({ stepUpAt: new Date() }).where(eq(userSessions.sessionId, sessionId));
+    await db.update(userSessions).set({ stepUpAt: sql`NOW()` } as any).where(eq(userSessions.sessionId, sessionId));
   }
 
   async cleanupExpiredUserSessions(): Promise<number> {

@@ -7,6 +7,7 @@ import { getSchedulerStatus } from "./scheduler";
 import { POLICY_TEMPLATES } from "./policy-templates";
 import { SME_BENCHMARKS } from "./benchmarks";
 import { getUserPermissions } from "@shared/schema";
+import { timestampToDate } from "./auth-token-timestamps";
 
 // ---------------------------------------------------------------------------
 // Admin user session auth (for key management routes)
@@ -185,6 +186,10 @@ export function registerAgentRoutes(app: Express) {
       const body = createKeySchema.parse(req.body);
       const { plaintext, hash, prefix } = generateAgentApiKey();
       const actorUserId = (req.session as any)?.userId;
+      const parsedExpiresAt = body.expiresAt ? timestampToDate(body.expiresAt) : null;
+      if (body.expiresAt && !parsedExpiresAt) {
+        return res.status(400).json({ error: "Invalid API key expiry timestamp" });
+      }
       const key = await storage.createAgentApiKey({
         agentType: body.agentType,
         label: body.label,
@@ -192,7 +197,7 @@ export function registerAgentRoutes(app: Express) {
         keyPrefix: prefix,
         scopes: body.scopes,
         companyId: body.companyId || null,
-        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+        expiresAt: parsedExpiresAt,
       } as any);
       storage.createAuditLog({
         userId: actorUserId || null,
