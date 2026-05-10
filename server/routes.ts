@@ -11795,6 +11795,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { format: fmt = "pdf", period, siteId, dateFrom, dateTo } = req.body;
+      const requestedFormat = String(fmt || "pdf").toLowerCase();
+      if (!["pdf", "docx"].includes(requestedFormat)) {
+        return res.status(400).json({ error: "Format must be pdf or docx" });
+      }
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
       const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
       if (requestedSiteId) {
@@ -12050,7 +12054,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       let contentType: string;
       let ext: string;
 
-      if (fmt === "docx") {
+      if (requestedFormat === "docx") {
         fileBuffer = await genDocx(reportData, reportType, companyName);
         contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         ext = "docx";
@@ -12072,7 +12076,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         userId,
         action: "export_report",
         entityType: "report",
-        details: { reportType, format: fmt, period, siteId, dateFrom, dateTo },
+        details: { reportType, format: requestedFormat, period, siteId, dateFrom, dateTo },
       }).catch(() => {});
     } catch (e: any) {
       console.error("[report-export]", e);
