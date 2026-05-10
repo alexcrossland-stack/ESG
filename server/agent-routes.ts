@@ -24,6 +24,20 @@ async function requireInternalKeyAdmin(req: Request, res: Response, next: Functi
   return next();
 }
 
+function getAgentCompanyScope(req: Request): string | null {
+  const agentAuth = (req as any)._agentAuth as { companyId?: string | null } | undefined;
+  return agentAuth?.companyId || null;
+}
+
+function enforceAgentCompanyScope(req: Request, res: Response, companyId?: string | null): boolean {
+  const scopedCompanyId = getAgentCompanyScope(req);
+  if (scopedCompanyId && companyId && scopedCompanyId !== companyId) {
+    res.status(403).json({ error: "API key is not scoped to this company" });
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // In-memory knowledge corpus (built once, searched per request)
 // ---------------------------------------------------------------------------
@@ -316,6 +330,7 @@ export function registerAgentRoutes(app: Express) {
     try {
       const user = await storage.getUser(req.params.userId);
       if (!user) return res.status(404).json({ error: "User not found" });
+      if (!enforceAgentCompanyScope(req, res, user.companyId)) return;
       const company = user.companyId ? await storage.getCompany(user.companyId) : null;
       const permissions = getUserPermissions(user.role);
       return res.json({
@@ -404,7 +419,10 @@ export function registerAgentRoutes(app: Express) {
   app.get("/api/internal/agent/support-tickets", requireAgentAuth, requireAgentScope("internal:events"), async (req: Request, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 50;
-      const tickets = await storage.getSupportRequests(limit);
+      const scopedCompanyId = getAgentCompanyScope(req);
+      const tickets = scopedCompanyId
+        ? await storage.getSupportRequestsByCompany(scopedCompanyId)
+        : await storage.getSupportRequests(limit);
       return res.json(tickets);
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
@@ -413,6 +431,7 @@ export function registerAgentRoutes(app: Express) {
 
   app.get("/api/internal/agent/audit-logs/:companyId", requireAgentAuth, requireAgentScope("internal:events"), async (req: Request, res: Response) => {
     try {
+      if (!enforceAgentCompanyScope(req, res, req.params.companyId)) return;
       const logs = await storage.getAuditLogs(req.params.companyId);
       const limit = parseInt(req.query.limit as string) || 100;
       return res.json(logs.slice(0, limit));
@@ -439,13 +458,16 @@ export function registerAgentRoutes(app: Express) {
   app.post("/api/internal/agent/escalations", requireAgentAuth, requireAgentScope("internal:escalations"), async (req: Request, res: Response) => {
     try {
       const body = createEscalationSchema.parse(req.body);
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, body.companyId || scopedCompanyId)) return;
+      const companyId = body.companyId || scopedCompanyId || null;
       const escalation = await storage.createAgentEscalation({
         runId: body.runId || null,
         agentName: body.agentName,
         escalationType: body.escalationType,
         priority: body.priority,
         summary: body.summary,
-        companyId: body.companyId || null,
+        companyId,
         userId: body.userId || null,
         relatedEntityType: body.relatedEntityType || null,
         relatedEntityId: body.relatedEntityId || null,
@@ -455,10 +477,10 @@ export function registerAgentRoutes(app: Express) {
       let supportTicket = null;
       if (body.createSupportTicket) {
         try {
-          const company = body.companyId ? await storage.getCompany(body.companyId) : null;
+          const company = companyId ? await storage.getCompany(companyId) : null;
           const user = body.userId ? await storage.getUser(body.userId) : null;
           supportTicket = await storage.createSupportRequest({
-            companyId: body.companyId || null,
+            companyId,
             userId: body.userId || null,
             refNumber: `AGT-${Date.now()}`,
             category: "general",
@@ -484,7 +506,10 @@ export function registerAgentRoutes(app: Express) {
   app.get("/api/internal/agent/escalations", requireAgentAuth, requireAgentScope("internal:escalations"), async (req: Request, res: Response) => {
     try {
       const status = typeof req.query.status === "string" ? req.query.status : undefined;
-      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, requestedCompanyId || scopedCompanyId)) return;
+      const companyId = requestedCompanyId || scopedCompanyId || undefined;
       const limit = parseInt(req.query.limit as string) || 50;
       const escalations = await storage.listAgentEscalations({ status, companyId, limit });
       return res.json(escalations);
@@ -524,7 +549,10 @@ export function registerAgentRoutes(app: Express) {
 
   app.get("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
     try {
-      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, requestedCompanyId || scopedCompanyId)) return;
+      const companyId = requestedCompanyId || scopedCompanyId || undefined;
       const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
       const runs = await storage.getAgentRuns({ companyId, siteId, limit });
@@ -537,20 +565,23 @@ export function registerAgentRoutes(app: Express) {
   app.post("/api/internal/agent/runs", requireAgentAuth, requireAgentScope("internal:runs"), async (req: Request, res: Response) => {
     try {
       const body = createRunSchema.parse(req.body);
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, body.companyId || scopedCompanyId)) return;
+      const companyId = body.companyId || scopedCompanyId || null;
       const run = await storage.createAgentRun({
         agentName: body.agentName,
         agentType: body.agentType,
         triggerType: body.triggerType,
         inputSummary: body.inputSummary || null,
         status: body.status,
-        companyId: body.companyId || null,
+        companyId,
         userId: body.userId || null,
         siteId: body.siteId || null,
       } as any);
-      if (body.siteId && body.companyId) {
+      if (body.siteId && companyId) {
         storage.createUserActivity({
           userId: body.userId || null,
-          companyId: body.companyId,
+          companyId,
           action: "ai_analysis_run_for_site",
           page: "/sites",
           details: { siteId: body.siteId, agentType: body.agentType, runId: run.id },
@@ -605,18 +636,21 @@ export function registerAgentRoutes(app: Express) {
   app.post("/api/internal/chat/sessions", requireAgentAuth, requireAgentScope("internal:chat"), async (req: Request, res: Response) => {
     try {
       const body = createSessionSchema.parse(req.body);
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, body.companyId || scopedCompanyId)) return;
+      const companyId = body.companyId || scopedCompanyId || null;
       const session = await storage.createChatSession({
-        companyId: body.companyId || null,
+        companyId,
         userId: body.userId || null,
         agentType: body.agentType || null,
         title: body.title || null,
         status: "open",
         siteId: body.siteId || null,
       } as any);
-      if (body.siteId && body.companyId) {
+      if (body.siteId && companyId) {
         storage.createUserActivity({
           userId: body.userId || null,
-          companyId: body.companyId,
+          companyId,
           action: "ai_analysis_run_for_site",
           page: "/sites",
           details: { siteId: body.siteId, agentType: body.agentType || "chat", runId: session.id },
@@ -631,7 +665,10 @@ export function registerAgentRoutes(app: Express) {
   app.get("/api/internal/chat/sessions", requireAgentAuth, requireAgentScope("internal:chat"), async (req: Request, res: Response) => {
     try {
       const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
-      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const scopedCompanyId = getAgentCompanyScope(req);
+      if (!enforceAgentCompanyScope(req, res, requestedCompanyId || scopedCompanyId)) return;
+      const companyId = requestedCompanyId || scopedCompanyId || undefined;
       const siteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined;
       const sessions = await storage.listChatSessions({ userId, companyId });
       const filtered = siteId ? sessions.filter((s: any) => s.siteId === siteId) : sessions;
@@ -645,6 +682,7 @@ export function registerAgentRoutes(app: Express) {
     try {
       const session = await storage.getChatSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
+      if (!enforceAgentCompanyScope(req, res, session.companyId)) return;
       const messages = await storage.getChatMessages(req.params.id);
       return res.json(messages);
     } catch (e: any) {
@@ -661,6 +699,7 @@ export function registerAgentRoutes(app: Express) {
     try {
       const session = await storage.getChatSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
+      if (!enforceAgentCompanyScope(req, res, session.companyId)) return;
 
       const body = sendMessageSchema.parse(req.body);
 
