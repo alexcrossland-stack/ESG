@@ -5474,9 +5474,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Audit logs
+  function parseAuditLogLimit(value: unknown, defaultLimit: number) {
+    const parsed = parseInt(String(value ?? defaultLimit), 10);
+    if (!Number.isFinite(parsed)) return defaultLimit;
+    return Math.min(Math.max(parsed, 1), 500);
+  }
+
+  function rejectAuditLogMutation(_req: Request, res: Response) {
+    res.status(405).json({ error: "Audit logs are immutable", code: "AUDIT_LOG_IMMUTABLE" });
+  }
+
   app.get("/api/audit-logs", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const limit = Math.min(parseInt(String(req.query.limit || "100"), 10) || 100, 500);
+    const limit = parseAuditLogLimit(req.query.limit, 100);
     const { action, outcome, entityType, dateFrom, dateTo } = req.query as Record<string, string>;
     const hasFilters = action || outcome || entityType || dateFrom || dateTo || req.query.limit;
     const logs = hasFilters
@@ -5498,6 +5508,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }));
     res.json(enriched);
   });
+  app.patch("/api/audit-logs/:id", requireAuth, requireProvisioningPermission("update_company_settings"), rejectAuditLogMutation);
+  app.put("/api/audit-logs/:id", requireAuth, requireProvisioningPermission("update_company_settings"), rejectAuditLogMutation);
+  app.delete("/api/audit-logs/:id", requireAuth, requireProvisioningPermission("update_company_settings"), rejectAuditLogMutation);
 
   app.get("/api/company/api-keys", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
@@ -10099,7 +10112,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
-      const limit = Math.min(parseInt(String(req.query.limit || "200")), 500);
+      const limit = parseAuditLogLimit(req.query.limit, 200);
       const { companyId: qCompanyId, userId: qUserId, entityType, action, outcome, dateFrom, dateTo } = req.query as Record<string, string>;
       const hasFilters = qCompanyId || qUserId || entityType || action || outcome || dateFrom || dateTo;
       if (hasFilters) {
@@ -10121,6 +10134,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       sendServerError(res, e);
     }
   });
+  app.patch("/api/admin/audit-logs/:id", requireAuth, requireSuperAdmin, rejectAuditLogMutation);
+  app.put("/api/admin/audit-logs/:id", requireAuth, requireSuperAdmin, rejectAuditLogMutation);
+  app.delete("/api/admin/audit-logs/:id", requireAuth, requireSuperAdmin, rejectAuditLogMutation);
 
   app.get("/api/admin/security-audit", requireAuth, requireSuperAdmin, async (_req, res) => {
     try {
