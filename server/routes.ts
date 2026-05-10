@@ -10865,6 +10865,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         metadata: { email: targetUser.email },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
+      }).catch((err) => {
+        console.warn("[support_resend_invite] Failed to record super admin action:", err?.message ?? err);
       });
 
       res.json({ ok: true, message: `Invitation resent to ${targetUser.email}` });
@@ -13547,11 +13549,30 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
+  function sanitizeIdentityProviderConfig(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map((item) => sanitizeIdentityProviderConfig(item));
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, nested]) => {
+        const isSensitive = /(secret|token|password|private[_-]?key)/i.test(key);
+        return [key, isSensitive ? "[redacted]" : sanitizeIdentityProviderConfig(nested)];
+      }),
+    );
+  }
+
+  function sanitizeIdentityProvider(provider: any) {
+    if (!provider) return provider;
+    return {
+      ...provider,
+      config: sanitizeIdentityProviderConfig(provider.config),
+    };
+  }
+
   app.get("/api/admin/identity-providers", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req as any)._auth.companyId;
       const providers = await storage.getIdentityProviders(companyId);
-      res.json(providers);
+      res.json(providers.map(sanitizeIdentityProvider));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -13572,7 +13593,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         entityId: provider.id,
         details: { name, providerType },
       });
-      res.json(provider);
+      res.json(sanitizeIdentityProvider(provider));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -13592,9 +13613,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         action: "identity_provider_updated",
         entityType: "identity_provider",
         entityId: id,
-        details: req.body,
+        details: sanitizeIdentityProviderConfig(req.body),
       });
-      res.json(updated);
+      res.json(sanitizeIdentityProvider(updated));
     } catch (e: any) {
       sendServerError(res, e);
     }
