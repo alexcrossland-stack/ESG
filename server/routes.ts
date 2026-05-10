@@ -5474,9 +5474,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Audit logs
-  app.get("/api/audit-logs", requireAuth, async (req, res) => {
+  app.get("/api/audit-logs", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     const companyId = (req.session as any).companyId;
-    const logs = await storage.getAuditLogs(companyId);
+    const limit = Math.min(parseInt(String(req.query.limit || "100"), 10) || 100, 500);
+    const { action, outcome, entityType, dateFrom, dateTo } = req.query as Record<string, string>;
+    const hasFilters = action || outcome || entityType || dateFrom || dateTo || req.query.limit;
+    const logs = hasFilters
+      ? await storage.queryAuditLogs({
+        companyId,
+        action: action || undefined,
+        outcome: outcome || undefined,
+        entityType: entityType || undefined,
+        dateFrom: dateFrom ? new Date(dateFrom) : undefined,
+        dateTo: dateTo ? new Date(dateTo) : undefined,
+        limit,
+      })
+      : await storage.getAuditLogs(companyId, limit);
     const users = await storage.getUsersByCompany(companyId);
     const userMap = new Map(users.map(u => [u.id, u.username]));
     const enriched = logs.map(log => ({
@@ -10087,14 +10100,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       const limit = Math.min(parseInt(String(req.query.limit || "200")), 500);
-      const { companyId: qCompanyId, userId: qUserId, entityType, action, dateFrom, dateTo } = req.query as Record<string, string>;
-      const hasFilters = qCompanyId || qUserId || entityType || action || dateFrom || dateTo;
+      const { companyId: qCompanyId, userId: qUserId, entityType, action, outcome, dateFrom, dateTo } = req.query as Record<string, string>;
+      const hasFilters = qCompanyId || qUserId || entityType || action || outcome || dateFrom || dateTo;
       if (hasFilters) {
         const logs = await storage.queryAuditLogs({
           companyId: qCompanyId || undefined,
           userId: qUserId || undefined,
           entityType: entityType || undefined,
           action: action || undefined,
+          outcome: outcome || undefined,
           dateFrom: dateFrom ? new Date(dateFrom) : undefined,
           dateTo: dateTo ? new Date(dateTo) : undefined,
           limit,
