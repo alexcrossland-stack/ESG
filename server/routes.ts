@@ -4628,6 +4628,152 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   // Reports
+  async function recordReportExportAudit(req: Request, input: {
+    reportType: string;
+    format?: string;
+    period?: unknown;
+    siteId?: unknown;
+    dateFrom?: unknown;
+    dateTo?: unknown;
+    outcome: "success" | "failure";
+    reason?: string | null;
+    statusCode?: number;
+    fileName?: string;
+    fileSize?: number;
+  }) {
+    try {
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId ?? null,
+        userId: (req.session as any).userId ?? null,
+        actorType: "user",
+        action: "export_report",
+        entityType: "report",
+        entityId: input.reportType,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          reportType: input.reportType,
+          format: input.format ?? null,
+          period: input.period ?? null,
+          siteId: input.siteId ?? null,
+          dateFrom: input.dateFrom ?? null,
+          dateTo: input.dateTo ?? null,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          statusCode: input.statusCode ?? null,
+          fileName: input.fileName ?? null,
+          fileSize: input.fileSize ?? null,
+        },
+      } as any);
+    } catch (err: any) {
+      console.error("[audit] Failed to write report export audit log:", err?.message ?? err);
+    }
+  }
+
+  async function recordReportExportDataAudit(req: Request, input: {
+    reportType: string;
+    format?: string;
+    period?: unknown;
+    siteId?: unknown;
+    outcome: "success" | "failure";
+    reason?: string | null;
+    statusCode?: number;
+  }) {
+    try {
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId ?? null,
+        userId: (req.session as any).userId ?? null,
+        actorType: "user",
+        action: "report_export_data",
+        entityType: "report",
+        entityId: input.reportType,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          reportType: input.reportType,
+          format: input.format ?? null,
+          period: input.period ?? null,
+          siteId: input.siteId ?? null,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          statusCode: input.statusCode ?? null,
+        },
+      } as any);
+    } catch (err: any) {
+      console.error("[audit] Failed to write report export-data audit log:", err?.message ?? err);
+    }
+  }
+
+  async function recordGeneratedFileGenerationAudit(req: Request, input: {
+    reportRunId: string;
+    fileId?: string | null;
+    format?: string;
+    outcome: "success" | "failure";
+    reason?: string | null;
+    statusCode?: number;
+    fileName?: string | null;
+    fileSize?: number | null;
+  }) {
+    try {
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId ?? null,
+        userId: (req.session as any).userId ?? null,
+        actorType: "user",
+        action: "generated_file_generate",
+        entityType: input.fileId ? "generated_file" : "report_run",
+        entityId: input.fileId ?? input.reportRunId,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          reportRunId: input.reportRunId,
+          fileId: input.fileId ?? null,
+          format: input.format ?? null,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          statusCode: input.statusCode ?? null,
+          fileName: input.fileName ?? null,
+          fileSize: input.fileSize ?? null,
+        },
+      } as any);
+    } catch (err: any) {
+      console.error("[audit] Failed to write generated-file generation audit log:", err?.message ?? err);
+    }
+  }
+
+  async function recordGeneratedFileDownloadAudit(req: Request, input: {
+    reportRunId: string;
+    fileId: string;
+    outcome: "success" | "failure";
+    reason?: string | null;
+    statusCode?: number;
+    fileName?: string | null;
+    fileType?: string | null;
+  }) {
+    try {
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId ?? null,
+        userId: (req.session as any).userId ?? null,
+        actorType: "user",
+        action: "generated_file_download",
+        entityType: "generated_file",
+        entityId: input.fileId,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          reportRunId: input.reportRunId,
+          fileId: input.fileId,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          statusCode: input.statusCode ?? null,
+          fileName: input.outcome === "success" ? input.fileName ?? null : null,
+          fileType: input.outcome === "success" ? input.fileType ?? null : null,
+        },
+      } as any);
+    } catch (err: any) {
+      console.error("[audit] Failed to write generated-file download audit log:", err?.message ?? err);
+    }
+  }
+
   app.get("/api/reports", requireAuth, async (req, res) => {
     try {
       const GENERATED_FILE_RETENTION_DAYS = 90;
@@ -8362,10 +8508,31 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const { format } = req.body;
-      if (!["pdf", "docx"].includes(format)) { res.status(400).json({ error: "Format must be pdf or docx" }); return; }
+      const requestedFormat = String(format || "").toLowerCase();
+      if (!["pdf", "docx"].includes(requestedFormat)) {
+        await recordGeneratedFileGenerationAudit(req, {
+          reportRunId: req.params.id,
+          format: requestedFormat || undefined,
+          outcome: "failure",
+          reason: "unsupported_format",
+          statusCode: 400,
+        });
+        res.status(400).json({ error: "Format must be pdf or docx" });
+        return;
+      }
 
       const reportRunResult = await db.execute(sql`SELECT * FROM report_runs WHERE id = ${req.params.id} AND company_id = ${companyId}`);
-      if (!reportRunResult.rows.length) { res.status(404).json({ error: "Report not found" }); return; }
+      if (!reportRunResult.rows.length) {
+        await recordGeneratedFileGenerationAudit(req, {
+          reportRunId: req.params.id,
+          format: requestedFormat,
+          outcome: "failure",
+          reason: "report_not_found_or_forbidden",
+          statusCode: 404,
+        });
+        res.status(404).json({ error: "Report not found" });
+        return;
+      }
       const reportRun = reportRunResult.rows[0] as any;
       const reportData = reportRun.report_data || {};
       const company = await storage.getCompany(companyId);
@@ -8415,7 +8582,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       let contentType: string;
       let filename: string;
 
-      if (format === "pdf") {
+      if (requestedFormat === "pdf") {
         fileBuffer = await generatePdf(formattedData, reportRun.report_template || "management", companyName);
         contentType = "application/pdf";
         filename = `${companyName.replace(/\s+/g, "_")}_${reportRun.report_template || "report"}_${reportRun.period || "latest"}.pdf`;
@@ -8428,9 +8595,19 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const savedFile = await storage.createGeneratedFile({
         reportRunId: req.params.id,
         companyId,
-        fileType: format,
+        fileType: requestedFormat,
         filename,
         fileData: fileBuffer.toString("base64"),
+        fileSize: fileBuffer.length,
+      });
+
+      await recordGeneratedFileGenerationAudit(req, {
+        reportRunId: req.params.id,
+        fileId: savedFile.id,
+        format: requestedFormat,
+        outcome: "success",
+        statusCode: 200,
+        fileName: filename,
         fileSize: fileBuffer.length,
       });
 
@@ -8438,7 +8615,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         fileId: savedFile.id,
         filename,
         fileSize: fileBuffer.length,
-        fileType: format,
+        fileType: requestedFormat,
         downloadUrl: `/api/reports/${req.params.id}/download/${savedFile.id}`,
       });
     } catch (e: any) {
@@ -8465,9 +8642,38 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         ))
         .limit(1);
       if (!file) {
+        const [candidate] = await db.select({
+          id: generatedFiles.id,
+          companyId: generatedFiles.companyId,
+          reportRunId: generatedFiles.reportRunId,
+        }).from(generatedFiles)
+          .where(eq(generatedFiles.id, req.params.fileId))
+          .limit(1);
+        const reason = !candidate
+          ? "file_not_found"
+          : candidate.companyId !== companyId
+            ? "cross_tenant_file"
+            : candidate.reportRunId !== req.params.id
+              ? "report_file_mismatch"
+              : "expired_file";
+        await recordGeneratedFileDownloadAudit(req, {
+          reportRunId: req.params.id,
+          fileId: req.params.fileId,
+          outcome: "failure",
+          reason,
+          statusCode: 404,
+        });
         res.status(404).json({ error: "File not found" });
         return;
       }
+      await recordGeneratedFileDownloadAudit(req, {
+        reportRunId: req.params.id,
+        fileId: file.id,
+        outcome: "success",
+        statusCode: 200,
+        fileName: file.filename,
+        fileType: file.fileType,
+      });
       storage.createAuditLog({
         companyId,
         userId,
@@ -11809,24 +12015,58 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
     try {
       const companyId = (req.session as any).companyId;
-      const userId = (req.session as any).userId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
 
       const { reportType } = req.params;
       const { format: fmt = "pdf", period, siteId, dateFrom, dateTo } = req.body;
       const requestedFormat = String(fmt || "pdf").toLowerCase();
       if (!["pdf", "docx"].includes(requestedFormat)) {
+        await recordReportExportAudit(req, {
+          reportType,
+          format: requestedFormat,
+          period,
+          siteId,
+          dateFrom,
+          dateTo,
+          outcome: "failure",
+          reason: "unsupported_format",
+          statusCode: 400,
+        });
         return res.status(400).json({ error: "Format must be pdf or docx" });
       }
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
       const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
       if (requestedSiteId) {
         const ownership = await validateSiteOwnership(requestedSiteId, companyId);
-        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        if (!ownership.valid) {
+          await recordReportExportAudit(req, {
+            reportType,
+            format: requestedFormat,
+            period,
+            siteId,
+            dateFrom,
+            dateTo,
+            outcome: "failure",
+            reason: "site_scope_forbidden",
+            statusCode: ownership.status,
+          });
+          return res.status(ownership.status).json({ error: ownership.message });
+        }
       }
 
       const VALID_TYPES = ["esg_metrics_summary", "framework_readiness_summary", "target_progress_summary", "policy_register_summary", "risk_register_summary", "site_comparison_summary"];
       if (!VALID_TYPES.includes(reportType)) {
+        await recordReportExportAudit(req, {
+          reportType,
+          format: requestedFormat,
+          period,
+          siteId,
+          dateFrom,
+          dateTo,
+          outcome: "failure",
+          reason: "invalid_report_type",
+          statusCode: 400,
+        });
         return res.status(400).json({ error: `Invalid report type. Must be one of: ${VALID_TYPES.join(", ")}` });
       }
 
@@ -12087,18 +12327,22 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const periodLabel = period || (dateFrom && dateTo ? `${dateFrom}_to_${dateTo}` : new Date().toISOString().slice(0, 10));
       const filename = `${reportType}_${periodLabel}.${ext}`;
+      await recordReportExportAudit(req, {
+        reportType,
+        format: requestedFormat,
+        period,
+        siteId,
+        dateFrom,
+        dateTo,
+        outcome: "success",
+        statusCode: 200,
+        fileName: filename,
+        fileSize: fileBuffer.length,
+      });
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Content-Length", fileBuffer.length);
       res.send(fileBuffer);
-
-      storage.createAuditLog({
-        companyId,
-        userId,
-        action: "export_report",
-        entityType: "report",
-        details: { reportType, format: requestedFormat, period, siteId, dateFrom, dateTo },
-      }).catch(() => {});
     } catch (e: any) {
       console.error("[report-export]", e);
       sendServerError(res, e);
@@ -12120,13 +12364,33 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const rawFormat = (req.query as Record<string, unknown>).format;
       const requestedFormat = Array.isArray(rawFormat) ? rawFormat[0] : rawFormat;
       if (requestedFormat !== undefined && String(requestedFormat).toLowerCase() !== "json") {
+        await recordReportExportDataAudit(req, {
+          reportType,
+          format: String(requestedFormat).toLowerCase(),
+          period,
+          siteId,
+          outcome: "failure",
+          reason: "unsupported_format",
+          statusCode: 400,
+        });
         return res.status(400).json({ error: "Format must be json" });
       }
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, "siteId");
       const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
       if (requestedSiteId) {
         const ownership = await validateSiteOwnership(requestedSiteId, companyId);
-        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        if (!ownership.valid) {
+          await recordReportExportDataAudit(req, {
+            reportType,
+            format: requestedFormat !== undefined ? String(requestedFormat).toLowerCase() : "json",
+            period,
+            siteId,
+            outcome: "failure",
+            reason: "site_scope_forbidden",
+            statusCode: ownership.status,
+          });
+          return res.status(ownership.status).json({ error: ownership.message });
+        }
       }
 
       const company = await storage.getCompany(companyId);
@@ -12141,6 +12405,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const enabledValues = values.filter((value: any) => enabledMetricIds.has(value.metricId));
         let site: any = null;
         if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
+        await recordReportExportDataAudit(req, {
+          reportType,
+          format: "json",
+          period,
+          siteId,
+          outcome: "success",
+          statusCode: 200,
+        });
         res.json({ metrics: enabledMetrics, values: enabledValues, site, period });
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
@@ -12148,21 +12420,35 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const selections = await storage.getBusinessFrameworkSelections(companyId);
         const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
         const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
         res.json({ frameworkReadiness, selectedFrameworks, period });
       } else if (reportType === "target_progress_summary") {
         const targets = await storage.getEsgTargets(companyId);
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
         res.json({ targets, period });
       } else if (reportType === "policy_register_summary") {
         const policyRecords = await storage.getPolicyRecords(companyId);
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
         res.json({ policyRecords, period });
       } else if (reportType === "risk_register_summary") {
         const risks = await storage.getEsgRisks(companyId);
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
         res.json({ risks, period });
       } else if (reportType === "site_comparison_summary") {
         const sites = await storage.getSites(companyId, false);
         const sitesSummary = await storage.getSitesSummary(companyId, period);
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
         res.json({ sites, sitesSummary, period });
       } else {
+        await recordReportExportDataAudit(req, {
+          reportType,
+          format: requestedFormat !== undefined ? String(requestedFormat).toLowerCase() : "json",
+          period,
+          siteId,
+          outcome: "failure",
+          reason: "invalid_report_type",
+          statusCode: 400,
+        });
         res.status(400).json({ error: "Unknown report type" });
       }
     } catch (e: any) {
