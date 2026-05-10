@@ -95,7 +95,7 @@ async function openSettingsAudit(browser: Browser): Promise<{ context: BrowserCo
   const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
   const page = await context.newPage();
   await page.goto("/settings");
-  await page.waitForLoadState("networkidle");
+  await expect(page.getByRole("main")).toBeVisible();
   await page.getByTestId("tab-admin").click();
   await page.getByTestId("admin-section-audit").click();
   await expect(page.getByTestId("card-admin-audit")).toBeVisible();
@@ -173,7 +173,7 @@ test.describe("Audit-log UI/access hardening", () => {
     const viewerContext = await browser.newContext({ storageState: VIEWER_STATE_FILE });
     const viewerPage = await viewerContext.newPage();
     await viewerPage.goto("/settings");
-    await viewerPage.waitForLoadState("networkidle");
+    await expect(viewerPage.getByRole("main")).toBeVisible();
     await expect(viewerPage.getByTestId("tab-admin")).toHaveCount(0);
     await expect(viewerPage.getByTestId("card-admin-audit")).toHaveCount(0);
     const viewerApi = await viewerPage.evaluate(async (token) => {
@@ -187,7 +187,7 @@ test.describe("Audit-log UI/access hardening", () => {
     await contributorContext.addInitScript((token) => window.localStorage.setItem("auth_token", token), tenantA.contributorToken);
     const contributorPage = await contributorContext.newPage();
     await contributorPage.goto("/settings");
-    await contributorPage.waitForLoadState("networkidle");
+    await expect(contributorPage.getByRole("main")).toBeVisible();
     await expect(contributorPage.getByTestId("tab-admin")).toHaveCount(0);
     await expect(contributorPage.getByTestId("card-admin-audit")).toHaveCount(0);
     const contributorApi = await contributorPage.evaluate(async (token) => {

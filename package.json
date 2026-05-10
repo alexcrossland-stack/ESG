@@ -20,7 +20,10 @@
     "test:all": "tsx tests/api-security.test.ts && playwright test",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "check:lockfile": "npm ci --ignore-scripts --dry-run",
-    "check:secrets": "node scripts/check-secrets.mjs"
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "test:security:api": "node scripts/run-security-regressions.mjs api",
+    "test:security:browser": "node scripts/run-security-regressions.mjs browser",
+    "test:security": "node scripts/run-security-regressions.mjs all"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
