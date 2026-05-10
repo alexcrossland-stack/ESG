@@ -1423,7 +1423,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    message: { error: "Too many login attempts. Please try again in 15 minutes." },
+    message: { error: "Too many login attempts. Please try again in 15 minutes.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1433,7 +1433,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const passwordChangeLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 5,
-    message: { error: "Too many password change attempts. Please try again later." },
+    message: { error: "Too many password change attempts. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1442,7 +1442,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const registerLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 5,
-    message: { error: "Too many registration attempts. Please try again later." },
+    message: { error: "Too many registration attempts. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1451,7 +1451,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const aiLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 20,
-    message: { error: "Too many AI requests. Please wait a moment before trying again." },
+    message: { error: "Too many AI requests. Please wait a moment before trying again.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1460,7 +1460,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const uploadLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 60,
-    message: { error: "Too many upload requests. Please try again later." },
+    message: { error: "Too many upload requests. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1469,7 +1469,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const reportLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 30,
-    message: { error: "Too many report generation requests. Please try again later." },
+    message: { error: "Too many report generation requests. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1478,7 +1478,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const csvImportLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    message: { error: "Too many CSV import requests. Please try again later." },
+    message: { error: "Too many CSV import requests. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
@@ -1486,11 +1486,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   const inviteLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: process.env.REGRESSION_TEST === "1" ? 10000 : 20,
-    message: { error: "Too many invite requests. Please try again later." },
+    max: 20,
+    message: { error: "Too many invite requests. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
+    keyGenerator: (req) => {
+      const auth = (req as any)._auth || resolveAuth(req);
+      return auth?.companyId && auth?.userId ? `${auth.companyId}:${auth.userId}` : req.ip || "unknown";
+    },
+  });
+
+  const auditLogReadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    message: { error: "Too many audit-log read requests. Please try again later.", code: "RATE_LIMITED" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: (req) => {
+      const auth = (req as any)._auth || resolveAuth(req);
+      return auth?.userId ? `${auth.userId}:${req.path}` : req.ip || "unknown";
+    },
   });
 
   async function getValidatedInvitation(token: string) {
@@ -5562,7 +5579,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.status(405).json({ error: "Audit logs are immutable", code: "AUDIT_LOG_IMMUTABLE" });
   }
 
-  app.get("/api/audit-logs", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.get("/api/audit-logs", requireAuth, requireProvisioningPermission("update_company_settings"), auditLogReadLimiter, async (req, res) => {
     const companyId = (req.session as any).companyId;
     const limit = parseAuditLogLimit(req.query.limit, 100);
     const { action, outcome, entityType, dateFrom, dateTo } = req.query as Record<string, string>;
@@ -10192,7 +10209,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, async (req, res) => {
+  app.get("/api/admin/audit-logs", requireAuth, requireSuperAdmin, auditLogReadLimiter, async (req, res) => {
     try {
       const limit = parseAuditLogLimit(req.query.limit, 200);
       const { companyId: qCompanyId, userId: qUserId, entityType, action, outcome, dateFrom, dateTo } = req.query as Record<string, string>;
@@ -12983,7 +13000,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   const mfaLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    message: { error: "Too many MFA attempts. Please try again in 15 minutes." },
+    message: { error: "Too many MFA attempts. Please try again in 15 minutes.", code: "RATE_LIMITED" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: (req) => {
+      const auth = (req as any)._auth || resolveAuth(req);
+      return auth?.userId || (req.session as any)?.mfaPendingUserId || req.ip || "unknown";
+    },
   });
 
   function requireAuthOrMfaPending(req: Request, res: Response, next: Function) {
@@ -13437,10 +13461,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   const stepUpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    message: { error: "Too many step-up attempts. Please try again later." },
+    message: { error: "Too many step-up attempts. Please try again later.", code: "RATE_LIMITED" },
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
+    keyGenerator: (req) => {
+      const auth = (req as any)._auth || resolveAuth(req);
+      return auth?.userId || req.ip || "unknown";
+    },
   });
 
   app.post("/api/auth/step-up", requireAuth, stepUpLimiter, async (req, res) => {
