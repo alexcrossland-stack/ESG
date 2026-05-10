@@ -12,12 +12,12 @@ import { getUserPermissions } from "@shared/schema";
 // Admin user session auth (for key management routes)
 // ---------------------------------------------------------------------------
 
-async function requireAdminUser(req: Request, res: Response, next: Function) {
+async function requireInternalKeyAdmin(req: Request, res: Response, next: Function) {
   const userId = (req.session as any)?.userId;
   if (!userId) return res.status(401).json({ error: "Not authenticated" });
   const user = await storage.getUser(userId);
-  if (!user || user.role !== "admin") {
-    return res.status(403).json({ error: "Admin role required" });
+  if (!user || user.role !== "super_admin") {
+    return res.status(403).json({ error: "Super admin role required" });
   }
   (req as any)._adminUser = user;
   return next();
@@ -180,7 +180,7 @@ export function registerAgentRoutes(app: Express) {
     companyId: z.string().optional(),
   });
 
-  app.post("/api/internal/agent/keys", requireAdminUser, async (req: Request, res: Response) => {
+  app.post("/api/internal/agent/keys", requireInternalKeyAdmin, async (req: Request, res: Response) => {
     try {
       const body = createKeySchema.parse(req.body);
       const { plaintext, hash, prefix } = generateAgentApiKey();
@@ -220,7 +220,7 @@ export function registerAgentRoutes(app: Express) {
     }
   });
 
-  app.get("/api/internal/agent/keys", requireAdminUser, async (_req: Request, res: Response) => {
+  app.get("/api/internal/agent/keys", requireInternalKeyAdmin, async (_req: Request, res: Response) => {
     try {
       const keys = await storage.listAgentApiKeys();
       const safe = keys.map(k => ({
@@ -241,7 +241,7 @@ export function registerAgentRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/internal/agent/keys/:id", requireAdminUser, async (req: Request, res: Response) => {
+  app.delete("/api/internal/agent/keys/:id", requireInternalKeyAdmin, async (req: Request, res: Response) => {
     try {
       const actorUserId = (req.session as any)?.userId;
       await storage.revokeAgentApiKey(req.params.id);
@@ -265,6 +265,10 @@ export function registerAgentRoutes(app: Express) {
 
   app.get("/api/internal/agent/company/:companyId", requireAgentAuth, requireAgentScope("internal:company"), async (req: Request, res: Response) => {
     try {
+      const agentAuth = (req as any)._agentAuth as { companyId?: string | null } | undefined;
+      if (agentAuth?.companyId && agentAuth.companyId !== req.params.companyId) {
+        return res.status(403).json({ error: "API key is not scoped to this company" });
+      }
       const company = await storage.getCompany(req.params.companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const settings = await storage.getCompanySettings(req.params.companyId);
