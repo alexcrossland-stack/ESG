@@ -26,7 +26,7 @@ test.describe("Settings/Security browser boundaries", () => {
     const context = await browser.newContext({ storageState: VIEWER_STATE_FILE });
     const page = await context.newPage();
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("main")).toBeVisible();
 
     const result = await page.evaluate(async ({ viewerToken, contributorToken }) => {
       async function request(method: string, path: string, token: string, body?: unknown) {
@@ -63,7 +63,7 @@ test.describe("Settings/Security browser boundaries", () => {
     const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
     const page = await context.newPage();
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("main")).toBeVisible();
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem("auth_token");

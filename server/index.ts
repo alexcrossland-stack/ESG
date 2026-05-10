@@ -55,6 +55,14 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+});
+
 if (isProd) {
   const allowedOrigins = (process.env.REPLIT_DOMAINS || "")
     .split(",")
