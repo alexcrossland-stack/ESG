@@ -547,6 +547,17 @@ function isInviteExpired(expiresAt: Date | string): boolean {
   return new Date(expiresAt).getTime() < Date.now();
 }
 
+async function isInviteExpiredById(id: string, fallbackExpiresAt: Date | string): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT expires_at <= NOW() AS expired
+    FROM auth_tokens
+    WHERE id = ${id}
+    LIMIT 1
+  `);
+  const expired = (result as any).rows?.[0]?.expired;
+  return typeof expired === "boolean" ? expired : isInviteExpired(fallbackExpiresAt);
+}
+
 function parseInvitationMetadata(metadata: unknown): InvitationTokenMetadata | null {
   const parsed = invitationMetadataSchema.safeParse(metadata);
   return parsed.success ? parsed.data : null;
@@ -1470,7 +1481,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
     }
 
-    if (isInviteExpired(record.expiresAt)) {
+    if (await isInviteExpiredById(record.id, record.expiresAt)) {
       return {
         ok: false as const,
         status: 410,
@@ -12557,8 +12568,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const encrypted = encryptSecret(secret);
       const uri = generateTotpUri(secret, user.email);
       await storage.updateUser(userId, { mfaSecretEncrypted: encrypted });
-      const QRCode = require("qrcode");
-      const qrDataUrl: string = await QRCode.toDataURL(uri);
+      const QRCode = await import("qrcode");
+      const qrGenerator = QRCode.default ?? QRCode;
+      const qrDataUrl: string = await qrGenerator.toDataURL(uri);
       res.json({ secret, uri, qrDataUrl });
     } catch (e: unknown) {
       sendServerError(res, e);
