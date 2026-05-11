@@ -37,7 +37,28 @@ const mockedReports = [
       period: "2024-01",
       generatedAt: "2026-05-07T09:30:00.000Z",
       generatedBy: "Mock Admin",
-      values: [],
+      values: [{
+        id: "value-1",
+        metricName: "Electricity Consumption",
+        category: "environmental",
+        value: "123.45",
+        unit: "kWh",
+        dataSourceLabel: "Evidenced",
+        workflowLabel: "Approved",
+      }],
+      metricsByCategory: {
+        environmental: [{
+          id: "value-1",
+          metricName: "Electricity Consumption",
+          category: "environmental",
+          value: "123.45",
+          unit: "kWh",
+          dataSourceLabel: "Evidenced",
+          workflowLabel: "Approved",
+        }],
+      },
+      weightedScore: { overallScore: 88, categoryScores: { environmental: { score: 88, scoredCount: 1, metricCount: 1 } } },
+      evidenceCoverage: { totalEvidence: 2, evidencedCount: 1, totalMetrics: 1, coveragePercent: 100 },
       factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
       dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
     },
@@ -197,7 +218,12 @@ test.describe("Report generation", () => {
     expect((await detailRequest).url()).toContain("/api/reports/report-available");
     await expect(page.getByTestId("card-report-library-detail")).toBeVisible();
     await expect(page.getByTestId("panel-report-library-metadata")).toContainText("Mock Co");
+    await expect(page.getByTestId("panel-report-library-summary")).toContainText("1");
+    await expect(page.getByTestId("panel-report-library-summary")).toContainText("2");
+    await expect(page.getByTestId("panel-report-library-summary")).toContainText("88");
     await expect(page.getByTestId("historical-report-preview")).toContainText("Mock Historical Report");
+    await expect(page.getByTestId("historical-report-preview")).toContainText("Electricity Consumption");
+    await expect(page.getByTestId("empty-state-report-preview")).toBeVisible();
 
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
     await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");

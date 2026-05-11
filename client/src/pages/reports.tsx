@@ -439,6 +439,26 @@ function reportSectionsFromEntry(report: ReportHistoryEntry) {
   };
 }
 
+function historicalMetricCount(reportData: any) {
+  if (Array.isArray(reportData?.values)) return reportData.values.length;
+  if (reportData?.metricsByCategory && typeof reportData.metricsByCategory === "object") {
+    return Object.values(reportData.metricsByCategory).reduce((total: number, values: any) => (
+      total + (Array.isArray(values) ? values.length : 0)
+    ), 0);
+  }
+  return 0;
+}
+
+function historicalEvidenceCount(reportData: any) {
+  if (typeof reportData?.evidenceCoverage?.totalEvidence === "number") return reportData.evidenceCoverage.totalEvidence;
+  if (Array.isArray(reportData?.evidence)) return reportData.evidence.length;
+  return 0;
+}
+
+function historicalEnabledSectionCount(report: ReportHistoryEntry) {
+  return Object.values(reportSectionsFromEntry(report)).filter(Boolean).length;
+}
+
 function StatusBadge({ status }: { status: string }) {
   if (status === "Approved") return <Badge className="text-[10px] bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-0">{status}</Badge>;
   if (status === "Submitted") return <Badge className="text-[10px] bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-0">{status}</Badge>;
@@ -2369,7 +2389,10 @@ export default function Reports() {
             <CardHeader className="pb-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <CardTitle className="text-sm">Historical Report</CardTitle>
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    Historical Report
+                    <Badge variant="outline" className="text-[10px]">Read-only snapshot</Badge>
+                  </CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Read-only snapshot from the selected report history entry.
                   </p>
@@ -2412,6 +2435,26 @@ export default function Reports() {
                       </p>
                     </div>
                   </div>
+                  {selectedLibraryReport.reportData && (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs" data-testid="panel-report-library-summary">
+                      <div className="rounded-md bg-muted/40 p-3">
+                        <p className="text-muted-foreground">Metric values</p>
+                        <p className="text-lg font-semibold">{historicalMetricCount(selectedLibraryReport.reportData)}</p>
+                      </div>
+                      <div className="rounded-md bg-muted/40 p-3">
+                        <p className="text-muted-foreground">Evidence files</p>
+                        <p className="text-lg font-semibold">{historicalEvidenceCount(selectedLibraryReport.reportData)}</p>
+                      </div>
+                      <div className="rounded-md bg-muted/40 p-3">
+                        <p className="text-muted-foreground">ESG score</p>
+                        <p className="text-lg font-semibold">{selectedLibraryReport.reportData?.weightedScore?.overallScore ?? "N/A"}</p>
+                      </div>
+                      <div className="rounded-md bg-muted/40 p-3">
+                        <p className="text-muted-foreground">Sections</p>
+                        <p className="text-lg font-semibold">{historicalEnabledSectionCount(selectedLibraryReport)}</p>
+                      </div>
+                    </div>
+                  )}
                   {selectedLibraryReport.fileAvailability === "available" && selectedLibraryReport.latestDownloadUrl && (
                     <div className="flex justify-end">
                       <Button
