@@ -300,6 +300,49 @@ async function run(tenants: SeededTenants): Promise<void> {
     assert(download.details?.statusCode === 200, `statusCode mismatch ${JSON.stringify(download.details)}`);
   });
 
+  await check("historical report view success and cross-tenant failures are audited safely", async () => {
+    const viewRes = await apiRequest("GET", `/api/reports/${reportId}`, undefined, tenantA.adminToken);
+    expectStatus(viewRes, 200, "GET /api/reports/:id");
+    const viewAudit = await latestAudit({
+      companyId: tenantA.companyId,
+      action: "historical_report_view",
+      entityId: reportId,
+      outcome: "success",
+      reason: null,
+    });
+    expectBaseAudit(viewAudit, {
+      companyId: tenantA.companyId,
+      userId: tenantAUserId,
+      action: "historical_report_view",
+      entityType: "report_run",
+      entityId: reportId,
+      outcome: "success",
+    });
+    assert(viewAudit.details?.statusCode === 200, `statusCode mismatch ${JSON.stringify(viewAudit.details)}`);
+    assert(viewAudit.details?.reportRunId === reportId, `reportRunId mismatch ${JSON.stringify(viewAudit.details)}`);
+    assert(typeof viewAudit.details?.hasReportData === "boolean", `missing hasReportData ${JSON.stringify(viewAudit.details)}`);
+    assert(!JSON.stringify(viewAudit.details).includes("values"), `historical view audit leaked report snapshot content ${JSON.stringify(viewAudit.details)}`);
+
+    expectStatus(await apiRequest("GET", `/api/reports/${tenantBReportId}`, undefined, tenantA.adminToken), 404, "cross-tenant historical report view");
+    const failedViewAudit = await latestAudit({
+      companyId: tenantA.companyId,
+      action: "historical_report_view",
+      entityId: tenantBReportId,
+      outcome: "failure",
+      reason: "report_not_found_or_forbidden",
+    });
+    expectBaseAudit(failedViewAudit, {
+      companyId: tenantA.companyId,
+      userId: tenantAUserId,
+      action: "historical_report_view",
+      entityType: "report_run",
+      entityId: tenantBReportId,
+      outcome: "failure",
+    });
+    assert(failedViewAudit.details?.statusCode === 404, `statusCode mismatch ${JSON.stringify(failedViewAudit.details)}`);
+    expectNoSensitiveContent(failedViewAudit, [tenantB.adminEmail, tenantBUserId, tenantB.companyId]);
+  });
+
   await check("cross-tenant report export and download failures are audited without sensitive content", async () => {
     const tenantBSiteId = await createSite(tenantB.adminToken, `Tenant B Audit Site ${suffix}`);
     const exportRes = await apiRequestRaw("POST", "/api/reports/export/esg_metrics_summary", {
