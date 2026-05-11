@@ -9,7 +9,7 @@ Complete this checklist before every production deployment.
 - [ ] `MFA_ENCRYPTION_KEY` is set in production and is stable across deploys
 - [ ] `APP_BASE_URL` is set to the production domain (e.g. `https://your-app.replit.app`)
 - [ ] `RESEND_API_KEY` is set for transactional email
-- [ ] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID` are set if billing is enabled
+- [ ] Billing mode is explicit: Stripe keys are set if billing is enabled, or billing is intentionally disabled and checkout/subscription UI is unavailable
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is set if AI features are required
 - [ ] `REPLIT_DOMAINS` or `CSRF_TRUSTED_ORIGINS` includes the production origin used by browser users
 - [ ] `SESSION_COOKIE_SECURE` is unset or `true` in production

@@ -22,7 +22,9 @@ Required environment and dependency checks:
 - [ ] `SESSION_COOKIE_SECURE` is unset or `true` in production.
 - [ ] `RESEND_API_KEY` is configured if invite/password-reset email is enabled.
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is configured if AI report narrative features are enabled.
-- [ ] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and plan price IDs are configured if billing is enabled.
+- [ ] Billing launch mode is explicit:
+  - If billing is enabled, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and plan price IDs are configured.
+  - If billing is intentionally disabled, `/api/billing/status` reports `billingEnabled=false`, billing UI actions are disabled, and `/api/admin/security-audit` reports billing as disabled rather than failed.
 - [ ] Production database connectivity has been verified by the platform operator.
 - [ ] Generated report files are backed by database storage and included in database backups.
 - [ ] Evidence upload storage under `uploads/evidence` is persistent across deploys/restarts if evidence uploads are enabled.
@@ -94,7 +96,7 @@ Integration checks:
 - [ ] Generated report files remain accessible after deployment.
 - [ ] Evidence files remain accessible if evidence uploads are enabled.
 - [ ] AI narrative generation behaves as expected if AI is enabled.
-- [ ] Billing pages/webhooks behave as expected if billing is enabled.
+- [ ] Billing pages/webhooks behave as expected if billing is enabled; if billing is disabled, checkout/subscription actions are unavailable and webhook requests fail safely.
 
 ## 4. Rollback Checklist
 

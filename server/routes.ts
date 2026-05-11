@@ -10200,11 +10200,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     }
   });
 
-  const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+  const stripeSecretConfigured = !!process.env.STRIPE_SECRET_KEY;
+  const stripePriceConfigured = !!process.env.STRIPE_PRO_PRICE_ID;
+  const stripeWebhookConfigured = !!process.env.STRIPE_WEBHOOK_SECRET;
+  const billingCheckoutConfigured = stripeSecretConfigured && stripePriceConfigured;
+  const billingWebhookConfigured = stripeSecretConfigured && stripeWebhookConfigured;
+  const stripe = stripeSecretConfigured ? new Stripe(process.env.STRIPE_SECRET_KEY!) : null;
 
   app.post("/api/billing/create-checkout", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
-      if (!stripe) return res.status(503).json({ error: "Billing is not configured" });
+      if (!stripe || !billingCheckoutConfigured) return res.status(503).json({ error: "Billing is not configured" });
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -10262,6 +10267,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         planStatus: company.planStatus || "active",
         currentPeriodEnd: company.currentPeriodEnd,
         stripeCustomerId: company.stripeCustomerId,
+        billingEnabled: billingCheckoutConfigured,
+        billingWebhookEnabled: billingWebhookConfigured,
         isBeta,
         betaExpiresAt: isBeta ? company.betaExpiresAt : null,
         isComped,
@@ -10511,8 +10518,25 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const sessionSecretOk = (process.env.SESSION_SECRET || "").length >= 32;
       checks.push({ check: "SESSION_SECRET strength", pass: sessionSecretOk, detail: sessionSecretOk ? "OK" : "Too short or missing" });
       checks.push({ check: "RESEND_API_KEY configured", pass: !!process.env.RESEND_API_KEY, detail: process.env.RESEND_API_KEY ? "OK" : "Not set — email disabled" });
-      checks.push({ check: "STRIPE_SECRET_KEY configured", pass: !!process.env.STRIPE_SECRET_KEY, detail: process.env.STRIPE_SECRET_KEY ? "OK" : "Not set — billing disabled" });
-      checks.push({ check: "STRIPE_WEBHOOK_SECRET configured", pass: !!process.env.STRIPE_WEBHOOK_SECRET, detail: process.env.STRIPE_WEBHOOK_SECRET ? "OK" : "Not set — webhook verification disabled" });
+      const billingPartiallyConfigured = stripeSecretConfigured || stripePriceConfigured || stripeWebhookConfigured;
+      checks.push({
+        check: "Billing configuration",
+        pass: billingCheckoutConfigured || !billingPartiallyConfigured,
+        detail: billingCheckoutConfigured
+          ? "Stripe checkout enabled"
+          : billingPartiallyConfigured
+            ? "Incomplete Stripe configuration"
+            : "Disabled for this release",
+      });
+      checks.push({
+        check: "Stripe webhook configuration",
+        pass: billingWebhookConfigured || !billingPartiallyConfigured,
+        detail: billingWebhookConfigured
+          ? "Stripe webhook verification enabled"
+          : billingPartiallyConfigured
+            ? "Incomplete Stripe webhook configuration"
+            : "Disabled for this release",
+      });
       checks.push({ check: "NODE_ENV is production", pass: process.env.NODE_ENV === "production", detail: `NODE_ENV=${process.env.NODE_ENV}` });
       checks.push({ check: "APP_BASE_URL configured", pass: !!process.env.APP_BASE_URL, detail: process.env.APP_BASE_URL || "Not set" });
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
