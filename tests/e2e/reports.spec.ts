@@ -13,6 +13,8 @@ function readSeedInfo() {
   };
 }
 
+type MockRole = "admin" | "contributor" | "viewer";
+
 const mockedReports = [
   {
     id: "report-available",
@@ -93,14 +95,18 @@ const mockedReports = [
   },
 ];
 
-function getMockedLibraryResponse(url: URL) {
+function cloneMockReports() {
+  return JSON.parse(JSON.stringify(mockedReports)) as typeof mockedReports;
+}
+
+function getMockedLibraryResponse(url: URL, reports: typeof mockedReports) {
   const search = (url.searchParams.get("search") || "").toLowerCase();
   const template = url.searchParams.get("reportTemplate") || "all";
   const status = url.searchParams.get("status") || "all";
   const generatedBy = (url.searchParams.get("generatedBy") || "").toLowerCase();
   const limit = Math.min(Math.max(Number.parseInt(url.searchParams.get("limit") || "10", 10) || 10, 1), 100);
   const offset = Math.max(Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0, 0);
-  const filtered = mockedReports.filter((report) => {
+  const filtered = reports.filter((report) => {
     if (template !== "all" && report.reportTemplate !== template) return false;
     if (status === "available" || status === "unavailable") {
       if (report.fileAvailability !== status) return false;
@@ -127,18 +133,93 @@ function getMockedLibraryResponse(url: URL) {
   };
 }
 
-async function mockReportsPageApis(page: Page) {
+async function mockReportsPageApis(page: Page, options?: {
+  role?: MockRole;
+  failAvailableDownloadOnce?: boolean;
+  onGenerateFile?: (reportId: string, format: string) => void;
+}) {
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
+  let reports = cloneMockReports();
+  let failedAvailableDownload = false;
 
   await page.route(/\/api\//, async (route) => {
     const url = new URL(route.request().url());
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
-    if (url.pathname === "/api/reports/library") return json(getMockedLibraryResponse(url));
-    if (url.pathname === "/api/reports") return json(mockedReports);
-    if (url.pathname === "/api/reports/report-available") return json(mockedReports[0]);
-    if (url.pathname === "/api/reports/report-unavailable") return json(mockedReports[1]);
+    if (url.pathname === "/api/reports/library") return json(getMockedLibraryResponse(url, reports));
+    if (url.pathname === "/api/reports") return json(reports);
+    if (url.pathname === "/api/reports/generate") {
+      return json({
+        report: { id: "report-generated" },
+        data: {
+          company: { id: "company-a", name: "Mock Co" },
+          reportTitle: "New Generated Report",
+          reportTemplate: "management",
+          period: "2026-05",
+          generatedAt: "2026-05-11T09:00:00.000Z",
+          generatedBy: "Mock Admin",
+          values: [{
+            id: "generated-value-1",
+            metricName: "Generated Electricity",
+            category: "environmental",
+            value: "456.78",
+            unit: "kWh",
+          }],
+          metricsByCategory: {
+            environmental: [{
+              id: "generated-value-1",
+              metricName: "Generated Electricity",
+              category: "environmental",
+              value: "456.78",
+              unit: "kWh",
+            }],
+          },
+          factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
+          dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+        },
+      });
+    }
+    if (url.pathname === "/api/reports/report-generated/generate-file") {
+      const body = JSON.parse(route.request().postData() || "{}") as { format?: string };
+      options?.onGenerateFile?.("report-generated", body.format || "");
+      return json({
+        fileId: "file-generated",
+        filename: "New_Generated_Report.pdf",
+        fileType: body.format || "pdf",
+        downloadUrl: "/api/reports/report-generated/download/file-generated",
+      });
+    }
+    if (url.pathname === "/api/reports/report-generated/download/file-generated") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        headers: { "content-disposition": 'attachment; filename="New_Generated_Report.pdf"' },
+        body: "%PDF-1.4\n% generated mock report\n",
+      });
+    }
+    const reportDetail = reports.find((report) => url.pathname === `/api/reports/${report.id}`);
+    if (reportDetail) return json(reportDetail);
     if (url.pathname === "/api/reports/report-available/download/file-available") {
+      if (options?.failAvailableDownloadOnce && !failedAvailableDownload) {
+        failedAvailableDownload = true;
+        reports = reports.map((report) => report.id === "report-available"
+          ? {
+              ...report,
+              latestFileId: null,
+              latestFilename: null,
+              latestFileType: null,
+              latestFileSize: null,
+              latestDownloadUrl: null,
+              fileAvailability: "unavailable",
+              fileUnavailableReason: "expired",
+            }
+          : report);
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "File not found" }),
+        });
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/pdf",
@@ -148,7 +229,7 @@ async function mockReportsPageApis(page: Page) {
     }
     if (url.pathname === "/api/auth/me") {
       return json({
-        user: { id: "user-admin", role: "admin", username: "Mock Admin" },
+        user: { id: `user-${options?.role || "admin"}`, role: options?.role || "admin", username: `Mock ${options?.role || "Admin"}` },
         company: { id: "company-a", name: "Mock Co", onboardingComplete: true },
       });
     }
@@ -281,5 +362,55 @@ test.describe("Report generation", () => {
     await page.getByRole("option", { name: "Unavailable files" }).click();
     await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+  });
+
+  for (const role of ["contributor", "viewer"] as const) {
+    test(`Report Library remains browsable for ${role} users without generation controls`, async ({ page }) => {
+      await mockReportsPageApis(page, { role });
+
+      await page.goto("/reports");
+      await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
+      await expect(page.getByTestId("report-history-report-available")).toBeVisible();
+      await expect(page.getByTestId("button-generate-report")).toHaveCount(0);
+      await expect(page.getByTestId("permission-banner")).toBeVisible();
+
+      await page.getByTestId("button-view-report-report-available").click();
+      await expect(page.getByTestId("card-report-library-detail")).toBeVisible();
+      await expect(page.getByTestId("historical-report-preview")).toContainText("Mock Historical Report");
+
+      const downloadRequest = page.waitForRequest("**/api/reports/report-available/download/file-available");
+      await page.getByTestId("button-download-report-file-report-available").click();
+      expect((await downloadRequest).url()).toContain("/api/reports/report-available/download/file-available");
+    });
+  }
+
+  test("Report Library refreshes stale availability after a historical file disappears", async ({ page }) => {
+    await mockReportsPageApis(page, { failAvailableDownloadOnce: true });
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("button-download-report-file-report-available")).toBeVisible();
+
+    await page.getByTestId("button-download-report-file-report-available").click();
+    await expect(page.getByTestId("badge-report-file-unavailable-report-available")).toHaveText("Unavailable");
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveCount(0);
+    await expect(page.getByTestId("report-file-status-report-available")).toContainText("expired");
+  });
+
+  test("Report file generation targets the newly generated report, not the filtered library row", async ({ page }) => {
+    const generatedFiles: Array<{ reportId: string; format: string }> = [];
+    await mockReportsPageApis(page, {
+      onGenerateFile: (reportId, format) => generatedFiles.push({ reportId, format }),
+    });
+
+    await page.goto("/reports");
+    await page.getByTestId("input-report-library-search").fill("Expired");
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+    await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
+
+    await page.getByTestId("button-generate-report").click();
+    await expect(page.getByTestId("report-preview")).toContainText("New Generated Report");
+
+    await page.getByTestId("button-download-pdf").click();
+    await expect.poll(() => generatedFiles).toEqual([{ reportId: "report-generated", format: "pdf" }]);
   });
 });

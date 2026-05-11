@@ -1391,6 +1391,7 @@ export default function Reports() {
   const [libraryDateTo, setLibraryDateTo] = useState("");
   const [librarySort, setLibrarySort] = useState("generated_desc");
   const [libraryOffset, setLibraryOffset] = useState(0);
+  const [currentReportRunId, setCurrentReportRunId] = useState<string | null>(null);
   const libraryLimit = 10;
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
   const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
@@ -1512,6 +1513,11 @@ export default function Reports() {
     staleTime: 30_000,
   });
 
+  const invalidateReportLibrary = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/reports/library"] });
+  };
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/reports/generate", {
@@ -1526,7 +1532,8 @@ export default function Reports() {
     onSuccess: (data: any) => {
       const isFirstReport = !activation.hasGeneratedReport;
       setReportData(data.data);
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      setCurrentReportRunId(data.report?.id ? String(data.report.id) : null);
+      invalidateReportLibrary();
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/readiness"] });
       if (isFirstReport) {
@@ -1577,7 +1584,7 @@ export default function Reports() {
       return res.json();
     },
     onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      invalidateReportLibrary();
       if (data.downloadUrl) {
         handleDownloadFile(data.downloadUrl, data.filename);
       }
@@ -1586,7 +1593,7 @@ export default function Reports() {
     onError: () => toast({ title: "File generation failed", variant: "destructive" }),
   });
 
-  const latestReportId = reports.length > 0 ? String(reports[0].id) : null;
+  const latestReportId = currentReportRunId ?? (reports.length > 0 ? String(reports[0].id) : null);
   const availableHistoryFiles = Array.from(
     new Map(
       reports
@@ -1610,7 +1617,7 @@ export default function Reports() {
       }
       const res = await authFetch(downloadUrl);
       if (!res.ok) {
-        queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+        invalidateReportLibrary();
         const errorBody = await res.json().catch(() => null);
         throw new Error(errorBody?.error || "Download failed");
       }
@@ -1929,7 +1936,7 @@ export default function Reports() {
       await apiRequest("POST", "/api/workflow/submit", { entityType: "report", entityIds: [reportId] });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      invalidateReportLibrary();
       toast({ title: "Report submitted for review" });
     },
     onError: (e: any) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
@@ -1946,7 +1953,7 @@ export default function Reports() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/reports"] });
+      invalidateReportLibrary();
       toast({ title: "Review action completed" });
     },
     onError: (e: any) => toast({ title: "Review failed", description: e.message, variant: "destructive" }),
