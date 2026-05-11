@@ -144,7 +144,7 @@ Feature flags are environment variables. They default to **enabled** (`true`) wh
    WHERE company_id = '<UUID>' ORDER BY created_at DESC LIMIT 5;
    ```
 4. If status is `failed`, the `error` column contains the root cause.
-5. Check `OPENAI_API_KEY` / AI integration secret is configured (required for AI-generated narrative sections).
+5. Check `AI_INTEGRATIONS_OPENAI_API_KEY` and `AI_INTEGRATIONS_OPENAI_BASE_URL` are configured (required for AI-generated narrative sections).
 6. Re-trigger generation after fixing the root cause.
 
 ---

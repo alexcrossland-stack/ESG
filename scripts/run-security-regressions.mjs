@@ -13,6 +13,7 @@ const apiGroups = [
       "tests/api/settings-security.test.ts",
       "tests/api/invite-identity-provider-hardening.test.ts",
       "tests/api/password-reset-security.test.ts",
+      "tests/api/openai-integration-config.test.ts",
     ],
   },
   {
@@ -82,7 +83,8 @@ function serverEnv(port) {
     NODE_ENV: "development",
     REGRESSION_TEST: "1",
     SESSION_SECRET: process.env.SESSION_SECRET || "local-security-regression-secret-32chars",
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY || "sk-local-security-regression-dummy",
+    AI_INTEGRATIONS_OPENAI_API_KEY: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || "sk-local-security-regression-dummy",
+    AI_INTEGRATIONS_OPENAI_BASE_URL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || "http://127.0.0.1:9/v1",
     PORT: String(port),
     BASE_URL: `http://127.0.0.1:${port}`,
   };

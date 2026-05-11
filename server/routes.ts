@@ -627,6 +627,28 @@ function isOpenAiQuotaError(error: unknown): boolean {
   );
 }
 
+function createOpenAiIntegrationClient(): OpenAI {
+  return new OpenAI({
+    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  });
+}
+
+function safeOpenAiErrorMeta(error: unknown): Record<string, unknown> {
+  if (!error || typeof error !== "object") return { type: typeof error };
+  const candidate = error as {
+    status?: number;
+    code?: string;
+    type?: string;
+    error?: { code?: string; type?: string };
+  };
+  return {
+    status: candidate.status ?? null,
+    code: candidate.code ?? candidate.error?.code ?? null,
+    type: candidate.type ?? candidate.error?.type ?? null,
+  };
+}
+
 function parseEmployeeCountInput(value: unknown): { ok: true; value: number } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") {
     return { ok: false, error: "Employee count is required" };
@@ -6309,10 +6331,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   // ===== AI POLICY GENERATOR =====
-  const openai = new OpenAI({
-    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  });
+  const openai = createOpenAiIntegrationClient();
 
   app.post("/api/policy-generator/generate", requireAuth, aiLimiter, requireProvisioningPermission("manage_policies"), async (req, res) => {
     try {
@@ -6370,12 +6389,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ id: saved.id, generatedContent });
     } catch (e: any) {
-      console.error("Policy generation error:", e);
+      console.error("[policy-generator] OpenAI generation failed:", safeOpenAiErrorMeta(e));
       try {
         const aiFailureEvent = {
           eventType: "ai_failure",
           severity: "error",
-          message: `Policy generation AI failure: ${e.message}`,
+          message: "Policy generation AI failure",
           details: { companyId: (req.session as any).companyId },
           companyId: (req.session as any).companyId,
         };
@@ -6754,7 +6773,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json({ questions: updatedQuestions });
     } catch (e: any) {
-      console.error("Autofill error:", e);
+      console.error("[questionnaire-autofill] OpenAI generation failed:", safeOpenAiErrorMeta(e));
       sendServerError(res, e);
     }
   });
@@ -6876,7 +6895,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       res.json(generatedPolicy);
     } catch (e: any) {
-      console.error("Template generation error:", e);
+      console.error("[policy-template] OpenAI generation failed:", safeOpenAiErrorMeta(e));
       if (isOpenAiQuotaError(e)) {
         return res.status(503).json({
           code: "AI_QUOTA_EXHAUSTED",
@@ -8625,7 +8644,7 @@ ${advisorContext}
 Use the live data above to give accurate, specific advice. If you don't have information to answer precisely, say so and suggest where the user can find it in the platform.`;
 
       try {
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const openai = createOpenAiIntegrationClient();
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
@@ -8637,7 +8656,8 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         });
         const reply = completion.choices[0]?.message?.content?.trim() || "I'm unable to answer right now. Please visit the Help Centre.";
         res.json({ reply });
-      } catch {
+      } catch (aiErr) {
+        console.error("[chat/assist] OpenAI request failed:", safeOpenAiErrorMeta(aiErr));
         res.json({ reply: "I'm unable to answer right now. Please visit the Help Centre for guidance." });
       }
     } catch (e: any) {
@@ -9828,10 +9848,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       try {
         if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
-          const aiOpenai = new OpenAI({
-            apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-            baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-          });
+          const aiOpenai = createOpenAiIntegrationClient();
 
           const prompt = `You are an ESG implementation advisor for SME businesses. Generate a 12-month ESG implementation roadmap.
 
@@ -9896,7 +9913,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           });
         }
       } catch (aiErr: any) {
-        console.log("AI roadmap generation failed, using fallback:", aiErr.message);
+        console.log("[esg-roadmap] OpenAI generation failed, using fallback:", safeOpenAiErrorMeta(aiErr));
       }
 
       if (!roadmap) {

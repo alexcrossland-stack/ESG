@@ -200,7 +200,9 @@ async function run(tenants: SeededTenants): Promise<void> {
   await check("tenant audit-log filters support entity type, date range, and bounded limit", async () => {
     const now = Date.now();
     const dateFrom = new Date(now - 86400000).toISOString().slice(0, 10);
-    const dateTo = new Date(now + 86400000).toISOString().slice(0, 10);
+    // The API accepts date-only filters; use a two-day upper bound so this
+    // assertion remains stable around local/UTC midnight boundaries.
+    const dateTo = new Date(now + 2 * 86400000).toISOString().slice(0, 10);
     const logs = await getAuditLogs(
       `/api/audit-logs?action=export_report&entityType=report&dateFrom=${dateFrom}&dateTo=${dateTo}&limit=1`,
       tenantA.adminToken,
