@@ -134,6 +134,8 @@ export default function BillingPage() {
     planStatus: string;
     currentPeriodEnd: string | null;
     stripeCustomerId: string | null;
+    billingEnabled: boolean;
+    billingWebhookEnabled: boolean;
     isBeta: boolean;
     betaExpiresAt: string | null;
     isComped: boolean;
@@ -144,6 +146,9 @@ export default function BillingPage() {
 
   const checkoutMutation = useMutation({
     mutationFn: async () => {
+      if (billing?.billingEnabled === false) {
+        throw new Error("Billing is not configured");
+      }
       const res = await apiRequest("POST", "/api/billing/create-checkout", {});
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -173,6 +178,8 @@ export default function BillingPage() {
   const isComped = billing?.isComped ?? false;
   const isPastDue = billing?.planStatus === "past_due";
   const isCancelled = billing?.planStatus === "cancelled";
+  const billingEnabled = billing?.billingEnabled === true;
+  const billingDisabled = !isLoading && !billingEnabled;
 
   const periodEnd = billing?.currentPeriodEnd
     ? new Date(billing.currentPeriodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
@@ -192,6 +199,16 @@ export default function BillingPage() {
         <h1 className="text-2xl font-bold">Billing & Plan</h1>
         <p className="text-muted-foreground text-sm mt-1">Manage your subscription and billing settings.</p>
       </div>
+
+      {billingDisabled && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/40 border border-border text-sm" data-testid="banner-billing-disabled">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-muted-foreground" />
+          <div>
+            <p className="font-medium">Billing is not enabled for this release.</p>
+            <p className="text-muted-foreground">Your current plan remains active. Online upgrades and subscription changes are currently unavailable.</p>
+          </div>
+        </div>
+      )}
 
       {isPastDue && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm" data-testid="alert-past-due">
@@ -263,11 +280,11 @@ export default function BillingPage() {
             {!isPro ? (
               <Button
                 className="w-full"
-                disabled={checkoutMutation.isPending}
+                disabled={billingDisabled || checkoutMutation.isPending}
                 onClick={() => checkoutMutation.mutate()}
                 data-testid="button-upgrade-pro"
               >
-                {checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro"}
+                {billingDisabled ? "Billing unavailable" : checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro"}
               </Button>
             ) : (
               <Badge className="w-full justify-center bg-primary/10 text-primary hover:bg-primary/10 border border-primary/20">Active</Badge>
@@ -326,14 +343,16 @@ export default function BillingPage() {
           <div className="pt-4">
             <Button
               className="w-full sm:w-auto gap-2"
-              disabled={checkoutMutation.isPending}
+              disabled={billingDisabled || checkoutMutation.isPending}
               onClick={() => checkoutMutation.mutate()}
               data-testid="button-upgrade-pro-bottom"
             >
               <Zap className="w-4 h-4" />
-              {checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro — £49/month"}
+              {billingDisabled ? "Billing unavailable" : checkoutMutation.isPending ? "Loading..." : "Upgrade to Pro — £49/month"}
             </Button>
-            <p className="text-xs text-muted-foreground mt-2">No long-term contracts · Cancel anytime</p>
+            <p className="text-xs text-muted-foreground mt-2">
+              {billingDisabled ? "Online plan changes are currently disabled." : "No long-term contracts · Cancel anytime"}
+            </p>
           </div>
         )}
       </div>
@@ -375,7 +394,7 @@ export default function BillingPage() {
           <Button
             variant="destructive"
             size="sm"
-            disabled={cancelMutation.isPending}
+            disabled={billingDisabled || cancelMutation.isPending}
             onClick={() => {
               if (window.confirm("Are you sure you want to cancel your Pro subscription?")) {
                 cancelMutation.mutate();
@@ -383,7 +402,7 @@ export default function BillingPage() {
             }}
             data-testid="button-cancel-subscription"
           >
-            {cancelMutation.isPending ? "Cancelling..." : "Cancel subscription"}
+            {billingDisabled ? "Billing unavailable" : cancelMutation.isPending ? "Cancelling..." : "Cancel subscription"}
           </Button>
         </div>
       )}
@@ -394,8 +413,14 @@ export default function BillingPage() {
           <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
             Your Pro features remain active until {periodEnd}. You can re-subscribe at any time.
           </p>
-          <Button size="sm" className="mt-3" onClick={() => checkoutMutation.mutate()} data-testid="button-resubscribe">
-            Re-subscribe
+          <Button
+            size="sm"
+            className="mt-3"
+            disabled={billingDisabled || checkoutMutation.isPending}
+            onClick={() => checkoutMutation.mutate()}
+            data-testid="button-resubscribe"
+          >
+            {billingDisabled ? "Billing unavailable" : "Re-subscribe"}
           </Button>
         </div>
       )}

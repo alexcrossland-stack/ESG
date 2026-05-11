@@ -13,6 +13,7 @@ const apiGroups = [
       "tests/api/settings-security.test.ts",
       "tests/api/invite-identity-provider-hardening.test.ts",
       "tests/api/password-reset-security.test.ts",
+      "tests/api/optional-billing-disabled.test.ts",
     ],
   },
   {
@@ -59,6 +60,7 @@ const browserSpecs = [
   "tests/e2e/settings-security.browser.spec.ts",
   "tests/e2e/settings-security-ui.browser.spec.ts",
   "tests/e2e/audit-log-ui.browser.spec.ts",
+  "tests/e2e/billing-disabled.browser.spec.ts",
   "--project=chromium",
 ];
 

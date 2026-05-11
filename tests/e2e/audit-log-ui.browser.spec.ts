@@ -113,7 +113,8 @@ test.describe("Audit-log UI/access hardening", () => {
     const { periodA, periodB } = await seedExportAuditEvents(request);
     const today = new Date();
     const yesterday = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
-    const tomorrow = new Date(today.getTime() + 86400000).toISOString().slice(0, 10);
+    // Date-only filters are parsed at midnight; keep this stable near UTC/local day boundaries.
+    const tomorrow = new Date(today.getTime() + 2 * 86400000).toISOString().slice(0, 10);
     const { context, page } = await openSettingsAudit(browser);
 
     await expect(page.locator("[data-testid^='audit-log-']").first()).toBeVisible();

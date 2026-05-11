@@ -13,8 +13,9 @@ export function useBillingStatus() {
   const isPro = data?.planTier === "pro";
   const isBeta = data?.isBeta === true;
   const isComped = data?.isComped === true;
+  const billingEnabled = data?.billingEnabled !== false;
   const compedUntil = data?.compedUntil ? new Date(data.compedUntil) : null;
-  return { billing: data, isPro, isBeta, isComped, compedUntil, isLoading };
+  return { billing: data, isPro, isBeta, isComped, billingEnabled, compedUntil, isLoading };
 }
 
 function trackEvent(action: string, details?: Record<string, string>) {
@@ -49,6 +50,8 @@ export function UpgradeButton({
   "data-testid": testId,
 }: UpgradeButtonProps) {
   const slug = feature.replace(/\s+/g, "-").toLowerCase();
+  const { billingEnabled, isLoading } = useBillingStatus();
+  const billingDisabled = !isLoading && !billingEnabled;
 
   useEffect(() => {
     trackEvent("upgrade_prompt_shown", { feature });
@@ -58,23 +61,28 @@ export function UpgradeButton({
     trackEvent("upgrade_prompt_clicked", { feature });
   };
 
-  const btn = (
-    <Link href="/billing" onClick={handleClick}>
-      <Button
+  const button = (
+    <Button
+      variant="outline"
+      size={size}
+      disabled={billingDisabled}
+      className={`relative gap-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950 ${className ?? ""}`}
+      data-testid={testId ?? `upgrade-button-${slug}`}
+    >
+      <Lock className="w-3.5 h-3.5 shrink-0" />
+      {billingDisabled ? "Upgrade unavailable" : children}
+      <Badge
         variant="outline"
-        size={size}
-        className={`relative gap-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950 ${className ?? ""}`}
-        data-testid={testId ?? `upgrade-button-${slug}`}
+        className="ml-1 text-[10px] px-1.5 py-0 h-4 border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-400 font-semibold"
       >
-        <Lock className="w-3.5 h-3.5 shrink-0" />
-        {children}
-        <Badge
-          variant="outline"
-          className="ml-1 text-[10px] px-1.5 py-0 h-4 border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-400 font-semibold"
-        >
-          Pro
-        </Badge>
-      </Button>
+        Pro
+      </Badge>
+    </Button>
+  );
+
+  const btn = billingDisabled ? button : (
+    <Link href="/billing" onClick={handleClick}>
+      {button}
     </Link>
   );
 
@@ -103,6 +111,9 @@ export function UpgradePageGate({
   icon,
   bullets,
 }: UpgradePageGateProps) {
+  const { billingEnabled, isLoading } = useBillingStatus();
+  const billingDisabled = !isLoading && !billingEnabled;
+
   useEffect(() => {
     trackEvent("upgrade_prompt_shown", { feature });
   }, [feature]);
@@ -136,14 +147,23 @@ export function UpgradePageGate({
             </ul>
           )}
 
-          <Link href="/billing" onClick={handleClick}>
-            <Button className="w-full gap-2 mt-2 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-upgrade-cta">
+          {billingDisabled ? (
+            <Button className="w-full gap-2 mt-2" disabled data-testid="button-upgrade-cta">
               <Zap className="w-4 h-4" />
-              Upgrade to Pro
-              <ArrowRight className="w-4 h-4" />
+              Upgrade unavailable
             </Button>
-          </Link>
-          <p className="text-xs text-muted-foreground">No long-term contracts · Cancel anytime</p>
+          ) : (
+            <Link href="/billing" onClick={handleClick}>
+              <Button className="w-full gap-2 mt-2 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-upgrade-cta">
+                <Zap className="w-4 h-4" />
+                Upgrade to Pro
+                <ArrowRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {billingDisabled ? "Online plan changes are currently disabled." : "No long-term contracts · Cancel anytime"}
+          </p>
         </CardContent>
       </Card>
     </div>
@@ -158,6 +178,9 @@ interface UpgradeOverlayProps {
 }
 
 export function UpgradeOverlay({ feature, title, description, children }: UpgradeOverlayProps) {
+  const { billingEnabled, isLoading } = useBillingStatus();
+  const billingDisabled = !isLoading && !billingEnabled;
+
   useEffect(() => {
     trackEvent("upgrade_prompt_shown", { feature });
   }, [feature]);
@@ -181,12 +204,19 @@ export function UpgradeOverlay({ feature, title, description, children }: Upgrad
               <p className="font-semibold text-sm">{title ?? `Unlock ${feature}`}</p>
               <p className="text-xs text-muted-foreground leading-relaxed">{description ?? `This insight is available on the Pro plan.`}</p>
             </div>
-            <Link href="/billing" onClick={handleClick}>
-              <Button size="sm" className="gap-1.5 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-overlay-upgrade">
+            {billingDisabled ? (
+              <Button size="sm" className="gap-1.5" disabled data-testid="button-overlay-upgrade">
                 <Zap className="w-3.5 h-3.5" />
-                Upgrade to Pro
+                Upgrade unavailable
               </Button>
-            </Link>
+            ) : (
+              <Link href="/billing" onClick={handleClick}>
+                <Button size="sm" className="gap-1.5 bg-amber-500 hover:bg-amber-600 text-white" data-testid="button-overlay-upgrade">
+                  <Zap className="w-3.5 h-3.5" />
+                  Upgrade to Pro
+                </Button>
+              </Link>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -212,6 +242,8 @@ export function UpgradeLimitBanner({
   "data-testid": testId,
 }: UpgradeLimitBannerProps) {
   const atLimit = current >= limit;
+  const { billingEnabled, isLoading } = useBillingStatus();
+  const billingDisabled = !isLoading && !billingEnabled;
 
   useEffect(() => {
     trackEvent("upgrade_prompt_shown", { feature });
@@ -241,7 +273,18 @@ export function UpgradeLimitBanner({
           )}
         </div>
       </div>
-      {atLimit && (
+      {atLimit && billingDisabled && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled
+          className="h-7 text-xs shrink-0"
+          data-testid={`button-upgrade-${feature}`}
+        >
+          Unavailable
+        </Button>
+      )}
+      {atLimit && !billingDisabled && (
         <Link href="/billing" onClick={handleClick}>
           <Button
             variant="outline"

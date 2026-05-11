@@ -284,6 +284,8 @@ function YourPlanCard() {
   const isPro = billing?.planTier === "pro";
   const isBeta = billing?.isBeta;
   const isComped = billing?.isComped;
+  const billingEnabled = billing?.billingEnabled === true;
+  const billingDisabled = !isLoading && !billingEnabled;
   const planStatus = billing?.planStatus;
   const isCancelled = planStatus === "cancelled";
   const isPastDue = planStatus === "past_due";
@@ -380,15 +382,26 @@ function YourPlanCard() {
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-plan-description">{planDescription}</p>
               </div>
-              <Link href="/billing">
-                <Button variant="outline" size="sm" data-testid="button-manage-plan">
-                  {isPro ? "Manage plan →" : "Upgrade to Pro →"}
+              {billingDisabled ? (
+                <Button variant="outline" size="sm" disabled data-testid="button-manage-plan">
+                  Billing unavailable
                 </Button>
-              </Link>
+              ) : (
+                <Link href="/billing">
+                  <Button variant="outline" size="sm" data-testid="button-manage-plan">
+                    {isPro ? "Manage plan →" : "Upgrade to Pro →"}
+                  </Button>
+                </Link>
+              )}
             </div>
             {statusNote && (
               <p className="text-xs text-muted-foreground border-t border-border pt-2" data-testid="text-plan-status-note">
                 {statusNote}
+              </p>
+            )}
+            {billingDisabled && (
+              <p className="text-xs text-muted-foreground border-t border-border pt-2" data-testid="text-billing-disabled-note">
+                Online billing is disabled for this release. Your current plan remains active.
               </p>
             )}
           </div>
