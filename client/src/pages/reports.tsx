@@ -43,6 +43,19 @@ type ReportHistoryEntry = {
   reportTemplate?: string | null;
   generatedAt?: string | Date | null;
   workflowStatus?: string | null;
+  includePolicy?: boolean | null;
+  includeTopics?: boolean | null;
+  includeMetrics?: boolean | null;
+  includeActions?: boolean | null;
+  includeSummary?: boolean | null;
+  includeCarbon?: boolean | null;
+  includeEvidence?: boolean | null;
+  includeMethodology?: boolean | null;
+  includeSignoff?: boolean | null;
+  generatedBy?: string | null;
+  generatedByName?: string | null;
+  companyName?: string | null;
+  reportData?: any;
   siteId?: string | null;
   siteName?: string | null;
   latestFileId?: string | null;
@@ -52,7 +65,7 @@ type ReportHistoryEntry = {
   latestFileGeneratedAt?: string | Date | null;
   latestDownloadUrl?: string | null;
   fileAvailability?: "available" | "unavailable" | null;
-  fileUnavailableReason?: "missing" | "retained_history_only" | null;
+  fileUnavailableReason?: "expired" | "missing" | "retained_history_only" | null;
 };
 
 type DownloadableHistoryEntry = ReportHistoryEntry & {
@@ -397,6 +410,33 @@ function generatePeriods() {
     d = subMonths(d, 1);
   }
   return periods;
+}
+
+function reportTemplateLabel(template?: string | null) {
+  return REPORT_TEMPLATES.find(t => t.id === template)?.label || "ESG Report";
+}
+
+function reportLibraryTitle(report: ReportHistoryEntry) {
+  return report.reportData?.reportTitle || `${reportTemplateLabel(report.reportTemplate)} — ${report.period || "All Periods"}`;
+}
+
+function reportSectionsFromEntry(report: ReportHistoryEntry) {
+  const templateDefaults = REPORT_TEMPLATES.find(t => t.id === report.reportTemplate)?.defaults || REPORT_TEMPLATES[0].defaults;
+  return {
+    ...templateDefaults,
+    includePolicy: report.includePolicy ?? templateDefaults.includePolicy,
+    includeTopics: report.includeTopics ?? templateDefaults.includeTopics,
+    includeMetrics: report.includeMetrics ?? templateDefaults.includeMetrics,
+    includeActions: report.includeActions ?? templateDefaults.includeActions,
+    includeSummary: report.includeSummary ?? templateDefaults.includeSummary,
+    includeCarbon: report.includeCarbon ?? templateDefaults.includeCarbon,
+    includeEvidence: report.includeEvidence ?? templateDefaults.includeEvidence,
+    includeMethodology: report.includeMethodology ?? templateDefaults.includeMethodology,
+    includeSignoff: report.includeSignoff ?? templateDefaults.includeSignoff,
+    includeDataQualityAssessment: report.reportData?.dataQualityAssessment ? templateDefaults.includeDataQualityAssessment : false,
+    includeComplianceStatus: report.reportData?.complianceStatus ? templateDefaults.includeComplianceStatus : false,
+    includePeriodComparison: report.reportData?.periodComparison ? templateDefaults.includePeriodComparison : false,
+  };
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1314,6 +1354,7 @@ export default function Reports() {
   const [reportData, setReportData] = useState<any>(null);
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [downloadErrorReportId, setDownloadErrorReportId] = useState<string | null>(null);
+  const [selectedLibraryReportId, setSelectedLibraryReportId] = useState<string | null>(null);
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
   const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
 
@@ -1343,6 +1384,15 @@ export default function Reports() {
       if (!res.ok) throw new Error("Failed to load reports");
       return res.json();
     },
+  });
+  const { data: selectedLibraryReport, isLoading: isLibraryReportLoading } = useQuery<ReportHistoryEntry>({
+    queryKey: ["/api/reports/detail", selectedLibraryReportId],
+    queryFn: async () => {
+      const res = await authFetch(`/api/reports/${selectedLibraryReportId}`);
+      if (!res.ok) throw new Error("Failed to load report");
+      return res.json();
+    },
+    enabled: !!selectedLibraryReportId,
   });
   const { data: companyData } = useQuery<any>({ queryKey: ["/api/company"] });
   const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
@@ -1921,7 +1971,7 @@ export default function Reports() {
               {hasMultipleSites && (
                 <div className="space-y-1.5">
                   <Label className="text-xs">Report Scope</Label>
-                  <Select value={reportScopeId} onValueChange={(v) => { setReportScopeId(v); setReportData(null); }}>
+                  <Select value={reportScopeId} onValueChange={(v) => { setReportScopeId(v); setReportData(null); setSelectedLibraryReportId(null); }}>
                     <SelectTrigger data-testid="select-report-scope"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__org__">All scopes (whole organisation)</SelectItem>
@@ -2169,11 +2219,16 @@ export default function Reports() {
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold flex items-center gap-2">
-            <Clock className="w-4 h-4" />
-            Report History
-          </h2>
+        <div className="flex items-center justify-between mb-3 gap-3">
+          <div>
+            <h2 className="text-sm font-semibold flex items-center gap-2" data-testid="heading-report-library">
+              <Clock className="w-4 h-4" />
+              Report Library
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Browse generated report snapshots and open available historical files.
+            </p>
+          </div>
           <OwnershipHint owner="Approvers or Company Admins" action="Final sign-off" />
         </div>
         {isLoading ? (
@@ -2186,35 +2241,31 @@ export default function Reports() {
             helpText="You'll need at least one period of data entered before your report will have meaningful figures."
           />
         ) : (
-          <div className="space-y-2">
-            {reports.map((report: any) => {
+          <div className="space-y-2" data-testid="section-report-library">
+            {reports.map((report: ReportHistoryEntry) => {
               const reportId = String(report.id);
-              const reportTitle = `${REPORT_TEMPLATES.find(t => t.id === report.reportTemplate)?.label || "ESG Report"} — ${report.period || "All Periods"}`;
+              const reportTitle = reportLibraryTitle(report);
               const downloadName = report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`;
               const hasReportFile = report.fileAvailability === "available" && !!report.latestDownloadUrl;
               const isDownloading = downloadingReportId === reportId;
               const hasDownloadError = downloadErrorReportId === reportId;
+              const canViewSnapshot = !!report.reportData;
+              const isSelected = selectedLibraryReportId === reportId;
 
               return (
-                <div key={report.id} className="flex flex-wrap items-center gap-3 p-3 rounded-md border border-border" data-testid={`report-history-${report.id}`}>
+                <div key={report.id} className={`flex flex-wrap items-center gap-3 p-3 rounded-md border ${isSelected ? "border-primary bg-primary/5" : "border-border"}`} data-testid={`report-history-${report.id}`}>
                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
-                    {hasReportFile ? (
-                      <button
-                        type="button"
-                        className="text-sm font-medium text-left text-primary underline-offset-4 hover:underline disabled:opacity-70"
-                        onClick={() => handleDownloadFile(report.latestDownloadUrl || "", downloadName, reportId)}
-                        disabled={isDownloading}
-                        data-testid={`link-report-file-${report.id}`}
-                      >
-                        {reportTitle}
-                      </button>
-                    ) : (
-                      <p className="text-sm font-medium">{reportTitle}</p>
-                    )}
+                    <p className="text-sm font-medium" data-testid={`text-report-library-title-${report.id}`}>{reportTitle}</p>
                     <p className="text-xs text-muted-foreground">
-                      Generated {format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm")}
+                      {report.companyName || companyData?.name || "Company"} · Generated {report.generatedAt ? format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm") : "Unknown date"}
+                      {report.generatedByName ? ` by ${report.generatedByName}` : ""}
                     </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{report.reportTemplate ? reportTemplateLabel(report.reportTemplate) : "ESG Report"}</span>
+                      <span>{report.period || "All periods"}</span>
+                      {report.siteId ? <span>{report.siteName || "Site"}</span> : <span>All scopes</span>}
+                    </div>
                     {hasReportFile ? (
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span className="font-medium">{report.latestFilename || "Generated report file"}</span>
@@ -2229,9 +2280,11 @@ export default function Reports() {
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground" data-testid={`report-file-status-${report.id}`}>
                         <span className="font-medium">Unavailable.</span>{" "}
-                        {report.fileUnavailableReason === "retained_history_only"
+                        {report.fileUnavailableReason === "expired"
+                          ? "The generated file has expired, but the historical report snapshot can still be viewed when available."
+                          : report.fileUnavailableReason === "retained_history_only"
                           ? "The history entry remains for audit purposes, but the file is no longer available."
-                          : "No downloadable file is available for this report entry."}
+                          : "No current file is available for this report entry."}
                       </p>
                     )}
                   </div>
@@ -2280,6 +2333,16 @@ export default function Reports() {
                       </Button>
                     </>
                   )}
+                  <Button
+                    size="sm"
+                    variant={isSelected ? "default" : "outline"}
+                    onClick={() => setSelectedLibraryReportId(reportId)}
+                    disabled={!canViewSnapshot}
+                    data-testid={`button-view-report-${report.id}`}
+                  >
+                    <Eye className="w-3.5 h-3.5 mr-1.5" />
+                    View report
+                  </Button>
                   {hasReportFile ? (
                     <Button
                       size="sm"
@@ -2289,7 +2352,7 @@ export default function Reports() {
                       data-testid={`button-download-report-file-${report.id}`}
                     >
                       {isDownloading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
-                      {isDownloading ? "Opening..." : "Open report"}
+                      {isDownloading ? "Opening..." : "Open file"}
                     </Button>
                   ) : (
                     <Badge variant="secondary" className="text-xs" data-testid={`badge-report-file-unavailable-${report.id}`}>
@@ -2300,6 +2363,87 @@ export default function Reports() {
               );
             })}
           </div>
+        )}
+        {selectedLibraryReportId && (
+          <Card className="mt-4" data-testid="card-report-library-detail">
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-sm">Historical Report</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Read-only snapshot from the selected report history entry.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelectedLibraryReportId(null)}
+                  data-testid="button-close-report-library-detail"
+                >
+                  <X className="w-3.5 h-3.5 mr-1.5" />
+                  Close
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLibraryReportLoading ? (
+                <Skeleton className="h-40" />
+              ) : selectedLibraryReport ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs" data-testid="panel-report-library-metadata">
+                    <div className="rounded-md border border-border p-3">
+                      <p className="text-muted-foreground">Report</p>
+                      <p className="font-medium">{reportLibraryTitle(selectedLibraryReport)}</p>
+                    </div>
+                    <div className="rounded-md border border-border p-3">
+                      <p className="text-muted-foreground">Company</p>
+                      <p className="font-medium">{selectedLibraryReport.companyName || companyData?.name || "Company"}</p>
+                    </div>
+                    <div className="rounded-md border border-border p-3">
+                      <p className="text-muted-foreground">Generated by</p>
+                      <p className="font-medium">{selectedLibraryReport.generatedByName || "Unknown user"}</p>
+                    </div>
+                    <div className="rounded-md border border-border p-3">
+                      <p className="text-muted-foreground">File</p>
+                      <p className="font-medium">
+                        {selectedLibraryReport.fileAvailability === "available"
+                          ? `${selectedLibraryReport.latestFileType?.toUpperCase() || "FILE"} available`
+                          : "Unavailable"}
+                      </p>
+                    </div>
+                  </div>
+                  {selectedLibraryReport.fileAvailability === "available" && selectedLibraryReport.latestDownloadUrl && (
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadFile(
+                          selectedLibraryReport.latestDownloadUrl || "",
+                          selectedLibraryReport.latestFilename || "report-file",
+                          selectedLibraryReport.id,
+                        )}
+                        data-testid="button-library-detail-download"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1.5" />
+                        Download file
+                      </Button>
+                    </div>
+                  )}
+                  {selectedLibraryReport.reportData ? (
+                    <div data-testid="historical-report-preview">
+                      <ReportPreview data={selectedLibraryReport.reportData} sections={reportSectionsFromEntry(selectedLibraryReport)} />
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground" data-testid="text-report-library-no-snapshot">
+                      This historical entry does not include a stored JSON snapshot.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">Report could not be loaded.</p>
+              )}
+            </CardContent>
+          </Card>
         )}
       </div>
 

@@ -28,6 +28,19 @@ const mockedReports = [
     latestDownloadUrl: "/api/reports/report-available/download/file-available",
     fileAvailability: "available",
     fileUnavailableReason: null,
+    companyName: "Mock Co",
+    generatedByName: "Mock Admin",
+    reportData: {
+      company: { id: "company-a", name: "Mock Co" },
+      reportTitle: "Mock Historical Report",
+      reportTemplate: "management",
+      period: "2024-01",
+      generatedAt: "2026-05-07T09:30:00.000Z",
+      generatedBy: "Mock Admin",
+      values: [],
+      factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
+      dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+    },
   },
   {
     id: "report-unavailable",
@@ -42,7 +55,20 @@ const mockedReports = [
     latestFileSize: null,
     latestDownloadUrl: null,
     fileAvailability: "unavailable",
-    fileUnavailableReason: "missing",
+    fileUnavailableReason: "expired",
+    companyName: "Mock Co",
+    generatedByName: "Mock Admin",
+    reportData: {
+      company: { id: "company-a", name: "Mock Co" },
+      reportTitle: "Expired Historical Report",
+      reportTemplate: "customer",
+      period: "2024-02",
+      generatedAt: "2026-05-07T10:30:00.000Z",
+      generatedBy: "Mock Admin",
+      values: [],
+      factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
+      dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+    },
   },
 ];
 
@@ -54,6 +80,8 @@ async function mockReportsPageApis(page: Page) {
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
     if (url.pathname === "/api/reports") return json(mockedReports);
+    if (url.pathname === "/api/reports/report-available") return json(mockedReports[0]);
+    if (url.pathname === "/api/reports/report-unavailable") return json(mockedReports[1]);
     if (url.pathname === "/api/reports/report-available/download/file-available") {
       return route.fulfill({
         status: 200,
@@ -155,17 +183,26 @@ test.describe("Report generation", () => {
     expect(res.status()).toBe(403);
   });
 
-  test("Report History shows access only for generated reports with files", async ({ page }) => {
+  test("Report Library opens historical snapshots and keeps unavailable files marked", async ({ page }) => {
     await mockReportsPageApis(page);
 
     await page.goto("/reports");
+    await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
-    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
-    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open file/);
+    await expect(page.getByTestId("text-report-library-title-report-available")).toContainText("Mock Historical Report");
+
+    const detailRequest = page.waitForRequest("**/api/reports/report-available");
+    await page.getByTestId("button-view-report-report-available").click();
+    expect((await detailRequest).url()).toContain("/api/reports/report-available");
+    await expect(page.getByTestId("card-report-library-detail")).toBeVisible();
+    await expect(page.getByTestId("panel-report-library-metadata")).toContainText("Mock Co");
+    await expect(page.getByTestId("historical-report-preview")).toContainText("Mock Historical Report");
 
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
     await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");
     await expect(page.getByTestId("button-download-report-file-report-unavailable")).toHaveCount(0);
+    await expect(page.getByTestId("report-file-status-report-unavailable")).toContainText("expired");
 
     const downloadRequest = page.waitForRequest("**/api/reports/report-available/download/file-available");
     await page.getByTestId("button-download-report-file-report-available").click();
