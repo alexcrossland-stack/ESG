@@ -23,6 +23,11 @@ function writeStorageState(filePath: string, token: string): void {
 }
 
 async function globalSetup(_config: FullConfig) {
+  if (process.env.PLAYWRIGHT_SKIP_GLOBAL_SETUP === "1") {
+    console.log("[global-setup] Skipping tenant seed by request.");
+    return;
+  }
+
   if (!fs.existsSync(AUTH_DIR)) {
     fs.mkdirSync(AUTH_DIR, { recursive: true });
   }
