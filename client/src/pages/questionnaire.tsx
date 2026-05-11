@@ -843,7 +843,7 @@ function PreviousQuestionnairesTab({ onCreateQuestionnaire }: { onCreateQuestion
 
 function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
-  const [importTab, setImportTab] = useState<"text" | "csv" | "xlsx">("text");
+  const [importTab, setImportTab] = useState<"text" | "csv">("text");
   const [importTitle, setImportTitle] = useState("");
   const [importText, setImportText] = useState("");
   const [importPreview, setImportPreview] = useState<any>(null);
@@ -875,8 +875,7 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
     const reader = new FileReader();
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
-      const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
-      importMutation.mutate({ format, content: base64, title: importTitle });
+      importMutation.mutate({ format: "csv", content: base64, title: importTitle });
     };
     reader.readAsArrayBuffer(file);
     if (fileRef.current) fileRef.current.value = "";
@@ -946,7 +945,6 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
               <TabsList>
                 <TabsTrigger value="text" data-testid="tab-import-text">Paste Text</TabsTrigger>
                 <TabsTrigger value="csv" data-testid="tab-import-csv">Upload CSV</TabsTrigger>
-                <TabsTrigger value="xlsx" data-testid="tab-import-xlsx">Upload Excel</TabsTrigger>
               </TabsList>
               <TabsContent value="text" className="mt-3">
                 <Textarea
@@ -969,17 +967,6 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
                     Choose CSV File
                   </Button>
                   <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFileImport} />
-                </div>
-              </TabsContent>
-              <TabsContent value="xlsx" className="mt-3">
-                <div className="border-2 border-dashed rounded-lg p-8 text-center">
-                  <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                  <p className="text-sm text-muted-foreground mb-3">Upload an Excel file with questions</p>
-                  <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} data-testid="button-upload-xlsx">
-                    <Upload className="w-3.5 h-3.5 mr-1.5" />
-                    Choose Excel File
-                  </Button>
-                  <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileImport} />
                 </div>
               </TabsContent>
             </Tabs>
