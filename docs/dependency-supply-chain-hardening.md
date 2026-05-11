@@ -37,7 +37,7 @@ Notable direct dependencies:
 
 | Package | Severity | Notes |
 | --- | --- | --- |
-| `drizzle-orm` | High | Fix requires semver-major upgrade to `0.45.2`; defer to a dedicated ORM compatibility PR. |
+| `drizzle-orm` | High | Remediated in dedicated ORM compatibility PR by upgrading to `^0.45.2`; no application code changes required after validation. |
 | `marked` | High | Fix available; should be assessed with report/policy rendering tests. |
 | `xlsx` | High | Remediated in the XLSX parser remediation PR by removing the production dependency and disabling server-side XLS/XLSX import parsing. CSV/text imports remain supported. |
 | `express-rate-limit` | Moderate | Fix available via dependency update; validate rate-limit regression suite after upgrade. |
@@ -69,6 +69,33 @@ Current behaviour:
 - Existing evidence uploads may still store `.xls` or `.xlsx` files as opaque evidence attachments; those files are not parsed by the removed `xlsx` dependency.
 
 Future XLSX support should use a maintained parser or isolated conversion service with explicit file size limits, MIME/extension validation, tenant authorization before parsing, safe error handling, and no formula execution/evaluation.
+
+## Drizzle ORM Remediation
+
+Reviewed: 2026-05-11
+
+Advisory:
+
+- `drizzle-orm <0.45.2`
+- High severity SQL injection risk in improperly escaped SQL identifiers.
+
+Decision:
+
+- Upgrade the production dependency from `^0.39.3` to `^0.45.2`.
+- Keep `drizzle-zod` and `drizzle-kit` unchanged because their current peer ranges remain compatible and this remediation does not require migration tooling changes.
+- No schema migration is required.
+
+Reachability:
+
+- Production reachable. The server uses `drizzle-orm` in core storage, startup/index DDL, report/export paths, settings/security APIs, scheduler code, and audit/security alert flows.
+- Existing dynamic identifier usage is mostly static or allowlisted (`ensureIndexes`, startup DDL, workflow table allowlists, assignment table map), but upgrading the ORM removes the vulnerable library version rather than relying on callsite-by-callsite containment.
+
+Validation:
+
+- `npm run audit:prod` no longer reports `drizzle-orm`; it still exits non-zero for unrelated advisories tracked separately.
+- `npm run build`
+- `npm run check:lockfile`
+- Focused DB/auth/settings/report/security regressions before release.
 
 ## Added Repo-Local Checks
 
