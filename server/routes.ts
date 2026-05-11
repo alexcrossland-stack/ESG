@@ -57,7 +57,6 @@ import { generateAgentApiKey } from "./agent-auth";
 import { provisionCompany } from "./company-provisioning";
 import { dispatchCriticalHealthEvent } from "./webhooks";
 import { parse as csvParse } from "csv-parse/sync";
-import * as XLSX from "xlsx";
 import {
   generateTotpSecret, encryptSecret, decryptSecret,
   generateTotpToken, verifyTotpToken, generateTotpUri,
@@ -9152,17 +9151,8 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           const questionCol = Object.keys(record).find(k => k.toLowerCase().includes("question")) || Object.keys(record)[0];
           if (questionCol && record[questionCol]) questions.push(record[questionCol].trim());
         }
-      } else if (format === "xlsx") {
-        const buf = Buffer.from(content, "base64");
-        const workbook = XLSX.read(buf, { type: "buffer" });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-        for (const row of rows) {
-          const questionCol = Object.keys(row).find(k => k.toLowerCase().includes("question")) || Object.keys(row)[0];
-          if (questionCol && row[questionCol]) questions.push(String(row[questionCol]).trim());
-        }
       } else {
-        res.status(400).json({ error: "Format must be text, csv, or xlsx" }); return;
+        res.status(400).json({ error: "Format must be text or csv" }); return;
       }
 
       if (!questions.length) { res.status(400).json({ error: "No questions found" }); return; }
@@ -9408,15 +9398,8 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true });
         if (records.length > 0) columns = Object.keys(records[0]);
         rows = records;
-      } else if (format === "xlsx") {
-        const buf = Buffer.from(content, "base64");
-        const workbook = XLSX.read(buf, { type: "buffer" });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet);
-        if (jsonRows.length > 0) columns = Object.keys(jsonRows[0]);
-        rows = jsonRows;
       } else {
-        res.status(400).json({ error: "Format must be csv or xlsx" }); return;
+        res.status(400).json({ error: "Format must be csv" }); return;
       }
 
       const mappings = columns.map(col => ({ column: col, ...matchColumn(col) }));

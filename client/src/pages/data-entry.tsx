@@ -1552,9 +1552,8 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     const reader = new FileReader();
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
-      const format = file.name.endsWith(".csv") ? "csv" : "xlsx";
       const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
-      parseMutation.mutate({ format, content: base64, siteId: resolvedSiteId });
+      parseMutation.mutate({ format: "csv", content: base64, siteId: resolvedSiteId });
     };
     reader.readAsArrayBuffer(file);
     if (fileRef.current) fileRef.current.value = "";
@@ -1604,7 +1603,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
         {step === "upload" && (
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">Upload a CSV or Excel file with your raw operational data. Column names will be automatically mapped to input fields.</p>
+            <p className="text-sm text-muted-foreground">Upload a CSV file with your raw operational data. Column names will be automatically mapped to input fields.</p>
 
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Download a template to get started</p>
@@ -1629,12 +1628,12 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
             <div className="border-2 border-dashed rounded-lg p-8 text-center">
               <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground mb-3">Drop a CSV or Excel file here</p>
+              <p className="text-sm text-muted-foreground mb-3">Drop a CSV file here</p>
               <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending || (isMultiSite && !selectedSiteId)} data-testid="button-import-choose-file">
                 {parseMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
                 {parseMutation.isPending ? "Parsing..." : "Choose File"}
               </Button>
-              <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
+              <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
             </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>Period: {period}</span>
