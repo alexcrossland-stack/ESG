@@ -706,7 +706,15 @@ export async function seedPeDemo(): Promise<{ summary: string; counts: Record<st
 // CLI entry point
 // ---------------------------------------------------------------------------
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isDirectCliExecution() {
+  const entrypoint = (process.argv[1] || "").replace(/\\/g, "/");
+  return entrypoint.endsWith("/server/seed-pe-demo.ts")
+    || entrypoint.endsWith("/server/seed-pe-demo.js")
+    || entrypoint.endsWith("/seed-pe-demo.ts")
+    || entrypoint.endsWith("/seed-pe-demo.js");
+}
+
+if (isDirectCliExecution()) {
   seedPeDemo()
     .then(() => {
       process.exit(0);

@@ -15,7 +15,7 @@
 | Auth & Session | PASS | Cookie + bearer token, idle/absolute timeouts, MFA |
 | Email / Invite | PASS | Resend integration via `server/email.ts` |
 | Password Reset | PASS | Token-based flow in `server/routes.ts` |
-| File Upload / Storage | PASS | DB-backed metadata store; extension validation |
+| File Upload / Storage | PASS | Evidence files require persistent `uploads/evidence`; generated reports are DB-backed |
 | Report Generation | PASS | PDF/DOCX via PDFKit/docx; feature flag guarded |
 | Callback URLs | PASS | `APP_BASE_URL` drives all email links |
 | Background Jobs | PASS | Scheduler in `server/scheduler.ts`; integrity checks daily |
@@ -45,13 +45,20 @@
 |----------|----------|--------|-------|
 | `DATABASE_URL` | Yes | Must be set | PostgreSQL connection string |
 | `SESSION_SECRET` | Yes | Must be set | ≥32 chars, unique to production |
+| `MFA_ENCRYPTION_KEY` | Yes | Must be set | Required in production to encrypt MFA secrets; keep stable across deploys |
 | `APP_BASE_URL` | Yes | Must be set | Used in all email links and invite URLs |
 | `RESEND_API_KEY` | Yes | Must be set | Transactional email (invites, password reset) |
 | `AI_INTEGRATIONS_OPENAI_API_KEY` | Yes for AI | Configured via Replit integration | Required for narrative report sections |
 | `NODE_ENV` | Yes | Must be `production` | Enables HSTS, secure cookies, sanitised errors |
+| `REPLIT_DOMAINS` / `CSRF_TRUSTED_ORIGINS` | Yes | Must include production origin | Used for CORS and cookie-auth CSRF origin checks |
+| `SESSION_COOKIE_SECURE` | Optional | Defaults secure in production | Leave unset or set to `true` |
+| `SESSION_IDLE_TIMEOUT_MS` | Optional | Defaults to 4 hours | Browser/API session idle timeout |
+| `SESSION_ABSOLUTE_LIFETIME_MS` | Optional | Defaults to 7 days | Maximum session lifetime |
+| `STEP_UP_VALIDITY_MS` | Optional | Defaults to 15 minutes | Re-authentication window for sensitive settings |
 | `STRIPE_SECRET_KEY` | Optional | Set if billing enabled | Billing feature |
 | `STRIPE_WEBHOOK_SECRET` | Optional | Set if billing enabled | Stripe webhook validation |
 | `STRIPE_PRO_PRICE_ID` | Optional | Set if billing enabled | Pro plan price reference |
+| `SLACK_SECURITY_WEBHOOK_URL` | Optional | Set if alert notifications required | Security/health alert webhook |
 | `FEATURE_PORTFOLIO_ENABLED` | Optional | Defaults to `true` | Set to `false` to disable portfolio module |
 | `FEATURE_REPORT_GENERATION_ENABLED` | Optional | Defaults to `true` | Set to `false` to disable report generation |
 | `FEATURE_ESTIMATION_ENABLED` | Optional | Defaults to `true` | Set to `false` to disable estimation module |
@@ -68,6 +75,8 @@ No `.env` file or raw secrets should be in version control.
 - Bearer token support for API/agent access.
 - Production cookie settings: `secure: true`, `httpOnly: true`, `sameSite: "none"` when `NODE_ENV=production`.
 - HSTS header active when `NODE_ENV=production` (via Helmet).
+- Security headers include CSP, frame denial, referrer policy, content-type sniffing protection, and permissions policy.
+- Cookie-authenticated state-changing API requests are checked against `Origin` / `Referer`; trusted origins come from `CSRF_TRUSTED_ORIGINS` or `REPLIT_DOMAINS`.
 - Session idle timeout: 4 hours (configurable via `SESSION_IDLE_TIMEOUT_MS`).
 - Session absolute lifetime: 7 days (configurable via `SESSION_ABSOLUTE_LIFETIME_MS`).
 - Server-side session revocation supported (`revokedAt` column in `user_sessions_ext`).
@@ -109,13 +118,13 @@ No `.env` file or raw secrets should be in version control.
 
 **Status: PASS**
 
-- Evidence upload stores metadata only (filename, type, description, linked period) — no binary file storage.
+- Evidence upload stores validated file metadata in PostgreSQL and file bytes under `uploads/evidence/<companyId>/<evidenceId>/...`.
 - Extension blocklist enforced: `.exe`, `.sh`, `.js`, `.php`, `.py`, `.rb`, `.bat`, `.cmd` and others are rejected.
 - Allowed types: pdf, doc, docx, xls, xlsx, csv, txt, png, jpg, jpeg, gif, webp, zip.
 - Rate limited: 60 uploads/15min per company.
 - `POST /api/evidence` requires auth; viewer role returns 403.
 
-**Note:** Evidence is metadata-only (a reference, not a binary store). Users record document names and descriptions; no files are transmitted to the server. This is a known platform design characteristic.
+**Action required:** Confirm `uploads/evidence` is on persistent production storage before enabling evidence uploads in production.
 
 ---
 
@@ -123,13 +132,14 @@ No `.env` file or raw secrets should be in version control.
 
 **Status: PASS**
 
-- `POST /api/reports/generate` creates a `report_runs` record, generates PDF or DOCX in memory, saves to `report_run_files`.
+- `POST /api/reports/generate` creates a `report_runs` record. PDF/DOCX generation stores base64 file blobs in `generated_files`.
 - PDF via PDFKit (`server/report-engine.ts`).
 - DOCX via docx library.
 - AI narrative sections use `AI_INTEGRATIONS_OPENAI_API_KEY` (OpenAI). If unavailable, generation falls back to non-AI content where possible but should be verified.
 - Feature flag `FEATURE_REPORT_GENERATION_ENABLED` disables the endpoint cleanly (503) if set to `false`.
 - Failure logged to `platform_health_events` (`event_type: 'report_failure'`) and `audit_logs` (`action: 'report_generation_failure'`).
 - Rate limited: 30/15min per company.
+- Generated report downloads are tenant-scoped, expire/unavailable safely, and are audited. Database backups must include `generated_files`.
 
 ---
 
@@ -181,3 +191,18 @@ No `.env` file or raw secrets should be in version control.
 | PR-07 | Confirm `AI_INTEGRATIONS_OPENAI_API_KEY` is set for report narrative | Operator | High |
 | PR-08 | Run `GET /api/admin/security-audit` and verify no failures | Operator | High |
 | PR-09 | Confirm automated DB backups are configured | Operator | High |
+| PR-10 | Confirm `MFA_ENCRYPTION_KEY` is set and retained across deploys | Operator | Critical |
+| PR-11 | Confirm `REPLIT_DOMAINS` or `CSRF_TRUSTED_ORIGINS` includes the production origin | Operator | Critical |
+| PR-12 | Confirm `uploads/evidence` persists across deploy/restart if evidence upload is enabled | Operator | High |
+| PR-13 | Confirm Report Library smoke passes for list/filter/open/download/unavailable states | Operator | High |
+
+---
+
+## 11. Build Warnings Reviewed 2026-05-11
+
+| Warning | Status | Disposition |
+|---------|--------|-------------|
+| `import.meta` unavailable with CJS for `server/seed-pe-demo.ts` | Fixed | CLI guard no longer uses `import.meta`, preserving direct script execution while avoiding the server bundle warning. |
+| Browserslist data age | Deferred | Requires dependency metadata update; handle in a dedicated dependency-maintenance PR. |
+| PostCSS `from` option warning | Deferred | Current production build succeeds; investigate CSS toolchain source separately. |
+| Large client chunk | Deferred | Requires route-level code splitting/performance work, not a deploy-prep change. |

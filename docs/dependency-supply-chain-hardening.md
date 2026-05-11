@@ -23,7 +23,7 @@ Command:
 npm audit --audit-level=high --omit=dev --json
 ```
 
-Result before this triage pass on 2026-05-10:
+Result before remediation on 2026-05-10:
 
 | Severity | Count |
 | --- | ---: |
@@ -67,6 +67,8 @@ Targeted updates applied:
 | `express-rate-limit` / `ip-address` | Direct and transitive | Runtime | Yes. Rate-limit middleware is part of auth/security abuse protection. | Fixed by updating `express-rate-limit` to `^8.5.1`, which resolves `ip-address` to a patched range. | Resolved in this PR. |
 | `brace-expansion`, `minimatch`, `picomatch`, `yaml` | Transitive | Build/dev tooling after this PR | Not production reachable after moving `tailwindcss-animate` to dev dependencies. These packages are Tailwind/Vite/build/test tooling paths. | Compatible lockfile updates applied where available. | Removed from production audit scope. |
 | `lodash`, `path-to-regexp`, `qs` | Transitive | Runtime | Potentially reachable through charting/router/query parsing, but not reported by the current production audit output. | `qs` was resolved to a patched compatible version in the lockfile; no override was introduced for `lodash` or `path-to-regexp`. | Monitor with `npm run audit:prod`; do not introduce overrides unless the advisory reappears or a focused compatibility PR is warranted. |
+
+Deploy-prep note: `npm run audit:prod` now passes. Treat any future non-zero production audit as a deploy blocker until it is remediated or explicitly accepted by the release owner.
 
 ## Triage Rules
 

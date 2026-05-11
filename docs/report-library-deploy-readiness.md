@@ -40,7 +40,7 @@ Focused results:
 - Report Library file actions use secured API download URLs and do not depend on local filesystem paths.
 - No new unsafe debug output was found in the Report Library flow. Existing server/test logging remains verbose in local regression runs.
 - Local validation emits expected optional-service warnings when `RESEND_API_KEY`, `AI_INTEGRATIONS_OPENAI_API_KEY`, and `STRIPE_SECRET_KEY` are unset. Production should continue to provide the required environment values for enabled email, AI, and billing paths.
-- Existing build warnings remain unchanged: Browserslist data age, a PostCSS `from` option warning, chunk-size warning, and the `import.meta` CommonJS build warning in `server/seed-pe-demo.ts`.
+- Existing deferred build warnings remain: Browserslist data age, a PostCSS `from` option warning, and chunk-size warning. The former `import.meta` CommonJS warning in `server/seed-pe-demo.ts` was removed in the production deploy-prep pass.
 
 ## Deploy Checklist
 
