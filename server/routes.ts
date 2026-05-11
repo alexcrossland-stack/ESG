@@ -4938,6 +4938,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }
 
+  async function recordHistoricalReportViewAudit(req: Request, input: {
+    reportRunId: string;
+    outcome: "success" | "failure";
+    reason?: string | null;
+    statusCode?: number;
+    fileAvailability?: string | null;
+    hasReportData?: boolean;
+  }) {
+    try {
+      await storage.createAuditLog({
+        companyId: (req.session as any).companyId ?? null,
+        userId: (req.session as any).userId ?? null,
+        actorType: "user",
+        action: "historical_report_view",
+        entityType: "report_run",
+        entityId: input.reportRunId,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"] || null,
+        details: {
+          reportRunId: input.reportRunId,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          statusCode: input.statusCode ?? null,
+          fileAvailability: input.fileAvailability ?? null,
+          hasReportData: input.hasReportData ?? false,
+        },
+      } as any);
+    } catch (err: any) {
+      console.error("[audit] Failed to write historical report view audit log:", err?.message ?? err);
+    }
+  }
+
   async function enrichReportLibraryEntries(companyId: string, reports: any[]) {
     const GENERATED_FILE_RETENTION_DAYS = 90;
     if (!reports.length) return reports;
@@ -5304,9 +5336,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .where(and(eq(reportRuns.id, req.params.id), eq(reportRuns.companyId, companyId)))
         .limit(1);
       if (!rows.length) {
+        await recordHistoricalReportViewAudit(req, {
+          reportRunId: req.params.id,
+          outcome: "failure",
+          reason: "report_not_found_or_forbidden",
+          statusCode: 404,
+        });
         return res.status(404).json({ error: "Report not found" });
       }
       const [entry] = await enrichReportLibraryEntries(companyId, rows);
+      await recordHistoricalReportViewAudit(req, {
+        reportRunId: req.params.id,
+        outcome: "success",
+        statusCode: 200,
+        fileAvailability: entry.fileAvailability ?? null,
+        hasReportData: !!entry.reportData,
+      });
       res.json(entry);
     } catch (e: any) {
       sendServerError(res, e);
