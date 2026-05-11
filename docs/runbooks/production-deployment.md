@@ -6,6 +6,8 @@ Do not use this runbook to introduce migrations, schema changes, or production d
 
 Production deployment is manual-gated. Pushing or merging to `main` must not deploy production automatically. Use the `Deploy to Hetzner` GitHub Actions workflow, provide `confirm_target=production`, and complete any configured `production` environment approval before deployment starts.
 
+Do not use the production deployment workflow for staging/pre-production validation. Use `docs/runbooks/staging-deployment.md` and the `Deploy to Staging` workflow when validating a release before production.
+
 ## 1. Pre-Deploy Checks
 
 Confirm the release is being deployed from the latest reviewed `main` commit.
@@ -135,3 +137,4 @@ Escalate immediately if failures indicate cross-tenant leakage, sensitive data e
 - Report Library readiness: `docs/report-library-deploy-readiness.md`
 - Dependency and supply-chain posture: `docs/dependency-supply-chain-hardening.md`
 - Security regression suite: `docs/security-regression-suite.md`
+- Staging deployment: `docs/runbooks/staging-deployment.md`
