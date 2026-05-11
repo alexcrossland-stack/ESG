@@ -1,0 +1,255 @@
+name: Deploy to Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy to staging"
+        required: true
+        default: "main"
+      confirm_target:
+        description: "Type staging to confirm this is not a production deploy"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    name: Deploy staging target
+    runs-on: ubuntu-latest
+    environment: staging
+
+    env:
+      DEPLOY_REF: ${{ inputs.ref }}
+      CONFIRM_TARGET: ${{ inputs.confirm_target }}
+      STAGING_SERVER_HOST: ${{ secrets.STAGING_SERVER_HOST }}
+      STAGING_SERVER_USER: ${{ secrets.STAGING_SERVER_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      STAGING_PM2_PROCESS: ${{ secrets.STAGING_PM2_PROCESS }}
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      STAGING_SESSION_SECRET: ${{ secrets.STAGING_SESSION_SECRET }}
+      STAGING_MFA_ENCRYPTION_KEY: ${{ secrets.STAGING_MFA_ENCRYPTION_KEY }}
+      STAGING_APP_BASE_URL: ${{ secrets.STAGING_APP_BASE_URL }}
+      STAGING_CSRF_TRUSTED_ORIGINS: ${{ secrets.STAGING_CSRF_TRUSTED_ORIGINS }}
+      STAGING_REPLIT_DOMAINS: ${{ secrets.STAGING_REPLIT_DOMAINS }}
+      STAGING_RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
+      STAGING_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY }}
+      STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL }}
+      STAGING_STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
+      STAGING_STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
+      STAGING_STRIPE_PRO_PRICE_ID: ${{ secrets.STAGING_STRIPE_PRO_PRICE_ID }}
+      PRODUCTION_SERVER_HOST: ${{ secrets.SERVER_HOST }}
+
+    steps:
+      - name: Validate staging inputs and secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ "${CONFIRM_TARGET}" != "staging" ]; then
+            echo "::error::confirm_target must be exactly 'staging'"
+            exit 1
+          fi
+
+          required=(
+            STAGING_SERVER_HOST
+            STAGING_SERVER_USER
+            STAGING_APP_DIR
+            STAGING_PM2_PROCESS
+            STAGING_DATABASE_URL
+            STAGING_SESSION_SECRET
+            STAGING_MFA_ENCRYPTION_KEY
+            STAGING_APP_BASE_URL
+            STAGING_CSRF_TRUSTED_ORIGINS
+            STAGING_REPLIT_DOMAINS
+            STAGING_RESEND_API_KEY
+            STAGING_AI_INTEGRATIONS_OPENAI_API_KEY
+            STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL
+            STAGING_STRIPE_SECRET_KEY
+            STAGING_STRIPE_WEBHOOK_SECRET
+            STAGING_STRIPE_PRO_PRICE_ID
+          )
+
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("${name}")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf "::error::Missing required staging secrets: %s\n" "${missing[*]}"
+            exit 1
+          fi
+
+          if [[ ! "${DEPLOY_REF}" =~ ^[A-Za-z0-9._/@:-]+$ ]]; then
+            echo "::error::DEPLOY_REF contains unsupported characters"
+            exit 1
+          fi
+
+          if [[ ! "${STAGING_APP_DIR}" =~ ^/[A-Za-z0-9._/@:-]+$ ]]; then
+            echo "::error::STAGING_APP_DIR must be an absolute path without shell-special characters"
+            exit 1
+          fi
+
+          if [[ ! "${STAGING_PM2_PROCESS}" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+            echo "::error::STAGING_PM2_PROCESS contains unsupported characters"
+            exit 1
+          fi
+
+          if [ "${STAGING_APP_DIR}" = "/root/ESG" ]; then
+            echo "::error::STAGING_APP_DIR must not be the production app directory"
+            exit 1
+          fi
+
+          if [ "${STAGING_PM2_PROCESS}" = "esg" ]; then
+            echo "::error::STAGING_PM2_PROCESS must not be the production PM2 process"
+            exit 1
+          fi
+
+          if [ -n "${PRODUCTION_SERVER_HOST:-}" ] && [ "${STAGING_SERVER_HOST}" = "${PRODUCTION_SERVER_HOST}" ]; then
+            echo "::error::STAGING_SERVER_HOST must not match SERVER_HOST"
+            exit 1
+          fi
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Start ssh-agent and add staging deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SERVER_SSH_KEY }}
+
+      - name: Add staging server to known_hosts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${STAGING_SERVER_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Build staging environment file
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          {
+            printf 'NODE_ENV=production\n'
+            printf 'DATABASE_URL=%s\n' "${STAGING_DATABASE_URL}"
+            printf 'SESSION_SECRET=%s\n' "${STAGING_SESSION_SECRET}"
+            printf 'MFA_ENCRYPTION_KEY=%s\n' "${STAGING_MFA_ENCRYPTION_KEY}"
+            printf 'APP_BASE_URL=%s\n' "${STAGING_APP_BASE_URL}"
+            printf 'CSRF_TRUSTED_ORIGINS=%s\n' "${STAGING_CSRF_TRUSTED_ORIGINS}"
+            printf 'REPLIT_DOMAINS=%s\n' "${STAGING_REPLIT_DOMAINS}"
+            printf 'RESEND_API_KEY=%s\n' "${STAGING_RESEND_API_KEY}"
+            printf 'AI_INTEGRATIONS_OPENAI_API_KEY=%s\n' "${STAGING_AI_INTEGRATIONS_OPENAI_API_KEY}"
+            printf 'AI_INTEGRATIONS_OPENAI_BASE_URL=%s\n' "${STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL}"
+            printf 'STRIPE_SECRET_KEY=%s\n' "${STAGING_STRIPE_SECRET_KEY}"
+            printf 'STRIPE_WEBHOOK_SECRET=%s\n' "${STAGING_STRIPE_WEBHOOK_SECRET}"
+            printf 'STRIPE_PRO_PRICE_ID=%s\n' "${STAGING_STRIPE_PRO_PRICE_ID}"
+          } > staging.env
+
+      - name: Deploy to staging host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          scp staging.env "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}:${STAGING_APP_DIR}/.env"
+          rm -f staging.env
+
+          # shellcheck disable=SC2029
+          ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" \
+            "DEPLOY_REF='${DEPLOY_REF}' STAGING_APP_DIR='${STAGING_APP_DIR}' STAGING_PM2_PROCESS='${STAGING_PM2_PROCESS}' bash -s" << 'EOF'
+              set -Eeuo pipefail
+
+              log() {
+                echo
+                echo "==> $1"
+              }
+
+              wait_for_url() {
+                local name="$1"
+                local url="$2"
+                local attempts="${3:-30}"
+                local delay_seconds="${4:-2}"
+
+                for attempt in $(seq 1 "$attempts"); do
+                  if curl --fail --silent --show-error --max-time 15 "$url"; then
+                    echo
+                    echo "$name is responding"
+                    return 0
+                  fi
+                  echo "$name not ready yet (${attempt}/${attempts}); retrying in ${delay_seconds}s"
+                  sleep "$delay_seconds"
+                done
+
+                echo "::error::$name did not respond after ${attempts} attempts" >&2
+                return 1
+              }
+
+              DEPLOY_STAGE="initialising"
+              trap 'echo "::error::Staging deployment failed during: ${DEPLOY_STAGE}" >&2' ERR
+
+              if [ ! -d "${STAGING_APP_DIR}/.git" ]; then
+                echo "::error::STAGING_APP_DIR must already contain a git checkout" >&2
+                exit 1
+              fi
+
+              cd "${STAGING_APP_DIR}"
+
+              DEPLOY_STAGE="fetching requested ref"
+              log "$DEPLOY_STAGE"
+              git fetch origin "${DEPLOY_REF}"
+
+              DEPLOY_STAGE="resetting staging checkout"
+              log "$DEPLOY_STAGE"
+              git reset --hard FETCH_HEAD
+
+              DEPLOY_STAGE="removing stale dependencies"
+              log "$DEPLOY_STAGE"
+              rm -rf node_modules
+
+              DEPLOY_STAGE="verifying npm cache"
+              log "$DEPLOY_STAGE"
+              npm cache verify
+
+              DEPLOY_STAGE="installing dependencies"
+              log "$DEPLOY_STAGE"
+              npm ci --include=dev
+
+              DEPLOY_STAGE="building application"
+              log "$DEPLOY_STAGE"
+              npm run build
+
+              DEPLOY_STAGE="copying runtime assets"
+              log "$DEPLOY_STAGE"
+              cp node_modules/connect-pg-simple/table.sql dist/table.sql
+
+              DEPLOY_STAGE="restarting staging pm2 process"
+              log "$DEPLOY_STAGE"
+              if pm2 describe "${STAGING_PM2_PROCESS}" >/dev/null 2>&1; then
+                pm2 restart "${STAGING_PM2_PROCESS}" --update-env
+              else
+                pm2 start dist/index.cjs --name "${STAGING_PM2_PROCESS}" --update-env
+              fi
+
+              DEPLOY_STAGE="checking pm2 status"
+              log "$DEPLOY_STAGE"
+              pm2 status
+
+              DEPLOY_STAGE="checking staging health endpoint"
+              log "$DEPLOY_STAGE"
+              . ./.env
+              app_base="${APP_BASE_URL%/}"
+              wait_for_url "staging health endpoint" "${app_base}/health"
+              wait_for_url "staging app shell" "${app_base}/"
+
+              log "staging deployment completed"
+          EOF
+
+      - name: Remove local staging env file on failure
+        if: always()
+        shell: bash
+        run: rm -f staging.env
