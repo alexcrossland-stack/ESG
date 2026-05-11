@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
+import { StepUpDialog } from "@/components/step-up-dialog";
 import { Button } from "@/components/ui/button";
 import { Moon, Sun, TriangleAlert } from "lucide-react";
 import {
@@ -17,61 +18,61 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { SupportAssistant } from "@/components/support-assistant";
-import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, Fragment, type ComponentType } from "react";
+import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, Fragment, lazy, Suspense, type ComponentType, type LazyExoticComponent } from "react";
 import type { ReactNode, ErrorInfo } from "react";
-import { StepUpDialog } from "@/pages/settings";
 import NotFound from "@/pages/not-found";
 import Auth from "@/pages/auth";
-import Dashboard from "@/pages/dashboard";
-import Policy from "@/pages/policy";
-import Topics from "@/pages/topics";
-import Metrics from "@/pages/metrics";
-import MetricsLibrary from "@/pages/metrics-library";
-import DataEntry from "@/pages/data-entry";
-import Actions from "@/pages/actions";
-import Reports from "@/pages/reports";
-import Settings from "@/pages/settings";
-import QuestionnairePage from "@/pages/questionnaire";
-import PolicyGenerator from "@/pages/policy-generator";
-import CarbonCalculator from "@/pages/carbon-calculator";
-import PolicyTemplatesPage from "@/pages/policy-templates";
-import Evidence from "@/pages/evidence";
 import Onboarding from "@/pages/onboarding";
-import Recommendations from "@/pages/recommendations";
-import MyTasks from "@/pages/my-tasks";
-import MyApprovals from "@/pages/my-approvals";
-import Compliance from "@/pages/compliance";
-import AnswerLibrary from "@/pages/answer-library";
-import ControlCentre from "@/pages/control-centre";
-import BenchmarksPage from "@/pages/benchmarks";
-import EsgProfilePage from "@/pages/esg-profile";
-import RoadmapPage from "@/pages/roadmap";
 import PublicProfilePage from "@/pages/public-profile";
-import AdminHealthPage from "@/pages/admin-health";
-import AdminAnalyticsPage from "@/pages/admin-analytics";
-import HelpPage from "@/pages/help";
-import HelpArticlePage from "@/pages/help-article";
-import AdminSupportPage from "@/pages/admin-support";
-import AdminPage from "@/pages/admin";
-import AdminCompanyPage from "@/pages/admin-company";
-import AdminEsgPage from "@/pages/admin-esg";
-import AdminSecurityPage from "@/pages/admin-security";
-import BillingPage from "@/pages/billing";
-import TeamPage from "@/pages/team";
-import SitesPage from "@/pages/sites";
-import SiteDashboardPage from "@/pages/site-dashboard";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
-import MaterialityPage from "@/pages/materiality";
-import EsgPolicyRegisterPage from "@/pages/esg-policy-register";
-import EsgTargetsPage from "@/pages/esg-targets";
-import EsgRisksPage from "@/pages/esg-risks";
 import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
-import FrameworkSettingsPage from "@/pages/framework-settings";
-import FrameworkReadinessPage from "@/pages/framework-readiness";
-import PortfolioPage from "@/pages/portfolio";
-import CreateCompanyPage from "@/pages/create-company";
 import { getBreadcrumbs } from "@/lib/navigation";
+
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const ControlCentre = lazy(() => import("@/pages/control-centre"));
+const Policy = lazy(() => import("@/pages/policy"));
+const Topics = lazy(() => import("@/pages/topics"));
+const Metrics = lazy(() => import("@/pages/metrics"));
+const MetricsLibrary = lazy(() => import("@/pages/metrics-library"));
+const DataEntry = lazy(() => import("@/pages/data-entry"));
+const Actions = lazy(() => import("@/pages/actions"));
+const Evidence = lazy(() => import("@/pages/evidence"));
+const Reports = lazy(() => import("@/pages/reports"));
+const PolicyGenerator = lazy(() => import("@/pages/policy-generator"));
+const PolicyTemplatesPage = lazy(() => import("@/pages/policy-templates"));
+const CarbonCalculator = lazy(() => import("@/pages/carbon-calculator"));
+const Settings = lazy(() => import("@/pages/settings"));
+const QuestionnairePage = lazy(() => import("@/pages/questionnaire"));
+const MyTasks = lazy(() => import("@/pages/my-tasks"));
+const MyApprovals = lazy(() => import("@/pages/my-approvals"));
+const Compliance = lazy(() => import("@/pages/compliance"));
+const AnswerLibrary = lazy(() => import("@/pages/answer-library"));
+const BenchmarksPage = lazy(() => import("@/pages/benchmarks"));
+const EsgProfilePage = lazy(() => import("@/pages/esg-profile"));
+const RoadmapPage = lazy(() => import("@/pages/roadmap"));
+const AdminPage = lazy(() => import("@/pages/admin"));
+const AdminCompanyPage = lazy(() => import("@/pages/admin-company"));
+const AdminHealthPage = lazy(() => import("@/pages/admin-health"));
+const AdminAnalyticsPage = lazy(() => import("@/pages/admin-analytics"));
+const AdminSupportPage = lazy(() => import("@/pages/admin-support"));
+const AdminEsgPage = lazy(() => import("@/pages/admin-esg"));
+const AdminSecurityPage = lazy(() => import("@/pages/admin-security"));
+const BillingPage = lazy(() => import("@/pages/billing"));
+const Recommendations = lazy(() => import("@/pages/recommendations"));
+const TeamPage = lazy(() => import("@/pages/team"));
+const SitesPage = lazy(() => import("@/pages/sites"));
+const SiteDashboardPage = lazy(() => import("@/pages/site-dashboard"));
+const HelpPage = lazy(() => import("@/pages/help"));
+const HelpArticlePage = lazy(() => import("@/pages/help-article"));
+const FrameworkSettingsPage = lazy(() => import("@/pages/framework-settings"));
+const FrameworkReadinessPage = lazy(() => import("@/pages/framework-readiness"));
+const PortfolioPage = lazy(() => import("@/pages/portfolio"));
+const CreateCompanyPage = lazy(() => import("@/pages/create-company"));
+const MaterialityPage = lazy(() => import("@/pages/materiality"));
+const EsgPolicyRegisterPage = lazy(() => import("@/pages/esg-policy-register"));
+const EsgTargetsPage = lazy(() => import("@/pages/esg-targets"));
+const EsgRisksPage = lazy(() => import("@/pages/esg-risks"));
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -82,6 +83,7 @@ interface StepUpContextValue {
 }
 
 const StepUpContext = createContext<StepUpContextValue>({ requestStepUp: () => {} });
+type RoutableComponent = ComponentType<any> | LazyExoticComponent<ComponentType<any>>;
 
 export function useStepUp() {
   return useContext(StepUpContext);
@@ -259,6 +261,14 @@ function ThemeToggle() {
   );
 }
 
+function PageFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-[18rem]">
+      <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+    </div>
+  );
+}
+
 function AppBreadcrumbs() {
   const [location] = useLocation();
   const items = getBreadcrumbs(location);
@@ -314,7 +324,7 @@ function usePageTracking() {
   }, [location]);
 }
 
-function SuperAdminRoute({ component: Component }: { component: ComponentType<any> }) {
+function SuperAdminRoute({ component: Component }: { component: RoutableComponent }) {
   const { data, isLoading } = useQuery<{ user: any; company: any }>({
     queryKey: ["/api/auth/me"],
     retry: false,
@@ -458,55 +468,57 @@ function ProtectedApp() {
           </header>
           <main className="flex-1 overflow-auto">
             <AppErrorBoundary>
-              <Switch>
-                <Route path="/" component={Dashboard} />
-                <Route path="/control-centre" component={ControlCentre} />
-                <Route path="/policy" component={Policy} />
-                <Route path="/topics" component={Topics} />
-                <Route path="/metrics" component={Metrics} />
-                <Route path="/metrics-library" component={MetricsLibrary} />
-                <Route path="/data-entry" component={DataEntry} />
-                <Route path="/actions" component={Actions} />
-                <Route path="/evidence" component={Evidence} />
-                <Route path="/reports" component={Reports} />
-                <Route path="/policy-generator" component={PolicyGenerator} />
-                <Route path="/policy-templates" component={PolicyTemplatesPage} />
-                <Route path="/carbon-calculator" component={CarbonCalculator} />
-                <Route path="/settings" component={Settings} />
-                <Route path="/questionnaire" component={QuestionnairePage} />
-                <Route path="/my-tasks" component={MyTasks} />
-                <Route path="/my-approvals" component={MyApprovals} />
-                <Route path="/compliance" component={Compliance} />
-                <Route path="/answer-library" component={AnswerLibrary} />
-                <Route path="/benchmarks" component={BenchmarksPage} />
-                <Route path="/esg-profile" component={EsgProfilePage} />
-                <Route path="/roadmap" component={RoadmapPage} />
-                <Route path="/admin" component={() => <SuperAdminRoute component={AdminPage} />} />
-                <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminCompanyPage} />} />
-                <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
-                <Route path="/admin/analytics" component={() => <SuperAdminRoute component={AdminAnalyticsPage} />} />
-                <Route path="/admin/support" component={() => <SuperAdminRoute component={AdminSupportPage} />} />
-                <Route path="/admin/esg" component={() => <SuperAdminRoute component={AdminEsgPage} />} />
-                <Route path="/admin/security" component={() => <SuperAdminRoute component={AdminSecurityPage} />} />
-                <Route path="/billing" component={BillingPage} />
-                <Route path="/onboarding" component={Onboarding} />
-                <Route path="/recommendations" component={Recommendations} />
-                <Route path="/team" component={TeamPage} />
-                <Route path="/settings/sites" component={SitesPage} />
-                <Route path="/sites" component={SitesPage} />
-                <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
-                <Route path="/help" component={HelpPage} />
-                <Route path="/help/:slug" component={HelpArticlePage} />
-                <Route path="/framework-settings" component={FrameworkSettingsPage} />
-                <Route path="/framework-readiness" component={FrameworkReadinessPage} />
-                <Route path="/portfolio" component={PortfolioPage} />
-                <Route path="/create-company" component={CreateCompanyPage} />
-                <Route path="/materiality" component={MaterialityPage} />
-                <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
-                <Route path="/esg-targets" component={EsgTargetsPage} />
-                <Route path="/esg-risks" component={EsgRisksPage} />
-                <Route component={NotFound} />
-              </Switch>
+              <Suspense fallback={<PageFallback />}>
+                <Switch>
+                  <Route path="/" component={Dashboard} />
+                  <Route path="/control-centre" component={ControlCentre} />
+                  <Route path="/policy" component={Policy} />
+                  <Route path="/topics" component={Topics} />
+                  <Route path="/metrics" component={Metrics} />
+                  <Route path="/metrics-library" component={MetricsLibrary} />
+                  <Route path="/data-entry" component={DataEntry} />
+                  <Route path="/actions" component={Actions} />
+                  <Route path="/evidence" component={Evidence} />
+                  <Route path="/reports" component={Reports} />
+                  <Route path="/policy-generator" component={PolicyGenerator} />
+                  <Route path="/policy-templates" component={PolicyTemplatesPage} />
+                  <Route path="/carbon-calculator" component={CarbonCalculator} />
+                  <Route path="/settings" component={Settings} />
+                  <Route path="/questionnaire" component={QuestionnairePage} />
+                  <Route path="/my-tasks" component={MyTasks} />
+                  <Route path="/my-approvals" component={MyApprovals} />
+                  <Route path="/compliance" component={Compliance} />
+                  <Route path="/answer-library" component={AnswerLibrary} />
+                  <Route path="/benchmarks" component={BenchmarksPage} />
+                  <Route path="/esg-profile" component={EsgProfilePage} />
+                  <Route path="/roadmap" component={RoadmapPage} />
+                  <Route path="/admin" component={() => <SuperAdminRoute component={AdminPage} />} />
+                  <Route path="/admin/companies/:companyId" component={() => <SuperAdminRoute component={AdminCompanyPage} />} />
+                  <Route path="/admin/health" component={() => <SuperAdminRoute component={AdminHealthPage} />} />
+                  <Route path="/admin/analytics" component={() => <SuperAdminRoute component={AdminAnalyticsPage} />} />
+                  <Route path="/admin/support" component={() => <SuperAdminRoute component={AdminSupportPage} />} />
+                  <Route path="/admin/esg" component={() => <SuperAdminRoute component={AdminEsgPage} />} />
+                  <Route path="/admin/security" component={() => <SuperAdminRoute component={AdminSecurityPage} />} />
+                  <Route path="/billing" component={BillingPage} />
+                  <Route path="/onboarding" component={Onboarding} />
+                  <Route path="/recommendations" component={Recommendations} />
+                  <Route path="/team" component={TeamPage} />
+                  <Route path="/settings/sites" component={SitesPage} />
+                  <Route path="/sites" component={SitesPage} />
+                  <Route path="/sites/:siteId/dashboard" component={SiteDashboardPage} />
+                  <Route path="/help" component={HelpPage} />
+                  <Route path="/help/:slug" component={HelpArticlePage} />
+                  <Route path="/framework-settings" component={FrameworkSettingsPage} />
+                  <Route path="/framework-readiness" component={FrameworkReadinessPage} />
+                  <Route path="/portfolio" component={PortfolioPage} />
+                  <Route path="/create-company" component={CreateCompanyPage} />
+                  <Route path="/materiality" component={MaterialityPage} />
+                  <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
+                  <Route path="/esg-targets" component={EsgTargetsPage} />
+                  <Route path="/esg-risks" component={EsgRisksPage} />
+                  <Route component={NotFound} />
+                </Switch>
+              </Suspense>
             </AppErrorBoundary>
           </main>
           <AppFooter />

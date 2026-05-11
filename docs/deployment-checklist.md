@@ -78,8 +78,11 @@ Complete this checklist before every production deployment.
 - [ ] Check platform health events in the admin panel
 - [ ] Smoke the Reports tab Library: historical list, filters, selected snapshot, available file open/download, expired/deleted unavailable messaging
 
-## 9. Known Deferred Build Warnings
+## 9. Known Build Warning Follow-Up
 
-- [ ] Browserslist data age warning: update `caniuse-lite` in a dedicated dependency-maintenance PR.
 - [ ] PostCSS `from` option warning: investigate in a dedicated CSS toolchain PR; current build output is unaffected.
-- [ ] Large client chunk warning: address via route-level code splitting in a focused frontend performance PR.
+
+Resolved in final pre-deploy cleanup:
+
+- [x] Browserslist data age warning: refreshed `caniuse-lite`.
+- [x] Large client chunk warning: added route-level lazy loading and conservative vendor chunks.

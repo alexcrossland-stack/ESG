@@ -203,6 +203,6 @@ No `.env` file or raw secrets should be in version control.
 | Warning | Status | Disposition |
 |---------|--------|-------------|
 | `import.meta` unavailable with CJS for `server/seed-pe-demo.ts` | Fixed | CLI guard no longer uses `import.meta`, preserving direct script execution while avoiding the server bundle warning. |
-| Browserslist data age | Deferred | Requires dependency metadata update; handle in a dedicated dependency-maintenance PR. |
-| PostCSS `from` option warning | Deferred | Current production build succeeds; investigate CSS toolchain source separately. |
-| Large client chunk | Deferred | Requires route-level code splitting/performance work, not a deploy-prep change. |
+| Browserslist data age | Fixed | `caniuse-lite` was refreshed in the final pre-deploy warning cleanup. |
+| PostCSS `from` option warning | Deferred | Current production build succeeds; warning traces to the Tailwind/PostCSS toolchain rather than application CSS. Handle in a dedicated CSS toolchain PR. |
+| Large client chunk | Fixed | Protected app pages are route-lazy-loaded and common dependencies are split into conservative vendor chunks. |
