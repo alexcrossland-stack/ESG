@@ -93,6 +93,40 @@ const mockedReports = [
   },
 ];
 
+function getMockedLibraryResponse(url: URL) {
+  const search = (url.searchParams.get("search") || "").toLowerCase();
+  const template = url.searchParams.get("reportTemplate") || "all";
+  const status = url.searchParams.get("status") || "all";
+  const generatedBy = (url.searchParams.get("generatedBy") || "").toLowerCase();
+  const limit = Math.min(Math.max(Number.parseInt(url.searchParams.get("limit") || "10", 10) || 10, 1), 100);
+  const offset = Math.max(Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0, 0);
+  const filtered = mockedReports.filter((report) => {
+    if (template !== "all" && report.reportTemplate !== template) return false;
+    if (status === "available" || status === "unavailable") {
+      if (report.fileAvailability !== status) return false;
+    } else if (status !== "all" && report.workflowStatus !== status) {
+      return false;
+    }
+    if (generatedBy && !report.generatedByName.toLowerCase().includes(generatedBy)) return false;
+    if (!search) return true;
+    return [
+      report.reportData.reportTitle,
+      report.reportTemplate,
+      report.period,
+      report.companyName,
+      report.generatedByName,
+      report.latestFilename,
+    ].join(" ").toLowerCase().includes(search);
+  });
+  return {
+    reports: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    limit,
+    offset,
+    hasMore: offset + limit < filtered.length,
+  };
+}
+
 async function mockReportsPageApis(page: Page) {
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
 
@@ -100,6 +134,7 @@ async function mockReportsPageApis(page: Page) {
     const url = new URL(route.request().url());
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 
+    if (url.pathname === "/api/reports/library") return json(getMockedLibraryResponse(url));
     if (url.pathname === "/api/reports") return json(mockedReports);
     if (url.pathname === "/api/reports/report-available") return json(mockedReports[0]);
     if (url.pathname === "/api/reports/report-unavailable") return json(mockedReports[1]);
@@ -209,6 +244,7 @@ test.describe("Report generation", () => {
 
     await page.goto("/reports");
     await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
+    await expect(page.getByTestId("text-report-library-count")).toContainText("1-2 of 2 reports");
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
     await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open file/);
     await expect(page.getByTestId("text-report-library-title-report-available")).toContainText("Mock Historical Report");
@@ -233,5 +269,17 @@ test.describe("Report generation", () => {
     const downloadRequest = page.waitForRequest("**/api/reports/report-available/download/file-available");
     await page.getByTestId("button-download-report-file-report-available").click();
     expect((await downloadRequest).url()).toContain("/api/reports/report-available/download/file-available");
+
+    await page.getByTestId("input-report-library-search").fill("Expired");
+    await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+    await expect(page.getByTestId("text-report-library-count")).toContainText("1-1 of 1 reports");
+
+    await page.getByTestId("button-report-library-clear-filters").click();
+    await expect(page.getByTestId("report-history-report-available")).toBeVisible();
+    await page.getByTestId("select-report-library-status").click();
+    await page.getByRole("option", { name: "Unavailable files" }).click();
+    await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
   });
 });

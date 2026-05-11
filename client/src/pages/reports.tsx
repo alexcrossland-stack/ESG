@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
@@ -72,6 +72,14 @@ type DownloadableHistoryEntry = ReportHistoryEntry & {
   latestFileId: string;
   latestFilename?: string | null;
   latestDownloadUrl: string;
+};
+
+type ReportLibraryResponse = {
+  reports: ReportHistoryEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 };
 
 const ESG_EXPORT_TYPES = [
@@ -1375,6 +1383,15 @@ export default function Reports() {
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [downloadErrorReportId, setDownloadErrorReportId] = useState<string | null>(null);
   const [selectedLibraryReportId, setSelectedLibraryReportId] = useState<string | null>(null);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryTemplate, setLibraryTemplate] = useState("all");
+  const [libraryStatus, setLibraryStatus] = useState("all");
+  const [libraryGeneratedBy, setLibraryGeneratedBy] = useState("");
+  const [libraryDateFrom, setLibraryDateFrom] = useState("");
+  const [libraryDateTo, setLibraryDateTo] = useState("");
+  const [librarySort, setLibrarySort] = useState("generated_desc");
+  const [libraryOffset, setLibraryOffset] = useState(0);
+  const libraryLimit = 10;
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
   const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
 
@@ -1396,15 +1413,49 @@ export default function Reports() {
     }));
   };
 
-  const { data: reports = [], isLoading } = useQuery<ReportHistoryEntry[]>({
-    queryKey: ["/api/reports", effectiveSiteId ?? "all"],
+  useEffect(() => {
+    setLibraryOffset(0);
+  }, [effectiveSiteId, librarySearch, libraryTemplate, libraryStatus, libraryGeneratedBy, libraryDateFrom, libraryDateTo, librarySort]);
+
+  useEffect(() => {
+    setSelectedLibraryReportId(null);
+  }, [effectiveSiteId, librarySearch, libraryTemplate, libraryStatus, libraryGeneratedBy, libraryDateFrom, libraryDateTo, librarySort, libraryOffset]);
+
+  const { data: reportLibraryData, isLoading } = useQuery<ReportLibraryResponse>({
+    queryKey: [
+      "/api/reports/library",
+      effectiveSiteId ?? "all",
+      librarySearch,
+      libraryTemplate,
+      libraryStatus,
+      libraryGeneratedBy,
+      libraryDateFrom,
+      libraryDateTo,
+      librarySort,
+      libraryOffset,
+    ],
     queryFn: async () => {
-      const url = effectiveSiteId ? `/api/reports?siteId=${effectiveSiteId}` : "/api/reports";
-      const res = await fetch(url, { credentials: "include" });
+      const params = new URLSearchParams({
+        limit: String(libraryLimit),
+        offset: String(libraryOffset),
+        sort: librarySort,
+      });
+      if (effectiveSiteId) params.set("siteId", effectiveSiteId);
+      if (librarySearch.trim()) params.set("search", librarySearch.trim());
+      if (libraryTemplate !== "all") params.set("reportTemplate", libraryTemplate);
+      if (libraryStatus !== "all") params.set("status", libraryStatus);
+      if (libraryGeneratedBy.trim()) params.set("generatedBy", libraryGeneratedBy.trim());
+      if (libraryDateFrom) params.set("dateFrom", libraryDateFrom);
+      if (libraryDateTo) params.set("dateTo", libraryDateTo);
+      const res = await authFetch(`/api/reports/library?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load reports");
       return res.json();
     },
   });
+  const reports = reportLibraryData?.reports ?? [];
+  const libraryTotal = reportLibraryData?.total ?? 0;
+  const libraryPageStart = libraryTotal === 0 ? 0 : libraryOffset + 1;
+  const libraryPageEnd = Math.min(libraryOffset + reports.length, libraryTotal);
   const { data: selectedLibraryReport, isLoading: isLibraryReportLoading } = useQuery<ReportHistoryEntry>({
     queryKey: ["/api/reports/detail", selectedLibraryReportId],
     queryFn: async () => {
@@ -2251,6 +2302,98 @@ export default function Reports() {
           </div>
           <OwnershipHint owner="Approvers or Company Admins" action="Final sign-off" />
         </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2 mb-3" data-testid="panel-report-library-filters">
+          <Input
+            value={librarySearch}
+            onChange={(event) => setLibrarySearch(event.target.value)}
+            placeholder="Search reports"
+            data-testid="input-report-library-search"
+            className="h-9 text-xs xl:col-span-2"
+          />
+          <Select value={libraryTemplate} onValueChange={setLibraryTemplate}>
+            <SelectTrigger className="h-9 text-xs" data-testid="select-report-library-template">
+              <SelectValue placeholder="Framework" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All frameworks</SelectItem>
+              {REPORT_TEMPLATES.map(template => (
+                <SelectItem key={template.id} value={template.id}>{template.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={libraryStatus} onValueChange={setLibraryStatus}>
+            <SelectTrigger className="h-9 text-xs" data-testid="select-report-library-status">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="available">Available files</SelectItem>
+              <SelectItem value="unavailable">Unavailable files</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="submitted">Submitted</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+          <Input
+            value={libraryGeneratedBy}
+            onChange={(event) => setLibraryGeneratedBy(event.target.value)}
+            placeholder="Generated by"
+            data-testid="input-report-library-generated-by"
+            className="h-9 text-xs"
+          />
+          <Select value={librarySort} onValueChange={setLibrarySort}>
+            <SelectTrigger className="h-9 text-xs" data-testid="select-report-library-sort">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="generated_desc">Newest first</SelectItem>
+              <SelectItem value="generated_asc">Oldest first</SelectItem>
+              <SelectItem value="title_asc">Title A-Z</SelectItem>
+              <SelectItem value="title_desc">Title Z-A</SelectItem>
+              <SelectItem value="framework_asc">Framework A-Z</SelectItem>
+            </SelectContent>
+          </Select>
+          <Input
+            value={libraryDateFrom}
+            onChange={(event) => setLibraryDateFrom(event.target.value)}
+            type="date"
+            aria-label="Generated from"
+            data-testid="input-report-library-date-from"
+            className="h-9 text-xs"
+          />
+          <Input
+            value={libraryDateTo}
+            onChange={(event) => setLibraryDateTo(event.target.value)}
+            type="date"
+            aria-label="Generated to"
+            data-testid="input-report-library-date-to"
+            className="h-9 text-xs"
+          />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground xl:col-span-4">
+            <span data-testid="text-report-library-count">
+              {libraryTotal === 0 ? "No reports" : `${libraryPageStart}-${libraryPageEnd} of ${libraryTotal} reports`}
+            </span>
+            {(librarySearch || libraryTemplate !== "all" || libraryStatus !== "all" || libraryGeneratedBy || libraryDateFrom || libraryDateTo) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setLibrarySearch("");
+                  setLibraryTemplate("all");
+                  setLibraryStatus("all");
+                  setLibraryGeneratedBy("");
+                  setLibraryDateFrom("");
+                  setLibraryDateTo("");
+                }}
+                data-testid="button-report-library-clear-filters"
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
+        </div>
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : reports.length === 0 ? (
@@ -2382,6 +2525,28 @@ export default function Reports() {
                 </div>
               );
             })}
+          </div>
+        )}
+        {libraryTotal > libraryLimit && (
+          <div className="flex items-center justify-end gap-2 mt-3" data-testid="controls-report-library-pagination">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setLibraryOffset(Math.max(0, libraryOffset - libraryLimit))}
+              disabled={libraryOffset === 0}
+              data-testid="button-report-library-prev"
+            >
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setLibraryOffset(libraryOffset + libraryLimit)}
+              disabled={!reportLibraryData?.hasMore}
+              data-testid="button-report-library-next"
+            >
+              Next
+            </Button>
           </div>
         )}
         {selectedLibraryReportId && (

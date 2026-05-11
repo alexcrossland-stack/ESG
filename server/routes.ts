@@ -5034,6 +5034,120 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   }
 
+  function parseReportLibraryNumber(value: unknown, fallback: number, min: number, max: number) {
+    const raw = Array.isArray(value) ? value[0] : value;
+    const parsed = typeof raw === "string" ? Number.parseInt(raw, 10) : Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(Math.max(parsed, min), max);
+  }
+
+  function parseReportLibraryDate(value: unknown, endOfDay = false) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "invalid";
+    if (endOfDay) date.setHours(23, 59, 59, 999);
+    return date;
+  }
+
+  function reportLibraryTitleFromEntry(report: any) {
+    const templates: Record<string, string> = {
+      board: "Board Summary",
+      customer: "Customer Response Pack",
+      compliance: "Compliance Summary",
+      management: "Full ESG Report",
+    };
+    return report.reportData?.reportTitle
+      || `${templates[report.reportTemplate] || "ESG Report"} — ${report.period || "All Periods"}`;
+  }
+
+  function reportLibraryStatusMatches(report: any, status: string) {
+    if (!status || status === "all") return true;
+    if (status === "available" || status === "unavailable") return report.fileAvailability === status;
+    return String(report.workflowStatus || "").toLowerCase() === status.toLowerCase();
+  }
+
+  function filterAndSortReportLibraryEntries(reports: any[], query: any) {
+    const search = typeof query.search === "string" ? query.search.trim().toLowerCase() : "";
+    const reportTemplate = typeof query.reportTemplate === "string" ? query.reportTemplate : "all";
+    const status = typeof query.status === "string" ? query.status : "all";
+    const generatedBy = typeof query.generatedBy === "string" ? query.generatedBy.trim().toLowerCase() : "";
+    const sort = typeof query.sort === "string" ? query.sort : "generated_desc";
+    const dateFrom = parseReportLibraryDate(query.dateFrom);
+    const dateTo = parseReportLibraryDate(query.dateTo, true);
+    if (dateFrom === "invalid" || dateTo === "invalid") {
+      return { error: "Invalid date filter" as const };
+    }
+
+    const filtered = reports.filter((report) => {
+      const title = reportLibraryTitleFromEntry(report);
+      const generatedByLabel = String(report.generatedByName || report.generatedBy || "");
+      if (reportTemplate !== "all" && report.reportTemplate !== reportTemplate) return false;
+      if (!reportLibraryStatusMatches(report, status)) return false;
+      if (generatedBy && !generatedByLabel.toLowerCase().includes(generatedBy)) return false;
+
+      const generatedAt = report.generatedAt ? new Date(report.generatedAt) : null;
+      if ((dateFrom instanceof Date || dateTo instanceof Date) && !generatedAt) return false;
+      if (generatedAt && dateFrom instanceof Date && generatedAt < dateFrom) return false;
+      if (generatedAt && dateTo instanceof Date && generatedAt > dateTo) return false;
+
+      if (!search) return true;
+      const haystack = [
+        title,
+        report.reportTemplate,
+        report.period,
+        report.companyName,
+        generatedByLabel,
+        report.siteName,
+        report.latestFilename,
+        report.workflowStatus,
+        report.fileAvailability,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(search);
+    });
+
+    const sorted = [...filtered].sort((a, b) => {
+      const aGenerated = a.generatedAt ? new Date(a.generatedAt).getTime() : 0;
+      const bGenerated = b.generatedAt ? new Date(b.generatedAt).getTime() : 0;
+      if (sort === "generated_asc") return aGenerated - bGenerated;
+      if (sort === "title_asc") return reportLibraryTitleFromEntry(a).localeCompare(reportLibraryTitleFromEntry(b));
+      if (sort === "title_desc") return reportLibraryTitleFromEntry(b).localeCompare(reportLibraryTitleFromEntry(a));
+      if (sort === "framework_asc") return String(a.reportTemplate || "").localeCompare(String(b.reportTemplate || ""));
+      return bGenerated - aGenerated;
+    });
+
+    return { reports: sorted };
+  }
+
+  app.get("/api/reports/library", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const rawSiteId = req.query.siteId as string | undefined;
+      const siteId = rawSiteId === "null" ? null : rawSiteId;
+      if (siteId) {
+        const own = await validateSiteOwnership(siteId, companyId);
+        if (!own.valid) return res.status(own.status).json({ error: own.message });
+      }
+
+      const limit = parseReportLibraryNumber(req.query.limit, 20, 1, 100);
+      const offset = parseReportLibraryNumber(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+      const reports = await enrichReportLibraryEntries(companyId, await storage.getReportRuns(companyId, siteId));
+      const filtered = filterAndSortReportLibraryEntries(reports, req.query);
+      if ("error" in filtered) return res.status(400).json({ error: filtered.error });
+
+      const total = filtered.reports.length;
+      const page = filtered.reports.slice(offset, offset + limit);
+      res.json({
+        reports: page,
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
   app.get("/api/reports", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;

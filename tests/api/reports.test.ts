@@ -504,6 +504,42 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
+  {
+    const name = "GET /api/reports/library filters, sorts, and paginates within tenant scope";
+    const pagedRes = await apiRequest("GET", "/api/reports/library?limit=2&offset=0&sort=generated_desc", undefined, tenantA.adminToken);
+    const customerRes = await apiRequest("GET", "/api/reports/library?reportTemplate=customer", undefined, tenantA.adminToken);
+    const availableRes = await apiRequest("GET", "/api/reports/library?status=available", undefined, tenantA.adminToken);
+    const searchRes = await apiRequest("GET", "/api/reports/library?search=customer", undefined, tenantA.adminToken);
+    const boundedRes = await apiRequest("GET", "/api/reports/library?limit=500", undefined, tenantA.adminToken);
+    const invalidDateRes = await apiRequest("GET", "/api/reports/library?dateFrom=not-a-date", undefined, tenantA.adminToken);
+    if (pagedRes.status !== 200) fail(name, `paged status=${pagedRes.status} body=${pagedRes.body.slice(0, 200)}`);
+    else if (customerRes.status !== 200) fail(name, `customer status=${customerRes.status} body=${customerRes.body.slice(0, 200)}`);
+    else if (availableRes.status !== 200) fail(name, `available status=${availableRes.status} body=${availableRes.body.slice(0, 200)}`);
+    else if (searchRes.status !== 200) fail(name, `search status=${searchRes.status} body=${searchRes.body.slice(0, 200)}`);
+    else if (boundedRes.status !== 200) fail(name, `bounded status=${boundedRes.status} body=${boundedRes.body.slice(0, 200)}`);
+    else if (invalidDateRes.status !== 400) fail(name, `invalid date expected 400 got ${invalidDateRes.status}`);
+    else {
+      const paged = JSON.parse(pagedRes.body) as { reports?: Array<{ companyId?: string; generatedAt?: string; reportTemplate?: string }>; total?: number; limit?: number; offset?: number; hasMore?: boolean };
+      const customer = JSON.parse(customerRes.body) as { reports?: Array<{ companyId?: string; reportTemplate?: string }> };
+      const available = JSON.parse(availableRes.body) as { reports?: Array<{ companyId?: string; fileAvailability?: string }> };
+      const search = JSON.parse(searchRes.body) as { reports?: Array<{ companyId?: string; reportTemplate?: string; reportData?: { reportTitle?: string } }> };
+      const bounded = JSON.parse(boundedRes.body) as { limit?: number };
+      const reports = paged.reports || [];
+      const hasTenantBLeak = JSON.stringify([paged, customer, available, search]).includes(tenantB.companyId);
+      const sortedDescending = reports.length < 2 || new Date(reports[0].generatedAt || 0).getTime() >= new Date(reports[1].generatedAt || 0).getTime();
+      if (!Array.isArray(paged.reports)) fail(name, "paged response missing reports array");
+      else if (paged.limit !== 2 || paged.offset !== 0) fail(name, `unexpected pagination metadata limit=${paged.limit} offset=${paged.offset}`);
+      else if (reports.length > 2) fail(name, `expected at most 2 reports, got ${reports.length}`);
+      else if (!sortedDescending) fail(name, "reports not sorted newest first");
+      else if (hasTenantBLeak) fail(name, "Tenant B data leaked into Tenant A library response");
+      else if ((customer.reports || []).some((report) => report.reportTemplate !== "customer")) fail(name, "customer filter returned another template");
+      else if ((available.reports || []).some((report) => report.fileAvailability !== "available")) fail(name, "available filter returned unavailable file");
+      else if (!(search.reports || []).some((report) => report.reportTemplate === "customer" || report.reportData?.reportTitle?.toLowerCase().includes("customer"))) fail(name, "search did not return expected customer report");
+      else if (bounded.limit !== 100) fail(name, `expected bounded max limit 100, got ${bounded.limit}`);
+      else pass(name, `total=${paged.total} hasMore=${Boolean(paged.hasMore)}`);
+    }
+  }
+
   // ── 12. GET /api/reports returns 200 array ────────────────────────────────
   {
     const name = "GET /api/reports returns 200 array for admin";
