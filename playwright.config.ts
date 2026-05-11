@@ -27,5 +27,13 @@ export default defineConfig({
         headless: true,
       },
     },
+    {
+      name: "webkit-app-boot",
+      testMatch: /app-boot\.browser\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Safari"],
+        headless: true,
+      },
+    },
   ],
 });
