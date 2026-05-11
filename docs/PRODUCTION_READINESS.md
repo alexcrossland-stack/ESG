@@ -49,6 +49,8 @@
 | `APP_BASE_URL` | Yes | Must be set | Used in all email links and invite URLs |
 | `RESEND_API_KEY` | Yes | Must be set | Transactional email (invites, password reset) |
 | `AI_INTEGRATIONS_OPENAI_API_KEY` | Yes for AI | Configured via Replit integration | Required for narrative report sections |
+| `AI_INTEGRATIONS_OPENAI_BASE_URL` | Yes for AI | Must be set | Use `https://api.openai.com/v1` for OpenAI production |
+| `AI_INTEGRATIONS_OPENAI_MODEL` | Optional | Defaults to `gpt-4.1-mini` | Set only to an approved chat model available to the production OpenAI account |
 | `NODE_ENV` | Yes | Must be `production` | Enables HSTS, secure cookies, sanitised errors |
 | `REPLIT_DOMAINS` / `CSRF_TRUSTED_ORIGINS` | Yes | Must include production origin | Used for CORS and cookie-auth CSRF origin checks |
 | `SESSION_COOKIE_SECURE` | Optional | Defaults secure in production | Leave unset or set to `true` |
@@ -135,7 +137,7 @@ No `.env` file or raw secrets should be in version control.
 - `POST /api/reports/generate` creates a `report_runs` record. PDF/DOCX generation stores base64 file blobs in `generated_files`.
 - PDF via PDFKit (`server/report-engine.ts`).
 - DOCX via docx library.
-- AI narrative sections use `AI_INTEGRATIONS_OPENAI_API_KEY` (OpenAI). If unavailable, generation falls back to non-AI content where possible but should be verified.
+- AI narrative sections use `AI_INTEGRATIONS_OPENAI_API_KEY`, `AI_INTEGRATIONS_OPENAI_BASE_URL`, and the configurable chat model from `AI_INTEGRATIONS_OPENAI_MODEL` (default `gpt-4.1-mini`). If unavailable, generation falls back to non-AI content where possible but should be verified.
 - Feature flag `FEATURE_REPORT_GENERATION_ENABLED` disables the endpoint cleanly (503) if set to `false`.
 - Failure logged to `platform_health_events` (`event_type: 'report_failure'`) and `audit_logs` (`action: 'report_generation_failure'`).
 - Rate limited: 30/15min per company.

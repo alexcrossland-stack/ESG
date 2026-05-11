@@ -11,6 +11,8 @@ Complete this checklist before every production deployment.
 - [ ] `RESEND_API_KEY` is set for transactional email
 - [ ] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID` are set if billing is enabled
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is set if AI features are required
+- [ ] `AI_INTEGRATIONS_OPENAI_BASE_URL` is set to `https://api.openai.com/v1` for OpenAI production
+- [ ] `AI_INTEGRATIONS_OPENAI_MODEL` is unset to use `gpt-4.1-mini`, or explicitly set to an approved accessible chat model
 - [ ] `REPLIT_DOMAINS` or `CSRF_TRUSTED_ORIGINS` includes the production origin used by browser users
 - [ ] `SESSION_COOKIE_SECURE` is unset or `true` in production
 - [ ] `SESSION_IDLE_TIMEOUT_MS`, `SESSION_ABSOLUTE_LIFETIME_MS`, and `STEP_UP_VALIDITY_MS` are either unset to use safe defaults or intentionally configured

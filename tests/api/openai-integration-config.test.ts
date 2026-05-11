@@ -47,6 +47,17 @@ await check("shared OpenAI client uses configured API key and base URL", () => {
   assert(routes.includes("baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL"), "client does not use AI_INTEGRATIONS_OPENAI_BASE_URL");
 });
 
+await check("OpenAI chat model is configurable with production-safe default", () => {
+  assert(routes.includes("function getOpenAiChatModel()"), "missing shared OpenAI chat model resolver");
+  assert(routes.includes("process.env.AI_INTEGRATIONS_OPENAI_MODEL?.trim()"), "resolver does not read AI_INTEGRATIONS_OPENAI_MODEL");
+  assert(routes.includes('|| "gpt-4.1-mini"'), "default OpenAI chat model is not gpt-4.1-mini");
+  assert(routes.includes("model: getOpenAiChatModel()"), "chat completion requests do not use configured model resolver");
+});
+
+await check("legacy inaccessible OpenAI chat model is not hardcoded", () => {
+  assert(!routes.includes('"gpt-4o-mini"'), "server/routes.ts still hardcodes gpt-4o-mini");
+});
+
 await check("OpenAI failure logging uses sanitized metadata", () => {
   assert(routes.includes("function safeOpenAiErrorMeta"), "missing safe OpenAI error metadata helper");
   const unsafePatterns = [
