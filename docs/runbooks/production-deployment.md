@@ -4,6 +4,8 @@ Use this runbook for production deployments after production readiness has been 
 
 Do not use this runbook to introduce migrations, schema changes, or production data changes. If a release includes a migration, attach a migration-specific plan and rollback decision before starting.
 
+Production deployment is manual-gated. Pushing or merging to `main` must not deploy production automatically. Use the `Deploy to Hetzner` GitHub Actions workflow, provide `confirm_target=production`, and complete any configured `production` environment approval before deployment starts.
+
 ## 1. Pre-Deploy Checks
 
 Confirm the release is being deployed from the latest reviewed `main` commit.
@@ -50,7 +52,7 @@ These are high-level steps only. Use the existing production deployment mechanis
 1. Confirm the release commit on `main`.
 2. Confirm no pending migration or destructive data action is attached to the release.
 3. Confirm the latest production backup timestamp and rollback owner.
-4. Trigger the standard production deployment from `main`.
+4. Trigger the manual `Deploy to Hetzner` GitHub Actions workflow from `main` with `confirm_target=production`.
 5. Wait for the deployment to finish.
 6. Confirm the deployed commit matches the intended `main` commit.
 7. Confirm the application health endpoint and logs show the app booted successfully.

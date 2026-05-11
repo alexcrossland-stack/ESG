@@ -1,15 +1,32 @@
 name: Deploy to Hetzner
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      confirm_target:
+        description: "Type production to confirm this deploy targets production"
+        required: true
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      CONFIRM_TARGET: ${{ inputs.confirm_target }}
 
     steps:
+      - name: Validate production deploy confirmation
+        run: |
+          set -Eeuo pipefail
+          if [ "${CONFIRM_TARGET}" != "production" ]; then
+            echo "::error::confirm_target must be exactly 'production'"
+            exit 1
+          fi
+
       - name: Checkout repo
         uses: actions/checkout@v4
 
