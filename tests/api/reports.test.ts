@@ -236,6 +236,60 @@ async function run(tenants: SeededTenants): Promise<void> {
   }
 
   {
+    const name = "GET /api/reports/:id preserves the selected historical report snapshot";
+    if (!generatedReportId) {
+      pass(name, "skipped — generated report unavailable");
+    } else {
+      const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+      if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
+      else {
+        const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+        if (!metricId) fail(name, "missing metric id");
+        else {
+          const period = "2024-02";
+          const dataEntryRes = await apiRequest("POST", "/api/data-entry", {
+            metricId,
+            period,
+            value: 22,
+            notes: "seed for historical report snapshot selection",
+          }, tenantA.adminToken);
+          if (![200, 201].includes(dataEntryRes.status)) fail(name, `data-entry status=${dataEntryRes.status} body=${dataEntryRes.body.slice(0, 200)}`);
+          else {
+            const secondReportRes = await apiRequest("POST", "/api/reports/generate", {
+              reportType: "pdf",
+              reportTemplate: "customer",
+              period,
+              includeMetrics: true,
+              includePolicy: false,
+              includeTopics: false,
+            }, tenantA.adminToken);
+            if (![200, 201].includes(secondReportRes.status)) fail(name, `second report status=${secondReportRes.status} body=${secondReportRes.body.slice(0, 200)}`);
+            else {
+              const secondReportId = (JSON.parse(secondReportRes.body) as { report?: { id?: string } }).report?.id;
+              if (!secondReportId) fail(name, "missing second report id");
+              else {
+                const firstDetail = await apiRequest("GET", `/api/reports/${generatedReportId}`, undefined, tenantA.adminToken);
+                const secondDetail = await apiRequest("GET", `/api/reports/${secondReportId}`, undefined, tenantA.adminToken);
+                if (firstDetail.status !== 200) fail(name, `first detail status=${firstDetail.status}`);
+                else if (secondDetail.status !== 200) fail(name, `second detail status=${secondDetail.status}`);
+                else {
+                  const first = JSON.parse(firstDetail.body) as { period?: string; reportTemplate?: string; reportData?: { period?: string; reportTemplate?: string } };
+                  const second = JSON.parse(secondDetail.body) as { period?: string; reportTemplate?: string; reportData?: { period?: string; reportTemplate?: string; values?: Array<{ value?: string }> } };
+                  if (first.period !== "2024-01" || first.reportData?.period !== "2024-01") fail(name, `first snapshot period drifted: ${first.period}/${first.reportData?.period}`);
+                  else if (second.period !== period || second.reportData?.period !== period) fail(name, `second snapshot period mismatch: ${second.period}/${second.reportData?.period}`);
+                  else if (second.reportTemplate !== "customer" || second.reportData?.reportTemplate !== "customer") fail(name, `second template mismatch: ${second.reportTemplate}/${second.reportData?.reportTemplate}`);
+                  else if (!second.reportData?.values?.some((value) => String(value.value).startsWith("22"))) fail(name, "second snapshot missing selected-period metric value");
+                  else pass(name);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  {
     const name = "viewer and contributor can browse own-tenant report detail but not generate reports";
     if (!generatedReportId) {
       pass(name, "skipped — generated report unavailable");
