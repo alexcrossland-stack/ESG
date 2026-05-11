@@ -12,7 +12,7 @@ import {
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users, metrics, metricValues, generatedFiles,
+  users, metrics, metricValues, generatedFiles, reportRuns,
   type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
@@ -4938,9 +4938,104 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }
 
+  async function enrichReportLibraryEntries(companyId: string, reports: any[]) {
+    const GENERATED_FILE_RETENTION_DAYS = 90;
+    if (!reports.length) return reports;
+
+    const reportIds = reports.map((report) => report.id).filter(Boolean);
+    const fileRows = reportIds.length
+      ? await db.select({
+          reportRunId: generatedFiles.reportRunId,
+          id: generatedFiles.id,
+          filename: generatedFiles.filename,
+          fileType: generatedFiles.fileType,
+          fileSize: generatedFiles.fileSize,
+          generatedAt: generatedFiles.generatedAt,
+          expiresAt: generatedFiles.expiresAt,
+        })
+        .from(generatedFiles)
+        .where(and(
+          eq(generatedFiles.companyId, companyId),
+          inArray(generatedFiles.reportRunId, reportIds),
+        ))
+        .orderBy(generatedFiles.reportRunId, desc(generatedFiles.generatedAt))
+      : [];
+
+    const latestFileByReportId = new Map<string, typeof fileRows[number]>();
+    const hasExpiredFileByReportId = new Set<string>();
+    const now = Date.now();
+    for (const file of fileRows) {
+      if (!file.reportRunId) continue;
+      const expiresAt = file.expiresAt ? new Date(file.expiresAt).getTime() : null;
+      const expired = expiresAt !== null && expiresAt <= now;
+      if (expired) {
+        hasExpiredFileByReportId.add(file.reportRunId);
+        continue;
+      }
+      if (!latestFileByReportId.has(file.reportRunId)) {
+        latestFileByReportId.set(file.reportRunId, file);
+      }
+    }
+
+    const reportSiteIds = Array.from(new Set(reports.map((report: any) => report.siteId).filter(Boolean)));
+    const sitesById = new Map<string, any>();
+    if (reportSiteIds.length > 0) {
+      const sites = await storage.getSites(companyId, true);
+      for (const site of sites) sitesById.set(site.id, site);
+    }
+
+    const generatedByIds = Array.from(new Set(reports.map((report: any) => report.generatedBy).filter(Boolean)));
+    const usersById = new Map<string, { username: string | null; email: string | null }>();
+    if (generatedByIds.length > 0) {
+      const userRows = await db.select({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+      })
+        .from(users)
+        .where(and(eq(users.companyId, companyId), inArray(users.id, generatedByIds)));
+      for (const user of userRows) usersById.set(user.id, { username: user.username, email: user.email });
+    }
+
+    const company = await storage.getCompany(companyId);
+    const retentionCutoff = new Date(Date.now() - GENERATED_FILE_RETENTION_DAYS * 86400000);
+    return reports.map((report) => {
+      const latestFile = latestFileByReportId.get(report.id) ?? null;
+      const site = report.siteId ? sitesById.get(report.siteId) : null;
+      const generatedBy = report.generatedBy ? usersById.get(report.generatedBy) : null;
+      const isRetainedHistoryOnly = !latestFile && !!report.generatedAt && new Date(report.generatedAt) < retentionCutoff;
+      const reportData = report.reportData as any;
+      const companyName = reportData?.company?.name ?? company?.name ?? null;
+      const generatedByName = reportData?.generatedBy
+        ?? generatedBy?.username
+        ?? (generatedBy?.email ? generatedBy.email.split("@")[0] : null);
+      const unavailableReason = latestFile
+        ? null
+        : hasExpiredFileByReportId.has(report.id)
+          ? "expired"
+          : (isRetainedHistoryOnly ? "retained_history_only" : "missing");
+
+      return {
+        ...report,
+        companyName,
+        generatedByName,
+        siteName: site?.name ?? null,
+        siteCountry: site?.country ?? null,
+        siteStatus: site?.status ?? null,
+        latestFileId: latestFile?.id ?? null,
+        latestFilename: latestFile?.filename ?? null,
+        latestFileType: latestFile?.fileType ?? null,
+        latestFileSize: latestFile?.fileSize ?? null,
+        latestFileGeneratedAt: latestFile?.generatedAt ?? null,
+        latestDownloadUrl: latestFile ? `/api/reports/${report.id}/download/${latestFile.id}` : null,
+        fileAvailability: latestFile ? "available" : "unavailable",
+        fileUnavailableReason: unavailableReason,
+      };
+    });
+  }
+
   app.get("/api/reports", requireAuth, async (req, res) => {
     try {
-      const GENERATED_FILE_RETENTION_DAYS = 90;
       const companyId = (req.session as any).companyId;
       const rawSiteId = req.query.siteId as string | undefined;
       const siteId = rawSiteId === "null" ? null : rawSiteId;
@@ -4949,62 +5044,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!own.valid) return res.status(own.status).json({ error: own.message });
       }
       const reports = await storage.getReportRuns(companyId, siteId);
-      if (!reports.length) {
-        return res.json(reports);
-      }
-
-      const reportIds = reports.map((report) => report.id);
-      const fileRows = reportIds.length
-        ? await db.select({
-            reportRunId: generatedFiles.reportRunId,
-            id: generatedFiles.id,
-            filename: generatedFiles.filename,
-            fileType: generatedFiles.fileType,
-            fileSize: generatedFiles.fileSize,
-            generatedAt: generatedFiles.generatedAt,
-          })
-          .from(generatedFiles)
-          .where(and(
-            eq(generatedFiles.companyId, companyId),
-            inArray(generatedFiles.reportRunId, reportIds),
-            sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
-          ))
-          .orderBy(generatedFiles.reportRunId, desc(generatedFiles.generatedAt))
-        : [];
-
-      const latestFileByReportId = new Map<string, typeof fileRows[number]>();
-      for (const file of fileRows) {
-        if (!file.reportRunId || latestFileByReportId.has(file.reportRunId)) continue;
-        latestFileByReportId.set(file.reportRunId, file);
-      }
-
-      const reportSiteIds = Array.from(new Set(reports.map((report: any) => report.siteId).filter(Boolean)));
-      const sitesById = new Map<string, any>();
-      if (reportSiteIds.length > 0) {
-        const sites = await storage.getSites(companyId, true);
-        for (const site of sites) sitesById.set(site.id, site);
-      }
-
-      const retentionCutoff = new Date(Date.now() - GENERATED_FILE_RETENTION_DAYS * 86400000);
-      res.json(reports.map((report) => {
-        const latestFile = latestFileByReportId.get(report.id) ?? null;
-        const site = report.siteId ? sitesById.get(report.siteId) : null;
-        const isRetainedHistoryOnly = !latestFile && !!report.generatedAt && new Date(report.generatedAt) < retentionCutoff;
-        return {
-          ...report,
-          siteName: site?.name ?? null,
-          siteCountry: site?.country ?? null,
-          siteStatus: site?.status ?? null,
-          latestFileId: latestFile?.id ?? null,
-          latestFilename: latestFile?.filename ?? null,
-          latestFileType: latestFile?.fileType ?? null,
-          latestFileSize: latestFile?.fileSize ?? null,
-          latestFileGeneratedAt: latestFile?.generatedAt ?? null,
-          latestDownloadUrl: latestFile ? `/api/reports/${report.id}/download/${latestFile.id}` : null,
-          fileAvailability: latestFile ? "available" : "unavailable",
-          fileUnavailableReason: latestFile ? null : (isRetainedHistoryOnly ? "retained_history_only" : "missing"),
-        };
-      }));
+      res.json(await enrichReportLibraryEntries(companyId, reports));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -5137,6 +5177,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         missingCategories,
         canGenerateConfirmed,
       });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.get("/api/reports/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const rows = await db.select()
+        .from(reportRuns)
+        .where(and(eq(reportRuns.id, req.params.id), eq(reportRuns.companyId, companyId)))
+        .limit(1);
+      if (!rows.length) {
+        return res.status(404).json({ error: "Report not found" });
+      }
+      const [entry] = await enrichReportLibraryEntries(companyId, rows);
+      res.json(entry);
     } catch (e: any) {
       sendServerError(res, e);
     }

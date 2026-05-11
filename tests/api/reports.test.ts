@@ -57,6 +57,18 @@ async function insertGeneratedReportFile(companyId: string, reportRunId: string)
   }
 }
 
+async function expireGeneratedReportFile(fileId: string): Promise<void> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  try {
+    await client.query("UPDATE generated_files SET expires_at = TIMESTAMP '2000-01-01 00:00:00' WHERE id = $1", [fileId]);
+  } finally {
+    await client.end();
+  }
+}
+
 async function prepareReportDownloadTenant(companyId: string, token: string): Promise<void> {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL env var not set");
@@ -193,6 +205,91 @@ async function run(tenants: SeededTenants): Promise<void> {
 
   // ── 4. Download route requires auth ───────────────────────────────────────
   {
+    const name = "GET /api/reports/:id opens a historical report detail with safe library metadata";
+    if (!generatedReportId || !generatedFileId) {
+      pass(name, "skipped — generated report unavailable");
+    } else {
+      const res = await apiRequest("GET", `/api/reports/${generatedReportId}`, undefined, tenantA.adminToken);
+      if (res.status !== 200) fail(name, `status=${res.status} body=${res.body.slice(0, 200)}`);
+      else {
+        const body = JSON.parse(res.body) as {
+          id?: string;
+          companyId?: string;
+          companyName?: string | null;
+          generatedByName?: string | null;
+          reportData?: unknown;
+          latestFileId?: string | null;
+          latestDownloadUrl?: string | null;
+          fileAvailability?: string;
+        };
+        if (body.id !== generatedReportId) fail(name, `expected id=${generatedReportId}, got ${body.id}`);
+        else if (body.companyId !== tenantA.companyId) fail(name, `expected tenant companyId, got ${body.companyId}`);
+        else if (!body.companyName) fail(name, "missing companyName");
+        else if (!body.generatedByName) fail(name, "missing generatedByName");
+        else if (!body.reportData) fail(name, "missing immutable reportData snapshot");
+        else if (body.fileAvailability !== "available") fail(name, `expected available, got ${body.fileAvailability}`);
+        else if (body.latestFileId !== generatedFileId) fail(name, `expected latestFileId=${generatedFileId}, got ${body.latestFileId}`);
+        else if (body.latestDownloadUrl !== `/api/reports/${generatedReportId}/download/${generatedFileId}`) fail(name, `unexpected latestDownloadUrl=${body.latestDownloadUrl}`);
+        else pass(name);
+      }
+    }
+  }
+
+  {
+    const name = "viewer and contributor can browse own-tenant report detail but not generate reports";
+    if (!generatedReportId) {
+      pass(name, "skipped — generated report unavailable");
+    } else {
+      const viewerRes = await apiRequest("GET", `/api/reports/${generatedReportId}`, undefined, tenantA.viewerToken);
+      const contributorRes = await apiRequest("GET", `/api/reports/${generatedReportId}`, undefined, tenantA.contributorToken);
+      if (viewerRes.status !== 200) fail(name, `viewer status=${viewerRes.status} body=${viewerRes.body.slice(0, 200)}`);
+      else if (contributorRes.status !== 200) fail(name, `contributor status=${contributorRes.status} body=${contributorRes.body.slice(0, 200)}`);
+      else pass(name);
+    }
+  }
+
+  {
+    const name = "expired generated files remain unavailable from library detail and download";
+    const expiredReportRes = await apiRequest("POST", "/api/reports/generate", {
+      reportType: "pdf",
+      reportTemplate: "management",
+      period: "2024-01",
+      includeMetrics: true,
+      includePolicy: false,
+      includeTopics: false,
+    }, tenantA.adminToken);
+    if (![200, 201].includes(expiredReportRes.status)) {
+      pass(name, `skipped — report generation status=${expiredReportRes.status}`);
+    } else {
+      const expiredReportId = (JSON.parse(expiredReportRes.body) as { report?: { id?: string } }).report?.id;
+      if (!expiredReportId) fail(name, "missing expired report id");
+      else {
+        const fileRes = await apiRequest("POST", `/api/reports/${expiredReportId}/generate-file`, { format: "pdf" }, tenantA.adminToken);
+        if (fileRes.status !== 200) fail(name, `file generation status=${fileRes.status} body=${fileRes.body.slice(0, 200)}`);
+        else {
+          const fileId = (JSON.parse(fileRes.body) as { fileId?: string }).fileId;
+          if (!fileId) fail(name, "missing generated file id");
+          else {
+            await expireGeneratedReportFile(fileId);
+            const detailRes = await apiRequest("GET", `/api/reports/${expiredReportId}`, undefined, tenantA.adminToken);
+            if (detailRes.status !== 200) fail(name, `detail status=${detailRes.status} body=${detailRes.body.slice(0, 200)}`);
+            else {
+              const detail = JSON.parse(detailRes.body) as { fileAvailability?: string; fileUnavailableReason?: string; latestFileId?: string | null; latestDownloadUrl?: string | null };
+              const downloadRes = await apiRequest("GET", `/api/reports/${expiredReportId}/download/${fileId}`, undefined, tenantA.adminToken);
+              if (detail.fileAvailability !== "unavailable") fail(name, `expected unavailable, got ${detail.fileAvailability}`);
+              else if (detail.fileUnavailableReason !== "expired") fail(name, `expected expired reason, got ${detail.fileUnavailableReason}`);
+              else if (detail.latestFileId !== null) fail(name, `expected latestFileId null, got ${detail.latestFileId}`);
+              else if (detail.latestDownloadUrl !== null) fail(name, `expected latestDownloadUrl null, got ${detail.latestDownloadUrl}`);
+              else if (downloadRes.status !== 404) fail(name, `expired download expected 404 got ${downloadRes.status}`);
+              else pass(name);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  {
     const name = "GET generated report download route without token returns 401";
     if (!generatedReportId || !generatedFileId) {
       pass(name, "skipped — generated file unavailable");
@@ -316,6 +413,17 @@ async function run(tenants: SeededTenants): Promise<void> {
       const res = await apiRequest("GET", `/api/reports/${tenantB.reportId}/files`, undefined, tenantA.adminToken);
       if (![403, 404].includes(res.status)) fail(name, `expected 403/404 got ${res.status}`);
       else pass(name, `status=${res.status}`);
+    }
+  }
+
+  {
+    const name = "Tenant A cannot open Tenant B report detail";
+    if (!tenantB.reportId) {
+      pass(name, "skipped — Tenant B reportId unavailable");
+    } else {
+      const res = await apiRequest("GET", `/api/reports/${tenantB.reportId}`, undefined, tenantA.adminToken);
+      if (res.status !== 404) fail(name, `expected 404 got ${res.status}`);
+      else pass(name);
     }
   }
 
