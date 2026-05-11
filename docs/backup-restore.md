@@ -2,7 +2,7 @@
 
 ## Overview
 
-ESG Manager uses a PostgreSQL database. All persistent state lives in the database. No external file storage is used; evidence files are stored as metadata (URLs/filenames) in the database. Generated report files (PDF/DOCX) are stored as base64-encoded blobs in the `generated_files` table.
+ESG Manager uses PostgreSQL for application records and generated report files. Evidence upload metadata is stored in PostgreSQL, while evidence file bytes are stored under the application `uploads/evidence` directory. Generated report files (PDF/DOCX) are stored as base64-encoded blobs in the `generated_files` table.
 
 ## Recovery Targets
 
@@ -27,6 +27,8 @@ Replit automatically creates checkpoints for the database. Additionally:
    ```
 
 2. **Scheduled backups** — Consider using Replit's scheduled tasks or an external cron to run `pg_dump` daily and store the output in a secure location.
+
+3. **Evidence upload storage** — If evidence uploads are enabled, confirm `uploads/evidence` is on persistent storage and included in platform-level backups or snapshots. PostgreSQL-only backups restore evidence metadata and generated reports, but not evidence upload bytes.
 
 ### On a self-hosted PostgreSQL
 
@@ -53,6 +55,8 @@ createdb esgmanager
 # Restore
 pg_restore --no-owner --no-acl -d esgmanager backup_YYYYMMDD_HHMMSS.dump
 ```
+
+If restoring an environment with evidence uploads enabled, restore the matching `uploads/evidence` directory from the same backup window before opening the restored environment to users.
 
 ### From a Replit checkpoint
 
@@ -106,6 +110,7 @@ A restore rehearsal must be performed **at minimum quarterly** (every 3 months).
      ORDER BY typname, enumsortorder;
      ```
    - Spot-check a recent audit log entry and a recent metric value to confirm data integrity.
+   - If evidence uploads are enabled, spot-check a recent evidence download after restoring the matching `uploads/evidence` directory.
    - Start the application against the restored database and perform a login test.
 
 4. **Record the outcome** in the Restore Rehearsal Log below.
@@ -180,5 +185,6 @@ See `docs/retention-rules.md` for the full retention schedule for all data categ
   DELETE FROM auth_tokens WHERE expires_at < NOW() AND used_at IS NULL;
   ```
 - Session store (`session` table): managed by `connect-pg-simple`; expired sessions are pruned automatically
+- Evidence uploads: retain according to company policy and storage lifecycle; ensure `uploads/evidence` backups align with database backup cadence
 - Generated files: automatically deleted after 90 days by the `generated_files_cleanup` scheduled job
 - GDPR export files: file data nulled and status set to `expired` after 24 hours by the `gdpr_export_cleanup` scheduled job
