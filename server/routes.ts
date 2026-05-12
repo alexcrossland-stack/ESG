@@ -92,6 +92,7 @@ type DashboardTrendCard = {
   absoluteDelta: number | null;
   percentageDelta: number | null;
   direction: MetricTrend["direction"];
+  changeLabel: MetricTrend["changeLabel"];
   state: "available" | "insufficient_data" | "not_applicable";
   unit: string | null;
   metricCount: number;
@@ -188,13 +189,25 @@ function buildDashboardTrendCards(trends: MetricTrend[], currentPeriod: string, 
       : null;
     const improvedCount = available.filter((trend) => trend.direction === "improved").length;
     const worsenedCount = available.filter((trend) => trend.direction === "worsened").length;
+    const knownDirectionCount = available.filter((trend) => trend.improvementKnown).length;
     const direction = absoluteDelta === 0 && available.length > 0
       ? "unchanged"
-      : improvedCount > worsenedCount
+      : knownDirectionCount === 0 && available.length > 0
+        ? "unavailable"
+        : improvedCount > worsenedCount
         ? "improved"
         : worsenedCount > improvedCount
           ? "worsened"
           : available.length > 0 ? "unchanged" : "unavailable";
+    const changeLabel = available.length === 0
+      ? "Trend unavailable"
+      : direction === "improved"
+        ? "Improved"
+        : direction === "worsened"
+          ? "Worsened"
+          : direction === "unchanged"
+            ? "Unchanged"
+            : absoluteDelta !== null && absoluteDelta > 0 ? "Increased" : "Decreased";
 
     return {
       key: area.key,
@@ -207,6 +220,7 @@ function buildDashboardTrendCards(trends: MetricTrend[], currentPeriod: string, 
       absoluteDelta,
       percentageDelta,
       direction,
+      changeLabel,
       state: available.length > 0 ? "available" : "insufficient_data",
       unit: available.length === 1 ? available[0].unit : null,
       metricCount: matching.length,
@@ -237,6 +251,11 @@ function buildDashboardTrendCards(trends: MetricTrend[], currentPeriod: string, 
       : readinessCurrent === readinessPrevious
         ? "unchanged"
         : readinessCurrent > readinessPrevious ? "improved" : "worsened",
+    changeLabel: readinessCurrent === null || readinessPrevious === null
+      ? "Trend unavailable"
+      : readinessCurrent === readinessPrevious
+        ? "Unchanged"
+        : readinessCurrent > readinessPrevious ? "Improved" : "Worsened",
     state: readinessCurrent !== null && readinessPrevious !== null ? "available" : "insufficient_data",
     unit: "%",
     metricCount: trends.length,
@@ -9443,7 +9462,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           .map((trend: any) => ({
             label: trend.metricName,
             value: `${trend.currentValue ?? "-"} vs ${trend.previousValue ?? "-"}`,
-            status: trend.direction === "improved" ? "Improved" : trend.direction === "worsened" ? "Worsened" : "Unchanged",
+            status: trend.changeLabel || (trend.direction === "improved" ? "Improved" : trend.direction === "worsened" ? "Worsened" : "Unchanged"),
           }));
         sections.push({
           title: "Trend Summary",

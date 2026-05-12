@@ -46,6 +46,8 @@ export type MetricTrend = {
   absoluteDelta: number | null;
   percentageDelta: number | null;
   comparisonLabel: string;
+  improvementKnown: boolean;
+  changeLabel: "Improved" | "Worsened" | "Unchanged" | "Increased" | "Decreased" | "Trend unavailable" | "Not applicable";
 };
 
 export type TrendCalculationResult = {
@@ -108,34 +110,42 @@ export function calculateMetricTrend(input: {
     currentPeriod: input.currentPeriod.period,
     previousPeriod: previousPeriod.period,
     comparisonLabel,
+    improvementKnown: input.metric.direction === "higher_is_better" || input.metric.direction === "lower_is_better",
   };
 
   if (input.metric.enabled === false) {
-    return { ...base, direction: "unavailable", reason: "not_reportable", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null };
+    return { ...base, direction: "unavailable", reason: "not_reportable", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null, changeLabel: "Trend unavailable" };
   }
 
   const allRows = [...input.currentRows, ...input.previousRows];
   if (metricIsYesNo(input.metric, allRows)) {
-    return { ...base, direction: "unavailable", reason: "not_applicable_yes_no", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null };
+    return { ...base, direction: "unavailable", reason: "not_applicable_yes_no", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null, changeLabel: "Not applicable" };
   }
 
   const currentValue = aggregateTrendValue(input.metric, input.currentRows);
   if (currentValue === null) {
-    return { ...base, direction: "unavailable", reason: input.currentRows.length === 0 ? "missing_current" : "non_numeric", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null };
+    return { ...base, direction: "unavailable", reason: input.currentRows.length === 0 ? "missing_current" : "non_numeric", currentValue: null, previousValue: null, absoluteDelta: null, percentageDelta: null, changeLabel: "Trend unavailable" };
   }
 
   const previousValue = aggregateTrendValue(input.metric, input.previousRows);
   if (previousValue === null) {
-    return { ...base, direction: "unavailable", reason: input.previousRows.length === 0 ? "missing_previous" : "non_numeric", currentValue, previousValue: null, absoluteDelta: null, percentageDelta: null };
+    return { ...base, direction: "unavailable", reason: input.previousRows.length === 0 ? "missing_previous" : "non_numeric", currentValue, previousValue: null, absoluteDelta: null, percentageDelta: null, changeLabel: "Trend unavailable" };
   }
 
   const absoluteDelta = currentValue - previousValue;
   const percentageDelta = previousValue === 0 ? null : Math.round((absoluteDelta / Math.abs(previousValue)) * 10000) / 100;
   let direction: TrendDirection = "unchanged";
+  let changeLabel: MetricTrend["changeLabel"] = "Unchanged";
   if (absoluteDelta !== 0) {
-    direction = input.metric.direction === "lower_is_better"
-      ? absoluteDelta < 0 ? "improved" : "worsened"
-      : absoluteDelta > 0 ? "improved" : "worsened";
+    if (base.improvementKnown) {
+      direction = input.metric.direction === "lower_is_better"
+        ? absoluteDelta < 0 ? "improved" : "worsened"
+        : absoluteDelta > 0 ? "improved" : "worsened";
+      changeLabel = direction === "improved" ? "Improved" : "Worsened";
+    } else {
+      direction = "unavailable";
+      changeLabel = absoluteDelta > 0 ? "Increased" : "Decreased";
+    }
   }
 
   return {
@@ -146,6 +156,7 @@ export function calculateMetricTrend(input: {
     previousValue,
     absoluteDelta,
     percentageDelta,
+    changeLabel,
   };
 }
 

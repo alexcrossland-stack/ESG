@@ -193,7 +193,7 @@ function DashboardTrendCards({ trendSummary }: { trendSummary: any }) {
                       </div>
                       <div className={`flex items-center gap-1 text-xs font-medium ${directionClass}`} aria-label={`Trend direction ${card.direction}`}>
                         {deltaDirection === "increase" ? <ArrowUp className="w-3.5 h-3.5" /> : deltaDirection === "decrease" ? <ArrowDown className="w-3.5 h-3.5" /> : <CircleDot className="w-3.5 h-3.5" />}
-                        {card.direction === "improved" ? "Improved" : card.direction === "worsened" ? "Worsened" : "Unchanged"}
+                        {card.changeLabel || (card.direction === "improved" ? "Improved" : card.direction === "worsened" ? "Worsened" : "Unchanged")}
                       </div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-xs">
@@ -218,7 +218,7 @@ function DashboardTrendCards({ trendSummary }: { trendSummary: any }) {
                   <div className="min-h-[112px] flex flex-col justify-center gap-2">
                     <p className="text-sm font-medium text-muted-foreground">Insufficient data</p>
                     <p className="text-xs text-muted-foreground" data-testid={`text-trend-insufficient-${card.key}`}>
-                      No prior-period data available for comparable {card.label.toLowerCase()} metrics.
+                      No prior-period data available for comparable {card.label.toLowerCase()} metrics. Trend unavailable.
                     </p>
                   </div>
                 )}
