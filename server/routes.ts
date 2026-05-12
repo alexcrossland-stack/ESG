@@ -98,6 +98,20 @@ type DashboardTrendCard = {
   metricNames: string[];
 };
 
+type ReportTrendSummary = {
+  currentPeriod: string;
+  currentPeriodLabel: string;
+  previousPeriod: string;
+  previousPeriodLabel: string;
+  periodType: ReportPeriodSelection["periodType"];
+  comparisonLabel: string;
+  metrics: MetricTrend[];
+  improvements: MetricTrend[];
+  worsening: MetricTrend[];
+  unavailable: MetricTrend[];
+  notes: string[];
+};
+
 function inferTrendPeriodFromPeriodString(period: string): ReportPeriodSelection {
   const monthly = period.match(/^(\d{4})-(\d{2})$/);
   if (monthly) return buildMonthlyReportPeriod(Number(monthly[1]), Number(monthly[2]));
@@ -230,6 +244,93 @@ function buildDashboardTrendCards(trends: MetricTrend[], currentPeriod: string, 
   });
 
   return cards;
+}
+
+function buildReportTrendSummary(
+  trends: MetricTrend[],
+  currentPeriod: ReportPeriodSelection,
+  previousPeriod: ReportPeriodSelection,
+  comparisonLabel: string,
+): ReportTrendSummary {
+  const reportable = trends.filter((trend) => trend.reason !== "not_reportable");
+  const available = reportable.filter((trend) => trend.reason === "ok");
+  const unavailable = reportable.filter((trend) => trend.reason !== "ok");
+  const notes: string[] = [];
+
+  if (available.length === 0) {
+    notes.push("No prior-period data available for numeric trend comparison.");
+  }
+  const yesNoCount = unavailable.filter((trend) => trend.reason === "not_applicable_yes_no").length;
+  if (yesNoCount > 0) {
+    notes.push(`${yesNoCount} Yes/No metric${yesNoCount === 1 ? "" : "s"} excluded from numeric trend calculations.`);
+  }
+  const missingPreviousCount = unavailable.filter((trend) => trend.reason === "missing_previous").length;
+  if (missingPreviousCount > 0) {
+    notes.push(`${missingPreviousCount} metric${missingPreviousCount === 1 ? "" : "s"} missing prior-period data.`);
+  }
+
+  return {
+    currentPeriod: currentPeriod.period,
+    currentPeriodLabel: currentPeriod.label,
+    previousPeriod: previousPeriod.period,
+    previousPeriodLabel: previousPeriod.label,
+    periodType: currentPeriod.periodType,
+    comparisonLabel,
+    metrics: reportable,
+    improvements: available.filter((trend) => trend.direction === "improved"),
+    worsening: available.filter((trend) => trend.direction === "worsened"),
+    unavailable,
+    notes,
+  };
+}
+
+async function calculateReportTrendSummary(input: {
+  companyId: string;
+  enabledMetrics: any[];
+  currentPeriod: ReportPeriodSelection;
+  siteId?: string | null;
+}): Promise<ReportTrendSummary> {
+  const previousPeriod = getPreviousComparableReportPeriod(input.currentPeriod);
+  const currentPeriods = listMonthPeriodsForSelection(input.currentPeriod);
+  const previousPeriods = listMonthPeriodsForSelection(previousPeriod);
+  const trendScope = input.siteId === undefined
+    ? { scope: "all" as const }
+    : input.siteId === null
+      ? { scope: "organisation" as const }
+      : { scope: "site" as const, siteId: input.siteId };
+  const trendRows = await storage.getMetricTrendValues(
+    input.companyId,
+    [...currentPeriods, ...previousPeriods],
+    trendScope,
+  );
+
+  let trendValues = trendRows;
+  if (input.siteId === undefined) {
+    const activeSitesList = await storage.getSites(input.companyId, false);
+    const activeSiteIds = new Set(activeSitesList.map((site: any) => site.id));
+    trendValues = trendRows.filter((row: any) => row.siteId === null || activeSiteIds.has(row.siteId));
+  }
+
+  const trendResult = calculateMetricTrends({
+    metrics: input.enabledMetrics.map(trendMetricFromMetric),
+    values: trendValues.map((row: any): TrendValueInput => ({
+      metricId: row.metricId,
+      companyId: row.companyId,
+      period: row.period,
+      value: row.value,
+      valueNumeric: row.valueNumeric,
+      valueBoolean: row.valueBoolean,
+      siteId: row.siteId,
+    })),
+    currentPeriod: input.currentPeriod,
+    previousPeriod,
+    currentPeriods,
+    previousPeriods,
+    companyId: input.companyId,
+    includeUnavailable: true,
+  });
+
+  return buildReportTrendSummary(trendResult.trends, input.currentPeriod, previousPeriod, trendResult.comparisonLabel);
 }
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
@@ -5362,6 +5463,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         generatedByName,
         periodType: reportData?.periodType ?? null,
         periodLabel: reportData?.periodLabel ?? report.period ?? null,
+        trendMetadata: reportData?.trendSummary ? {
+          currentPeriod: reportData.trendSummary.currentPeriod ?? null,
+          currentPeriodLabel: reportData.trendSummary.currentPeriodLabel ?? null,
+          previousPeriod: reportData.trendSummary.previousPeriod ?? null,
+          previousPeriodLabel: reportData.trendSummary.previousPeriodLabel ?? null,
+          comparisonLabel: reportData.trendSummary.comparisonLabel ?? null,
+          availableComparisons: Array.isArray(reportData.trendSummary.metrics)
+            ? reportData.trendSummary.metrics.filter((trend: any) => trend.reason === "ok").length
+            : 0,
+          unavailableComparisons: Array.isArray(reportData.trendSummary.unavailable)
+            ? reportData.trendSummary.unavailable.length
+            : 0,
+        } : null,
         dateFrom: reportData?.dateFrom ?? null,
         dateTo: reportData?.dateTo ?? null,
         siteName: site?.name ?? null,
@@ -6051,24 +6165,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
-      let periodComparisonData = null;
-      if (req.body.includePeriodComparison && reportPeriod && /^\d{4}-\d{2}$/.test(reportPeriod)) {
-        const [yearStr, monthStr] = reportPeriod.split("-");
-        const prevMonth = parseInt(monthStr) - 1;
-        const previousPeriod = prevMonth < 1
-          ? `${parseInt(yearStr) - 1}-12`
-          : `${yearStr}-${String(prevMonth).padStart(2, "0")}`;
-        const prevValues = await storage.getMetricValuesByPeriod(companyId, previousPeriod);
-        const compMetrics = enabledMetrics.map((m: any) => {
-          const curr = valuesWithLabels.find((v: any) => v.metricId === m.id);
-          const prev = prevValues.find((v: any) => v.metricId === m.id);
-          const currentVal = curr?.value != null ? parseFloat(curr.value) : null;
-          const prevVal = prev?.value != null ? parseFloat(prev.value as any) : null;
-          const delta = currentVal != null && prevVal != null ? currentVal - prevVal : null;
-          return { name: m.name, currentValue: currentVal, previousValue: prevVal, delta };
-        });
-        periodComparisonData = { currentPeriod: reportPeriod, previousPeriod, metrics: compMetrics };
-      }
+      const trendCurrentPeriod = selectedReportPeriod
+        ?? (reportPeriod ? inferTrendPeriodFromPeriodString(reportPeriod) : null);
+      const trendSummaryData = trendCurrentPeriod
+        ? await calculateReportTrendSummary({
+            companyId,
+            enabledMetrics,
+            currentPeriod: trendCurrentPeriod,
+            siteId: bodySiteId ? bodySiteId : undefined,
+          })
+        : null;
 
       // Determine report naming (T007): "Initial ESG Baseline Report" for first, "Draft ESG Summary" if high estimated coverage
       const existingReportRuns = await storage.getReportRuns(companyId);
@@ -6136,7 +6242,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         factorMethodology,
         dataQualityAssessment,
         complianceStatus: complianceStatusData,
-        periodComparison: periodComparisonData,
+        trendSummary: trendSummaryData,
+        periodComparison: trendSummaryData,
       };
 
       const report = await storage.createReportRun({
@@ -6168,6 +6275,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             periodType: selectedReportPeriod?.periodType ?? null,
             dateFrom: reportDateFrom ?? null,
             dateTo: reportDateTo ?? null,
+            trendCurrentPeriod: trendSummaryData?.currentPeriod ?? null,
+            trendPreviousPeriod: trendSummaryData?.previousPeriod ?? null,
             reportType: reportType ?? "pdf",
             reportTemplate: reportTemplate ?? "management",
           },
@@ -9325,6 +9434,36 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           type: "metrics",
           rows: reportData.metrics.map((m: any) => ({ label: m.name || m.metricName, value: `${m.value || "-"} ${m.unit || ""}`.trim(), status: m.status || m.trafficLight || "-" })),
         });
+      }
+
+      if (reportData.trendSummary) {
+        const trendRows = (reportData.trendSummary.metrics || [])
+          .filter((trend: any) => trend.reason === "ok")
+          .slice(0, 12)
+          .map((trend: any) => ({
+            label: trend.metricName,
+            value: `${trend.currentValue ?? "-"} vs ${trend.previousValue ?? "-"}`,
+            status: trend.direction === "improved" ? "Improved" : trend.direction === "worsened" ? "Worsened" : "Unchanged",
+          }));
+        sections.push({
+          title: "Trend Summary",
+          type: "text",
+          content: `${reportData.trendSummary.comparisonLabel}: ${reportData.trendSummary.currentPeriodLabel} compared with ${reportData.trendSummary.previousPeriodLabel}. Improvements: ${reportData.trendSummary.improvements?.length || 0}. Worsening areas: ${reportData.trendSummary.worsening?.length || 0}.`,
+        });
+        if (trendRows.length > 0) {
+          sections.push({
+            title: "Metric Trends",
+            type: "metrics",
+            rows: trendRows,
+          });
+        }
+        if (reportData.trendSummary.notes?.length) {
+          sections.push({
+            title: "Trend Notes",
+            type: "list",
+            items: reportData.trendSummary.notes,
+          });
+        }
       }
 
       if (reportData.carbon) {
@@ -13180,6 +13319,23 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const enabledValues = values.filter((value: any) => enabledMetricIds.has(value.metricId));
         let site: any = null;
         if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
+        const exportTrendPeriod = resolveReportPeriodSelection({
+          periodType,
+          period,
+          dateFrom,
+          dateTo,
+          year: period?.slice(0, 4),
+          month: periodType === "monthly" && period?.includes("-") ? period.split("-")[1] : undefined,
+          quarter: periodType === "quarterly" && period?.includes("-Q") ? period.split("-Q")[1] : undefined,
+        }) ?? (period ? inferTrendPeriodFromPeriodString(period) : null);
+        const trendSummary = exportTrendPeriod
+          ? await calculateReportTrendSummary({
+              companyId,
+              enabledMetrics,
+              currentPeriod: exportTrendPeriod,
+              siteId: siteScopeProvided ? requestedSiteId : undefined,
+            })
+          : null;
         await recordReportExportDataAudit(req, {
           reportType,
           format: "json",
@@ -13191,7 +13347,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           outcome: "success",
           statusCode: 200,
         });
-        res.json({ metrics: enabledMetrics, values: enabledValues, site, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+        res.json({ metrics: enabledMetrics, values: enabledValues, site, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null, trendSummary });
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
         const allFrameworks = await storage.getFrameworks(true);
