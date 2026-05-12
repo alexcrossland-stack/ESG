@@ -70,6 +70,10 @@ import {
   isBooleanMetricDataType,
   parseBooleanMetricInput,
 } from "@shared/data-entry-metrics";
+import {
+  isPeriodWithinDateRange,
+  resolveReportPeriodSelection,
+} from "@shared/report-periods";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -4821,6 +4825,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     companyId: string,
     period: string | undefined,
     siteId: string | null | undefined,
+    dateFrom?: string,
+    dateTo?: string,
   ): Promise<{
     canGenerate: boolean;
     code?: "no_metrics_configured" | "no_reporting_period_data";
@@ -4848,8 +4854,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
-    const allPeriodValues = (await storage.getMetricValuesByPeriod(companyId, resolvedPeriod))
-      .filter((value: any) => enabledMetricIds.has(value.metricId));
+    const metricScope = siteId
+      ? { scope: "site" as const, siteId }
+      : { scope: "all" as const };
+    const allPeriodValues = (dateFrom || dateTo)
+      ? (await Promise.all(enabledMetrics.map(async (metric: any) => {
+          const values = await storage.getMetricValuesForMetric(companyId, metric.id, metricScope);
+          return values.map((value: any) => ({ ...value, metricId: metric.id }));
+        }))).flat().filter((value: any) => isPeriodWithinDateRange(value.period, dateFrom, dateTo))
+      : (await storage.getMetricValuesByPeriod(companyId, resolvedPeriod))
+        .filter((value: any) => enabledMetricIds.has(value.metricId));
     let values: typeof allPeriodValues;
     if (siteId) {
       values = allPeriodValues.filter((v: any) => v.siteId === siteId);
@@ -4880,6 +4894,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     reportType: string;
     format?: string;
     period?: unknown;
+    periodType?: unknown;
     siteId?: unknown;
     dateFrom?: unknown;
     dateTo?: unknown;
@@ -4903,6 +4918,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reportType: input.reportType,
           format: input.format ?? null,
           period: input.period ?? null,
+          periodType: input.periodType ?? null,
           siteId: input.siteId ?? null,
           dateFrom: input.dateFrom ?? null,
           dateTo: input.dateTo ?? null,
@@ -4922,7 +4938,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     reportType: string;
     format?: string;
     period?: unknown;
+    periodType?: unknown;
     siteId?: unknown;
+    dateFrom?: unknown;
+    dateTo?: unknown;
     outcome: "success" | "failure";
     reason?: string | null;
     statusCode?: number;
@@ -4941,7 +4960,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reportType: input.reportType,
           format: input.format ?? null,
           period: input.period ?? null,
+          periodType: input.periodType ?? null,
           siteId: input.siteId ?? null,
+          dateFrom: input.dateFrom ?? null,
+          dateTo: input.dateTo ?? null,
           outcome: input.outcome,
           reason: input.reason ?? null,
           statusCode: input.statusCode ?? null,
@@ -5135,6 +5157,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ...report,
         companyName,
         generatedByName,
+        periodType: reportData?.periodType ?? null,
+        periodLabel: reportData?.periodLabel ?? report.period ?? null,
+        dateFrom: reportData?.dateFrom ?? null,
+        dateTo: reportData?.dateTo ?? null,
         siteName: site?.name ?? null,
         siteCountry: site?.country ?? null,
         siteStatus: site?.status ?? null,
@@ -5284,13 +5310,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const period = req.query.period as string | undefined;
+      const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
+      const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : undefined;
       const rawSiteId = req.query.siteId as string | undefined;
       const siteId = rawSiteId === "__all__" ? undefined : rawSiteId === "null" || rawSiteId === "__org__" ? null : rawSiteId || null;
       if (siteId) {
         const ownership = await validateSiteOwnership(siteId, companyId);
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
-      const eligibility = await checkReportEligibility(companyId, period, siteId);
+      const eligibility = await checkReportEligibility(companyId, period, siteId, dateFrom, dateTo);
       res.json(eligibility);
     } catch (e: any) {
       sendServerError(res, e);
@@ -5452,10 +5480,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const {
         period, reportType, reportTemplate,
+        periodType, year, quarter, dateFrom, dateTo,
         includePolicy, includeTopics, includeMetrics, includeActions,
         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
         siteId: bodySiteId,
       } = req.body;
+      const selectedReportPeriod = resolveReportPeriodSelection({ periodType, year, quarter, period, dateFrom, dateTo });
+      const reportPeriod = selectedReportPeriod?.period ?? period;
+      const reportPeriodLabel = selectedReportPeriod?.label ?? period;
+      const reportDateFrom = selectedReportPeriod?.dateFrom ?? (typeof dateFrom === "string" ? dateFrom : undefined);
+      const reportDateTo = selectedReportPeriod?.dateTo ?? (typeof dateTo === "string" ? dateTo : undefined);
 
       if (bodySiteId) {
         // Reports can be generated for archived sites (historical reporting) — read-only ownership check (no write restriction)
@@ -5464,9 +5498,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       // ── Eligibility pre-flight (shared helper — fails fast before heavy work) ──
-      const eligibility = await checkReportEligibility(companyId, period, bodySiteId ?? null);
-      if (!eligibility.canGenerate) {
-        return res.status(400).json({ error: eligibility.message, code: eligibility.code });
+      if (!selectedReportPeriod) {
+        const eligibility = await checkReportEligibility(companyId, reportPeriod, bodySiteId ?? null);
+        if (!eligibility.canGenerate) {
+          return res.status(400).json({ error: eligibility.message, code: eligibility.code });
+        }
       }
 
       const company = await storage.getCompany(companyId);
@@ -5480,9 +5516,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
       const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
-      const allPeriodValues = period
-        ? (await storage.getMetricValuesByPeriod(companyId, period)).filter((value: any) => enabledMetricIds.has(value.metricId))
-        : [];
+      const valueScope = bodySiteId
+        ? { scope: "site" as const, siteId: bodySiteId }
+        : { scope: "all" as const };
+      let allPeriodValues = reportDateFrom && reportDateTo
+        ? (await Promise.all(enabledMetrics.map(async (metric: any) => {
+            const vals = await storage.getMetricValuesForMetric(companyId, metric.id, valueScope);
+            return vals.map((value: any) => ({
+              ...value,
+              metricId: metric.id,
+              metricName: metric.name,
+              category: metric.category,
+              unit: metric.unit,
+            }));
+          }))).flat()
+        : reportPeriod
+          ? (await storage.getMetricValuesByPeriod(companyId, reportPeriod)).filter((value: any) => enabledMetricIds.has(value.metricId))
+          : [];
+      if (reportDateFrom || reportDateTo) {
+        allPeriodValues = allPeriodValues.filter((value: any) => isPeriodWithinDateRange(value.period, reportDateFrom, reportDateTo));
+      }
 
       // Apply aggregation scope rules:
       // - Site-scoped: only records with site_id = bodySiteId (archived sites allowed for historical)
@@ -5497,6 +5550,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const activeSiteIds = new Set(activeSitesList.map(s => s.id));
         values = allPeriodValues.filter((v: any) => v.siteId === null || activeSiteIds.has(v.siteId));
       }
+      if (selectedReportPeriod && values.length === 0) {
+        return res.status(400).json({
+          error: `No data found for ${selectedReportPeriod.label}. Go to Data Entry and add figures for this period first.`,
+          code: "no_reporting_period_data",
+        });
+      }
 
       const actions = await storage.getActionPlans(companyId);
       // Evidence and carbon: apply same scope rules as metrics
@@ -5504,14 +5563,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let allCarbonCalcs: Awaited<ReturnType<typeof storage.getCarbonCalculations>>;
       if (bodySiteId) {
         // Site-scoped: exact site, period-filtered
-        allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId, period || undefined);
+        allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId, reportDateFrom && reportDateTo ? undefined : reportPeriod || undefined);
+        if (reportDateFrom || reportDateTo) allEvidence = allEvidence.filter((e: any) => isPeriodWithinDateRange(e.linkedPeriod, reportDateFrom, reportDateTo));
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === bodySiteId);
       } else {
         // Org-wide: active sites + unassigned; exclude archived-site records; period-filtered
         const activeOnly = await storage.getSites(companyId, false);
         const activeIds = new Set(activeOnly.map((s: any) => s.id));
-        const allEv = await storage.getEvidenceFiles(companyId, undefined, period || undefined);
+        let allEv = await storage.getEvidenceFiles(companyId, undefined, reportDateFrom && reportDateTo ? undefined : reportPeriod || undefined);
+        if (reportDateFrom || reportDateTo) allEv = allEv.filter((e: any) => isPeriodWithinDateRange(e.linkedPeriod, reportDateFrom, reportDateTo));
         allEvidence = allEv.filter((e: any) => e.siteId === null || activeIds.has(e.siteId));
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === null || activeIds.has(c.siteId));
@@ -5519,11 +5580,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const generatingUser = await storage.getUser(userId);
 
       const periodSchema = z.object({
-        period: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+        period: z.string().regex(/^\d{4}(?:-\d{2}|-Q[1-4])?$/).optional(),
+        periodType: z.enum(["quarterly", "annual"]).optional(),
         reportType: z.enum(["pdf", "csv", "word"]).optional(),
         reportTemplate: z.enum(["management", "customer", "annual"]).optional(),
       });
-      const validation = periodSchema.safeParse({ period, reportType, reportTemplate });
+      const validation = periodSchema.safeParse({ period: reportPeriod, periodType, reportType, reportTemplate });
       if (!validation.success) {
         res.status(400).json({ error: "Invalid report parameters" });
         return;
@@ -5636,10 +5698,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const selectedTopics = topics.filter((t: any) => t.selected);
       const weightedScore = calculateWeightedEsgScore(scoredMetrics, selectedTopics);
 
-      // Carbon: period filter first (strict match only), then aggregate all scoped rows for that period
-      const periodCarbonRows = period
-        ? allCarbonCalcs.filter((c: any) => c.reportingPeriod === period)
-        : allCarbonCalcs;
+      // Carbon: use the same selected period boundary as metric values.
+      const periodCarbonRows = reportDateFrom || reportDateTo
+        ? allCarbonCalcs.filter((c: any) => isPeriodWithinDateRange(c.reportingPeriod, reportDateFrom, reportDateTo))
+        : reportPeriod
+          ? allCarbonCalcs.filter((c: any) => c.reportingPeriod === reportPeriod)
+          : allCarbonCalcs;
       const carbonSummary = periodCarbonRows.length > 0 ? (() => {
         // Sum scope1/2/3/total across all matched rows
         const scope1 = periodCarbonRows.reduce((s: number, c: any) => s + (parseFloat(c.scope1Total as string) || 0), 0);
@@ -5720,13 +5784,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let dataQualityAssessment = null;
       if (req.body.includeDataQualityAssessment) {
-        const dqResult = await db.execute(
-          sql`SELECT mv.metric_id, mv.value, mv.notes, mv.workflow_status, mv.data_source_type, mv.id as mv_id
-              FROM metric_values mv JOIN metrics m ON mv.metric_id = m.id
-              WHERE m.company_id = ${companyId} AND mv.period = ${period || ""}`
-        );
         const dqMap: Record<string, any> = {};
-        dqResult.rows.forEach((v: any) => { dqMap[v.metric_id] = v; });
+        values.forEach((v: any) => {
+          if (!dqMap[v.metricId]) {
+            dqMap[v.metricId] = {
+              metric_id: v.metricId,
+              value: v.value,
+              notes: v.notes,
+              workflow_status: v.workflowStatus,
+              data_source_type: v.dataSourceType,
+              mv_id: v.id,
+            };
+          }
+        });
         const evidenceLinked = new Set(
           allEvidence.filter((e: any) => e.linkedModule === "metric_value" && e.linkedEntityId).map((e: any) => e.linkedEntityId)
         );
@@ -5779,8 +5849,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       let periodComparisonData = null;
-      if (req.body.includePeriodComparison && period) {
-        const [yearStr, monthStr] = period.split("-");
+      if (req.body.includePeriodComparison && reportPeriod && /^\d{4}-\d{2}$/.test(reportPeriod)) {
+        const [yearStr, monthStr] = reportPeriod.split("-");
         const prevMonth = parseInt(monthStr) - 1;
         const previousPeriod = prevMonth < 1
           ? `${parseInt(yearStr) - 1}-12`
@@ -5794,7 +5864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const delta = currentVal != null && prevVal != null ? currentVal - prevVal : null;
           return { name: m.name, currentValue: currentVal, previousValue: prevVal, delta };
         });
-        periodComparisonData = { currentPeriod: period, previousPeriod, metrics: compMetrics };
+        periodComparisonData = { currentPeriod: reportPeriod, previousPeriod, metrics: compMetrics };
       }
 
       // Determine report naming (T007): "Initial ESG Baseline Report" for first, "Draft ESG Summary" if high estimated coverage
@@ -5844,7 +5914,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportTemplate: reportTemplate || "management",
         reportTitle,
         dataQualitySummary,
-        period,
+        period: reportPeriod,
+        periodType: selectedReportPeriod?.periodType ?? null,
+        periodLabel: reportPeriodLabel,
+        dateFrom: reportDateFrom ?? null,
+        dateTo: reportDateTo ?? null,
         company,
         branding,
         policySummary,
@@ -5863,7 +5937,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       };
 
       const report = await storage.createReportRun({
-        companyId, period,
+        companyId, period: reportPeriod,
         reportType: reportType || "pdf",
         reportTemplate: reportTemplate || "management",
         generatedBy: userId,
@@ -5886,7 +5960,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: report.id,
         details: {
           before: null,
-          after: { period, reportType: reportType ?? "pdf", reportTemplate: reportTemplate ?? "management" },
+          after: {
+            period: reportPeriod,
+            periodType: selectedReportPeriod?.periodType ?? null,
+            dateFrom: reportDateFrom ?? null,
+            dateTo: reportDateTo ?? null,
+            reportType: reportType ?? "pdf",
+            reportTemplate: reportTemplate ?? "management",
+          },
         },
         req,
       });
@@ -5903,7 +5984,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               action: "first_report_generated",
               entityType: "report_run",
               entityId: report.id,
-              details: { period, reportType: reportType ?? "pdf" },
+              details: { period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? null, reportType: reportType ?? "pdf" },
             });
           }
         }).catch(() => {});
@@ -5915,7 +5996,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           companyId,
           action: "report_generated_for_site",
           page: "/reports",
-          details: { siteId: bodySiteId, reportId: report.id, reportType: reportType || "pdf" },
+          details: { siteId: bodySiteId, reportId: report.id, period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? null, reportType: reportType || "pdf" },
         }).catch(() => {});
       }
 
@@ -12502,13 +12583,14 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
 
       const { reportType } = req.params;
-      const { format: fmt = "pdf", period, siteId, dateFrom, dateTo } = req.body;
+      const { format: fmt = "pdf", period, periodType, siteId, dateFrom, dateTo } = req.body;
       const requestedFormat = String(fmt || "pdf").toLowerCase();
       if (!["pdf", "docx"].includes(requestedFormat)) {
         await recordReportExportAudit(req, {
           reportType,
           format: requestedFormat,
           period,
+          periodType,
           siteId,
           dateFrom,
           dateTo,
@@ -12527,6 +12609,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             reportType,
             format: requestedFormat,
             period,
+            periodType,
             siteId,
             dateFrom,
             dateTo,
@@ -12544,6 +12627,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           reportType,
           format: requestedFormat,
           period,
+          periodType,
           siteId,
           dateFrom,
           dateTo,
@@ -12554,12 +12638,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(400).json({ error: `Invalid report type. Must be one of: ${VALID_TYPES.join(", ")}` });
       }
 
-      // Build date range for filtering (inclusive)
-      const dateFromObj = dateFrom ? new Date(dateFrom) : null;
-      const dateToObj = dateTo ? new Date(dateTo) : null;
-
       // Helper: filter values by date range (period string "YYYY-MM" comparison) and siteId
-      function filterValues(values: any[], opts: { siteId?: string | null; siteScopeProvided?: boolean; dateFrom?: Date | null; dateTo?: Date | null }): any[] {
+      function filterValues(values: any[], opts: { siteId?: string | null; siteScopeProvided?: boolean; dateFrom?: string | null; dateTo?: string | null }): any[] {
         return values.filter(v => {
           // Site filter: omitted means all scopes, null means organisation-wide only.
           if (opts.siteScopeProvided) {
@@ -12568,26 +12648,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           }
           // Date range filter: period is "YYYY-MM" or "YYYY-QN" or "YYYY"
           if (opts.dateFrom || opts.dateTo) {
-            if (v.period) {
-              // Parse period to a representative date (first day of period)
-              let periodDate: Date | null = null;
-              const periodStr = String(v.period);
-              if (/^\d{4}-\d{2}$/.test(periodStr)) {
-                periodDate = new Date(`${periodStr}-01`);
-              } else if (/^\d{4}$/.test(periodStr)) {
-                periodDate = new Date(`${periodStr}-01-01`);
-              } else {
-                periodDate = new Date(periodStr);
-              }
-              if (!isNaN(periodDate.getTime())) {
-                if (opts.dateFrom && periodDate < opts.dateFrom) return false;
-                if (opts.dateTo && periodDate > opts.dateTo) return false;
-              }
-            }
+            if (!isPeriodWithinDateRange(v.period, opts.dateFrom ?? undefined, opts.dateTo ?? undefined)) return false;
           }
           return true;
         });
       }
+      const dateFromObj = dateFrom ? new Date(dateFrom) : null;
+      const dateToObj = dateTo ? new Date(dateTo) : null;
 
       const company = await storage.getCompany(companyId);
       const companyName = company?.name || "Organisation";
@@ -12624,7 +12691,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             ? { scope: "organisation" as const }
             : { scope: "site" as const, siteId: requestedSiteId };
 
-        if (period) {
+        if (period && !(dateFrom || dateTo)) {
           allValues = await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined);
         } else {
           // Fetch all values across all metrics for the company
@@ -12641,7 +12708,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         allValues = allValues.filter((value: any) => enabledMetricIds.has(value.metricId));
 
         // Apply site and date range filters
-        const values = filterValues(allValues, { siteId: requestedSiteId, siteScopeProvided: siteScopeProvided && requestedSiteId !== undefined, dateFrom: dateFromObj, dateTo: dateToObj });
+        const values = filterValues(allValues, { siteId: requestedSiteId, siteScopeProvided: siteScopeProvided && requestedSiteId !== undefined, dateFrom: dateFrom || null, dateTo: dateTo || null });
 
         // Compute accurate metric counts: only count metrics that have reported values in the filtered set
         const reportedMetricIds = new Set(values.map((v: any) => v.metricId));
@@ -12715,7 +12782,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         // If siteId specified, filter to just that site (for narrowed comparison)
         if (requestedSiteId) sites = sites.filter((s: any) => s.id === requestedSiteId);
 
-        const allSitesSummary = await storage.getSitesSummary(companyId, period);
+        const allSitesSummary = await storage.getSitesSummary(companyId, dateFrom || dateTo ? undefined : period);
         // Filter sitesSummary to only include scoped sites
         const scopedSiteIds = new Set(sites.map((s: any) => s.id));
         const sitesSummary = allSitesSummary.filter((s: any) => scopedSiteIds.has(s.siteId));
@@ -12728,7 +12795,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const metricMetaMap = new Map(enabledMetrics.map((m: any) => [m.id, { metricName: m.name, unit: m.unit, category: m.category }]));
         let allValues: any[] = [];
 
-        if (period) {
+        if (period && !(dateFrom || dateTo)) {
           const periodVals = await storage.getMetricValuesByPeriod(companyId, period);
           // Enrich with metric metadata by matching metricId
           allValues = periodVals.filter((v: any) => metricMetaMap.has(v.metricId)).map((v: any) => {
@@ -12749,7 +12816,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }
 
         // Apply date range filter
-        const filteredValues = filterValues(allValues, { dateFrom: dateFromObj, dateTo: dateToObj });
+        const filteredValues = filterValues(allValues, { dateFrom: dateFrom || null, dateTo: dateTo || null });
 
         // Group by siteId — only include sites that are in the sites list
         const siteIds = new Set(sites.map((s: any) => s.id));
@@ -12815,6 +12882,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         reportType,
         format: requestedFormat,
         period,
+        periodType,
         siteId,
         dateFrom,
         dateTo,
@@ -12844,7 +12912,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
 
       const { reportType } = req.params;
-      const { period, siteId } = req.query as { period?: string; siteId?: string };
+      const { period, periodType, siteId, dateFrom, dateTo } = req.query as { period?: string; periodType?: string; siteId?: string; dateFrom?: string; dateTo?: string };
       const rawFormat = (req.query as Record<string, unknown>).format;
       const requestedFormat = Array.isArray(rawFormat) ? rawFormat[0] : rawFormat;
       if (requestedFormat !== undefined && String(requestedFormat).toLowerCase() !== "json") {
@@ -12852,7 +12920,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           reportType,
           format: String(requestedFormat).toLowerCase(),
           period,
+          periodType,
           siteId,
+          dateFrom,
+          dateTo,
           outcome: "failure",
           reason: "unsupported_format",
           statusCode: 400,
@@ -12868,7 +12939,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
             reportType,
             format: requestedFormat !== undefined ? String(requestedFormat).toLowerCase() : "json",
             period,
+            periodType,
             siteId,
+            dateFrom,
+            dateTo,
             outcome: "failure",
             reason: "site_scope_forbidden",
             statusCode: ownership.status,
@@ -12883,9 +12957,23 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const metrics = await storage.getMetrics(companyId);
         const enabledMetrics = metrics.filter((m: any) => m.enabled);
         const enabledMetricIds = new Set(enabledMetrics.map((metric: any) => metric.id));
-        const values = period
-          ? await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined)
-          : [];
+        let values: any[] = [];
+        if (period && !(dateFrom || dateTo)) {
+          values = await storage.getMetricValuesByPeriod(companyId, period, siteScopeProvided ? requestedSiteId : undefined);
+        } else {
+          const exportMetricScope = requestedSiteId === undefined
+            ? { scope: "all" as const }
+            : requestedSiteId === null
+              ? { scope: "organisation" as const }
+              : { scope: "site" as const, siteId: requestedSiteId };
+          values = (await Promise.all(enabledMetrics.map(async (metric: any) => {
+            const rows = await storage.getMetricValuesForMetric(companyId, metric.id, exportMetricScope);
+            return rows.map((value: any) => ({ ...value, metricId: metric.id }));
+          }))).flat();
+          if (dateFrom || dateTo) {
+            values = values.filter((value: any) => isPeriodWithinDateRange(value.period, dateFrom, dateTo));
+          }
+        }
         const enabledValues = values.filter((value: any) => enabledMetricIds.has(value.metricId));
         let site: any = null;
         if (requestedSiteId) site = await storage.getSite(requestedSiteId, companyId);
@@ -12893,42 +12981,48 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           reportType,
           format: "json",
           period,
+          periodType,
           siteId,
+          dateFrom,
+          dateTo,
           outcome: "success",
           statusCode: 200,
         });
-        res.json({ metrics: enabledMetrics, values: enabledValues, site, period });
+        res.json({ metrics: enabledMetrics, values: enabledValues, site, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
         const allFrameworks = await storage.getFrameworks(true);
         const selections = await storage.getBusinessFrameworkSelections(companyId);
         const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
         const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
-        res.json({ frameworkReadiness, selectedFrameworks, period });
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({ frameworkReadiness, selectedFrameworks, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else if (reportType === "target_progress_summary") {
         const targets = await storage.getEsgTargets(companyId);
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
-        res.json({ targets, period });
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({ targets, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else if (reportType === "policy_register_summary") {
         const policyRecords = await storage.getPolicyRecords(companyId);
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
-        res.json({ policyRecords, period });
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({ policyRecords, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else if (reportType === "risk_register_summary") {
         const risks = await storage.getEsgRisks(companyId);
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
-        res.json({ risks, period });
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({ risks, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else if (reportType === "site_comparison_summary") {
         const sites = await storage.getSites(companyId, false);
-        const sitesSummary = await storage.getSitesSummary(companyId, period);
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, siteId, outcome: "success", statusCode: 200 });
-        res.json({ sites, sitesSummary, period });
+        const sitesSummary = await storage.getSitesSummary(companyId, dateFrom || dateTo ? undefined : period);
+        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({ sites, sitesSummary, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
       } else {
         await recordReportExportDataAudit(req, {
           reportType,
           format: requestedFormat !== undefined ? String(requestedFormat).toLowerCase() : "json",
           period,
+          periodType,
           siteId,
+          dateFrom,
+          dateTo,
           outcome: "failure",
           reason: "invalid_report_type",
           statusCode: 400,

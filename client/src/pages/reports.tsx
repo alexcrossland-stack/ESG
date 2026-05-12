@@ -35,10 +35,15 @@ import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { ReportReadinessPanel } from "@/components/report-readiness-panel";
+import { buildReportPeriodSelection, reportPeriodYears, type ReportPeriodType } from "@shared/report-periods";
 
 type ReportHistoryEntry = {
   id: string;
   period?: string | null;
+  periodType?: string | null;
+  periodLabel?: string | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
   reportType?: string | null;
   reportTemplate?: string | null;
   generatedAt?: string | Date | null;
@@ -425,7 +430,7 @@ function reportTemplateLabel(template?: string | null) {
 }
 
 function reportLibraryTitle(report: ReportHistoryEntry) {
-  return report.reportData?.reportTitle || `${reportTemplateLabel(report.reportTemplate)} — ${report.period || "All Periods"}`;
+  return report.reportData?.reportTitle || `${reportTemplateLabel(report.reportTemplate)} — ${report.periodLabel || report.period || "All Periods"}`;
 }
 
 function reportSectionsFromEntry(report: ReportHistoryEntry) {
@@ -1375,8 +1380,14 @@ export default function Reports() {
   const archivedSites = allSites.filter((s: any) => s.status === "archived");
   const hasMultipleSites = allSites.length >= 1;
   const [reportScopeId, setReportScopeId] = useState<string>(activeSiteId || "__org__");
-  const periods = generatePeriods();
-  const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
+  const periodYears = reportPeriodYears();
+  const [reportPeriodType, setReportPeriodType] = useState<ReportPeriodType>("quarterly");
+  const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
+  const [reportQuarter, setReportQuarter] = useState<1 | 2 | 3 | 4>(
+    (Math.floor(new Date().getMonth() / 3) + 1) as 1 | 2 | 3 | 4
+  );
+  const selectedReportPeriod = buildReportPeriodSelection(reportPeriodType, reportYear, reportQuarter);
+  const selectedPeriod = selectedReportPeriod.period;
   const [reportType, setReportType] = useState("pdf");
   const [selectedTemplate, setSelectedTemplate] = useState("management");
   const [reportData, setReportData] = useState<any>(null);
@@ -1480,9 +1491,12 @@ export default function Reports() {
     totalMetrics: number;
     resolvedPeriod: string;
   }>({
-    queryKey: ["/api/reports/preflight", selectedPeriod, effectiveSiteId ?? "all"],
+    queryKey: ["/api/reports/preflight", selectedPeriod, selectedReportPeriod.dateFrom, selectedReportPeriod.dateTo, effectiveSiteId ?? "all"],
     queryFn: async () => {
       const params = new URLSearchParams({ period: selectedPeriod });
+      params.set("periodType", selectedReportPeriod.periodType);
+      params.set("dateFrom", selectedReportPeriod.dateFrom);
+      params.set("dateTo", selectedReportPeriod.dateTo);
       params.set("siteId", reportScopeId === "__org__" ? "__all__" : effectiveSiteId!);
       const res = await authFetch(`/api/reports/preflight?${params}`);
       if (!res.ok) throw new Error("preflight check failed");
@@ -1522,6 +1536,11 @@ export default function Reports() {
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/reports/generate", {
         period: selectedPeriod,
+        periodType: selectedReportPeriod.periodType,
+        year: selectedReportPeriod.year,
+        quarter: selectedReportPeriod.quarter,
+        dateFrom: selectedReportPeriod.dateFrom,
+        dateTo: selectedReportPeriod.dateTo,
         reportType,
         reportTemplate: selectedTemplate,
         siteId: effectiveSiteId,
@@ -1537,7 +1556,7 @@ export default function Reports() {
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/readiness"] });
       if (isFirstReport) {
-        trackEvent(AnalyticsEvents.FIRST_REPORT_GENERATED, { template: selectedTemplate, period: selectedPeriod });
+        trackEvent(AnalyticsEvents.FIRST_REPORT_GENERATED, { template: selectedTemplate, period: selectedPeriod, periodType: selectedReportPeriod.periodType });
         setShowFirstReportMilestone(true);
       }
       toast({ title: "Report generated", description: `${templateConfig.label} is ready to preview and export.` });
@@ -2079,12 +2098,58 @@ export default function Reports() {
 
               <div className="space-y-1.5">
                 <Label className="text-xs">Reporting Period</Label>
-                <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-                  <SelectTrigger data-testid="select-report-period"><SelectValue /></SelectTrigger>
+                <Select value={reportPeriodType} onValueChange={(value) => {
+                  setReportPeriodType(value as ReportPeriodType);
+                  setReportData(null);
+                  setSelectedLibraryReportId(null);
+                }}>
+                  <SelectTrigger data-testid="select-report-period-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {periods.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Year</Label>
+                  <Select value={String(reportYear)} onValueChange={(value) => {
+                    setReportYear(Number(value));
+                    setReportData(null);
+                    setSelectedLibraryReportId(null);
+                  }}>
+                    <SelectTrigger data-testid="select-report-year"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {periodYears.map(yearOption => (
+                        <SelectItem key={yearOption} value={String(yearOption)}>{yearOption}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {reportPeriodType === "quarterly" && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Quarter</Label>
+                    <Select value={String(reportQuarter)} onValueChange={(value) => {
+                      setReportQuarter(Number(value) as 1 | 2 | 3 | 4);
+                      setReportData(null);
+                      setSelectedLibraryReportId(null);
+                    }}>
+                      <SelectTrigger data-testid="select-report-quarter"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">Q1 Jan-Mar</SelectItem>
+                        <SelectItem value="2">Q2 Apr-Jun</SelectItem>
+                        <SelectItem value="3">Q3 Jul-Sep</SelectItem>
+                        <SelectItem value="4">Q4 Oct-Dec</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-testid="text-report-period-range">
+                {selectedReportPeriod.label} · {selectedReportPeriod.dateFrom} to {selectedReportPeriod.dateTo}
               </div>
 
               <div className="space-y-1.5">
@@ -2176,7 +2241,7 @@ export default function Reports() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-medium">Report Preview</h2>
-                  <p className="text-xs text-muted-foreground">{templateConfig.label} — {selectedPeriod}</p>
+                  <p className="text-xs text-muted-foreground">{templateConfig.label} — {selectedReportPeriod.label}</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <Button size="sm" variant="outline" onClick={exportCsv} disabled={!reportData?.values?.length} data-testid="button-export-csv">
@@ -2433,7 +2498,8 @@ export default function Reports() {
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <span>{report.reportTemplate ? reportTemplateLabel(report.reportTemplate) : "ESG Report"}</span>
-                      <span>{report.period || "All periods"}</span>
+                      <span>{report.periodLabel || report.period || "All periods"}</span>
+                      {report.periodType && <span className="capitalize">{report.periodType}</span>}
                       {report.siteId ? <span>{report.siteName || "Site"}</span> : <span>All scopes</span>}
                     </div>
                     {hasReportFile ? (
@@ -2585,7 +2651,7 @@ export default function Reports() {
                 <Skeleton className="h-40" />
               ) : selectedLibraryReport ? (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs" data-testid="panel-report-library-metadata">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs" data-testid="panel-report-library-metadata">
                     <div className="rounded-md border border-border p-3">
                       <p className="text-muted-foreground">Report</p>
                       <p className="font-medium">{reportLibraryTitle(selectedLibraryReport)}</p>
@@ -2593,6 +2659,10 @@ export default function Reports() {
                     <div className="rounded-md border border-border p-3">
                       <p className="text-muted-foreground">Company</p>
                       <p className="font-medium">{selectedLibraryReport.companyName || companyData?.name || "Company"}</p>
+                    </div>
+                    <div className="rounded-md border border-border p-3">
+                      <p className="text-muted-foreground">Period</p>
+                      <p className="font-medium">{selectedLibraryReport.periodLabel || selectedLibraryReport.period || "All periods"}</p>
                     </div>
                     <div className="rounded-md border border-border p-3">
                       <p className="text-muted-foreground">Generated by</p>
