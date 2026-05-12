@@ -25,7 +25,7 @@ Required environment and dependency checks:
 - [ ] `RESEND_API_KEY` is configured if invite/password-reset email is enabled.
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is configured if AI report narrative features are enabled.
 - [ ] `AI_INTEGRATIONS_OPENAI_BASE_URL` is set to `https://api.openai.com/v1` if AI features are enabled.
-- [ ] `AI_INTEGRATIONS_OPENAI_MODEL` is unset to use `gpt-4.1-mini`, or explicitly set to an approved accessible production chat model.
+- [ ] `AI_INTEGRATIONS_OPENAI_MODEL` is unset to use the application default, or explicitly set to an approved accessible production chat model. The deploy workflow validates that a supplied runtime model is configured without enforcing one specific model name.
 - [ ] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and plan price IDs are configured if billing is enabled.
 - [ ] Production database connectivity has been verified by the platform operator.
 - [ ] Generated report files are backed by database storage and included in database backups.

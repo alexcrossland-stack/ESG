@@ -332,7 +332,7 @@ jobs:
                 ["DATABASE_URL", Boolean(env.DATABASE_URL)],
                 ["AI_INTEGRATIONS_OPENAI_API_KEY", Boolean(env.AI_INTEGRATIONS_OPENAI_API_KEY)],
                 ["AI_INTEGRATIONS_OPENAI_BASE_URL", env.AI_INTEGRATIONS_OPENAI_BASE_URL === "https://api.openai.com/v1"],
-                ["AI_INTEGRATIONS_OPENAI_MODEL", env.AI_INTEGRATIONS_OPENAI_MODEL === "gpt-4.1-mini"],
+                ["AI_INTEGRATIONS_OPENAI_MODEL", Boolean(env.AI_INTEGRATIONS_OPENAI_MODEL)],
               ];
 
               const missing = checks.filter(([, ok]) => !ok).map(([name]) => name);
