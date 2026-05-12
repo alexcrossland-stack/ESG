@@ -1,8 +1,9 @@
-export type ReportPeriodType = "quarterly" | "annual";
+export type ReportPeriodType = "monthly" | "quarterly" | "annual";
 
 export type ReportPeriodSelection = {
   periodType: ReportPeriodType;
   year: number;
+  month?: number;
   quarter?: 1 | 2 | 3 | 4;
   period: string;
   label: string;
@@ -37,6 +38,27 @@ function normalizeQuarter(quarter: unknown): 1 | 2 | 3 | 4 | null {
   return null;
 }
 
+function normalizeMonth(month: unknown): number | null {
+  const parsed = Number(month);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 12) return null;
+  return parsed;
+}
+
+export function buildMonthlyReportPeriod(year: number, month: number): ReportPeriodSelection {
+  const normalizedMonth = normalizeMonth(month);
+  if (!normalizedMonth) throw new Error("Invalid report month");
+  const monthLabel = new Date(year, normalizedMonth - 1, 1).toLocaleString("en-GB", { month: "short" });
+  return {
+    periodType: "monthly",
+    year,
+    month: normalizedMonth,
+    period: `${year}-${padMonth(normalizedMonth)}`,
+    label: `${monthLabel} ${year}`,
+    dateFrom: `${year}-${padMonth(normalizedMonth)}-01`,
+    dateTo: `${year}-${padMonth(normalizedMonth)}-${daysInMonth(year, normalizedMonth)}`,
+  };
+}
+
 export function buildQuarterlyReportPeriod(year: number, quarter: 1 | 2 | 3 | 4): ReportPeriodSelection {
   const bounds = QUARTERS[quarter];
   return {
@@ -61,9 +83,10 @@ export function buildAnnualReportPeriod(year: number): ReportPeriodSelection {
   };
 }
 
-export function buildReportPeriodSelection(periodType: ReportPeriodType, year: number, quarter?: number): ReportPeriodSelection {
+export function buildReportPeriodSelection(periodType: ReportPeriodType, year: number, quarter?: number, month?: number): ReportPeriodSelection {
   const normalizedYear = normalizeYear(year);
   if (!normalizedYear) throw new Error("Invalid report year");
+  if (periodType === "monthly") return buildMonthlyReportPeriod(normalizedYear, month ?? new Date().getMonth() + 1);
   if (periodType === "annual") return buildAnnualReportPeriod(normalizedYear);
   const normalizedQuarter = normalizeQuarter(quarter);
   if (!normalizedQuarter) throw new Error("Invalid report quarter");
@@ -73,12 +96,13 @@ export function buildReportPeriodSelection(periodType: ReportPeriodType, year: n
 export function resolveReportPeriodSelection(input: {
   periodType?: unknown;
   year?: unknown;
+  month?: unknown;
   quarter?: unknown;
   period?: unknown;
   dateFrom?: unknown;
   dateTo?: unknown;
 }): ReportPeriodSelection | null {
-  const periodType = input.periodType === "annual" || input.periodType === "quarterly"
+  const periodType = input.periodType === "monthly" || input.periodType === "annual" || input.periodType === "quarterly"
     ? input.periodType
     : null;
   if (!periodType) return null;
@@ -91,6 +115,14 @@ export function resolveReportPeriodSelection(input: {
   if (!year) return null;
 
   if (periodType === "annual") return buildAnnualReportPeriod(year);
+
+  if (periodType === "monthly") {
+    let month = normalizeMonth(input.month);
+    const periodMonth = period.match(/^\d{4}-(\d{2})$/);
+    if (!month && periodMonth) month = normalizeMonth(periodMonth[1]);
+    if (!month) return null;
+    return buildMonthlyReportPeriod(year, month);
+  }
 
   let quarter = normalizeQuarter(input.quarter);
   const periodQuarter = period.match(/^\d{4}-Q([1-4])$/);

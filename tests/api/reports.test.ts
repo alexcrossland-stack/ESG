@@ -338,6 +338,67 @@ async function run(tenants: SeededTenants): Promise<void> {
   }
 
   {
+    const name = "monthly report includes selected month data and excludes other months";
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
+    else {
+      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      if (!metricId) fail(name, "missing metric id");
+      else {
+        const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-05", value: 505, notes: "monthly included" }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-06", value: 606, notes: "monthly excluded" }, tenantA.adminToken),
+        ]);
+        const failedSave = saves.find((res) => ![200, 201].includes(res.status));
+        if (failedSave) fail(name, `data-entry status=${failedSave.status} body=${failedSave.body.slice(0, 200)}`);
+        else {
+          const reportRes = await apiRequest("POST", "/api/reports/generate", {
+            reportType: "pdf",
+            reportTemplate: "management",
+            period: "2025-05",
+            periodType: "monthly",
+            year: 2025,
+            month: 5,
+            dateFrom: "2025-05-01",
+            dateTo: "2025-05-31",
+            includeMetrics: true,
+            includePolicy: false,
+            includeTopics: false,
+          }, tenantA.adminToken);
+          const exportRes = await apiRequest("GET", "/api/reports/export-data/esg_metrics_summary?period=2025-05&periodType=monthly&dateFrom=2025-05-01&dateTo=2025-05-31&siteId=__all__", undefined, tenantA.adminToken);
+          if (![200, 201].includes(reportRes.status)) fail(name, `report status=${reportRes.status} body=${reportRes.body.slice(0, 200)}`);
+          else if (exportRes.status !== 200) fail(name, `export-data status=${exportRes.status} body=${exportRes.body.slice(0, 200)}`);
+          else {
+            const body = JSON.parse(reportRes.body) as {
+              report?: { id?: string; period?: string };
+              data?: { period?: string; periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            };
+            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            const reportPeriods = new Set((body.data?.values || []).map((value) => value.period));
+            const exportPeriods = new Set((exportBody.values || []).map((value) => value.period));
+            if (body.report?.period !== "2025-05" || body.data?.period !== "2025-05") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
+            else if (body.data?.periodType !== "monthly") fail(name, `expected monthly periodType, got ${body.data?.periodType}`);
+            else if (body.data?.dateFrom !== "2025-05-01" || body.data?.dateTo !== "2025-05-31") fail(name, `date metadata mismatch ${body.data?.dateFrom}/${body.data?.dateTo}`);
+            else if (exportBody.periodType !== "monthly" || exportBody.dateFrom !== "2025-05-01" || exportBody.dateTo !== "2025-05-31") fail(name, `export metadata mismatch ${exportBody.periodType}/${exportBody.dateFrom}/${exportBody.dateTo}`);
+            else if (!reportPeriods.has("2025-05") || !exportPeriods.has("2025-05")) fail(name, "selected-month value missing from report/export");
+            else if (reportPeriods.has("2025-06") || exportPeriods.has("2025-06")) fail(name, "other-month value leaked into monthly report/export");
+            else {
+              const detailRes = await apiRequest("GET", `/api/reports/${body.report?.id}`, undefined, tenantA.adminToken);
+              if (detailRes.status !== 200) fail(name, `detail status=${detailRes.status} body=${detailRes.body.slice(0, 200)}`);
+              else {
+                const detail = JSON.parse(detailRes.body) as { periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null };
+                if (detail.periodType !== "monthly") fail(name, `library detail periodType mismatch ${detail.periodType}`);
+                else if (!detail.periodLabel || detail.dateFrom !== "2025-05-01" || detail.dateTo !== "2025-05-31") fail(name, `library metadata mismatch ${detail.periodLabel}/${detail.dateFrom}/${detail.dateTo}`);
+                else pass(name);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  {
     const name = "annual report and export-data include selected year only";
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
     if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
