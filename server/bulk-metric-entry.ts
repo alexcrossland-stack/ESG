@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { auditLogs, metrics, metricValues, reportingPeriods, type Metric } from "@shared/schema";
-import { isActiveEditableDataEntryMetric } from "@shared/data-entry-metrics";
+import {
+  formatBooleanMetricValue,
+  formatMetricDisplayValue,
+  isActiveEditableDataEntryMetric,
+  isBooleanMetricDataType,
+  parseBooleanMetricInput,
+} from "@shared/data-entry-metrics";
 import { db, storage } from "./storage";
 import { trackTelemetryEvent } from "./telemetry";
 
@@ -22,10 +28,13 @@ type ExistingMetricValue = {
   metricId: string;
   period: string;
   value: string | null;
+  valueText: string | null;
+  valueBoolean: boolean | null;
   locked: boolean | null;
 };
 
 type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled"> & {
+  dataType: string;
   readOnly: boolean;
 };
 
@@ -37,6 +46,8 @@ export type BulkMetricGridResponse = {
     metricId: string;
     period: string;
     value: string | null;
+    valueText: string | null;
+    valueBoolean: boolean | null;
     locked: boolean;
     dataSourceType: string | null;
     workflowStatus: string | null;
@@ -51,7 +62,13 @@ export type BulkMetricValidationResult = {
   period: string;
   rawValue: string | null;
   normalizedValue: number | null;
+  normalizedText: string | null;
+  normalizedBoolean: boolean | null;
+  normalizedDisplayValue: string | null;
   existingValue: number | null;
+  existingText: string | null;
+  existingBoolean: boolean | null;
+  existingDisplayValue: string | null;
   status: "create" | "update" | "clear" | "unchanged" | "error";
   errors: string[];
   warnings: string[];
@@ -105,26 +122,97 @@ function cellKey(metricId: string, period: string) {
   return `${metricId}::${period}`;
 }
 
-function parseStoredValue(value: string | null | undefined) {
-  if (value === null || value === undefined || value === "") return null;
-  const parsed = Number(value);
+function normalizeMetricName(name: string | null | undefined) {
+  return (name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(scope\s+1|scope\s+2|scope\s+3|category\s+6|category\s+7|category\s+8|category\s+9)\b/g, "")
+    .replace(/\b(ghg|carbon|emissions?)\b/g, "emission")
+    .replace(/\b(energy|electricity)\b/g, "energy")
+    .replace(/\b(water|withdrawal)\b/g, "water")
+    .replace(/\b(waste|recycled?)\b/g, "waste")
+    .replace(/\b(employee|employees|workforce|staff)\b/g, "employee")
+    .trim();
+}
+
+function parseStoredValue(value: string | null | undefined, valueText?: string | null, valueBoolean?: boolean | null) {
+  if (typeof valueBoolean === "boolean") return valueBoolean ? 1 : 0;
+  const raw = value ?? valueText;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function valuesMatch(a: number | null, b: number | null) {
+type NormalizedBulkValue = {
+  normalizedValue: number | null;
+  normalizedText: string | null;
+  normalizedBoolean: boolean | null;
+  normalizedDisplayValue: string | null;
+};
+
+function valuesMatch(existing: NormalizedBulkValue, next: NormalizedBulkValue) {
+  if (existing.normalizedBoolean !== null || next.normalizedBoolean !== null) {
+    return existing.normalizedBoolean === next.normalizedBoolean;
+  }
+  const a = existing.normalizedValue;
+  const b = next.normalizedValue;
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
   return Math.abs(a - b) < 0.000001;
 }
 
-function normalizePastedValue(rawValue: string | null, metric: Metric | undefined) {
+function emptyNormalizedValue(): NormalizedBulkValue {
+  return {
+    normalizedValue: null,
+    normalizedText: null,
+    normalizedBoolean: null,
+    normalizedDisplayValue: null,
+  };
+}
+
+function normalizeExistingValue(existing: ExistingMetricValue | undefined): NormalizedBulkValue {
+  if (!existing) return emptyNormalizedValue();
+  if (typeof existing.valueBoolean === "boolean") {
+    const label = formatBooleanMetricValue(existing.valueBoolean);
+    return {
+      normalizedValue: null,
+      normalizedText: label,
+      normalizedBoolean: existing.valueBoolean,
+      normalizedDisplayValue: label,
+    };
+  }
+  const numeric = parseStoredValue(existing.value, existing.valueText, existing.valueBoolean);
+  return {
+    normalizedValue: numeric,
+    normalizedText: existing.valueText ?? null,
+    normalizedBoolean: null,
+    normalizedDisplayValue: formatMetricDisplayValue(existing) ?? (numeric === null ? null : String(numeric)),
+  };
+}
+
+function normalizePastedValue(rawValue: string | null, metric: BulkGridMetric | undefined): NormalizedBulkValue & { error: string | null } {
   if (rawValue === null || rawValue === undefined) {
-    return { normalizedValue: null as number | null, error: null as string | null };
+    return { ...emptyNormalizedValue(), error: null };
   }
 
   const trimmed = rawValue.trim();
   if (!trimmed) {
-    return { normalizedValue: null as number | null, error: null as string | null };
+    return { ...emptyNormalizedValue(), error: null };
+  }
+
+  if (isBooleanMetricDataType(metric?.dataType)) {
+    const parsed = parseBooleanMetricInput(trimmed);
+    if (parsed === null) {
+      return { ...emptyNormalizedValue(), error: "Invalid Yes/No format" };
+    }
+    const label = formatBooleanMetricValue(parsed);
+    return {
+      normalizedValue: null,
+      normalizedText: label,
+      normalizedBoolean: parsed,
+      normalizedDisplayValue: label,
+      error: null,
+    };
   }
 
   const isNegativeByParens = trimmed.startsWith("(") && trimmed.endsWith(")");
@@ -143,10 +231,16 @@ function normalizePastedValue(rawValue: string | null, metric: Metric | undefine
 
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) {
-    return { normalizedValue: null as number | null, error: "Invalid numeric format" };
+    return { ...emptyNormalizedValue(), error: "Invalid numeric format" };
   }
 
-  return { normalizedValue: parsed, error: null as string | null };
+  return {
+    normalizedValue: parsed,
+    normalizedText: null,
+    normalizedBoolean: null,
+    normalizedDisplayValue: String(parsed),
+    error: null,
+  };
 }
 
 function isMaterialOutlier(previousValue: number | null, nextValue: number | null) {
@@ -156,11 +250,27 @@ function isMaterialOutlier(previousValue: number | null, nextValue: number | nul
   return delta >= 1 && delta / baseline >= 0.5;
 }
 
-async function loadCompanyMetrics(companyId: string) {
-  return db
+async function loadCompanyMetrics(companyId: string): Promise<BulkGridMetric[]> {
+  const companyMetrics = await db
     .select()
     .from(metrics)
     .where(eq(metrics.companyId, companyId));
+
+  const activeDefinitions = await storage.getMetricDefinitions({ isActive: true });
+  const definitionDataTypeByMetricName = new Map(
+    activeDefinitions.map((def: any) => [normalizeMetricName(def.name), def.dataType ?? "numeric"]),
+  );
+
+  return companyMetrics.map((metric) => ({
+    id: metric.id,
+    name: metric.name,
+    category: metric.category,
+    unit: metric.unit,
+    metricType: metric.metricType,
+    enabled: Boolean(metric.enabled),
+    dataType: definitionDataTypeByMetricName.get(normalizeMetricName(metric.name)) ?? "numeric",
+    readOnly: false,
+  }));
 }
 
 async function loadMetricValues(companyId: string, metricIds: string[], periods: string[], siteId: string | null) {
@@ -172,6 +282,8 @@ async function loadMetricValues(companyId: string, metricIds: string[], periods:
       metricId: metricValues.metricId,
       period: metricValues.period,
       value: metricValues.value,
+      valueText: metricValues.valueText,
+      valueBoolean: metricValues.valueBoolean,
       locked: metricValues.locked,
     })
     .from(metricValues)
@@ -218,6 +330,7 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
       unit: metric.unit,
       metricType: metric.metricType,
       enabled: Boolean(metric.enabled),
+      dataType: metric.dataType,
       readOnly: false,
     }));
 
@@ -228,6 +341,8 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
         metricId: metricValues.metricId,
         period: metricValues.period,
         value: metricValues.value,
+        valueText: metricValues.valueText,
+        valueBoolean: metricValues.valueBoolean,
         locked: metricValues.locked,
         dataSourceType: metricValues.dataSourceType,
         workflowStatus: metricValues.workflowStatus,
@@ -247,6 +362,9 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
     metrics: eligibleMetrics,
     values: values.map((value) => ({
       ...value,
+      value: formatMetricDisplayValue(value) ?? value.value,
+      valueText: value.valueText ?? null,
+      valueBoolean: value.valueBoolean ?? null,
       locked: Boolean(value.locked),
       dataSourceType: value.dataSourceType ?? null,
       workflowStatus: value.workflowStatus ?? null,
@@ -304,23 +422,27 @@ export async function validateBulkMetricPaste(params: {
     const normalized = normalizePastedValue(cell.rawValue, metric);
     if (normalized.error) errors.push(normalized.error);
 
-    const existingValue = parseStoredValue(existing?.value);
+    const existingNormalized = normalizeExistingValue(existing);
     let status: BulkMetricValidationResult["status"] = "unchanged";
     if (errors.length > 0) {
       status = "error";
-    } else if (!valuesMatch(existingValue, normalized.normalizedValue)) {
-      if (existing && normalized.normalizedValue === null) {
+    } else if (!valuesMatch(existingNormalized, normalized)) {
+      if (existing && normalized.normalizedValue === null && normalized.normalizedBoolean === null && normalized.normalizedText === null) {
         status = "clear";
       } else if (existing) {
         status = "update";
-      } else if (normalized.normalizedValue === null) {
+      } else if (normalized.normalizedValue === null && normalized.normalizedBoolean === null && normalized.normalizedText === null) {
         status = "unchanged";
       } else {
         status = "create";
       }
     }
 
-    if (status !== "error" && isMaterialOutlier(parseStoredValue(previous?.value), normalized.normalizedValue)) {
+    if (
+      status !== "error" &&
+      !isBooleanMetricDataType(metric?.dataType) &&
+      isMaterialOutlier(parseStoredValue(previous?.value, previous?.valueText, previous?.valueBoolean), normalized.normalizedValue)
+    ) {
       warnings.push("Material change versus the prior month");
     }
 
@@ -340,7 +462,13 @@ export async function validateBulkMetricPaste(params: {
       period: cell.period,
       rawValue: cell.rawValue,
       normalizedValue: normalized.normalizedValue,
-      existingValue,
+      normalizedText: normalized.normalizedText,
+      normalizedBoolean: normalized.normalizedBoolean,
+      normalizedDisplayValue: normalized.normalizedDisplayValue,
+      existingValue: existingNormalized.normalizedValue,
+      existingText: existingNormalized.normalizedText,
+      existingBoolean: existingNormalized.normalizedBoolean,
+      existingDisplayValue: existingNormalized.normalizedDisplayValue,
       status,
       errors,
       warnings,
@@ -407,19 +535,24 @@ export async function commitBulkMetricPaste(params: {
     metricId: string;
     metricName: string | null;
     period: string;
-    previousValue: number | null;
-    nextValue: number | null;
+    previousValue: string | null;
+    nextValue: string | null;
     action: "metric_value_created" | "metric_value_updated";
   }> = [];
 
   await db.transaction(async (tx) => {
     for (const cell of changedCells) {
+      const nextDisplayValue = cell.normalizedDisplayValue ?? (cell.normalizedValue === null ? null : String(cell.normalizedValue));
+      const previousDisplayValue = cell.existingDisplayValue ?? (cell.existingValue === null ? null : String(cell.existingValue));
       const rowResult = siteId === null
         ? await tx.execute(sql`
           INSERT INTO metric_values (
             metric_id,
             period,
             value,
+            value_numeric,
+            value_text,
+            value_boolean,
             submitted_by,
             submitted_at,
             notes,
@@ -431,6 +564,9 @@ export async function commitBulkMetricPaste(params: {
             ${cell.metricId},
             ${cell.period},
             ${cell.normalizedValue === null ? null : String(cell.normalizedValue)},
+            ${cell.normalizedValue === null ? null : String(cell.normalizedValue)},
+            ${cell.normalizedText},
+            ${cell.normalizedBoolean},
             ${userId},
             NOW(),
             ${null},
@@ -441,6 +577,9 @@ export async function commitBulkMetricPaste(params: {
           ON CONFLICT (metric_id, period) WHERE site_id IS NULL
           DO UPDATE SET
             value = EXCLUDED.value,
+            value_numeric = EXCLUDED.value_numeric,
+            value_text = EXCLUDED.value_text,
+            value_boolean = EXCLUDED.value_boolean,
             submitted_by = EXCLUDED.submitted_by,
             submitted_at = NOW(),
             notes = EXCLUDED.notes,
@@ -453,6 +592,9 @@ export async function commitBulkMetricPaste(params: {
             metric_id,
             period,
             value,
+            value_numeric,
+            value_text,
+            value_boolean,
             submitted_by,
             submitted_at,
             notes,
@@ -464,6 +606,9 @@ export async function commitBulkMetricPaste(params: {
             ${cell.metricId},
             ${cell.period},
             ${cell.normalizedValue === null ? null : String(cell.normalizedValue)},
+            ${cell.normalizedValue === null ? null : String(cell.normalizedValue)},
+            ${cell.normalizedText},
+            ${cell.normalizedBoolean},
             ${userId},
             NOW(),
             ${null},
@@ -474,6 +619,9 @@ export async function commitBulkMetricPaste(params: {
           ON CONFLICT (metric_id, period, site_id) WHERE site_id IS NOT NULL
           DO UPDATE SET
             value = EXCLUDED.value,
+            value_numeric = EXCLUDED.value_numeric,
+            value_text = EXCLUDED.value_text,
+            value_boolean = EXCLUDED.value_boolean,
             submitted_by = EXCLUDED.submitted_by,
             submitted_at = NOW(),
             notes = EXCLUDED.notes,
@@ -492,8 +640,8 @@ export async function commitBulkMetricPaste(params: {
         metricId: cell.metricId,
         metricName: cell.metricName,
         period: cell.period,
-        previousValue: cell.existingValue,
-        nextValue: cell.normalizedValue,
+        previousValue: previousDisplayValue,
+        nextValue: nextDisplayValue,
         action: cell.status === "create" ? "metric_value_created" : "metric_value_updated",
       });
     }

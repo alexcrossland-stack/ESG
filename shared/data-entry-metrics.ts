@@ -22,8 +22,8 @@ export function parseBooleanMetricInput(value: unknown): boolean | null {
   if (value === null || value === undefined) return null;
   const normalized = String(value).trim().toLowerCase();
   if (normalized === "") return null;
-  if (["yes", "true"].includes(normalized)) return true;
-  if (["no", "false"].includes(normalized)) return false;
+  if (["yes", "y", "true", "1"].includes(normalized)) return true;
+  if (["no", "n", "false", "0"].includes(normalized)) return false;
   return null;
 }
 

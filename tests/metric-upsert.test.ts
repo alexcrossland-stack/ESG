@@ -96,9 +96,18 @@ async function createSite(adminToken: string, name: string): Promise<string> {
 }
 
 async function countMetricValues(client: Client, metricId: string, period: string, siteId: string | null) {
-  const result = await client.query<{ count: string; value: string | null }>(
+  const result = await client.query<{
+    count: string;
+    value: string | null;
+    value_text: string | null;
+    value_boolean: boolean | null;
+  }>(
     `
-      SELECT COUNT(*)::int AS count, MAX(value::text) AS value
+      SELECT
+        COUNT(*)::int AS count,
+        MAX(value::text) AS value,
+        MAX(value_text) AS value_text,
+        BOOL_OR(value_boolean) FILTER (WHERE value_boolean IS NOT NULL) AS value_boolean
       FROM metric_values
       WHERE metric_id = $1::uuid
         AND period = $2
@@ -112,7 +121,54 @@ async function countMetricValues(client: Client, metricId: string, period: strin
   return {
     count: Number(result.rows[0]?.count ?? 0),
     value: result.rows[0]?.value ?? null,
+    valueText: result.rows[0]?.value_text ?? null,
+    valueBoolean: result.rows[0]?.value_boolean ?? null,
   };
+}
+
+async function createBooleanMetricForCompany(client: Client, companyId: string) {
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const name = `Bulk Boolean Regression ${suffix}`;
+  await client.query(
+    `
+      INSERT INTO metric_definitions (
+        code,
+        name,
+        pillar,
+        category,
+        description,
+        data_type,
+        unit,
+        input_frequency,
+        is_core,
+        is_active,
+        is_derived
+      )
+      VALUES ($1, $2, 'governance', 'governance', 'Bulk boolean regression fixture', 'boolean', 'Yes/No', 'monthly', false, true, false)
+    `,
+    [`bulk_boolean_${suffix}`, name],
+  );
+  const result = await client.query<{ id: string }>(
+    `
+      INSERT INTO metrics (
+        company_id,
+        name,
+        description,
+        category,
+        unit,
+        frequency,
+        enabled,
+        is_default,
+        metric_type
+      )
+      VALUES ($1::uuid, $2, 'Bulk boolean regression fixture', 'governance', 'Yes/No', 'monthly', true, false, 'manual')
+      RETURNING id
+    `,
+    [companyId, name],
+  );
+  const metricId = result.rows[0]?.id;
+  if (!metricId) throw new Error("Could not create boolean metric fixture");
+  return metricId;
 }
 
 async function countMetricDefinitionValues(
@@ -290,6 +346,131 @@ async function testBulkMetricPasteUpsert(adminToken: string, metricIds: string[]
   }
 }
 
+async function testBulkBooleanMetricPaste(adminToken: string, booleanMetricId: string, numericMetricId: string, client: Client) {
+  console.log("\n── bulk yes/no metric paste tests ──");
+
+  const variants = [
+    { period: "2026-09", rawValue: "Yes", expected: true, label: "Yes" },
+    { period: "2026-10", rawValue: "no", expected: false, label: "No" },
+    { period: "2026-11", rawValue: "Y", expected: true, label: "Yes" },
+    { period: "2026-12", rawValue: "N", expected: false, label: "No" },
+    { period: "2027-01", rawValue: "TRUE", expected: true, label: "Yes" },
+    { period: "2027-02", rawValue: "false", expected: false, label: "No" },
+    { period: "2027-03", rawValue: "1", expected: true, label: "Yes" },
+    { period: "2027-04", rawValue: "0", expected: false, label: "No" },
+  ];
+
+  const validateRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: variants.map(({ period, rawValue }) => ({ metricId: booleanMetricId, period, rawValue })),
+  }, adminToken);
+
+  if (validateRes.status === 200) {
+    const body = JSON.parse(validateRes.body) as ValidationShape;
+    const normalizedLabels = (body.cells || []).map((cell) => cell.normalizedText);
+    if (
+      body.ok === true &&
+      body.summary.errorCount === 0 &&
+      body.summary.createCount === variants.length &&
+      normalizedLabels.join(",") === variants.map((variant) => variant.label).join(",")
+    ) {
+      pass("bulk validate accepts yes/no paste variants and normalizes display labels", normalizedLabels.join(","));
+    } else {
+      fail("bulk validate should accept yes/no paste variants", JSON.stringify({ summary: body.summary, normalizedLabels, cells: body.cells }));
+    }
+  } else {
+    fail("bulk yes/no validate should return 200", `status=${validateRes.status} body=${validateRes.body.slice(0, 200)}`);
+  }
+
+  const invalidBooleanRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [{ metricId: booleanMetricId, period: "2027-05", rawValue: "maybe" }],
+  }, adminToken);
+  if (invalidBooleanRes.status === 200) {
+    const body = JSON.parse(invalidBooleanRes.body) as ValidationShape;
+    const errors = (body.cells || []).flatMap((cell) => cell.errors);
+    if (body.ok === false && errors.some((error) => error.includes("Yes/No"))) {
+      pass("bulk validate rejects invalid yes/no labels", errors.join(","));
+    } else {
+      fail("bulk validate should reject invalid yes/no labels", JSON.stringify(body));
+    }
+  } else {
+    fail("bulk invalid yes/no validate should return 200", `status=${invalidBooleanRes.status}`);
+  }
+
+  const invalidNumericRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "validate",
+    cells: [{ metricId: numericMetricId, period: "2027-05", rawValue: "maybe" }],
+  }, adminToken);
+  if (invalidNumericRes.status === 200) {
+    const body = JSON.parse(invalidNumericRes.body) as ValidationShape;
+    const errors = (body.cells || []).flatMap((cell) => cell.errors);
+    if (body.ok === false && errors.some((error) => error.includes("numeric"))) {
+      pass("bulk validate still rejects non-numeric text for numeric metrics", errors.join(","));
+    } else {
+      fail("bulk validate should reject non-numeric text for numeric metrics", JSON.stringify(body));
+    }
+  } else {
+    fail("bulk invalid numeric validate should return 200", `status=${invalidNumericRes.status}`);
+  }
+
+  const commitRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+    mode: "commit",
+    cells: [
+      { metricId: booleanMetricId, period: "2027-06", rawValue: "Yes" },
+      { metricId: booleanMetricId, period: "2027-07", rawValue: "No" },
+    ],
+  }, adminToken);
+
+  if (commitRes.status === 200) {
+    const yesRow = await countMetricValues(client, booleanMetricId, "2027-06", null);
+    const noRow = await countMetricValues(client, booleanMetricId, "2027-07", null);
+    if (
+      yesRow.count === 1 &&
+      yesRow.value === null &&
+      yesRow.valueText === "Yes" &&
+      yesRow.valueBoolean === true &&
+      noRow.count === 1 &&
+      noRow.value === null &&
+      noRow.valueText === "No" &&
+      noRow.valueBoolean === false
+    ) {
+      pass("bulk commit stores yes/no metrics as boolean and display text", `yes=${yesRow.valueText}/${yesRow.valueBoolean} no=${noRow.valueText}/${noRow.valueBoolean}`);
+    } else {
+      fail("bulk commit should store yes/no values in typed columns", `yes=${JSON.stringify(yesRow)} no=${JSON.stringify(noRow)}`);
+    }
+  } else {
+    fail("bulk yes/no commit should succeed", `status=${commitRes.status} body=${commitRes.body.slice(0, 200)}`);
+  }
+
+  const reloadRes = await apiRequest("GET", "/api/data-entry/bulk-grid?periods=2027-06,2027-07&siteId=null", undefined, adminToken);
+  if (reloadRes.status === 200) {
+    const body = JSON.parse(reloadRes.body) as { values?: Array<{ metricId: string; period: string; value: string | null; valueText?: string | null; valueBoolean?: boolean | null }> };
+    const yes = (body.values || []).find((value) => value.metricId === booleanMetricId && value.period === "2027-06");
+    const no = (body.values || []).find((value) => value.metricId === booleanMetricId && value.period === "2027-07");
+    if (yes?.value === "Yes" && yes.valueText === "Yes" && yes.valueBoolean === true && no?.value === "No" && no.valueText === "No" && no.valueBoolean === false) {
+      pass("bulk grid reload displays yes/no values as labels", `yes=${yes.value} no=${no.value}`);
+    } else {
+      fail("bulk grid reload should display yes/no labels", JSON.stringify({ yes, no }));
+    }
+  } else {
+    fail("bulk grid reload should return 200", `status=${reloadRes.status} body=${reloadRes.body.slice(0, 200)}`);
+  }
+
+  const exportRes = await apiRequest("GET", "/api/reports/export-data/esg_metrics_summary?period=2027-06&siteId=null", undefined, adminToken);
+  if (exportRes.status === 200) {
+    const body = JSON.parse(exportRes.body) as { values?: Array<{ metricId: string; value?: unknown; valueText?: string | null; valueBoolean?: boolean | null; displayValue?: string | null }> };
+    const row = (body.values || []).find((value) => value.metricId === booleanMetricId);
+    if (row && row.valueText === "Yes" && row.valueBoolean === true && String(row.displayValue ?? row.valueText) === "Yes") {
+      pass("report export-data keeps yes/no values as labels", JSON.stringify({ valueText: row.valueText, valueBoolean: row.valueBoolean, displayValue: row.displayValue }));
+    } else {
+      fail("report export-data should expose yes/no labels", JSON.stringify(row));
+    }
+  } else {
+    fail("report export-data for bulk yes/no metric should return 200", `status=${exportRes.status} body=${exportRes.body.slice(0, 200)}`);
+  }
+}
+
 type ValidationShape = {
   summary: {
     createCount: number;
@@ -300,7 +481,15 @@ type ValidationShape = {
   };
   ok?: boolean;
   rowIssues?: Array<{ metricName: string | null; errors: string[]; warnings: string[] }>;
-  cells?: Array<{ status: string; normalizedValue: number | null; errors: string[]; warnings: string[] }>;
+  cells?: Array<{
+    status: string;
+    normalizedValue: number | null;
+    normalizedText?: string | null;
+    normalizedBoolean?: boolean | null;
+    normalizedDisplayValue?: string | null;
+    errors: string[];
+    warnings: string[];
+  }>;
 };
 
 async function insertLockedReportingPeriod(client: Client, companyId: string, month: string) {
@@ -507,10 +696,12 @@ async function run() {
 
     const metricId = await getTenantAMetricId(tenants.tenantA.adminToken);
     const bulkMetricIds = await getTenantAMetricIds(tenants.tenantA.adminToken, 2);
+    const booleanMetricId = await createBooleanMetricForCompany(client, tenants.tenantA.companyId);
     const metricDefinitionId = await getMetricDefinitionId(client);
 
     await testMetricValuesUpsert(tenants.tenantA.adminToken, metricId, client);
     await testBulkMetricPasteUpsert(tenants.tenantA.adminToken, bulkMetricIds, client);
+    await testBulkBooleanMetricPaste(tenants.tenantA.adminToken, booleanMetricId, bulkMetricIds[0], client);
     await testBulkMetricPasteValidationEdges(tenants.tenantA.adminToken, tenants.tenantA.companyId, bulkMetricIds, client);
     await testMetricDefinitionValuesUpsert(
       tenants.tenantA.adminToken,
