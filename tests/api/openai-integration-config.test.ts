@@ -54,6 +54,14 @@ await check("OpenAI chat model is configurable with production-safe default", ()
   assert(routes.includes("model: getOpenAiChatModel()"), "chat completion requests do not use configured model resolver");
 });
 
+await check("ESG Assistant uses Responses API parser for configured models", () => {
+  const assist = readFileSync("server/openai-assist.ts", "utf8");
+  assert(assist.includes("openai.responses.create"), "assistant does not use Responses API");
+  assert(assist.includes("extractOpenAiAssistantReply"), "assistant response parser is missing");
+  assert(assist.includes("output_text"), "assistant parser does not handle Responses API output_text");
+  assert(routes.includes("createOpenAiAssistantReply(openai"), "chat assist route does not use shared response parser");
+});
+
 await check("legacy inaccessible OpenAI chat model is not hardcoded", () => {
   assert(!routes.includes('"gpt-4o-mini"'), "server/routes.ts still hardcodes gpt-4o-mini");
 });
