@@ -11,6 +11,13 @@ export type ReportPeriodSelection = {
   dateTo: string;
 };
 
+export type ReportPeriodBoundary = {
+  period: string;
+  label: string;
+  dateFrom: string;
+  dateTo: string;
+};
+
 const QUARTERS = {
   1: { startMonth: 1, endMonth: 3 },
   2: { startMonth: 4, endMonth: 6 },
@@ -91,6 +98,39 @@ export function buildReportPeriodSelection(periodType: ReportPeriodType, year: n
   const normalizedQuarter = normalizeQuarter(quarter);
   if (!normalizedQuarter) throw new Error("Invalid report quarter");
   return buildQuarterlyReportPeriod(normalizedYear, normalizedQuarter);
+}
+
+export function getPreviousComparableReportPeriod(selection: ReportPeriodSelection): ReportPeriodSelection {
+  if (selection.periodType === "monthly") {
+    const month = selection.month ?? normalizeMonth(selection.period.slice(5, 7)) ?? 1;
+    const previousMonth = month === 1 ? 12 : month - 1;
+    const previousYear = month === 1 ? selection.year - 1 : selection.year;
+    return buildMonthlyReportPeriod(previousYear, previousMonth);
+  }
+
+  if (selection.periodType === "quarterly") {
+    const quarter = selection.quarter ?? normalizeQuarter(selection.period.slice(-1)) ?? 1;
+    const previousQuarter = quarter === 1 ? 4 : (quarter - 1) as 1 | 2 | 3 | 4;
+    const previousYear = quarter === 1 ? selection.year - 1 : selection.year;
+    return buildQuarterlyReportPeriod(previousYear, previousQuarter);
+  }
+
+  return buildAnnualReportPeriod(selection.year - 1);
+}
+
+export function getReportPeriodBoundary(selection: ReportPeriodSelection): ReportPeriodBoundary {
+  return {
+    period: selection.period,
+    label: selection.label,
+    dateFrom: selection.dateFrom,
+    dateTo: selection.dateTo,
+  };
+}
+
+export function getReportComparisonLabel(periodType: ReportPeriodType): string {
+  if (periodType === "monthly") return "Compared with previous month";
+  if (periodType === "quarterly") return "Compared with previous quarter";
+  return "Compared with previous year";
 }
 
 export function resolveReportPeriodSelection(input: {
