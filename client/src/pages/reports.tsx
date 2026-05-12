@@ -472,7 +472,9 @@ function reportSectionsFromEntry(report: ReportHistoryEntry) {
     includeSignoff: report.includeSignoff ?? templateDefaults.includeSignoff,
     includeDataQualityAssessment: report.reportData?.dataQualityAssessment ? templateDefaults.includeDataQualityAssessment : false,
     includeComplianceStatus: report.reportData?.complianceStatus ? templateDefaults.includeComplianceStatus : false,
-    includePeriodComparison: report.reportData?.periodComparison ? templateDefaults.includePeriodComparison : false,
+    includePeriodComparison: (report.reportData?.trendSummary || report.reportData?.periodComparison)
+      ? templateDefaults.includePeriodComparison
+      : false,
   };
 }
 
@@ -513,12 +515,127 @@ function TrafficDot({ status }: { status: string }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${color}`} />;
 }
 
+function formatTrendDisplayValue(value: unknown, unit?: string | null) {
+  if (value === null || value === undefined || value === "") return "—";
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  const formatted = Math.abs(numeric) >= 100
+    ? numeric.toLocaleString(undefined, { maximumFractionDigits: 1 })
+    : numeric.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function trendReasonLabel(reason?: string) {
+  switch (reason) {
+    case "missing_current": return "No current-period data available";
+    case "missing_previous": return "No prior-period data available";
+    case "not_applicable_yes_no": return "Not applicable for Yes/No metric";
+    case "non_numeric": return "Trend unavailable for non-numeric value";
+    case "zero_previous": return "Percentage change unavailable because the prior value is zero";
+    default: return "Trend unavailable";
+  }
+}
+
+function ReportTrendSections({ trendSummary }: { trendSummary: any }) {
+  if (!trendSummary) return null;
+  const available = Array.isArray(trendSummary.metrics)
+    ? trendSummary.metrics.filter((trend: any) => trend?.reason === "ok")
+    : [];
+  const unavailable = Array.isArray(trendSummary.unavailable) ? trendSummary.unavailable : [];
+  const notes = Array.isArray(trendSummary.notes) ? trendSummary.notes : [];
+  const visibleUnavailable = unavailable.slice(0, Math.max(0, 8 - Math.min(8, available.length)));
+
+  return (
+    <div data-testid="section-trend-summary" className="space-y-4">
+      <div>
+        <h2 className="font-semibold text-base mb-2 flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-primary" />
+          Trend Summary
+        </h2>
+        <div className="grid grid-cols-3 gap-3 text-xs">
+          <div className="bg-muted/50 rounded-md p-3">
+            <p className="text-muted-foreground">Comparison</p>
+            <p className="font-medium" data-testid="text-report-trend-comparison">
+              {trendSummary.comparisonLabel || "Compared with previous period"}
+            </p>
+            <p className="text-muted-foreground mt-1">
+              {trendSummary.currentPeriodLabel || trendSummary.currentPeriod || "Current period"} vs {trendSummary.previousPeriodLabel || trendSummary.previousPeriod || "previous period"}
+            </p>
+          </div>
+          <div className="bg-muted/50 rounded-md p-3">
+            <p className="text-muted-foreground">Improvements</p>
+            <p className="font-semibold text-lg">{trendSummary.improvements?.length || 0}</p>
+          </div>
+          <div className="bg-muted/50 rounded-md p-3">
+            <p className="text-muted-foreground">Worsening areas</p>
+            <p className="font-semibold text-lg">{trendSummary.worsening?.length || 0}</p>
+          </div>
+        </div>
+      </div>
+
+      {available.length > 0 && (
+        <div data-testid="section-metric-trends">
+          <h3 className="text-xs font-semibold text-muted-foreground mb-1.5">Metric Trends</h3>
+          <div className="border border-border rounded-md overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left p-2 font-medium">Metric</th>
+                  <th className="text-right p-2 font-medium">Previous</th>
+                  <th className="text-right p-2 font-medium">Current</th>
+                  <th className="text-right p-2 font-medium">Change</th>
+                  <th className="text-left p-2 font-medium">Direction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {available.slice(0, 12).map((trend: any, i: number) => (
+                  <tr key={trend.metricId || trend.metricName || i} className="border-t border-border">
+                    <td className="p-2">{trend.metricName || "Metric"}</td>
+                    <td className="p-2 text-right text-muted-foreground">{formatTrendDisplayValue(trend.previousValue, trend.unit)}</td>
+                    <td className="p-2 text-right font-medium">{formatTrendDisplayValue(trend.currentValue, trend.unit)}</td>
+                    <td className="p-2 text-right">
+                      <span className="font-medium">{formatTrendDisplayValue(trend.absoluteDelta, trend.unit)}</span>
+                      {trend.percentageDelta !== null && trend.percentageDelta !== undefined && (
+                        <span className="text-muted-foreground ml-1">({Number(trend.percentageDelta).toFixed(1)}%)</span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      <Badge variant="secondary" className="text-[10px]">{trend.changeLabel || trend.direction || "Trend unavailable"}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {available.length > 12 && (
+            <p className="text-xs text-muted-foreground mt-1">Showing 12 of {available.length} available metric comparisons.</p>
+          )}
+        </div>
+      )}
+
+      {(notes.length > 0 || visibleUnavailable.length > 0) && (
+        <div data-testid="section-trend-notes" className="bg-muted/30 rounded-md p-3 text-xs">
+          <h3 className="font-semibold mb-1.5">Trend Notes</h3>
+          <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+            {notes.map((note: string, i: number) => <li key={`note-${i}`}>{note}</li>)}
+            {visibleUnavailable.map((trend: any, i: number) => (
+              <li key={`unavailable-${trend.metricId || i}`}>
+                {trend.metricName || "Metric"}: {trendReasonLabel(trend.reason)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportPreview({ data, sections }: { data: any; sections: Record<string, boolean> }) {
   const {
     company, policySummary, selectedTopics, metricsByCategory, values,
     weightedScore, carbonSummary, actionsSummary, dataQualityFlags,
     evidenceCoverage, factorMethodology, period, generatedAt, generatedBy, reportTemplate,
-    branding, dataQualityAssessment, complianceStatus, periodComparison,
+    branding, dataQualityAssessment, complianceStatus, periodComparison, trendSummary,
     reportTitle, dataQualitySummary,
   } = data;
 
@@ -1097,7 +1214,11 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         </div>
       )}
 
-      {sections.includePeriodComparison && periodComparison && (
+      {sections.includePeriodComparison && (trendSummary || periodComparison) && (
+        <ReportTrendSections trendSummary={trendSummary || periodComparison} />
+      )}
+
+      {sections.includePeriodComparison && periodComparison && !trendSummary && (
         <div data-testid="section-period-comparison">
           <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
             <ArrowUpDown className="w-4 h-4 text-primary" />

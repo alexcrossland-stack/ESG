@@ -31,6 +31,50 @@ interface ReportData {
   nextSteps?: string[];
 }
 
+export function buildTrendReportSections(trendSummary: any): ReportSection[] {
+  if (!trendSummary) return [];
+
+  const availableTrends = Array.isArray(trendSummary.metrics)
+    ? trendSummary.metrics.filter((trend: any) => trend?.reason === "ok")
+    : [];
+  const trendRows = availableTrends.slice(0, 12).map((trend: any) => ({
+    label: trend.metricName || trend.name || "Metric",
+    value: `${trend.currentValue ?? "-"} vs ${trend.previousValue ?? "-"}`,
+    status: trend.changeLabel || (trend.direction === "improved"
+      ? "Improved"
+      : trend.direction === "worsened"
+        ? "Worsened"
+        : trend.direction === "unchanged"
+          ? "Unchanged"
+          : "Trend unavailable"),
+  }));
+  const notes = Array.isArray(trendSummary.notes) ? trendSummary.notes : [];
+  const unavailableCount = Array.isArray(trendSummary.unavailable) ? trendSummary.unavailable.length : 0;
+  const sections: ReportSection[] = [{
+    title: "Trend Summary",
+    type: "text",
+    content: `${trendSummary.comparisonLabel || "Compared with previous period"}: ${trendSummary.currentPeriodLabel || trendSummary.currentPeriod || "Current period"} compared with ${trendSummary.previousPeriodLabel || trendSummary.previousPeriod || "previous period"}. Improvements: ${trendSummary.improvements?.length || 0}. Worsening areas: ${trendSummary.worsening?.length || 0}. Unavailable comparisons: ${unavailableCount}.`,
+  }];
+
+  if (trendRows.length > 0) {
+    sections.push({
+      title: "Metric Trends",
+      type: "metrics",
+      rows: trendRows,
+    });
+  }
+
+  if (notes.length > 0 || unavailableCount > 0) {
+    sections.push({
+      title: "Trend Notes",
+      type: "list",
+      items: notes.length > 0 ? notes : [`${unavailableCount} metric comparison${unavailableCount === 1 ? "" : "s"} unavailable due to missing or non-applicable prior-period data.`],
+    });
+  }
+
+  return sections;
+}
+
 const PDF_CONTENT_WIDTH = 495;
 const PDF_PAGE_BREAK_Y = 720;
 function sanitizeDocxText(value: unknown): string {

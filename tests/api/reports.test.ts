@@ -393,10 +393,11 @@ async function run(tenants: SeededTenants): Promise<void> {
               const detailRes = await apiRequest("GET", `/api/reports/${body.report?.id}`, undefined, tenantA.adminToken);
               if (detailRes.status !== 200) fail(name, `detail status=${detailRes.status} body=${detailRes.body.slice(0, 200)}`);
               else {
-                const detail = JSON.parse(detailRes.body) as { periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; trendMetadata?: { previousPeriod?: string | null } | null };
+                const detail = JSON.parse(detailRes.body) as { periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; trendMetadata?: { previousPeriod?: string | null } | null; reportData?: { trendSummary?: { comparisonLabel?: string | null; previousPeriod?: string | null; metrics?: unknown[]; unavailable?: unknown[]; notes?: string[] } } };
                 if (detail.periodType !== "monthly") fail(name, `library detail periodType mismatch ${detail.periodType}`);
                 else if (!detail.periodLabel || detail.dateFrom !== "2025-05-01" || detail.dateTo !== "2025-05-31") fail(name, `library metadata mismatch ${detail.periodLabel}/${detail.dateFrom}/${detail.dateTo}`);
                 else if (detail.trendMetadata?.previousPeriod !== "2025-04") fail(name, `library trend metadata mismatch ${detail.trendMetadata?.previousPeriod}`);
+                else if (detail.reportData?.trendSummary?.previousPeriod !== "2025-04" || !detail.reportData.trendSummary.comparisonLabel) fail(name, "library report body missing trend summary for preview rendering");
                 else pass(name);
               }
             }
