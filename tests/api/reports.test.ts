@@ -10,6 +10,7 @@
 import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
 import { Client } from "pg";
+import { inflateSync } from "zlib";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
@@ -36,6 +37,30 @@ async function apiRequestBinary(method: string, path: string, body?: object, tok
     headers: res.headers,
     body: Buffer.from(await res.arrayBuffer()),
   };
+}
+
+function extractPdfText(buffer: Buffer): string {
+  const raw = buffer.toString("latin1");
+  const pieces: string[] = [];
+  const streamPattern = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  for (const match of raw.matchAll(streamPattern)) {
+    let stream = Buffer.from(match[1], "latin1");
+    try {
+      stream = inflateSync(stream);
+    } catch {
+      // Some PDF streams may be uncompressed.
+    }
+    const content = stream.toString("latin1");
+    for (const hex of content.matchAll(/<([0-9a-fA-F\s]+)>/g)) {
+      const normalized = hex[1].replace(/\s+/g, "");
+      if (!normalized || normalized.length % 2 !== 0) continue;
+      pieces.push(Buffer.from(normalized, "hex").toString("utf8"));
+    }
+    for (const literal of content.matchAll(/\(([^()]*)\)/g)) {
+      pieces.push(literal[1].replace(/\\([\\()])/g, "$1"));
+    }
+  }
+  return pieces.join("").replace(/\s+/g, " ").trim();
 }
 
 async function insertGeneratedReportFile(companyId: string, reportRunId: string): Promise<string> {
@@ -398,7 +423,23 @@ async function run(tenants: SeededTenants): Promise<void> {
                 else if (!detail.periodLabel || detail.dateFrom !== "2025-05-01" || detail.dateTo !== "2025-05-31") fail(name, `library metadata mismatch ${detail.periodLabel}/${detail.dateFrom}/${detail.dateTo}`);
                 else if (detail.trendMetadata?.previousPeriod !== "2025-04") fail(name, `library trend metadata mismatch ${detail.trendMetadata?.previousPeriod}`);
                 else if (detail.reportData?.trendSummary?.previousPeriod !== "2025-04" || !detail.reportData.trendSummary.comparisonLabel) fail(name, "library report body missing trend summary for preview rendering");
-                else pass(name);
+                else {
+                  const fileRes = await apiRequest("POST", `/api/reports/${body.report?.id}/generate-file`, { format: "pdf" }, tenantA.adminToken);
+                  if (fileRes.status !== 200) fail(name, `snapshot file generation status=${fileRes.status} body=${fileRes.body.slice(0, 200)}`);
+                  else {
+                    const fileBody = JSON.parse(fileRes.body) as { fileId?: string; downloadUrl?: string };
+                    if (!fileBody.fileId || !fileBody.downloadUrl) fail(name, "snapshot file generation missing file metadata");
+                    else {
+                      const downloadRes = await apiRequestBinary("GET", fileBody.downloadUrl, undefined, tenantA.adminToken);
+                      const text = extractPdfText(downloadRes.body);
+                      if (downloadRes.status !== 200) fail(name, `snapshot file download status=${downloadRes.status}`);
+                      else if (!text.includes("Trend Summary")) fail(name, `snapshot file missing Trend Summary: ${text.slice(0, 500)}`);
+                      else if (!text.includes("Metric Trends")) fail(name, `snapshot file missing Metric Trends: ${text.slice(0, 500)}`);
+                      else if (!text.includes("Compared with previous month")) fail(name, `snapshot file missing comparison label: ${text.slice(0, 500)}`);
+                      else pass(name);
+                    }
+                  }
+                }
               }
             }
           }

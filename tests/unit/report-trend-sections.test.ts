@@ -1,4 +1,4 @@
-import { buildTrendReportSections } from "../../server/report-engine";
+import { buildSavedReportSnapshotSections, buildTrendReportSections } from "../../server/report-engine";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -75,6 +75,44 @@ await check("adds safe unavailable note when no explicit notes exist", () => {
   assert(sections.some((section) => section.title === "Trend Summary"), "missing summary section");
   const notes = sections.find((section) => section.title === "Trend Notes");
   assert(notes?.items?.[0]?.includes("1 metric comparison unavailable"), `unexpected unavailable note ${JSON.stringify(notes?.items)}`);
+});
+
+await check("saved report snapshot sections preserve stored metrics and trend sections", () => {
+  const sections = buildSavedReportSnapshotSections({
+    reportTitle: "Historical Monthly Report",
+    period: "2025-05",
+    values: [{
+      metricName: "Electricity Consumption",
+      category: "environmental",
+      value: 80,
+      unit: "kWh",
+      dataSourceLabel: "Evidenced",
+      workflowLabel: "Approved",
+    }],
+    trendSummary: {
+      comparisonLabel: "Compared with previous month",
+      currentPeriod: "2025-05",
+      previousPeriod: "2025-04",
+      improvements: [],
+      worsening: [],
+      metrics: [{
+        metricName: "Electricity Consumption",
+        reason: "ok",
+        currentValue: 80,
+        previousValue: 100,
+        changeLabel: "Improved",
+      }],
+      unavailable: [],
+      notes: [],
+    },
+  });
+
+  const titles = sections.map((section) => section.title);
+  assert(titles.includes("ESG Metrics"), `missing ESG Metrics in ${titles.join(",")}`);
+  assert(titles.includes("Trend Summary"), `missing Trend Summary in ${titles.join(",")}`);
+  assert(titles.includes("Metric Trends"), `missing Metric Trends in ${titles.join(",")}`);
+  const metrics = sections.find((section) => section.title === "ESG Metrics");
+  assert(metrics?.tableRows?.[0]?.[0] === "Electricity Consumption", "snapshot metric row missing stored metric");
 });
 
 const passed = results.filter((result) => result.passed).length;
