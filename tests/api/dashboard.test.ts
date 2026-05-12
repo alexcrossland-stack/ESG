@@ -141,6 +141,78 @@ async function run(tenants: SeededTenants): Promise<void> {
     if (res.status === 500) fail(name, "server error for contributor");
     else pass(name, `status=${res.status}`);
   }
+
+  // ── 11. Dashboard trend summary is safe with sparse/no historical data ───
+  {
+    const name = "dashboard trend summary loads with sparse historical data";
+    const res = await apiRequest("GET", "/api/dashboard/enhanced", undefined, tenantA.adminToken);
+    if (res.status !== 200) {
+      pass(name, `skipped — status=${res.status}`);
+    } else {
+      try {
+        const body = JSON.parse(res.body) as { trendSummary?: { cards?: Array<{ state?: string }> } };
+        const cards = body.trendSummary?.cards;
+        if (!Array.isArray(cards) || cards.length === 0) fail(name, "missing trend cards");
+        else if (!cards.some((card) => card.state === "insufficient_data")) fail(name, "expected at least one insufficient-data trend state");
+        else pass(name);
+      } catch {
+        fail(name, "invalid JSON");
+      }
+    }
+  }
+
+  // ── 12. Dashboard trends compare current and previous period correctly ───
+  {
+    const name = "dashboard energy trend values use current vs previous period and exclude other tenants";
+    const metricsResA = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    const metricsResB = await apiRequest("GET", "/api/metrics", undefined, tenantB.adminToken);
+    if (metricsResA.status !== 200 || metricsResB.status !== 200) {
+      fail(name, `metrics status A=${metricsResA.status} B=${metricsResB.status}`);
+    } else {
+      try {
+        const metricsA = JSON.parse(metricsResA.body) as Array<{ id: string; name?: string }>;
+        const metricsB = JSON.parse(metricsResB.body) as Array<{ id: string; name?: string }>;
+        const metricA = metricsA.find((metric) => /electricity|energy/i.test(metric.name || "")) || metricsA[0];
+        const metricB = metricsB.find((metric) => /electricity|energy/i.test(metric.name || "")) || metricsB[0];
+        if (!metricA?.id || !metricB?.id) fail(name, "missing metric id");
+        else {
+          const seedResponses = await Promise.all([
+            apiRequest("POST", "/api/data-entry", { metricId: metricA.id, period: "2099-04", value: 100, notes: "dashboard trend previous" }, tenantA.adminToken),
+            apiRequest("POST", "/api/data-entry", { metricId: metricA.id, period: "2099-05", value: 80, notes: "dashboard trend current" }, tenantA.adminToken),
+            apiRequest("POST", "/api/data-entry", { metricId: metricB.id, period: "2099-04", value: 9000, notes: "tenant b previous" }, tenantB.adminToken),
+            apiRequest("POST", "/api/data-entry", { metricId: metricB.id, period: "2099-05", value: 8000, notes: "tenant b current" }, tenantB.adminToken),
+          ]);
+          const failedSeed = seedResponses.find((response) => ![200, 201].includes(response.status));
+          if (failedSeed) {
+            fail(name, `seed data-entry status=${failedSeed.status} body=${failedSeed.body.slice(0, 200)}`);
+            return;
+          }
+          const dashboardRes = await apiRequest("GET", "/api/dashboard/enhanced", undefined, tenantA.adminToken);
+          if (dashboardRes.status !== 200) fail(name, `dashboard status=${dashboardRes.status} body=${dashboardRes.body.slice(0, 200)}`);
+          else {
+            const body = JSON.parse(dashboardRes.body) as {
+              trendSummary?: { currentPeriod?: string; previousPeriod?: string; cards?: Array<{ key?: string; currentValue?: number; previousValue?: number; absoluteDelta?: number; state?: string }> };
+              metricSummaries?: unknown[];
+            };
+            const energy = body.trendSummary?.cards?.find((card) => card.key === "energy");
+            if (body.trendSummary?.currentPeriod !== "2099-05" || body.trendSummary.previousPeriod !== "2099-04") {
+              fail(name, `period mismatch ${body.trendSummary?.currentPeriod}/${body.trendSummary?.previousPeriod}`);
+            } else if (!energy || energy.state !== "available") {
+              fail(name, "energy trend unavailable");
+            } else if (energy.currentValue !== 80 || energy.previousValue !== 100 || energy.absoluteDelta !== -20) {
+              fail(name, `unexpected energy trend ${JSON.stringify(energy)}`);
+            } else if (!Array.isArray(body.metricSummaries)) {
+              fail(name, "existing dashboard metric summaries missing");
+            } else {
+              pass(name);
+            }
+          }
+        }
+      } catch (err) {
+        fail(name, err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
 }
 
 (async () => {

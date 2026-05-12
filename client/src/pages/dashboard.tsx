@@ -14,6 +14,7 @@ import {
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
   Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
   Database, TrendingDown, BookOpen, Globe, Star, Download, Upload,
+  Droplets, Recycle,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -125,6 +126,108 @@ function CategoryBar({ label, counts, score }: {
         {redPct > 0 && <div className="bg-red-500 transition-all" style={{ width: `${redPct}%` }} />}
       </div>
     </div>
+  );
+}
+
+const TREND_ICON_MAP: Record<string, any> = {
+  emissions: Leaf,
+  energy: Zap,
+  waste: Recycle,
+  water: Droplets,
+  workforce: Users,
+  readiness: Database,
+};
+
+function formatTrendNumber(value: number | null | undefined, unit?: string | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded.toLocaleString()}${unit ? ` ${unit}` : ""}`;
+}
+
+function DashboardTrendCards({ trendSummary }: { trendSummary: any }) {
+  const cards = Array.isArray(trendSummary?.cards) ? trendSummary.cards : [];
+  if (cards.length === 0) return null;
+
+  return (
+    <section aria-labelledby="dashboard-trends-heading" data-testid="section-dashboard-trends" className="space-y-2">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 id="dashboard-trends-heading" className="text-sm font-semibold">Trend analysis</h2>
+          <p className="text-xs text-muted-foreground">
+            {trendSummary?.comparisonLabel || "Compared with previous period"}
+            {trendSummary?.currentPeriodLabel && trendSummary?.previousPeriodLabel
+              ? `: ${trendSummary.currentPeriodLabel} vs ${trendSummary.previousPeriodLabel}`
+              : ""}
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        {cards.map((card: any) => {
+          const Icon = TREND_ICON_MAP[card.key] || BarChart3;
+          const isAvailable = card.state === "available";
+          const deltaDirection = card.absoluteDelta === null
+            ? null
+            : card.absoluteDelta > 0 ? "increase" : card.absoluteDelta < 0 ? "decrease" : "unchanged";
+          const directionClass = card.direction === "improved"
+            ? "text-emerald-600"
+            : card.direction === "worsened"
+              ? "text-red-600"
+              : "text-muted-foreground";
+          return (
+            <Card key={card.key} data-testid={`card-dashboard-trend-${card.key}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Icon className="w-4 h-4 text-primary" />
+                  {card.label}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {isAvailable ? (
+                  <>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Current period</p>
+                        <p className="text-xl font-semibold" data-testid={`text-trend-current-${card.key}`}>
+                          {formatTrendNumber(card.currentValue, card.unit)}
+                        </p>
+                      </div>
+                      <div className={`flex items-center gap-1 text-xs font-medium ${directionClass}`} aria-label={`Trend direction ${card.direction}`}>
+                        {deltaDirection === "increase" ? <ArrowUp className="w-3.5 h-3.5" /> : deltaDirection === "decrease" ? <ArrowDown className="w-3.5 h-3.5" /> : <CircleDot className="w-3.5 h-3.5" />}
+                        {card.direction === "improved" ? "Improved" : card.direction === "worsened" ? "Worsened" : "Unchanged"}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="text-muted-foreground">Previous</p>
+                        <p className="font-medium">{formatTrendNumber(card.previousValue, card.unit)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Change</p>
+                        <p className="font-medium">{formatTrendNumber(card.absoluteDelta, card.unit)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Percent</p>
+                        <p className="font-medium">{card.percentageDelta === null || card.percentageDelta === undefined ? "—" : `${Math.abs(card.percentageDelta).toFixed(1)}%`}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground" data-testid={`text-trend-summary-${card.key}`}>
+                      Based on {card.metricCount} metric{card.metricCount === 1 ? "" : "s"} in this area.
+                    </p>
+                  </>
+                ) : (
+                  <div className="min-h-[112px] flex flex-col justify-center gap-2">
+                    <p className="text-sm font-medium text-muted-foreground">Insufficient data</p>
+                    <p className="text-xs text-muted-foreground" data-testid={`text-trend-insufficient-${card.key}`}>
+                      No prior-period data available for comparable {card.label.toLowerCase()} metrics.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -1156,6 +1259,8 @@ export default function Dashboard() {
       <PrimaryActionCard readiness={readiness} isLoading={!readiness} />
 
       <DashboardHeroCard esgScore={esgScore} weightedScore={weightedScore} />
+
+      <DashboardTrendCards trendSummary={enhanced?.trendSummary} />
 
       <WhatsMissingPanel readiness={readiness} esgState={esgState} />
 

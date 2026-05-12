@@ -71,9 +71,166 @@ import {
   parseBooleanMetricInput,
 } from "@shared/data-entry-metrics";
 import {
+  buildAnnualReportPeriod,
+  buildMonthlyReportPeriod,
+  buildQuarterlyReportPeriod,
+  getPreviousComparableReportPeriod,
   isPeriodWithinDateRange,
+  type ReportPeriodSelection,
   resolveReportPeriodSelection,
 } from "@shared/report-periods";
+import { calculateMetricTrends, type MetricTrend, type TrendMetricInput, type TrendValueInput } from "@shared/esg-trends";
+
+type DashboardTrendCard = {
+  key: string;
+  label: string;
+  category: string;
+  currentPeriod: string;
+  previousPeriod: string;
+  currentValue: number | null;
+  previousValue: number | null;
+  absoluteDelta: number | null;
+  percentageDelta: number | null;
+  direction: MetricTrend["direction"];
+  state: "available" | "insufficient_data" | "not_applicable";
+  unit: string | null;
+  metricCount: number;
+  metricNames: string[];
+};
+
+function inferTrendPeriodFromPeriodString(period: string): ReportPeriodSelection {
+  const monthly = period.match(/^(\d{4})-(\d{2})$/);
+  if (monthly) return buildMonthlyReportPeriod(Number(monthly[1]), Number(monthly[2]));
+
+  const quarterly = period.match(/^(\d{4})-Q([1-4])$/);
+  if (quarterly) return buildQuarterlyReportPeriod(Number(quarterly[1]), Number(quarterly[2]) as 1 | 2 | 3 | 4);
+
+  const annual = period.match(/^(\d{4})$/);
+  if (annual) return buildAnnualReportPeriod(Number(annual[1]));
+
+  const now = new Date();
+  return buildMonthlyReportPeriod(now.getFullYear(), now.getMonth() + 1);
+}
+
+function inferTrendPeriodFromReportingPeriod(reportingPeriod: any, fallbackPeriod: string): ReportPeriodSelection {
+  if (!reportingPeriod?.periodType || !reportingPeriod?.startDate) {
+    return inferTrendPeriodFromPeriodString(fallbackPeriod);
+  }
+
+  const start = new Date(reportingPeriod.startDate);
+  const year = start.getFullYear();
+  if (reportingPeriod.periodType === "annual") return buildAnnualReportPeriod(year);
+  if (reportingPeriod.periodType === "quarterly") {
+    const quarter = (Math.floor(start.getMonth() / 3) + 1) as 1 | 2 | 3 | 4;
+    return buildQuarterlyReportPeriod(year, quarter);
+  }
+  return buildMonthlyReportPeriod(year, start.getMonth() + 1);
+}
+
+function listMonthPeriodsForSelection(selection: ReportPeriodSelection): string[] {
+  const periods: string[] = [];
+  const start = new Date(`${selection.dateFrom}T00:00:00Z`);
+  const end = new Date(`${selection.dateTo}T00:00:00Z`);
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const endIndex = end.getUTCFullYear() * 12 + end.getUTCMonth();
+
+  while (cursor.getUTCFullYear() * 12 + cursor.getUTCMonth() <= endIndex) {
+    periods.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return periods;
+}
+
+function trendMetricFromMetric(metric: any): TrendMetricInput {
+  return {
+    id: metric.id,
+    name: metric.name,
+    category: metric.category,
+    unit: metric.unit,
+    enabled: metric.enabled,
+    metricType: metric.metricType,
+    direction: metric.direction,
+  };
+}
+
+function buildDashboardTrendCards(trends: MetricTrend[], currentPeriod: string, previousPeriod: string): DashboardTrendCard[] {
+  const areas = [
+    { key: "emissions", label: "Emissions", category: "environmental", match: /(emission|carbon|scope\s*[123])/i },
+    { key: "energy", label: "Energy", category: "environmental", match: /(energy|electricity|gas|fuel|kwh)/i },
+    { key: "waste", label: "Waste & Recycling", category: "environmental", match: /(waste|recycl)/i },
+    { key: "water", label: "Water", category: "environmental", match: /water/i },
+    { key: "workforce", label: "Workforce & Diversity", category: "social", match: /(employee|headcount|workforce|diversity|gender|training)/i },
+  ];
+
+  const cards: DashboardTrendCard[] = areas.map((area) => {
+    const matching = trends.filter((trend) => area.match.test(trend.metricName));
+    const available = matching.filter((trend) => trend.reason === "ok" && trend.currentValue !== null && trend.previousValue !== null);
+    const currentValue = available.length > 0 ? available.reduce((sum, trend) => sum + (trend.currentValue ?? 0), 0) : null;
+    const previousValue = available.length > 0 ? available.reduce((sum, trend) => sum + (trend.previousValue ?? 0), 0) : null;
+    const absoluteDelta = currentValue !== null && previousValue !== null ? currentValue - previousValue : null;
+    const percentageDelta = previousValue !== null && previousValue !== 0 && absoluteDelta !== null
+      ? Math.round((absoluteDelta / Math.abs(previousValue)) * 10000) / 100
+      : null;
+    const improvedCount = available.filter((trend) => trend.direction === "improved").length;
+    const worsenedCount = available.filter((trend) => trend.direction === "worsened").length;
+    const direction = absoluteDelta === 0 && available.length > 0
+      ? "unchanged"
+      : improvedCount > worsenedCount
+        ? "improved"
+        : worsenedCount > improvedCount
+          ? "worsened"
+          : available.length > 0 ? "unchanged" : "unavailable";
+
+    return {
+      key: area.key,
+      label: area.label,
+      category: area.category,
+      currentPeriod,
+      previousPeriod,
+      currentValue,
+      previousValue,
+      absoluteDelta,
+      percentageDelta,
+      direction,
+      state: available.length > 0 ? "available" : "insufficient_data",
+      unit: available.length === 1 ? available[0].unit : null,
+      metricCount: matching.length,
+      metricNames: matching.map((trend) => trend.metricName).slice(0, 4),
+    };
+  });
+
+  const readinessCurrent = trends.length > 0
+    ? Math.round((trends.filter((trend) => trend.currentValue !== null).length / trends.length) * 100)
+    : null;
+  const readinessPrevious = trends.length > 0
+    ? Math.round((trends.filter((trend) => trend.previousValue !== null).length / trends.length) * 100)
+    : null;
+  cards.push({
+    key: "readiness",
+    label: "Data Readiness",
+    category: "governance",
+    currentPeriod,
+    previousPeriod,
+    currentValue: readinessCurrent,
+    previousValue: readinessPrevious,
+    absoluteDelta: readinessCurrent !== null && readinessPrevious !== null ? readinessCurrent - readinessPrevious : null,
+    percentageDelta: readinessCurrent !== null && readinessPrevious !== null && readinessPrevious !== 0
+      ? Math.round(((readinessCurrent - readinessPrevious) / Math.abs(readinessPrevious)) * 10000) / 100
+      : null,
+    direction: readinessCurrent === null || readinessPrevious === null
+      ? "unavailable"
+      : readinessCurrent === readinessPrevious
+        ? "unchanged"
+        : readinessCurrent > readinessPrevious ? "improved" : "worsened",
+    state: readinessCurrent !== null && readinessPrevious !== null ? "available" : "insufficient_data",
+    unit: "%",
+    metricCount: trends.length,
+    metricNames: ["Metrics with usable current and prior-period data"],
+  });
+
+  return cards;
+}
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -4330,10 +4487,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Resolve period: if reportingPeriodId passed, look up its name (the period label)
       let forcedPeriod: string | null = null;
+      let selectedReportingPeriod: any | null = null;
       if (req.query.reportingPeriodId && typeof req.query.reportingPeriodId === "string") {
         const periods = await storage.getReportingPeriods(companyId);
         const rp = periods.find(p => p.id === req.query.reportingPeriodId);
-        if (rp) forcedPeriod = rp.name;
+        if (rp) {
+          selectedReportingPeriod = rp;
+          forcedPeriod = rp.name;
+        }
       }
 
       // Fetch active sites for archive exclusion (used in period scan and value aggregation)
@@ -4513,6 +4674,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const calculatedMetrics = metricSummaries.filter(m => m.metricType === "calculated" || m.metricType === "derived").length;
       const manualMetrics = metricSummaries.filter(m => m.metricType === "manual").length;
 
+      const trendCurrentPeriod = inferTrendPeriodFromReportingPeriod(selectedReportingPeriod, latestPeriod);
+      const trendPreviousPeriod = getPreviousComparableReportPeriod(trendCurrentPeriod);
+      const trendCurrentPeriods = listMonthPeriodsForSelection(trendCurrentPeriod);
+      const trendPreviousPeriods = listMonthPeriodsForSelection(trendPreviousPeriod);
+      const trendValueRows = await storage.getMetricTrendValues(
+        companyId,
+        [...trendCurrentPeriods, ...trendPreviousPeriods],
+        { scope: "all" },
+      );
+      const trendValues = trendValueRows
+        .filter((row: any) => row.siteId === null || activeSiteIds.has(row.siteId))
+        .map((row: any): TrendValueInput => ({
+          metricId: row.metricId,
+          companyId: row.companyId,
+          period: row.period,
+          value: row.value,
+          valueNumeric: row.valueNumeric,
+          valueBoolean: row.valueBoolean,
+          siteId: row.siteId,
+        }));
+      const trendResult = calculateMetricTrends({
+        metrics: enabledMetrics.map(trendMetricFromMetric),
+        values: trendValues,
+        currentPeriod: trendCurrentPeriod,
+        previousPeriod: trendPreviousPeriod,
+        currentPeriods: trendCurrentPeriods,
+        previousPeriods: trendPreviousPeriods,
+        companyId,
+        includeUnavailable: true,
+      });
+      const trendSummary = {
+        currentPeriod: trendCurrentPeriod.period,
+        currentPeriodLabel: trendCurrentPeriod.label,
+        previousPeriod: trendPreviousPeriod.period,
+        previousPeriodLabel: trendPreviousPeriod.label,
+        periodType: trendCurrentPeriod.periodType,
+        comparisonLabel: trendResult.comparisonLabel,
+        cards: buildDashboardTrendCards(trendResult.trends, trendCurrentPeriod.period, trendPreviousPeriod.period),
+        metrics: trendResult.trends,
+      };
+
       // Site breakdown: active sites with data counts for the selected period
       const _rpIdForBreakdown = typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : undefined;
       const siteBreakdown = await storage.getSitesSummary(companyId, latestPeriod, _rpIdForBreakdown);
@@ -4532,6 +4734,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         submissionRate,
         calculatedMetrics,
         manualMetrics,
+        trendSummary,
         siteBreakdown,
       });
 

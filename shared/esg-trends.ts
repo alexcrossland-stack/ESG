@@ -154,10 +154,14 @@ export function calculateMetricTrends(input: {
   values: TrendValueInput[];
   currentPeriod: ReportPeriodSelection;
   previousPeriod?: ReportPeriodSelection;
+  currentPeriods?: string[];
+  previousPeriods?: string[];
   companyId?: string;
   includeUnavailable?: boolean;
 }): TrendCalculationResult {
   const previousPeriod = input.previousPeriod ?? getPreviousComparableReportPeriod(input.currentPeriod);
+  const currentPeriods = new Set(input.currentPeriods?.length ? input.currentPeriods : [input.currentPeriod.period]);
+  const previousPeriods = new Set(input.previousPeriods?.length ? input.previousPeriods : [previousPeriod.period]);
   const scopedValues = input.companyId
     ? input.values.filter((value) => value.companyId === undefined || value.companyId === input.companyId)
     : input.values;
@@ -166,8 +170,8 @@ export function calculateMetricTrends(input: {
       metric,
       currentPeriod: input.currentPeriod,
       previousPeriod,
-      currentRows: scopedValues.filter((value) => value.metricId === metric.id && value.period === input.currentPeriod.period),
-      previousRows: scopedValues.filter((value) => value.metricId === metric.id && value.period === previousPeriod.period),
+      currentRows: scopedValues.filter((value) => value.metricId === metric.id && currentPeriods.has(value.period)),
+      previousRows: scopedValues.filter((value) => value.metricId === metric.id && previousPeriods.has(value.period)),
     }))
     .filter((trend) => input.includeUnavailable || trend.reason !== "not_reportable");
 
