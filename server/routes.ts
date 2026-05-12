@@ -62,6 +62,7 @@ import {
   generateTotpToken, verifyTotpToken, generateTotpUri,
   generateBackupCodes, hashBackupCodes, verifyBackupCode,
 } from "./mfa";
+import { createOpenAiAssistantReply } from "./openai-assist";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -8649,17 +8650,17 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       try {
         const openai = createOpenAiIntegrationClient();
-        const completion = await openai.chat.completions.create({
+        const reply = await createOpenAiAssistantReply(openai, {
           model: getOpenAiChatModel(),
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: message.trim() },
-          ],
-          max_tokens: 350,
-          temperature: 0.6,
+          systemPrompt,
+          message: message.trim(),
         });
-        const reply = completion.choices[0]?.message?.content?.trim() || "I'm unable to answer right now. Please visit the Help Centre.";
-        res.json({ reply });
+        if (reply) {
+          res.json({ reply });
+          return;
+        }
+        console.warn("[chat/assist] OpenAI response contained no assistant text");
+        res.json({ reply: "I'm unable to answer right now. Please visit the Help Centre for guidance." });
       } catch (aiErr) {
         console.error("[chat/assist] OpenAI request failed:", safeOpenAiErrorMeta(aiErr));
         res.json({ reply: "I'm unable to answer right now. Please visit the Help Centre for guidance." });
