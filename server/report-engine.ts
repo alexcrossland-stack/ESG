@@ -6,6 +6,7 @@ import {
   stripMarkdownToText,
   type GeneratedInlineRun,
 } from "@shared/generated-document-markdown";
+import { formatMetricDisplayValue } from "@shared/data-entry-metrics";
 
 interface ReportSection {
   title: string;
@@ -464,6 +465,14 @@ function formatMetricValue(value: unknown): string {
   });
 }
 
+function formatMetricRowValue(row: any): string {
+  const displayValue = formatMetricDisplayValue(row);
+  if (!displayValue) return "—";
+  const numeric = Number(displayValue);
+  if (!Number.isFinite(numeric)) return displayValue;
+  return formatMetricValue(displayValue);
+}
+
 function aggregateValuesByMetric(values: any[]): any[] {
   const grouped = new Map<string, any[]>();
   const passthrough: any[] = [];
@@ -481,6 +490,18 @@ function aggregateValuesByMetric(values: any[]): any[] {
 
   const aggregated = Array.from(grouped.entries()).map(([metricId, rows]) => {
     if (rows.length === 1) return rows[0];
+    const booleanRows = rows.filter((row) => row.valueBoolean !== null && row.valueBoolean !== undefined);
+    if (booleanRows.length === rows.length) {
+      const uniqueValues = new Set(booleanRows.map((row) => row.valueBoolean));
+      return {
+        ...rows[0],
+        metricId,
+        value: null,
+        valueBoolean: uniqueValues.size === 1 ? booleanRows[0].valueBoolean : null,
+        valueText: uniqueValues.size === 1 ? null : "Mixed",
+        siteId: undefined,
+      };
+    }
     const numericRows = rows
       .map((row) => Number(row.value))
       .filter((value) => Number.isFinite(value));
@@ -567,7 +588,7 @@ export function buildEsgMetricsSummaryReport(data: {
       tableHeaders: ["Metric", "Value", "Unit", "Source Type", "Status"],
       tableRows: entries.map(({ metric, value }) => [
         metric.name,
-        value ? formatMetricValue(value.value) : "—",
+        value ? formatMetricRowValue(value) : "—",
         metric.unit || "—",
         value ? labelDataSource(value) : "Missing",
         value?.workflowLabel || (value ? "Draft" : "Not reported"),
@@ -911,7 +932,7 @@ export function buildSiteComparisonSummaryReport(data: {
         tableHeaders: ["Metric", "Value", "Unit", "Source"],
         tableRows: siteMetrics.map((m: any) => [
           m.metricName || m.name || "—",
-          m.value ? String(parseFloat(m.value).toLocaleString()) : "—",
+          formatMetricRowValue(m),
           m.unit || "—",
           labelDataSource(m),
         ]),

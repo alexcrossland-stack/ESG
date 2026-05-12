@@ -25,6 +25,7 @@ type CompanyMetricLike = {
   category: "environmental" | "social" | "governance";
   description?: string | null;
   unit?: string | null;
+  dataType?: string | null;
   enabled?: boolean | null;
   metricType?: string | null;
   direction?: string | null;
@@ -54,6 +55,7 @@ export type CanonicalEnabledMetric = {
   category: "environmental" | "social" | "governance";
   description?: string | null;
   unit?: string | null;
+  dataType?: string | null;
   metricType: string;
   direction?: string | null;
   helpText?: string | null;
@@ -84,6 +86,7 @@ function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEn
     category: definition.pillar,
     description: definition.description ?? null,
     unit: definition.unit ?? null,
+    dataType: definition.dataType ?? "numeric",
     metricType: definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual"),
     direction: "higher_is_better",
     helpText: definition.description ?? null,
@@ -102,6 +105,7 @@ function buildCompanyCandidate(metric: CompanyMetricLike): CanonicalEnabledMetri
     category: metric.category,
     description: metric.description ?? null,
     unit: metric.unit ?? null,
+    dataType: metric.dataType ?? null,
     metricType: metric.metricType ?? "manual",
     direction: metric.direction ?? "higher_is_better",
     helpText: metric.helpText ?? null,
@@ -130,6 +134,7 @@ function mergeCandidates(
     category: base.category || extra.category,
     description: base.description ?? extra.description ?? null,
     unit: base.unit ?? extra.unit ?? null,
+    dataType: base.dataType ?? extra.dataType ?? "numeric",
     metricType: base.metricType ?? extra.metricType ?? "manual",
     direction: base.direction ?? extra.direction ?? "higher_is_better",
     helpText: base.helpText ?? extra.helpText ?? null,

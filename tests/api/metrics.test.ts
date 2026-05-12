@@ -484,6 +484,73 @@ async function run(tenants: SeededTenants): Promise<void> {
       }
     }
   }
+
+  // ── 14. Boolean / yes-no metrics save and report as labels ────────────────
+  {
+    const name = "yes/no metric values save, update, reject invalid input, and export as labels";
+    const period = "2024-05";
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+
+    if (metricsRes.status !== 200) {
+      fail(name, `metrics status ${metricsRes.status}`);
+    } else {
+      const metrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string }>;
+      const yesNoMetric = metrics.find((metric) => metric.name === "Anti-Bribery Policy in Place");
+      if (!yesNoMetric) {
+        fail(name, "missing seeded yes/no metric");
+      } else {
+        const initialEntryRes = await apiRequest("GET", `/api/data-entry/${period}?siteId=null`, undefined, tenantA.adminToken);
+        const initialEntry = initialEntryRes.status === 200
+          ? JSON.parse(initialEntryRes.body) as { metrics: Array<{ id: string; dataType?: string | null }> }
+          : { metrics: [] };
+        const entryMetric = initialEntry.metrics.find((metric) => metric.id === yesNoMetric.id);
+
+        const yesSave = await apiRequest("POST", "/api/data-entry", {
+          metricId: yesNoMetric.id,
+          period,
+          value: "Yes",
+          notes: "yes/no test yes",
+          siteId: null,
+        }, tenantA.adminToken);
+        const noSave = await apiRequest("POST", "/api/data-entry", {
+          metricId: yesNoMetric.id,
+          period,
+          value: "No",
+          notes: "yes/no test no",
+          siteId: null,
+        }, tenantA.adminToken);
+        const invalidSave = await apiRequest("POST", "/api/data-entry", {
+          metricId: yesNoMetric.id,
+          period,
+          value: "maybe",
+          notes: "invalid yes/no test",
+          siteId: null,
+        }, tenantA.adminToken);
+        const reloadRes = await apiRequest("GET", `/api/data-entry/${period}?siteId=null`, undefined, tenantA.adminToken);
+        const exportRes = await apiRequest("GET", `/api/reports/export-data/esg_metrics_summary?period=${period}&siteId=null`, undefined, tenantA.adminToken);
+
+        if (initialEntryRes.status !== 200) fail(name, `initial data-entry status ${initialEntryRes.status}`);
+        else if (entryMetric?.dataType !== "boolean") fail(name, `data-entry metric dataType not boolean: ${entryMetric?.dataType}`);
+        else if (yesSave.status !== 200) fail(name, `yes save status ${yesSave.status}: ${yesSave.body}`);
+        else if (noSave.status !== 200) fail(name, `no save status ${noSave.status}: ${noSave.body}`);
+        else if (invalidSave.status !== 400) fail(name, `invalid save status ${invalidSave.status}`);
+        else if (reloadRes.status !== 200) fail(name, `reload status ${reloadRes.status}`);
+        else if (exportRes.status !== 200) fail(name, `export-data status ${exportRes.status}`);
+        else {
+          const reload = JSON.parse(reloadRes.body) as { values: Array<{ metricId: string; value: string | null; valueBoolean?: boolean | null; valueText?: string | null }> };
+          const exported = JSON.parse(exportRes.body) as { values: Array<{ metricId: string; value: string | null; valueBoolean?: boolean | null; valueText?: string | null }> };
+          const saved = reload.values.find((value) => value.metricId === yesNoMetric.id);
+          const exportedValue = exported.values.find((value) => value.metricId === yesNoMetric.id);
+          if (!saved) fail(name, "saved yes/no metric missing from data-entry reload");
+          else if (saved.value !== null) fail(name, `yes/no metric value was numerically coerced: ${saved.value}`);
+          else if (saved.valueBoolean !== false || saved.valueText !== "No") fail(name, `expected updated No value, got ${JSON.stringify(saved)}`);
+          else if (!exportedValue) fail(name, "yes/no metric missing from export data");
+          else if (exportedValue.valueBoolean !== false || exportedValue.valueText !== "No") fail(name, `export value not labelled as No: ${JSON.stringify(exportedValue)}`);
+          else pass(name);
+        }
+      }
+    }
+  }
 }
 
 (async () => {

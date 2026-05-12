@@ -6,8 +6,12 @@
 
 import assert from "node:assert/strict";
 import {
+  formatBooleanMetricValue,
+  formatMetricDisplayValue,
   isActiveEditableDataEntryMetric,
+  isBooleanMetricDataType,
   isEditableDataEntryMetricType,
+  parseBooleanMetricInput,
 } from "../../shared/data-entry-metrics";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
@@ -57,6 +61,29 @@ await check("active non-manual metrics are hidden from Data Entry", () => {
   assert.equal(isActiveEditableDataEntryMetric({ enabled: true, metricType: "calculated" }), false);
   assert.equal(isActiveEditableDataEntryMetric({ enabled: true, metricType: "derived" }), false);
   assert.equal(isActiveEditableDataEntryMetric({ enabled: true, metricType: "system" }), false);
+});
+
+await check("boolean metric data type is detected explicitly", () => {
+  assert.equal(isBooleanMetricDataType("boolean"), true);
+  assert.equal(isBooleanMetricDataType("numeric"), false);
+  assert.equal(isBooleanMetricDataType(null), false);
+});
+
+await check("yes/no metric inputs parse safely", () => {
+  assert.equal(parseBooleanMetricInput("Yes"), true);
+  assert.equal(parseBooleanMetricInput("no"), false);
+  assert.equal(parseBooleanMetricInput(true), true);
+  assert.equal(parseBooleanMetricInput(false), false);
+  assert.equal(parseBooleanMetricInput("1"), null);
+  assert.equal(parseBooleanMetricInput("maybe"), null);
+});
+
+await check("yes/no metric values display as Yes/No without numeric coercion", () => {
+  assert.equal(formatBooleanMetricValue(true), "Yes");
+  assert.equal(formatBooleanMetricValue(false), "No");
+  assert.equal(formatMetricDisplayValue({ value: null, valueBoolean: true, valueText: "Yes" }), "Yes");
+  assert.equal(formatMetricDisplayValue({ value: null, valueBoolean: false, valueText: "No" }), "No");
+  assert.equal(formatMetricDisplayValue({ value: "0.0000" }), "0.0000");
 });
 
 const failed = results.filter((result) => !result.passed);
