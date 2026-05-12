@@ -8,7 +8,7 @@ Production deployment is manual-gated. Pushing or merging to `main` must not dep
 
 Do not use the production deployment workflow for staging/pre-production validation. Use `docs/runbooks/staging-deployment.md` and the `Deploy to Staging` workflow when validating a release before production.
 
-The production workflow writes the GitHub `production` environment secrets into `/root/ESG/.env` on the Hetzner host before restart, sources that file in the remote shell, and then runs `pm2 restart esg --update-env`. Secret values must never be printed in workflow logs. The workflow validates required secret presence by name only, uploads the runtime env file with `0600` permissions, and verifies selected PM2 runtime env keys as present/configured without printing values.
+The production workflow merges GitHub `production` environment secrets into `/root/ESG/.env` on the Hetzner host before restart, sources that file in the remote shell, and then runs `pm2 restart esg --update-env`. Existing production runtime values from `/root/ESG/.env` or the current PM2 process are preserved unless GitHub supplies an override. This prevents a deploy from replacing a working live database configuration just because `DATABASE_URL` is not stored as a GitHub secret. Secret values must never be printed in workflow logs. The workflow validates required runtime keys by name only, writes the merged runtime env file with `0600` permissions, and verifies selected PM2 runtime env keys as present/configured without printing values.
 
 ## 1. Pre-Deploy Checks
 
@@ -16,7 +16,7 @@ Confirm the release is being deployed from the latest reviewed `main` commit.
 
 Required environment and dependency checks:
 
-- [ ] `DATABASE_URL` points to the production PostgreSQL database.
+- [ ] `DATABASE_URL` points to the production PostgreSQL database, either in GitHub `production` secrets, existing `/root/ESG/.env`, or current PM2 runtime env.
 - [ ] `SESSION_SECRET` is set, production-only, and at least 32 characters.
 - [ ] `MFA_ENCRYPTION_KEY` is set and stable across deploys.
 - [ ] `APP_BASE_URL` matches the production user-facing URL.
@@ -60,7 +60,7 @@ These are high-level steps only. Use the existing production deployment mechanis
 3. Confirm the latest production backup timestamp and rollback owner.
 4. Trigger the manual `Deploy to Hetzner` GitHub Actions workflow from `main` with `confirm_target=production`.
 5. Wait for the deployment to finish.
-6. Confirm the workflow updated the production runtime env file and verified PM2 runtime env keys without printing secret values.
+6. Confirm the workflow merged the production runtime env file, preserved existing live DB configuration where GitHub did not override it, and verified PM2 runtime env keys without printing secret values.
 7. Confirm the deployed commit matches the intended `main` commit.
 8. Confirm the application health endpoint and logs show the app booted successfully.
 9. Keep the previous release identifier available until smoke checks pass.
