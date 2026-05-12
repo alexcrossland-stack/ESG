@@ -30,7 +30,7 @@ import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
 import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
 import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } from "./scheduler";
-import { generatePdf, generateDocx } from "./report-engine";
+import { buildSavedReportSnapshotSections, generatePdf, generateDocx } from "./report-engine";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { seedCompanyDefaults, seedOnboardingChecklist, STANDARD_CHECKLIST_TASKS } from "./company-defaults";
@@ -9444,49 +9444,13 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       if (_fileTier !== "pro") return upgradeRequired(req, res);
       const companyName = company?.name || "Company";
 
-      const sections: any[] = [];
-      if (reportData.summary) sections.push({ title: "Executive Summary", type: "text", content: reportData.summary });
-
-      if (reportData.metrics?.length) {
-        sections.push({
-          title: "ESG Metrics",
-          type: "metrics",
-          rows: reportData.metrics.map((m: any) => ({ label: m.name || m.metricName, value: `${m.value || "-"} ${m.unit || ""}`.trim(), status: m.status || m.trafficLight || "-" })),
-        });
-      }
-
-      if (reportData.trendSummary) {
-        const { buildTrendReportSections } = await import("./report-engine");
-        sections.push(...buildTrendReportSections(reportData.trendSummary));
-      }
-
-      if (reportData.carbon) {
-        sections.push({
-          title: "Carbon Summary",
-          type: "metrics",
-          rows: [
-            { label: "Scope 1", value: `${reportData.carbon.scope1 || 0} tCO2e` },
-            { label: "Scope 2", value: `${reportData.carbon.scope2 || 0} tCO2e` },
-            { label: "Scope 3", value: `${reportData.carbon.scope3 || 0} tCO2e` },
-            { label: "Total", value: `${reportData.carbon.total || 0} tCO2e` },
-          ],
-        });
-      }
-
-      if (reportData.actions?.length) {
-        sections.push({
-          title: "Action Plans",
-          type: "table",
-          tableHeaders: ["Action", "Owner", "Status", "Due Date"],
-          tableRows: reportData.actions.map((a: any) => [a.title, a.owner || "-", a.status || "-", a.dueDate ? new Date(a.dueDate).toLocaleDateString() : "-"]),
-        });
-      }
-
-      if (reportData.evidence?.length) {
-        sections.push({ title: "Evidence Coverage", type: "list", items: reportData.evidence.map((e: any) => `${e.filename || e.name}: ${e.status || "uploaded"}`) });
-      }
-
-      const formattedData = { title: companyName, period: reportRun.period, sections, summary: reportData.summary };
+      const sections = buildSavedReportSnapshotSections(reportData);
+      const formattedData = {
+        title: reportData.reportTitle || companyName,
+        period: reportData.periodLabel || reportData.period || reportRun.period,
+        sections,
+        summary: reportData.summary,
+      };
       let fileBuffer: Buffer;
       let contentType: string;
       let filename: string;

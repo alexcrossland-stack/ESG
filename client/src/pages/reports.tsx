@@ -473,7 +473,7 @@ function reportSectionsFromEntry(report: ReportHistoryEntry) {
     includeDataQualityAssessment: report.reportData?.dataQualityAssessment ? templateDefaults.includeDataQualityAssessment : false,
     includeComplianceStatus: report.reportData?.complianceStatus ? templateDefaults.includeComplianceStatus : false,
     includePeriodComparison: (report.reportData?.trendSummary || report.reportData?.periodComparison)
-      ? templateDefaults.includePeriodComparison
+      ? (report.includePeriodComparison ?? true)
       : false,
   };
 }
@@ -496,6 +496,16 @@ function historicalEvidenceCount(reportData: any) {
 
 function historicalEnabledSectionCount(report: ReportHistoryEntry) {
   return Object.values(reportSectionsFromEntry(report)).filter(Boolean).length;
+}
+
+function reportFileUnavailableMessage(reason?: string | null) {
+  if (reason === "expired") {
+    return "The generated file has expired, but the historical report snapshot can still be viewed and regenerated when permitted.";
+  }
+  if (reason === "retained_history_only") {
+    return "The history entry remains for audit purposes, but the file is no longer available.";
+  }
+  return "No current file is available for this report entry.";
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1519,6 +1529,7 @@ export default function Reports() {
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const canApprove = can("report_generation");
+  const canGenerateReportFiles = can("report_generation");
   const { isPro } = useBillingStatus();
   const { activeSiteId, activeSite, sites: allSites } = useSiteContext();
   const activeSites = allSites.filter((s: any) => s.status === "active");
@@ -1749,10 +1760,11 @@ export default function Reports() {
       const res = await apiRequest("POST", `/api/reports/${reportId}/generate-file`, { format });
       return res.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: (data: any, variables) => {
       invalidateReportLibrary();
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/detail", variables.reportId] });
       if (data.downloadUrl) {
-        handleDownloadFile(data.downloadUrl, data.filename);
+        handleDownloadFile(data.downloadUrl, data.filename, variables.reportId);
       }
       toast({ title: `${data.fileType?.toUpperCase() || "File"} generated` });
     },
@@ -2686,12 +2698,7 @@ export default function Reports() {
                       </div>
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground" data-testid={`report-file-status-${report.id}`}>
-                        <span className="font-medium">Unavailable.</span>{" "}
-                        {report.fileUnavailableReason === "expired"
-                          ? "The generated file has expired, but the historical report snapshot can still be viewed when available."
-                          : report.fileUnavailableReason === "retained_history_only"
-                          ? "The history entry remains for audit purposes, but the file is no longer available."
-                          : "No current file is available for this report entry."}
+                        <span className="font-medium">Unavailable.</span> {reportFileUnavailableMessage(report.fileUnavailableReason)}
                       </p>
                     )}
                   </div>
@@ -2879,7 +2886,7 @@ export default function Reports() {
                       </div>
                     </div>
                   )}
-                  {selectedLibraryReport.fileAvailability === "available" && selectedLibraryReport.latestDownloadUrl && (
+                  {selectedLibraryReport.fileAvailability === "available" && selectedLibraryReport.latestDownloadUrl ? (
                     <div className="flex justify-end">
                       <Button
                         size="sm"
@@ -2892,9 +2899,60 @@ export default function Reports() {
                         data-testid="button-library-detail-download"
                       >
                         <Download className="w-3.5 h-3.5 mr-1.5" />
-                        Download file
+                        {downloadingReportId === String(selectedLibraryReport.id) ? "Downloading..." : "Download file"}
                       </Button>
                     </div>
+                  ) : selectedLibraryReport.reportData ? (
+                    <div className="rounded-md border border-dashed border-border p-3 text-xs" data-testid="panel-library-detail-file-actions">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium">No generated file attached</p>
+                          <p className="text-muted-foreground mt-0.5">
+                            {reportFileUnavailableMessage(selectedLibraryReport.fileUnavailableReason)}
+                          </p>
+                        </div>
+                        {canGenerateReportFiles ? (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => generateFileMutation.mutate({ reportId: String(selectedLibraryReport.id), format: "pdf" })}
+                              disabled={generateFileMutation.isPending}
+                              data-testid="button-library-detail-generate-pdf"
+                            >
+                              {generateFileMutation.isPending
+                                && generateFileMutation.variables?.reportId === String(selectedLibraryReport.id)
+                                && generateFileMutation.variables?.format === "pdf"
+                                ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                                : <FileDown className="w-3.5 h-3.5 mr-1.5" />}
+                              PDF
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => generateFileMutation.mutate({ reportId: String(selectedLibraryReport.id), format: "docx" })}
+                              disabled={generateFileMutation.isPending}
+                              data-testid="button-library-detail-generate-docx"
+                            >
+                              {generateFileMutation.isPending
+                                && generateFileMutation.variables?.reportId === String(selectedLibraryReport.id)
+                                && generateFileMutation.variables?.format === "docx"
+                                ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                                : <FileDown className="w-3.5 h-3.5 mr-1.5" />}
+                              DOCX
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-muted-foreground" data-testid="text-library-detail-file-generation-permission">
+                            File generation is available to approvers or company admins.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground" data-testid="text-library-detail-file-unavailable">
+                      {reportFileUnavailableMessage(selectedLibraryReport.fileUnavailableReason)}
+                    </p>
                   )}
                   {selectedLibraryReport.reportData ? (
                     <div data-testid="historical-report-preview">

@@ -263,6 +263,12 @@ async function run(tenants: SeededTenants): Promise<void> {
     const files = await reportFiles(tenantA.adminToken, reportOneId);
     assert(!files.some((row) => row.id === file.fileId), "deleted generated file still appears in file list");
     expectStatus(await download(tenantA.adminToken, reportOneId, file.fileId), 404, "download deleted generated file");
+
+    const regenerated = await generateFile(tenantA.adminToken, reportOneId, "pdf");
+    assert(regenerated.fileId && regenerated.downloadUrl, "regenerated file metadata missing after delete");
+    const report = findReport(await reportsList(tenantA.adminToken), reportOneId);
+    assert(report.fileAvailability === "available", `expected regenerated report to be available, got ${report.fileAvailability}`);
+    assert(report.latestFileId === regenerated.fileId, `expected latest regenerated file ${regenerated.fileId}, got ${report.latestFileId}`);
   });
 
   await check("regeneration uses the current report file and does not expose stale prior-report files", async () => {

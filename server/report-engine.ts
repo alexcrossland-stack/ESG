@@ -8,7 +8,7 @@ import {
 } from "@shared/generated-document-markdown";
 import { formatMetricDisplayValue } from "@shared/data-entry-metrics";
 
-interface ReportSection {
+export interface ReportSection {
   title: string;
   type: "text" | "table" | "metrics" | "list";
   content?: string;
@@ -69,6 +69,156 @@ export function buildTrendReportSections(trendSummary: any): ReportSection[] {
       title: "Trend Notes",
       type: "list",
       items: notes.length > 0 ? notes : [`${unavailableCount} metric comparison${unavailableCount === 1 ? "" : "s"} unavailable due to missing or non-applicable prior-period data.`],
+    });
+  }
+
+  return sections;
+}
+
+function snapshotMetricRows(reportData: any): string[][] {
+  const values = Array.isArray(reportData?.values)
+    ? reportData.values
+    : reportData?.metricsByCategory && typeof reportData.metricsByCategory === "object"
+      ? Object.values(reportData.metricsByCategory).flatMap((entries: any) => Array.isArray(entries) ? entries : [])
+      : Array.isArray(reportData?.metrics)
+        ? reportData.metrics
+        : [];
+
+  return values.slice(0, 75).map((entry: any) => {
+    const displayValue = formatMetricDisplayValue(entry);
+    const unit = entry?.unit || entry?.metricUnit || "";
+    return [
+      entry?.metricName || entry?.name || "Metric",
+      entry?.category || entry?.metricCategory || "-",
+      `${displayValue || "-"} ${unit}`.trim(),
+      entry?.dataSourceLabel || entry?.dataSourceType || entry?.source || "-",
+      entry?.workflowLabel || entry?.workflowStatus || entry?.status || "-",
+    ];
+  });
+}
+
+export function buildSavedReportSnapshotSections(reportData: any): ReportSection[] {
+  const sections: ReportSection[] = [];
+
+  if (Array.isArray(reportData?.sections) && reportData.sections.length > 0) {
+    sections.push(...reportData.sections);
+  }
+
+  if (reportData?.summary && !sections.some(section => section.title === "Executive Summary")) {
+    sections.push({ title: "Executive Summary", type: "text", content: reportData.summary });
+  }
+
+  const metricRows = snapshotMetricRows(reportData);
+  if (metricRows.length > 0 && !sections.some(section => section.title === "ESG Metrics")) {
+    sections.push({
+      title: "ESG Metrics",
+      type: "table",
+      tableHeaders: ["Metric", "Category", "Value", "Source", "Status"],
+      tableRows: metricRows,
+    });
+  }
+
+  if (reportData?.trendSummary && !sections.some(section => section.title === "Trend Summary")) {
+    sections.push(...buildTrendReportSections(reportData.trendSummary));
+  }
+
+  const carbon = reportData?.carbonSummary || reportData?.carbon;
+  if (carbon && !sections.some(section => section.title === "Carbon Summary")) {
+    sections.push({
+      title: "Carbon Summary",
+      type: "metrics",
+      rows: [
+        { label: "Scope 1", value: `${carbon.scope1 ?? 0} tCO2e` },
+        { label: "Scope 2", value: `${carbon.scope2 ?? 0} tCO2e` },
+        { label: "Scope 3", value: `${carbon.scope3 ?? 0} tCO2e` },
+        { label: "Total", value: `${carbon.total ?? carbon.totalEmissions ?? 0} tCO2e` },
+      ],
+    });
+  }
+
+  const actions = Array.isArray(reportData?.actions) ? reportData.actions : [];
+  if (actions.length > 0 && !sections.some(section => section.title === "Action Plans")) {
+    sections.push({
+      title: "Action Plans",
+      type: "table",
+      tableHeaders: ["Action", "Owner", "Status", "Due Date"],
+      tableRows: actions.slice(0, 50).map((action: any) => [
+        action?.title || action?.name || "Action",
+        action?.owner || action?.ownerName || "-",
+        action?.status || "-",
+        action?.dueDate ? new Date(action.dueDate).toLocaleDateString("en-GB") : "-",
+      ]),
+    });
+  }
+
+  const evidence = Array.isArray(reportData?.evidence) ? reportData.evidence : [];
+  if (evidence.length > 0 && !sections.some(section => section.title === "Evidence Coverage")) {
+    sections.push({
+      title: "Evidence Coverage",
+      type: "list",
+      items: evidence.slice(0, 50).map((item: any) => `${item?.filename || item?.name || "Evidence"}: ${item?.status || "uploaded"}`),
+    });
+  } else if (reportData?.evidenceCoverage && !sections.some(section => section.title === "Evidence Coverage")) {
+    const coverage = reportData.evidenceCoverage;
+    sections.push({
+      title: "Evidence Coverage",
+      type: "metrics",
+      rows: [
+        { label: "Evidence files", value: String(coverage.totalEvidence ?? 0) },
+        { label: "Evidenced metrics", value: String(coverage.evidencedCount ?? 0) },
+        { label: "Coverage", value: `${coverage.coveragePercent ?? 0}%` },
+      ],
+    });
+  }
+
+  if (Array.isArray(reportData?.dataQualityFlags) && reportData.dataQualityFlags.length > 0 && !sections.some(section => section.title === "Data Quality Flags")) {
+    sections.push({
+      title: "Data Quality Flags",
+      type: "list",
+      items: reportData.dataQualityFlags.slice(0, 50).map((flag: any) => flag?.message || flag?.label || String(flag)),
+    });
+  } else if (reportData?.dataQualityFlags && !sections.some(section => section.title === "Data Quality Flags")) {
+    const flags = reportData.dataQualityFlags;
+    sections.push({
+      title: "Data Quality Flags",
+      type: "metrics",
+      rows: [
+        { label: "Approval rate", value: `${flags.approvalRate ?? 0}%` },
+        { label: "Evidence rate", value: `${flags.evidenceRate ?? 0}%` },
+        { label: "Missing values", value: String(flags.missingCount ?? 0) },
+      ],
+    });
+  }
+
+  if (reportData?.dataQualityAssessment && !sections.some(section => section.title === "Data Quality Assessment")) {
+    sections.push({
+      title: "Data Quality Assessment",
+      type: "text",
+      content: typeof reportData.dataQualityAssessment === "string"
+        ? reportData.dataQualityAssessment
+        : reportData.dataQualityAssessment.summary || reportData.dataQualityAssessment.statusLabel || "Data quality assessment captured in the saved report snapshot.",
+    });
+  }
+
+  if (reportData?.complianceStatus && !sections.some(section => section.title === "Compliance Status")) {
+    const frameworks = Array.isArray(reportData.complianceStatus) ? reportData.complianceStatus : Object.values(reportData.complianceStatus);
+    sections.push({
+      title: "Compliance Status",
+      type: "table",
+      tableHeaders: ["Framework", "Status", "Completion"],
+      tableRows: frameworks.slice(0, 50).map((framework: any) => [
+        framework?.name || framework?.frameworkName || "Framework",
+        framework?.status || framework?.state || "-",
+        `${framework?.compliancePercent ?? framework?.completionPercent ?? 0}%`,
+      ]),
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      title: "Saved Report Snapshot",
+      type: "text",
+      content: "This generated file was created from the immutable saved report snapshot. No metric rows were stored for this historical entry.",
     });
   }
 
