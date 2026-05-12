@@ -5480,12 +5480,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const {
         period, reportType, reportTemplate,
-        periodType, year, quarter, dateFrom, dateTo,
+        periodType, year, month, quarter, dateFrom, dateTo,
         includePolicy, includeTopics, includeMetrics, includeActions,
         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
         siteId: bodySiteId,
       } = req.body;
-      const selectedReportPeriod = resolveReportPeriodSelection({ periodType, year, quarter, period, dateFrom, dateTo });
+      const selectedReportPeriod = resolveReportPeriodSelection({ periodType, year, month, quarter, period, dateFrom, dateTo });
       const reportPeriod = selectedReportPeriod?.period ?? period;
       const reportPeriodLabel = selectedReportPeriod?.label ?? period;
       const reportDateFrom = selectedReportPeriod?.dateFrom ?? (typeof dateFrom === "string" ? dateFrom : undefined);
@@ -5581,7 +5581,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const periodSchema = z.object({
         period: z.string().regex(/^\d{4}(?:-\d{2}|-Q[1-4])?$/).optional(),
-        periodType: z.enum(["quarterly", "annual"]).optional(),
+        periodType: z.enum(["monthly", "quarterly", "annual"]).optional(),
         reportType: z.enum(["pdf", "csv", "word"]).optional(),
         reportTemplate: z.enum(["management", "customer", "annual"]).optional(),
       });

@@ -6,6 +6,7 @@
 
 import {
   buildAnnualReportPeriod,
+  buildMonthlyReportPeriod,
   buildQuarterlyReportPeriod,
   isPeriodWithinDateRange,
   resolveReportPeriodSelection,
@@ -29,6 +30,17 @@ function expectEqual(name: string, actual: unknown, expected: unknown) {
   else fail(name, `expected=${String(expected)} actual=${String(actual)}`);
 }
 
+const monthly = buildMonthlyReportPeriod(2025, 2);
+expectEqual("monthly period key is 2025-02", monthly.period, "2025-02");
+expectEqual("monthly starts on first calendar day", monthly.dateFrom, "2025-02-01");
+expectEqual("monthly ends on final calendar day", monthly.dateTo, "2025-02-28");
+expectEqual("monthly includes selected month", isPeriodWithinDateRange("2025-02", monthly.dateFrom, monthly.dateTo), true);
+expectEqual("monthly excludes prior month", isPeriodWithinDateRange("2025-01", monthly.dateFrom, monthly.dateTo), false);
+expectEqual("monthly excludes next month", isPeriodWithinDateRange("2025-03", monthly.dateFrom, monthly.dateTo), false);
+
+const leapMonthly = buildMonthlyReportPeriod(2024, 2);
+expectEqual("monthly handles leap-year February", leapMonthly.dateTo, "2024-02-29");
+
 const q1 = buildQuarterlyReportPeriod(2025, 1);
 expectEqual("Q1 period key is 2025-Q1", q1.period, "2025-Q1");
 expectEqual("Q1 starts on 2025-01-01", q1.dateFrom, "2025-01-01");
@@ -51,6 +63,10 @@ expectEqual("quarter resolve preserves exact 3-month end", resolvedQuarter?.date
 
 const resolvedAnnual = resolveReportPeriodSelection({ periodType: "annual", period: "2025" });
 expectEqual("annual can resolve from period key", resolvedAnnual?.dateTo, "2025-12-31");
+
+const resolvedMonthly = resolveReportPeriodSelection({ periodType: "monthly", period: "2025-11" });
+expectEqual("monthly can resolve from period key", resolvedMonthly?.dateFrom, "2025-11-01");
+expectEqual("monthly resolve preserves exact month end", resolvedMonthly?.dateTo, "2025-11-30");
 
 const failed = results.filter((result) => !result.passed);
 console.log(`\nReport period selection tests: ${results.length - failed.length}/${results.length} passed`);

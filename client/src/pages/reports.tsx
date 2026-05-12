@@ -132,6 +132,21 @@ const ESG_EXPORT_TYPES = [
   },
 ];
 
+const REPORT_MONTHS = [
+  { value: 1, label: "January" },
+  { value: 2, label: "February" },
+  { value: 3, label: "March" },
+  { value: 4, label: "April" },
+  { value: 5, label: "May" },
+  { value: 6, label: "June" },
+  { value: 7, label: "July" },
+  { value: 8, label: "August" },
+  { value: 9, label: "September" },
+  { value: 10, label: "October" },
+  { value: 11, label: "November" },
+  { value: 12, label: "December" },
+];
+
 function EsgExportsSection() {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("esg_metrics_summary");
@@ -1383,10 +1398,11 @@ export default function Reports() {
   const periodYears = reportPeriodYears();
   const [reportPeriodType, setReportPeriodType] = useState<ReportPeriodType>("quarterly");
   const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
+  const [reportMonth, setReportMonth] = useState<number>(new Date().getMonth() + 1);
   const [reportQuarter, setReportQuarter] = useState<1 | 2 | 3 | 4>(
     (Math.floor(new Date().getMonth() / 3) + 1) as 1 | 2 | 3 | 4
   );
-  const selectedReportPeriod = buildReportPeriodSelection(reportPeriodType, reportYear, reportQuarter);
+  const selectedReportPeriod = buildReportPeriodSelection(reportPeriodType, reportYear, reportQuarter, reportMonth);
   const selectedPeriod = selectedReportPeriod.period;
   const [reportType, setReportType] = useState("pdf");
   const [selectedTemplate, setSelectedTemplate] = useState("management");
@@ -1538,6 +1554,7 @@ export default function Reports() {
         period: selectedPeriod,
         periodType: selectedReportPeriod.periodType,
         year: selectedReportPeriod.year,
+        month: selectedReportPeriod.month,
         quarter: selectedReportPeriod.quarter,
         dateFrom: selectedReportPeriod.dateFrom,
         dateTo: selectedReportPeriod.dateTo,
@@ -2106,6 +2123,7 @@ export default function Reports() {
                   <SelectTrigger data-testid="select-report-period-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="annual">Annual</SelectItem>
                   </SelectContent>
                 </Select>
@@ -2127,6 +2145,24 @@ export default function Reports() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {reportPeriodType === "monthly" && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Month</Label>
+                    <Select value={String(reportMonth)} onValueChange={(value) => {
+                      setReportMonth(Number(value));
+                      setReportData(null);
+                      setSelectedLibraryReportId(null);
+                    }}>
+                      <SelectTrigger data-testid="select-report-month"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {REPORT_MONTHS.map(monthOption => (
+                          <SelectItem key={monthOption.value} value={String(monthOption.value)}>{monthOption.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 {reportPeriodType === "quarterly" && (
                   <div className="space-y-1.5">
