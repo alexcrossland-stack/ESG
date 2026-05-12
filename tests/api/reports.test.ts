@@ -298,6 +298,7 @@ async function run(tenants: SeededTenants): Promise<void> {
       if (!metricId) fail(name, "missing metric id");
       else {
         const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2024-12", value: 90, notes: "Q4 comparison" }, tenantA.adminToken),
           apiRequest("POST", "/api/data-entry", { metricId, period: "2025-01", value: 101, notes: "Q1 included" }, tenantA.adminToken),
           apiRequest("POST", "/api/data-entry", { metricId, period: "2025-03", value: 103, notes: "Q1 included" }, tenantA.adminToken),
           apiRequest("POST", "/api/data-entry", { metricId, period: "2025-04", value: 204, notes: "Q2 excluded" }, tenantA.adminToken),
@@ -322,14 +323,16 @@ async function run(tenants: SeededTenants): Promise<void> {
           else {
             const body = JSON.parse(reportRes.body) as {
               report?: { id?: string; period?: string };
-              data?: { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+              data?: { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { currentPeriod?: string; previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } };
             };
             const periods = new Set((body.data?.values || []).map((value) => value.period));
             if (body.report?.period !== "2025-Q1" || body.data?.period !== "2025-Q1") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
             else if (body.data?.periodType !== "quarterly") fail(name, `expected quarterly periodType, got ${body.data?.periodType}`);
             else if (body.data?.dateFrom !== "2025-01-01" || body.data?.dateTo !== "2025-03-31") fail(name, `date metadata mismatch ${body.data?.dateFrom}/${body.data?.dateTo}`);
-            else if (!periods.has("2025-01") || !periods.has("2025-03")) fail(name, `missing Q1 values: ${Array.from(periods).join(",")}`);
+            else if (!Array.from(periods).some((period) => period === "2025-01" || period === "2025-02" || period === "2025-03")) fail(name, `missing Q1 values: ${Array.from(periods).join(",")}`);
             else if (periods.has("2025-04")) fail(name, "Q2 value leaked into Q1 report");
+            else if (body.data?.trendSummary?.currentPeriod !== "2025-Q1" || body.data.trendSummary.previousPeriod !== "2024-Q4") fail(name, `trend period mismatch ${body.data?.trendSummary?.currentPeriod}/${body.data?.trendSummary?.previousPeriod}`);
+            else if (!body.data.trendSummary.metrics?.some((trend) => trend.metricId === metricId && trend.currentValue === 204 && trend.previousValue === 90)) fail(name, "quarterly trend comparison missing expected metric values");
             else pass(name);
           }
         }
@@ -346,6 +349,7 @@ async function run(tenants: SeededTenants): Promise<void> {
       if (!metricId) fail(name, "missing metric id");
       else {
         const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-04", value: 404, notes: "monthly comparison" }, tenantA.adminToken),
           apiRequest("POST", "/api/data-entry", { metricId, period: "2025-05", value: 505, notes: "monthly included" }, tenantA.adminToken),
           apiRequest("POST", "/api/data-entry", { metricId, period: "2025-06", value: 606, notes: "monthly excluded" }, tenantA.adminToken),
         ]);
@@ -371,9 +375,9 @@ async function run(tenants: SeededTenants): Promise<void> {
           else {
             const body = JSON.parse(reportRes.body) as {
               report?: { id?: string; period?: string };
-              data?: { period?: string; periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+              data?: { period?: string; periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { currentPeriod?: string; previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } };
             };
-            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { currentPeriod?: string; previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } };
             const reportPeriods = new Set((body.data?.values || []).map((value) => value.period));
             const exportPeriods = new Set((exportBody.values || []).map((value) => value.period));
             if (body.report?.period !== "2025-05" || body.data?.period !== "2025-05") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
@@ -382,13 +386,17 @@ async function run(tenants: SeededTenants): Promise<void> {
             else if (exportBody.periodType !== "monthly" || exportBody.dateFrom !== "2025-05-01" || exportBody.dateTo !== "2025-05-31") fail(name, `export metadata mismatch ${exportBody.periodType}/${exportBody.dateFrom}/${exportBody.dateTo}`);
             else if (!reportPeriods.has("2025-05") || !exportPeriods.has("2025-05")) fail(name, "selected-month value missing from report/export");
             else if (reportPeriods.has("2025-06") || exportPeriods.has("2025-06")) fail(name, "other-month value leaked into monthly report/export");
+            else if (body.data?.trendSummary?.previousPeriod !== "2025-04" || exportBody.trendSummary?.previousPeriod !== "2025-04") fail(name, "monthly trend previous period metadata missing");
+            else if (!body.data.trendSummary.metrics?.some((trend) => trend.metricId === metricId && trend.currentValue === 505 && trend.previousValue === 404)) fail(name, "monthly report trend comparison missing expected metric values");
+            else if (!exportBody.trendSummary.metrics?.some((trend) => trend.metricId === metricId && trend.currentValue === 505 && trend.previousValue === 404)) fail(name, "monthly export trend comparison missing expected metric values");
             else {
               const detailRes = await apiRequest("GET", `/api/reports/${body.report?.id}`, undefined, tenantA.adminToken);
               if (detailRes.status !== 200) fail(name, `detail status=${detailRes.status} body=${detailRes.body.slice(0, 200)}`);
               else {
-                const detail = JSON.parse(detailRes.body) as { periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null };
+                const detail = JSON.parse(detailRes.body) as { periodType?: string | null; periodLabel?: string | null; dateFrom?: string | null; dateTo?: string | null; trendMetadata?: { previousPeriod?: string | null } | null };
                 if (detail.periodType !== "monthly") fail(name, `library detail periodType mismatch ${detail.periodType}`);
                 else if (!detail.periodLabel || detail.dateFrom !== "2025-05-01" || detail.dateTo !== "2025-05-31") fail(name, `library metadata mismatch ${detail.periodLabel}/${detail.dateFrom}/${detail.dateTo}`);
+                else if (detail.trendMetadata?.previousPeriod !== "2025-04") fail(name, `library trend metadata mismatch ${detail.trendMetadata?.previousPeriod}`);
                 else pass(name);
               }
             }
@@ -429,14 +437,16 @@ async function run(tenants: SeededTenants): Promise<void> {
           if (![200, 201].includes(reportRes.status)) fail(name, `report status=${reportRes.status} body=${reportRes.body.slice(0, 200)}`);
           else if (exportRes.status !== 200) fail(name, `export-data status=${exportRes.status} body=${exportRes.body.slice(0, 200)}`);
           else {
-            const reportBody = JSON.parse(reportRes.body) as { data?: { period?: string; periodType?: string | null; values?: Array<{ period?: string; value?: string }> } };
-            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            const reportBody = JSON.parse(reportRes.body) as { data?: { period?: string; periodType?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } } };
+            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } };
             const reportPeriods = new Set((reportBody.data?.values || []).map((value) => value.period));
             const exportPeriods = new Set((exportBody.values || []).map((value) => value.period));
             if (reportBody.data?.period !== "2025" || reportBody.data?.periodType !== "annual") fail(name, `report metadata mismatch ${reportBody.data?.period}/${reportBody.data?.periodType}`);
             else if (exportBody.period !== "2025" || exportBody.periodType !== "annual") fail(name, `export metadata mismatch ${exportBody.period}/${exportBody.periodType}`);
-            else if (reportPeriods.has("2024-12") || exportPeriods.has("2024-12")) fail(name, "prior-year value leaked into annual report/export");
-            else if (!reportPeriods.has("2025-05") || !exportPeriods.has("2025-05")) fail(name, "selected-year value missing from annual report/export");
+            else if (Array.from(reportPeriods).some((period) => period?.startsWith("2024")) || Array.from(exportPeriods).some((period) => period?.startsWith("2024"))) fail(name, "prior-year value leaked into annual report/export");
+            else if (!Array.from(reportPeriods).some((period) => period?.startsWith("2025")) || !Array.from(exportPeriods).some((period) => period?.startsWith("2025"))) fail(name, "selected-year value missing from annual report/export");
+            else if (reportBody.data?.trendSummary?.previousPeriod !== "2024" || exportBody.trendSummary?.previousPeriod !== "2024") fail(name, "annual trend previous period metadata missing");
+            else if (!reportBody.data.trendSummary.metrics?.some((trend) => typeof trend.currentValue === "number" && trend.currentValue > 0 && typeof trend.previousValue === "number")) fail(name, "annual report trend comparison missing expected metric values");
             else pass(name);
           }
         }

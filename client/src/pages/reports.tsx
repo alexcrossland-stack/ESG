@@ -71,6 +71,15 @@ type ReportHistoryEntry = {
   latestDownloadUrl?: string | null;
   fileAvailability?: "available" | "unavailable" | null;
   fileUnavailableReason?: "expired" | "missing" | "retained_history_only" | null;
+  trendMetadata?: {
+    currentPeriod?: string | null;
+    currentPeriodLabel?: string | null;
+    previousPeriod?: string | null;
+    previousPeriodLabel?: string | null;
+    comparisonLabel?: string | null;
+    availableComparisons?: number;
+    unavailableComparisons?: number;
+  } | null;
 };
 
 type DownloadableHistoryEntry = ReportHistoryEntry & {
@@ -2536,6 +2545,11 @@ export default function Reports() {
                       <span>{report.reportTemplate ? reportTemplateLabel(report.reportTemplate) : "ESG Report"}</span>
                       <span>{report.periodLabel || report.period || "All periods"}</span>
                       {report.periodType && <span className="capitalize">{report.periodType}</span>}
+                      {report.trendMetadata?.comparisonLabel && (
+                        <span data-testid={`text-report-trend-metadata-${report.id}`}>
+                          {report.trendMetadata.comparisonLabel}
+                        </span>
+                      )}
                       {report.siteId ? <span>{report.siteName || "Site"}</span> : <span>All scopes</span>}
                     </div>
                     {hasReportFile ? (
@@ -2713,6 +2727,17 @@ export default function Reports() {
                       </p>
                     </div>
                   </div>
+                  {selectedLibraryReport.trendMetadata && (
+                    <div className="rounded-md border border-border p-3 text-xs" data-testid="panel-report-library-trend-metadata">
+                      <p className="text-muted-foreground">Trend comparison</p>
+                      <p className="font-medium">
+                        {selectedLibraryReport.trendMetadata.comparisonLabel}: {selectedLibraryReport.trendMetadata.currentPeriodLabel || selectedLibraryReport.trendMetadata.currentPeriod} vs {selectedLibraryReport.trendMetadata.previousPeriodLabel || selectedLibraryReport.trendMetadata.previousPeriod}
+                      </p>
+                      <p className="text-muted-foreground mt-1">
+                        {selectedLibraryReport.trendMetadata.availableComparisons || 0} metric comparisons available · {selectedLibraryReport.trendMetadata.unavailableComparisons || 0} unavailable
+                      </p>
+                    </div>
+                  )}
                   {selectedLibraryReport.reportData && (
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs" data-testid="panel-report-library-summary">
                       <div className="rounded-md bg-muted/40 p-3">
