@@ -88,6 +88,16 @@ export type MetricValueScope =
   | { scope: "organisation" }
   | { scope: "site"; siteId: string };
 
+export type MetricTrendValueRow = MetricValue & {
+  companyId: string;
+  metricName: string;
+  category: string;
+  unit: string | null;
+  metricType: string | null;
+  direction: string | null;
+  enabled: boolean | null;
+};
+
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool);
@@ -167,6 +177,7 @@ export interface IStorage {
   getMetricValuesForMetric(companyId: string, metricId: string, scope: MetricValueScope): Promise<MetricValue[]>;
   getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null): Promise<MetricValue | undefined>;
   getMetricValuesByPeriod(companyId: string, period: string, siteId?: string | null): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
+  getMetricTrendValues(companyId: string, periods: string[], scope: MetricValueScope): Promise<MetricTrendValueRow[]>;
   hasAnyData(companyId: string): Promise<boolean>;
   countEstimatedValues(companyId: string): Promise<number>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
@@ -748,6 +759,67 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
       .where(and(...conditions));
     return result as any[];
+  }
+
+  async getMetricTrendValues(companyId: string, periods: string[], scope: MetricValueScope): Promise<MetricTrendValueRow[]> {
+    const uniquePeriods = Array.from(new Set(periods.filter(Boolean)));
+    if (uniquePeriods.length === 0) return [];
+
+    const conditions: any[] = [
+      eq(metrics.companyId, companyId),
+      eq(metrics.enabled, true),
+      inArray(metricValues.period, uniquePeriods),
+    ];
+    if (scope.scope === "organisation") {
+      conditions.push(isNull(metricValues.siteId));
+    } else if (scope.scope === "site") {
+      conditions.push(eq(metricValues.siteId, scope.siteId));
+    }
+
+    const result = await db
+      .select({
+        id: metricValues.id,
+        metricId: metricValues.metricId,
+        period: metricValues.period,
+        value: metricValues.value,
+        previousValue: metricValues.previousValue,
+        targetValue: metricValues.targetValue,
+        status: metricValues.status,
+        percentChange: metricValues.percentChange,
+        submittedBy: metricValues.submittedBy,
+        submittedAt: metricValues.submittedAt,
+        notes: metricValues.notes,
+        locked: metricValues.locked,
+        dataSourceType: metricValues.dataSourceType,
+        workflowStatus: metricValues.workflowStatus,
+        reviewedBy: metricValues.reviewedBy,
+        reviewedAt: metricValues.reviewedAt,
+        reviewComment: metricValues.reviewComment,
+        reportingPeriodId: metricValues.reportingPeriodId,
+        siteId: metricValues.siteId,
+        metricDefinitionId: metricValues.metricDefinitionId,
+        reportingPeriodStart: metricValues.reportingPeriodStart,
+        reportingPeriodEnd: metricValues.reportingPeriodEnd,
+        valueNumeric: metricValues.valueNumeric,
+        valueText: metricValues.valueText,
+        valueBoolean: metricValues.valueBoolean,
+        valueJson: metricValues.valueJson,
+        sourceType: metricValues.sourceType,
+        enteredByUserId: metricValues.enteredByUserId,
+        companyId: metrics.companyId,
+        metricName: metrics.name,
+        category: metrics.category,
+        unit: metrics.unit,
+        metricType: metrics.metricType,
+        direction: metrics.direction,
+        enabled: metrics.enabled,
+      })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(and(...conditions))
+      .orderBy(metricValues.period, metrics.category, metrics.name);
+
+    return result as MetricTrendValueRow[];
   }
 
   async createMetricValue(value: InsertMetricValue) {
