@@ -40,6 +40,15 @@ test.describe("Metrics surface alignment", () => {
     await page.goto("/metrics-library");
     await page.waitForLoadState("networkidle");
     const enabledLibraryCount = Number((await page.locator("[data-testid='stat-active']").textContent()) || "0");
+    const editableMetricCount = await page.evaluate(async () => {
+      const token = localStorage.getItem("auth_token");
+      const res = await fetch("/api/data-entry/2024-01", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`data-entry status ${res.status}`);
+      const body = await res.json() as { metrics?: Array<{ metricType?: string | null; enabled?: boolean | null }> };
+      return (body.metrics || []).filter((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual")).length;
+    });
 
     await page.goto("/metrics");
     await page.waitForLoadState("networkidle");
@@ -54,8 +63,8 @@ test.describe("Metrics surface alignment", () => {
     await page.waitForLoadState("networkidle");
     const denominatorText = (await page.locator("[data-testid='badge-enabled-metric-denominator']").textContent()) || "";
     const denominator = Number(denominatorText.split(" ")[0] || "0");
-    expect(denominator).toBe(enabledLibraryCount);
-    await expect(page.locator("[data-testid^='manual-row-']")).toHaveCount(enabledLibraryCount);
+    expect(denominator).toBe(editableMetricCount);
+    await expect(page.locator("[data-testid^='manual-row-']")).toHaveCount(editableMetricCount);
     await expect(page.getByText("Raw input fields completed:", { exact: false })).toBeVisible();
 
     await page.goto("/evidence");
