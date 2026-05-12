@@ -8,6 +8,8 @@ Production deployment is manual-gated. Pushing or merging to `main` must not dep
 
 Do not use the production deployment workflow for staging/pre-production validation. Use `docs/runbooks/staging-deployment.md` and the `Deploy to Staging` workflow when validating a release before production.
 
+The production workflow writes the GitHub `production` environment secrets into `/root/ESG/.env` on the Hetzner host before restart, sources that file in the remote shell, and then runs `pm2 restart esg --update-env`. Secret values must never be printed in workflow logs. The workflow validates required secret presence by name only, uploads the runtime env file with `0600` permissions, and verifies selected PM2 runtime env keys as present/configured without printing values.
+
 ## 1. Pre-Deploy Checks
 
 Confirm the release is being deployed from the latest reviewed `main` commit.
@@ -58,9 +60,10 @@ These are high-level steps only. Use the existing production deployment mechanis
 3. Confirm the latest production backup timestamp and rollback owner.
 4. Trigger the manual `Deploy to Hetzner` GitHub Actions workflow from `main` with `confirm_target=production`.
 5. Wait for the deployment to finish.
-6. Confirm the deployed commit matches the intended `main` commit.
-7. Confirm the application health endpoint and logs show the app booted successfully.
-8. Keep the previous release identifier available until smoke checks pass.
+6. Confirm the workflow updated the production runtime env file and verified PM2 runtime env keys without printing secret values.
+7. Confirm the deployed commit matches the intended `main` commit.
+8. Confirm the application health endpoint and logs show the app booted successfully.
+9. Keep the previous release identifier available until smoke checks pass.
 
 ## 3. Production Smoke Checklist
 
