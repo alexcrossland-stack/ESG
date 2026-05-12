@@ -9456,33 +9456,8 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       }
 
       if (reportData.trendSummary) {
-        const trendRows = (reportData.trendSummary.metrics || [])
-          .filter((trend: any) => trend.reason === "ok")
-          .slice(0, 12)
-          .map((trend: any) => ({
-            label: trend.metricName,
-            value: `${trend.currentValue ?? "-"} vs ${trend.previousValue ?? "-"}`,
-            status: trend.changeLabel || (trend.direction === "improved" ? "Improved" : trend.direction === "worsened" ? "Worsened" : "Unchanged"),
-          }));
-        sections.push({
-          title: "Trend Summary",
-          type: "text",
-          content: `${reportData.trendSummary.comparisonLabel}: ${reportData.trendSummary.currentPeriodLabel} compared with ${reportData.trendSummary.previousPeriodLabel}. Improvements: ${reportData.trendSummary.improvements?.length || 0}. Worsening areas: ${reportData.trendSummary.worsening?.length || 0}.`,
-        });
-        if (trendRows.length > 0) {
-          sections.push({
-            title: "Metric Trends",
-            type: "metrics",
-            rows: trendRows,
-          });
-        }
-        if (reportData.trendSummary.notes?.length) {
-          sections.push({
-            title: "Trend Notes",
-            type: "list",
-            items: reportData.trendSummary.notes,
-          });
-        }
+        const { buildTrendReportSections } = await import("./report-engine");
+        sections.push(...buildTrendReportSections(reportData.trendSummary));
       }
 
       if (reportData.carbon) {
@@ -13028,6 +13003,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         buildPolicyRegisterSummaryReport,
         buildRiskRegisterSummaryReport,
         buildSiteComparisonSummaryReport,
+        buildTrendReportSections,
         generatePdf: genPdf,
         generateDocx: genDocx,
       } = await import("./report-engine");
@@ -13086,6 +13062,34 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           reportedCount,
           missingCount,
         });
+
+        const exportTrendPeriod = resolveReportPeriodSelection({
+          periodType,
+          period,
+          dateFrom,
+          dateTo,
+          year: period?.slice(0, 4),
+          month: periodType === "monthly" && period?.includes("-") ? period.split("-")[1] : undefined,
+          quarter: periodType === "quarterly" && period?.includes("-Q") ? period.split("-Q")[1] : undefined,
+        }) ?? (period ? inferTrendPeriodFromPeriodString(period) : null);
+        const trendSummary = exportTrendPeriod
+          ? await calculateReportTrendSummary({
+              companyId,
+              enabledMetrics,
+              currentPeriod: exportTrendPeriod,
+              siteId: siteScopeProvided ? requestedSiteId : undefined,
+            })
+          : null;
+        if (trendSummary) {
+          reportData = {
+            ...reportData,
+            trendSummary,
+            sections: [
+              ...buildTrendReportSections(trendSummary),
+              ...(reportData.sections || []),
+            ],
+          };
+        }
 
       } else if (reportType === "framework_readiness_summary") {
         const frameworkReadiness = await storage.getFrameworkReadiness(companyId);

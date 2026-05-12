@@ -284,6 +284,9 @@ async function run(tenants: SeededTenants): Promise<void> {
   await check("PDF export text is tenant-scoped and excludes disabled or cross-tenant content", async () => {
     const text = await exportPdf(tenantA.adminToken, { period, siteId: "__org__" });
     expectIncludes(text, tenantACompanyName);
+    expectIncludes(text, "Trend Summary");
+    expectIncludes(text, "Compared with previous month");
+    expectIncludes(text, "Trend Notes");
     expectIncludes(text, tenantAMetricName);
     expectIncludes(text, "12.34");
     expectIncludes(text, period);

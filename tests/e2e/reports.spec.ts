@@ -63,6 +63,33 @@ const mockedReports = [
       evidenceCoverage: { totalEvidence: 2, evidencedCount: 1, totalMetrics: 1, coveragePercent: 100 },
       factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
       dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+      trendSummary: {
+        currentPeriod: "2024-01",
+        previousPeriod: "2023-12",
+        currentPeriodLabel: "January 2024",
+        previousPeriodLabel: "December 2023",
+        comparisonLabel: "Compared with previous month",
+        improvements: [{ metricId: "value-1" }],
+        worsening: [],
+        metrics: [{
+          metricId: "value-1",
+          metricName: "Electricity Consumption",
+          unit: "kWh",
+          currentValue: 123.45,
+          previousValue: 150,
+          absoluteDelta: -26.55,
+          percentageDelta: -17.7,
+          direction: "improved",
+          changeLabel: "Improved",
+          reason: "ok",
+        }],
+        unavailable: [{
+          metricId: "value-2",
+          metricName: "Water Consumption",
+          reason: "missing_previous",
+        }],
+        notes: ["Water Consumption: No prior-period data available"],
+      },
     },
   },
   {
@@ -176,6 +203,29 @@ async function mockReportsPageApis(page: Page, options?: {
           },
           factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
           dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+          trendSummary: {
+            currentPeriod: "2026-05",
+            previousPeriod: "2026-04",
+            currentPeriodLabel: "May 2026",
+            previousPeriodLabel: "April 2026",
+            comparisonLabel: "Compared with previous month",
+            improvements: [],
+            worsening: [{ metricId: "generated-value-1" }],
+            metrics: [{
+              metricId: "generated-value-1",
+              metricName: "Generated Electricity",
+              unit: "kWh",
+              currentValue: 456.78,
+              previousValue: 400,
+              absoluteDelta: 56.78,
+              percentageDelta: 14.2,
+              direction: "worsened",
+              changeLabel: "Worsened",
+              reason: "ok",
+            }],
+            unavailable: [],
+            notes: [],
+          },
         },
       });
     }
@@ -339,6 +389,9 @@ test.describe("Report generation", () => {
     await expect(page.getByTestId("panel-report-library-summary")).toContainText("2");
     await expect(page.getByTestId("panel-report-library-summary")).toContainText("88");
     await expect(page.getByTestId("historical-report-preview")).toContainText("Mock Historical Report");
+    await expect(page.getByTestId("historical-report-preview").getByTestId("section-trend-summary")).toContainText("Trend Summary");
+    await expect(page.getByTestId("historical-report-preview").getByTestId("section-metric-trends")).toContainText("Electricity Consumption");
+    await expect(page.getByTestId("historical-report-preview").getByTestId("section-trend-notes")).toContainText("No prior-period data available");
     await expect(page.getByTestId("historical-report-preview")).toContainText("Electricity Consumption");
     await expect(page.getByTestId("empty-state-report-preview")).toBeVisible();
 
@@ -409,6 +462,9 @@ test.describe("Report generation", () => {
 
     await page.getByTestId("button-generate-report").click();
     await expect(page.getByTestId("report-preview")).toContainText("New Generated Report");
+    await expect(page.getByTestId("report-preview").getByTestId("section-trend-summary")).toContainText("Trend Summary");
+    await expect(page.getByTestId("report-preview").getByTestId("text-report-trend-comparison")).toContainText("Compared with previous month");
+    await expect(page.getByTestId("report-preview").getByTestId("section-metric-trends")).toContainText("Generated Electricity");
 
     await page.getByTestId("button-download-pdf").click();
     await expect.poll(() => generatedFiles).toEqual([{ reportId: "report-generated", format: "pdf" }]);

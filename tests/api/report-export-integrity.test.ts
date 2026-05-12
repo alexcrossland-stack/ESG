@@ -256,6 +256,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     siteId: null,
     filename: `export-org-${suffix}.txt`,
   });
+  await saveMetricValue({ token: tenantA.adminToken, metricId: primaryMetricId, period: "2099-09", value: 77.7, siteId: null });
   await attachMetricEvidence({
     token: tenantA.adminToken,
     metricId: primaryMetricId,
@@ -328,6 +329,9 @@ async function run(tenants: SeededTenants): Promise<void> {
   await check("DOCX exports render correct reporting period, scope labels, values, precision, and evidence status", async () => {
     const orgText = await exportDocx(tenantA.adminToken, { period, siteId: "__org__" });
     expectIncludes(orgText, "ESG Metrics Summary");
+    expectIncludes(orgText, "Trend Summary");
+    expectIncludes(orgText, "Compared with previous month");
+    expectIncludes(orgText, "Metric Trends");
     expectIncludes(orgText, `Reporting Period ${period}`);
     expectIncludes(orgText, "excludes site-specific metric entries");
     expectIncludes(orgText, primaryMetricName);
