@@ -4,6 +4,7 @@ export type GridMetric = {
   category: string;
   unit: string | null;
   metricType: string | null;
+  dataType: string;
   enabled: boolean;
   readOnly: boolean;
 };
@@ -13,6 +14,8 @@ export type GridValue = {
   metricId: string;
   period: string;
   value: string | null;
+  valueText?: string | null;
+  valueBoolean?: boolean | null;
   locked: boolean;
   dataSourceType: string | null;
   workflowStatus: string | null;

@@ -71,10 +71,15 @@ await check("boolean metric data type is detected explicitly", () => {
 
 await check("yes/no metric inputs parse safely", () => {
   assert.equal(parseBooleanMetricInput("Yes"), true);
+  assert.equal(parseBooleanMetricInput("Y"), true);
   assert.equal(parseBooleanMetricInput("no"), false);
+  assert.equal(parseBooleanMetricInput("n"), false);
   assert.equal(parseBooleanMetricInput(true), true);
   assert.equal(parseBooleanMetricInput(false), false);
-  assert.equal(parseBooleanMetricInput("1"), null);
+  assert.equal(parseBooleanMetricInput("1"), true);
+  assert.equal(parseBooleanMetricInput("0"), false);
+  assert.equal(parseBooleanMetricInput("TRUE"), true);
+  assert.equal(parseBooleanMetricInput("False"), false);
   assert.equal(parseBooleanMetricInput("maybe"), null);
 });
 

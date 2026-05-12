@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { authFetch, apiRequest } from "@/lib/queryClient";
-import { parseBulkGridResponse, resolvePasteGridState, type GridResponse } from "@/lib/paste-grid-response";
+import { parseBulkGridResponse, resolvePasteGridState, type GridMetric, type GridResponse } from "@/lib/paste-grid-response";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useSiteContext } from "@/hooks/use-site-context";
@@ -19,7 +19,13 @@ type ValidationCell = {
   period: string;
   rawValue: string | null;
   normalizedValue: number | null;
+  normalizedText: string | null;
+  normalizedBoolean: boolean | null;
+  normalizedDisplayValue: string | null;
   existingValue: number | null;
+  existingText: string | null;
+  existingBoolean: boolean | null;
+  existingDisplayValue: string | null;
   status: "create" | "update" | "clear" | "unchanged" | "error";
   errors: string[];
   warnings: string[];
@@ -73,6 +79,12 @@ function parseClipboardBlock(text: string) {
 
 function looksLikePeriod(value: string) {
   return /^\d{4}-\d{2}$/.test(value.trim());
+}
+
+function displayValidationValue(displayValue: string | null | undefined, numericValue: number | null | undefined, emptyLabel: string) {
+  if (displayValue !== null && displayValue !== undefined && displayValue !== "") return displayValue;
+  if (numericValue !== null && numericValue !== undefined) return String(numericValue);
+  return emptyLabel;
 }
 
 function normalizeClipboardBlock(block: string[][], params: {
@@ -387,7 +399,7 @@ export function PasteFromExcelTab({
             <span>Changed cells are highlighted immediately and validated before save.</span>
           </div>
           <p className="text-xs text-sky-700 dark:text-sky-300">
-            Blank cells inside the pasted range clear existing values. Blank cells outside the pasted range are ignored.
+            Blank cells inside the pasted range clear existing values. Yes/No metrics accept Yes, No, Y, N, True, False, 1, or 0.
           </p>
         </AlertDescription>
       </Alert>
@@ -653,8 +665,12 @@ export function PasteFromExcelTab({
                           {cell.status}
                         </Badge>
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{cell.existingValue ?? "Empty"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{cell.normalizedValue ?? "Cleared"}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {displayValidationValue(cell.existingDisplayValue, cell.existingValue, "Empty")}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {displayValidationValue(cell.normalizedDisplayValue, cell.normalizedValue, "Cleared")}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -706,7 +722,7 @@ export function PasteFromExcelTab({
 
       <Card className="bg-muted/30">
         <CardContent className="pt-4 text-xs text-muted-foreground space-y-2">
-          <p>Clipboard rules: columns are tab-separated, rows are newline-separated, blanks stay empty, and values like `1,234`, `£450`, or `12%` are normalized automatically.</p>
+          <p>Clipboard rules: columns are tab-separated, rows are newline-separated, blanks stay empty, and values like `1,234`, `£450`, `12%`, or Yes/No are normalized automatically.</p>
           <p>Keyboard support: arrows move cell-to-cell, `Tab` moves across months, `Enter` moves down, and `Shift` with arrows expands the current selection.</p>
         </CardContent>
       </Card>
