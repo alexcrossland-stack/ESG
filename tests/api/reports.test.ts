@@ -290,6 +290,100 @@ async function run(tenants: SeededTenants): Promise<void> {
   }
 
   {
+    const name = "quarterly report includes selected quarter data and excludes outside months";
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
+    else {
+      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      if (!metricId) fail(name, "missing metric id");
+      else {
+        const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-01", value: 101, notes: "Q1 included" }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-03", value: 103, notes: "Q1 included" }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-04", value: 204, notes: "Q2 excluded" }, tenantA.adminToken),
+        ]);
+        const failedSave = saves.find((res) => ![200, 201].includes(res.status));
+        if (failedSave) fail(name, `data-entry status=${failedSave.status} body=${failedSave.body.slice(0, 200)}`);
+        else {
+          const reportRes = await apiRequest("POST", "/api/reports/generate", {
+            reportType: "pdf",
+            reportTemplate: "management",
+            period: "2025-Q1",
+            periodType: "quarterly",
+            year: 2025,
+            quarter: 1,
+            dateFrom: "2025-01-01",
+            dateTo: "2025-03-31",
+            includeMetrics: true,
+            includePolicy: false,
+            includeTopics: false,
+          }, tenantA.adminToken);
+          if (![200, 201].includes(reportRes.status)) fail(name, `report status=${reportRes.status} body=${reportRes.body.slice(0, 200)}`);
+          else {
+            const body = JSON.parse(reportRes.body) as {
+              report?: { id?: string; period?: string };
+              data?: { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            };
+            const periods = new Set((body.data?.values || []).map((value) => value.period));
+            if (body.report?.period !== "2025-Q1" || body.data?.period !== "2025-Q1") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
+            else if (body.data?.periodType !== "quarterly") fail(name, `expected quarterly periodType, got ${body.data?.periodType}`);
+            else if (body.data?.dateFrom !== "2025-01-01" || body.data?.dateTo !== "2025-03-31") fail(name, `date metadata mismatch ${body.data?.dateFrom}/${body.data?.dateTo}`);
+            else if (!periods.has("2025-01") || !periods.has("2025-03")) fail(name, `missing Q1 values: ${Array.from(periods).join(",")}`);
+            else if (periods.has("2025-04")) fail(name, "Q2 value leaked into Q1 report");
+            else pass(name);
+          }
+        }
+      }
+    }
+  }
+
+  {
+    const name = "annual report and export-data include selected year only";
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
+    else {
+      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      if (!metricId) fail(name, "missing metric id");
+      else {
+        const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2024-12", value: 412, notes: "prior-year excluded" }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-05", value: 505, notes: "annual included" }, tenantA.adminToken),
+        ]);
+        const failedSave = saves.find((res) => ![200, 201].includes(res.status));
+        if (failedSave) fail(name, `data-entry status=${failedSave.status} body=${failedSave.body.slice(0, 200)}`);
+        else {
+          const reportRes = await apiRequest("POST", "/api/reports/generate", {
+            reportType: "pdf",
+            reportTemplate: "annual",
+            period: "2025",
+            periodType: "annual",
+            year: 2025,
+            dateFrom: "2025-01-01",
+            dateTo: "2025-12-31",
+            includeMetrics: true,
+            includePolicy: false,
+            includeTopics: false,
+          }, tenantA.adminToken);
+          const exportRes = await apiRequest("GET", "/api/reports/export-data/esg_metrics_summary?period=2025&periodType=annual&dateFrom=2025-01-01&dateTo=2025-12-31&siteId=__all__", undefined, tenantA.adminToken);
+          if (![200, 201].includes(reportRes.status)) fail(name, `report status=${reportRes.status} body=${reportRes.body.slice(0, 200)}`);
+          else if (exportRes.status !== 200) fail(name, `export-data status=${exportRes.status} body=${exportRes.body.slice(0, 200)}`);
+          else {
+            const reportBody = JSON.parse(reportRes.body) as { data?: { period?: string; periodType?: string | null; values?: Array<{ period?: string; value?: string }> } };
+            const exportBody = JSON.parse(exportRes.body) as { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }> };
+            const reportPeriods = new Set((reportBody.data?.values || []).map((value) => value.period));
+            const exportPeriods = new Set((exportBody.values || []).map((value) => value.period));
+            if (reportBody.data?.period !== "2025" || reportBody.data?.periodType !== "annual") fail(name, `report metadata mismatch ${reportBody.data?.period}/${reportBody.data?.periodType}`);
+            else if (exportBody.period !== "2025" || exportBody.periodType !== "annual") fail(name, `export metadata mismatch ${exportBody.period}/${exportBody.periodType}`);
+            else if (reportPeriods.has("2024-12") || exportPeriods.has("2024-12")) fail(name, "prior-year value leaked into annual report/export");
+            else if (!reportPeriods.has("2025-05") || !exportPeriods.has("2025-05")) fail(name, "selected-year value missing from annual report/export");
+            else pass(name);
+          }
+        }
+      }
+    }
+  }
+
+  {
     const name = "viewer and contributor can browse own-tenant report detail but not generate reports";
     if (!generatedReportId) {
       pass(name, "skipped — generated report unavailable");
