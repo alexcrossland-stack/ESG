@@ -634,6 +634,10 @@ function createOpenAiIntegrationClient(): OpenAI {
   });
 }
 
+function getOpenAiChatModel(): string {
+  return process.env.AI_INTEGRATIONS_OPENAI_MODEL?.trim() || "gpt-4.1-mini";
+}
+
 function safeOpenAiErrorMeta(error: unknown): Record<string, unknown> {
   if (!error || typeof error !== "object") return { type: typeof error };
   const candidate = error as {
@@ -8646,7 +8650,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       try {
         const openai = createOpenAiIntegrationClient();
         const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
+          model: getOpenAiChatModel(),
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: message.trim() },
@@ -9872,7 +9876,7 @@ Return ONLY valid JSON in this exact format:
 Include all 12 months. Make the progression realistic: start with quick wins and policies, move to data collection, then reporting and continuous improvement.`;
 
           const completion = await aiOpenai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: getOpenAiChatModel(),
             messages: [
               { role: "system", content: "You are an ESG implementation expert for SMEs. Always respond with valid JSON only." },
               { role: "user", content: prompt },
@@ -9904,7 +9908,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           await storage.createAiGenerationLog({
             companyId,
             featureType: "esg_roadmap",
-            modelName: "gpt-4o-mini",
+            modelName: getOpenAiChatModel(),
             promptVersion: "v1",
             generatedBy: userId,
             sourceDataSummary: { maturityLevel, priorityTopics, actionItems: actionItems.slice(0, 200) },

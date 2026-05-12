@@ -144,7 +144,7 @@ Feature flags are environment variables. They default to **enabled** (`true`) wh
    WHERE company_id = '<UUID>' ORDER BY created_at DESC LIMIT 5;
    ```
 4. If status is `failed`, the `error` column contains the root cause.
-5. Check `AI_INTEGRATIONS_OPENAI_API_KEY` and `AI_INTEGRATIONS_OPENAI_BASE_URL` are configured (required for AI-generated narrative sections).
+5. Check `AI_INTEGRATIONS_OPENAI_API_KEY` and `AI_INTEGRATIONS_OPENAI_BASE_URL` are configured (required for AI-generated narrative sections). `AI_INTEGRATIONS_OPENAI_MODEL` defaults to `gpt-4.1-mini` when unset; set it only to an approved model available to the production OpenAI account.
 6. Re-trigger generation after fixing the root cause.
 
 ---
