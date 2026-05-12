@@ -63,6 +63,7 @@ import {
   generateBackupCodes, hashBackupCodes, verifyBackupCode,
 } from "./mfa";
 import { createOpenAiAssistantReply } from "./openai-assist";
+import { isActiveEditableDataEntryMetric } from "@shared/data-entry-metrics";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -3390,7 +3391,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ...(evidenceByMetricId.get(value.metricId) || []),
         ].filter((file, index, all) => all.findIndex((item) => item.id === file.id) === index),
       })),
-      metrics: allMetrics.filter(m => m.enabled),
+      metrics: allMetrics.filter(isActiveEditableDataEntryMetric),
     });
   });
 

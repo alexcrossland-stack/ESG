@@ -40,6 +40,7 @@ import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTU
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
+import { isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -521,8 +522,9 @@ export default function DataEntry() {
   const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
   const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, metrics);
   const canonicalEvidenceMetrics = buildCanonicalEvidenceMetrics(allEnabledMetrics, evidenceCoverage?.metricCoverage || []);
-  const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && (metric.metricType === "manual" || !metric.metricType);
+  const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && isEditableDataEntryMetricType(metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
+  const visibleManualMetrics = eligibleMetrics;
   const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
   const getMetricEvidence = (metricValueId?: string, metricId?: string | null) =>
     evidenceFiles.filter((file: any) => (
@@ -1182,17 +1184,17 @@ export default function DataEntry() {
             <div>
               <p className="text-sm font-medium">Enabled metric coverage</p>
               <p className="text-xs text-muted-foreground">
-                {eligibleMetrics.length} of {allEnabledMetrics.length} enabled metrics accept direct data entry. Calculated and derived metrics are shown below as read-only so your tracked metric set stays consistent across the platform.
+                {visibleManualMetrics.length} active editable metrics accept direct data entry. Calculated and derived metrics remain available in reporting and summary views.
               </p>
             </div>
             <Badge variant="outline" className="text-xs" data-testid="badge-enabled-metric-denominator">
-              {allEnabledMetrics.length} enabled
+              {visibleManualMetrics.length} editable
             </Badge>
           </div>
 
           {(["environmental", "social", "governance"] as const).map(cat => {
             const PRIORITY_ORDER: Record<string, number> = { essential: 0, recommended: 1, optional: 2 };
-            const catMetrics = (allEnabledMetrics as any[])
+            const catMetrics = (visibleManualMetrics as any[])
               .filter((m: any) => m.category === cat)
               .sort((a: any, b: any) =>
                 (PRIORITY_ORDER[getManualMetricPriority(a.name)] ?? 2) -
@@ -1466,15 +1468,15 @@ export default function DataEntry() {
             );
           })}
 
-          {allEnabledMetrics.length === 0 && (
+          {visibleManualMetrics.length === 0 && (
             <EmptyState
               icon={ClipboardList}
-              title="No enabled metrics configured"
-              description="Your company hasn't enabled any metrics yet. Use Metrics Library to turn on the metrics you want to track."
+              title="No editable metrics configured"
+              description="Your company hasn't enabled any manual metrics yet. Use Metrics Library to turn on editable metrics you want to track."
             />
           )}
 
-          {allEnabledMetrics.length > 0 && activeSiteId && existingValues.filter(isSelectedScopeValue).length === 0 && (
+          {visibleManualMetrics.length > 0 && activeSiteId && existingValues.filter(isSelectedScopeValue).length === 0 && (
             <EmptyState
               icon={ClipboardList}
               title="No data entered for this site"

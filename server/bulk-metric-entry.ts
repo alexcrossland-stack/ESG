@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { auditLogs, metrics, metricValues, reportingPeriods, type Metric } from "@shared/schema";
+import { isActiveEditableDataEntryMetric } from "@shared/data-entry-metrics";
 import { db, storage } from "./storage";
 import { trackTelemetryEvent } from "./telemetry";
 
@@ -205,7 +206,7 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
   const sanitizedPeriods = periods.filter((period) => MONTH_PERIOD_RE.test(period)).slice(0, 18);
   const companyMetrics = await loadCompanyMetrics(companyId);
   const eligibleMetrics = companyMetrics
-    .filter((metric) => metric.enabled)
+    .filter(isActiveEditableDataEntryMetric)
     .sort((a, b) => {
       if (a.category !== b.category) return a.category.localeCompare(b.category);
       return a.name.localeCompare(b.name);
@@ -217,7 +218,7 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
       unit: metric.unit,
       metricType: metric.metricType,
       enabled: Boolean(metric.enabled),
-      readOnly: Boolean(metric.metricType && metric.metricType !== "manual"),
+      readOnly: false,
     }));
 
   const values = sanitizedPeriods.length > 0

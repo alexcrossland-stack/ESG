@@ -413,6 +413,77 @@ async function run(tenants: SeededTenants): Promise<void> {
       else pass(name);
     }
   }
+
+  // ── 13. Data Entry exposes only active editable metrics ──────────────────
+  {
+    const name = "GET /api/data-entry and bulk grid exclude inactive and calculated metrics";
+    const suffix = Date.now();
+    const manualName = `QA Editable Metric ${suffix}`;
+    const calculatedName = `QA Calculated Metric ${suffix}`;
+    const inactiveName = `QA Inactive Metric ${suffix}`;
+
+    const createManual = await apiRequest("POST", "/api/metrics", {
+      name: manualName,
+      description: "Editable metric for data-entry filtering test",
+      category: "environmental",
+      unit: "kg",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    }, tenantA.adminToken);
+    const createCalculated = await apiRequest("POST", "/api/metrics", {
+      name: calculatedName,
+      description: "Calculated metric should not appear as manual data entry",
+      category: "environmental",
+      unit: "kg",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "calculated",
+      formulaText: "Manual metric * factor",
+    }, tenantA.adminToken);
+    const createInactive = await apiRequest("POST", "/api/metrics", {
+      name: inactiveName,
+      description: "Inactive metric should not appear as manual data entry",
+      category: "environmental",
+      unit: "kg",
+      frequency: "monthly",
+      enabled: false,
+      metricType: "manual",
+    }, tenantA.adminToken);
+
+    if (![200, 201].includes(createManual.status) || ![200, 201].includes(createCalculated.status) || ![200, 201].includes(createInactive.status)) {
+      fail(name, `create statuses manual=${createManual.status} calculated=${createCalculated.status} inactive=${createInactive.status}`);
+    } else {
+      const dataEntryRes = await apiRequest("GET", "/api/data-entry/2024-04", undefined, tenantA.adminToken);
+      const bulkGridRes = await apiRequest("GET", "/api/data-entry/bulk-grid?periods=2024-04&siteId=null", undefined, tenantA.adminToken);
+      const tenantBDataEntryRes = await apiRequest("GET", "/api/data-entry/2024-04", undefined, tenantB.adminToken);
+
+      if (dataEntryRes.status !== 200 || bulkGridRes.status !== 200 || tenantBDataEntryRes.status !== 200) {
+        fail(name, `statuses dataEntry=${dataEntryRes.status} bulk=${bulkGridRes.status} tenantB=${tenantBDataEntryRes.status}`);
+      } else {
+        const dataEntry = JSON.parse(dataEntryRes.body) as { metrics: Array<{ name: string; enabled?: boolean; metricType?: string | null }> };
+        const bulkGrid = JSON.parse(bulkGridRes.body) as { metrics: Array<{ name: string; enabled?: boolean; metricType?: string | null; readOnly?: boolean }> };
+        const tenantBDataEntry = JSON.parse(tenantBDataEntryRes.body) as { metrics: Array<{ name: string }> };
+
+        const dataEntryNames = new Set(dataEntry.metrics.map((metric) => metric.name));
+        const bulkGridNames = new Set(bulkGrid.metrics.map((metric) => metric.name));
+        const tenantBNames = new Set(tenantBDataEntry.metrics.map((metric) => metric.name));
+        const badDataEntryRows = dataEntry.metrics.filter((metric) => metric.enabled === false || (metric.metricType && metric.metricType !== "manual"));
+        const badBulkRows = bulkGrid.metrics.filter((metric) => metric.enabled === false || (metric.metricType && metric.metricType !== "manual") || metric.readOnly);
+
+        if (!dataEntryNames.has(manualName)) fail(name, "active manual metric missing from /api/data-entry");
+        else if (dataEntryNames.has(calculatedName)) fail(name, "calculated metric leaked into /api/data-entry");
+        else if (dataEntryNames.has(inactiveName)) fail(name, "inactive metric leaked into /api/data-entry");
+        else if (!bulkGridNames.has(manualName)) fail(name, "active manual metric missing from bulk grid");
+        else if (bulkGridNames.has(calculatedName)) fail(name, "calculated metric leaked into bulk grid");
+        else if (bulkGridNames.has(inactiveName)) fail(name, "inactive metric leaked into bulk grid");
+        else if (badDataEntryRows.length > 0) fail(name, `non-editable rows in /api/data-entry: ${badDataEntryRows.map((metric) => metric.name).join(", ")}`);
+        else if (badBulkRows.length > 0) fail(name, `non-editable rows in bulk grid: ${badBulkRows.map((metric) => metric.name).join(", ")}`);
+        else if (tenantBNames.has(manualName) || tenantBNames.has(calculatedName) || tenantBNames.has(inactiveName)) fail(name, "tenant A metric leaked into tenant B data-entry view");
+        else pass(name);
+      }
+    }
+  }
 }
 
 (async () => {
