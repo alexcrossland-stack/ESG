@@ -318,7 +318,7 @@ jobs:
 
             DEPLOY_STAGE="checking pm2 runtime environment"
             log "$DEPLOY_STAGE"
-            node <<'NODE'
+            node -e '
               const { execFileSync } = require("node:child_process");
               const processes = JSON.parse(execFileSync("pm2", ["jlist"], { encoding: "utf8" }));
               const app = processes.find((entry) => entry.name === "esg");
@@ -329,6 +329,7 @@ jobs:
 
               const env = app.pm2_env?.env || {};
               const checks = [
+                ["DATABASE_URL", Boolean(env.DATABASE_URL)],
                 ["AI_INTEGRATIONS_OPENAI_API_KEY", Boolean(env.AI_INTEGRATIONS_OPENAI_API_KEY)],
                 ["AI_INTEGRATIONS_OPENAI_BASE_URL", env.AI_INTEGRATIONS_OPENAI_BASE_URL === "https://api.openai.com/v1"],
                 ["AI_INTEGRATIONS_OPENAI_MODEL", env.AI_INTEGRATIONS_OPENAI_MODEL === "gpt-4.1-mini"],
@@ -343,7 +344,7 @@ jobs:
                 console.error(`::error::PM2 runtime environment missing or invalid: ${missing.join(", ")}`);
                 process.exit(1);
               }
-            NODE
+            '
 
             DEPLOY_STAGE="checking health endpoint"
             log "$DEPLOY_STAGE"
