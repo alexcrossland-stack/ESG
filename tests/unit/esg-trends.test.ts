@@ -131,4 +131,16 @@ test("tenant-scoped trend calculation ignores other tenant values", () => {
   assert.equal(result.trends[0]?.previousValue, 100);
 });
 
+test("unknown improvement direction uses neutral increased/decreased labels", () => {
+  const trend = calculateMetricTrend({
+    metric: { ...metric, direction: "target_range" },
+    currentPeriod: buildMonthlyReportPeriod(2025, 5),
+    currentRows: [value("2025-05", 120)],
+    previousRows: [value("2025-04", 100)],
+  });
+  assert.equal(trend.direction, "unavailable");
+  assert.equal(trend.improvementKnown, false);
+  assert.equal(trend.changeLabel, "Increased");
+});
+
 console.log("\n=== ESG Trends: all tests passed ===\n");
