@@ -40,7 +40,7 @@ import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTU
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
-import { isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
+import { formatMetricDisplayValue, isBooleanMetricDataType, isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -254,7 +254,7 @@ export default function DataEntry() {
       const vals: Record<string, { value: string; notes: string }> = {};
       const dsTypes: Record<string, string> = {};
       entryData.values.forEach((v: any) => {
-        vals[v.metricId] = { value: v.value ? String(Number(v.value)) : "", notes: v.notes || "" };
+        vals[v.metricId] = { value: formatMetricDisplayValue(v), notes: v.notes || "" };
         if (v.dataSourceType) dsTypes[v.metricId] = v.dataSourceType;
       });
       setManualValues(vals);
@@ -402,7 +402,7 @@ export default function DataEntry() {
     const prefillKey = `estimate_prefill_shown_${selectedPeriod}_${selectedScopeKey}`;
     if (localStorage.getItem(prefillKey) === "true") return;
     const allMetrics = entryData?.metrics || [];
-    const filledValues = (entryData?.values || []).filter((v: any) => v.value !== null && v.value !== undefined);
+    const filledValues = (entryData?.values || []).filter((v: any) => formatMetricDisplayValue(v) !== "");
     const filledMetricIds = new Set(filledValues.map((v: any) => v.metricId));
     const entryEligibleMetrics = allMetrics.filter((m: any) => m.metricType === "manual" || !m.metricType);
     const emptyMetrics = entryEligibleMetrics.filter((m: any) => !filledMetricIds.has(m.id));
@@ -1221,6 +1221,7 @@ export default function DataEntry() {
                     const isEligible = isMetricEntryEligible(metric);
                     const localVal = manualValues[metricKey] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
+                    const isBooleanMetric = isBooleanMetricDataType(metric.dataType);
                     const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId && isSelectedScopeValue(v)) : undefined;
                     const metricPriority = getManualMetricPriority(metric.name);
                     const mpc = PRIORITY_LABELS[metricPriority];
@@ -1287,19 +1288,38 @@ export default function DataEntry() {
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Value</Label>
-                              <Input
-                                type="number"
-                                step="any"
-                                value={localVal.value}
-                                onChange={e => setManualValues(prev => ({
-                                  ...prev,
-                                  [metricKey]: { ...prev[metricKey] || { notes: "" }, value: e.target.value }
-                                }))}
-                                placeholder={isEligible ? `Enter ${metric.unit || "value"}` : "Calculated automatically"}
-                                disabled={editDisabled || !isEligible}
-                                className="h-8 text-sm"
-                                data-testid={`input-manual-${metricKey}`}
-                              />
+                              {isBooleanMetric ? (
+                                <Select
+                                  value={localVal.value === "Yes" ? "yes" : localVal.value === "No" ? "no" : ""}
+                                  onValueChange={(value) => setManualValues(prev => ({
+                                    ...prev,
+                                    [metricKey]: { ...prev[metricKey] || { notes: "" }, value: value === "yes" ? "Yes" : "No" }
+                                  }))}
+                                  disabled={editDisabled || !isEligible}
+                                >
+                                  <SelectTrigger className="h-8 text-sm" data-testid={`input-manual-${metricKey}`}>
+                                    <SelectValue placeholder={isEligible ? "Select Yes or No" : "Calculated automatically"} />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="yes">Yes</SelectItem>
+                                    <SelectItem value="no">No</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Input
+                                  type="number"
+                                  step="any"
+                                  value={localVal.value}
+                                  onChange={e => setManualValues(prev => ({
+                                    ...prev,
+                                    [metricKey]: { ...prev[metricKey] || { notes: "" }, value: e.target.value }
+                                  }))}
+                                  placeholder={isEligible ? `Enter ${metric.unit || "value"}` : "Calculated automatically"}
+                                  disabled={editDisabled || !isEligible}
+                                  className="h-8 text-sm"
+                                  data-testid={`input-manual-${metricKey}`}
+                                />
+                              )}
                             </div>
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Notes</Label>

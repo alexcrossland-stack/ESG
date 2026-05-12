@@ -318,7 +318,7 @@ export const DEFAULT_METRICS: DefaultMetric[] = [
     metricType: "manual",
     direction: "compliance_yes_no",
     displayOrder: 22,
-    helpText: "Enter 1 if you have a policy in place, 0 if not",
+    helpText: "Select Yes if you have a policy in place, No if not",
   },
   {
     name: "Whistleblowing Policy in Place",
@@ -330,7 +330,7 @@ export const DEFAULT_METRICS: DefaultMetric[] = [
     metricType: "manual",
     direction: "compliance_yes_no",
     displayOrder: 23,
-    helpText: "Enter 1 if you have a policy in place, 0 if not",
+    helpText: "Select Yes if you have a policy in place, No if not",
   },
   {
     name: "Data Privacy Training Completion",
@@ -370,7 +370,7 @@ export const DEFAULT_METRICS: DefaultMetric[] = [
     metricType: "manual",
     direction: "compliance_yes_no",
     displayOrder: 26,
-    helpText: "Enter 1 if you have a policy in place, 0 if not",
+    helpText: "Select Yes if you have a policy in place, No if not",
   },
   {
     name: "ESG Responsibility Assigned",
@@ -382,7 +382,7 @@ export const DEFAULT_METRICS: DefaultMetric[] = [
     metricType: "manual",
     direction: "compliance_yes_no",
     displayOrder: 27,
-    helpText: "Enter 1 if ESG responsibility is formally assigned, 0 if not",
+    helpText: "Select Yes if ESG responsibility is formally assigned, No if not",
   },
   {
     name: "ESG Targets Set",
@@ -394,7 +394,7 @@ export const DEFAULT_METRICS: DefaultMetric[] = [
     metricType: "manual",
     direction: "compliance_yes_no",
     displayOrder: 28,
-    helpText: "Enter 1 if formal ESG targets are set, 0 if not",
+    helpText: "Select Yes if formal ESG targets are set, No if not",
   },
 ];
 

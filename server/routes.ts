@@ -63,7 +63,13 @@ import {
   generateBackupCodes, hashBackupCodes, verifyBackupCode,
 } from "./mfa";
 import { createOpenAiAssistantReply } from "./openai-assist";
-import { isActiveEditableDataEntryMetric } from "@shared/data-entry-metrics";
+import {
+  formatBooleanMetricValue,
+  formatMetricDisplayValue,
+  isActiveEditableDataEntryMetric,
+  isBooleanMetricDataType,
+  parseBooleanMetricInput,
+} from "@shared/data-entry-metrics";
 
 function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
   const map: EmissionFactorMap = {};
@@ -1151,6 +1157,17 @@ function buildCompanyMetricFromDefinition(companyId: string, def: any) {
     enabled: true,
     isDefault: Boolean(def.isCore),
   };
+}
+
+async function resolveCompanyMetricDataType(companyId: string, metric: { name?: string | null }): Promise<string> {
+  const defs = await storage.getMetricDefinitions({ isActive: true });
+  const def = defs.find((item: any) => normalizeMetricName(item.name) === normalizeMetricName(metric.name));
+  return def?.dataType ?? "numeric";
+}
+
+function formatMetricAuditValue(value: any): string | null {
+  const displayValue = formatMetricDisplayValue(value);
+  return displayValue === "" ? null : displayValue;
 }
 
 async function seedMetricsFromSelection(companyId: string, selectedKeys: string[], answers?: any) {
@@ -3366,6 +3383,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const values = await storage.getMetricValuesByPeriod(companyId, req.params.period, siteIdParam !== undefined ? siteId : undefined);
     const allMetrics = await storage.getMetrics(companyId);
+    const activeDefinitions = await storage.getMetricDefinitions({ isActive: true });
+    const definitionDataTypeByMetricName = new Map(
+      activeDefinitions.map((def: any) => [normalizeMetricName(def.name), def.dataType ?? "numeric"]),
+    );
     const evidence = await storage.getEvidenceFiles(companyId, siteIdParam !== undefined ? siteId : undefined, req.params.period);
     const evidenceByMetricValueId = new Map<string, any[]>();
     const evidenceByMetricId = new Map<string, any[]>();
@@ -3391,7 +3412,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ...(evidenceByMetricId.get(value.metricId) || []),
         ].filter((file, index, all) => all.findIndex((item) => item.id === file.id) === index),
       })),
-      metrics: allMetrics.filter(isActiveEditableDataEntryMetric),
+      metrics: allMetrics
+        .filter(isActiveEditableDataEntryMetric)
+        .map((metric: any) => ({
+          ...metric,
+          dataType: definitionDataTypeByMetricName.get(normalizeMetricName(metric.name)) ?? "numeric",
+        })),
     });
   });
 
@@ -3478,13 +3504,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (!metricId) return res.status(400).json({ error: "metricId is required" });
       if (!period) return res.status(400).json({ error: "period is required" });
-      if (value !== undefined && value !== null && isNaN(Number(value))) {
-        return res.status(400).json({ error: "value must be a number" });
-      }
       // Validate metric exists and belongs to this company
       const metric = await storage.getMetric(metricId);
       if (!metric || metric.companyId !== companyId) {
         return res.status(404).json({ error: "Metric not found" });
+      }
+      const metricDataType = await resolveCompanyMetricDataType(companyId, metric);
+      const isBooleanMetric = isBooleanMetricDataType(metricDataType);
+      const parsedBooleanValue = isBooleanMetric
+        ? parseBooleanMetricInput(isMultipartRequest(req) ? value : req.body?.valueBoolean ?? value)
+        : null;
+      if (isBooleanMetric && parsedBooleanValue === null) {
+        return res.status(400).json({ error: "value must be Yes or No" });
+      }
+      if (!isBooleanMetric && value !== undefined && value !== null && isNaN(Number(value))) {
+        return res.status(400).json({ error: "value must be a number" });
       }
       const activeSitesForEntry = await storage.getSites(companyId);
       if (activeSitesForEntry.length >= 1 && !siteScopeProvided) {
@@ -3507,7 +3541,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const effectiveSourceType = attachments.length > 0 ? "evidenced" : dataSourceType;
-      const createData: any = { metricId, period, value, notes, submittedBy: userId, locked: false, siteId: bodySiteId || null };
+      const createData: any = isBooleanMetric
+        ? {
+            metricId,
+            period,
+            value: null,
+            valueBoolean: parsedBooleanValue,
+            valueText: formatBooleanMetricValue(parsedBooleanValue),
+            notes,
+            submittedBy: userId,
+            locked: false,
+            siteId: bodySiteId || null,
+          }
+        : {
+            metricId,
+            period,
+            value,
+            valueNumeric: value === undefined || value === null || value === "" ? null : String(value),
+            valueBoolean: null,
+            valueText: null,
+            notes,
+            submittedBy: userId,
+            locked: false,
+            siteId: bodySiteId || null,
+          };
       if (effectiveSourceType) createData.dataSourceType = effectiveSourceType;
       const result = await storage.upsertMetricValue(createData);
       if (result.locked) {
@@ -3581,8 +3638,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: {
           metricId,
           period,
-          before: existingForPeriod ? { value: existingForPeriod.value, notes: existingForPeriod.notes } : null,
-          after: { value, notes: notes ?? null },
+          before: existingForPeriod ? { value: formatMetricAuditValue(existingForPeriod), notes: existingForPeriod.notes } : null,
+          after: { value: formatMetricAuditValue(result), notes: notes ?? null },
         },
         req,
       });

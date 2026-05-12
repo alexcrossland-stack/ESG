@@ -726,6 +726,10 @@ export class DatabaseStorage implements IStorage {
         metricId: metricValues.metricId,
         period: metricValues.period,
         value: metricValues.value,
+        valueNumeric: metricValues.valueNumeric,
+        valueText: metricValues.valueText,
+        valueBoolean: metricValues.valueBoolean,
+        valueJson: metricValues.valueJson,
         submittedBy: metricValues.submittedBy,
         submittedAt: metricValues.submittedAt,
         notes: metricValues.notes,
@@ -796,16 +800,24 @@ export class DatabaseStorage implements IStorage {
             UPDATE metric_values
             SET
               value = $2,
-              submitted_by = $3,
+              value_numeric = $3,
+              value_text = $4,
+              value_boolean = $5,
+              value_json = $6,
+              submitted_by = $7,
               submitted_at = NOW(),
-              notes = $4,
-              data_source_type = $5
+              notes = $8,
+              data_source_type = $9
             WHERE id = $1
             RETURNING *
           `,
           [
             existing.id,
             value.value ?? null,
+            value.valueNumeric ?? null,
+            value.valueText ?? null,
+            value.valueBoolean ?? null,
+            value.valueJson ?? null,
             value.submittedBy ?? null,
             value.notes ?? null,
             value.dataSourceType ?? "manual",
@@ -818,15 +830,19 @@ export class DatabaseStorage implements IStorage {
       const insertResult = await client.query(
         `
           INSERT INTO metric_values (
-            metric_id, period, value, submitted_by, submitted_at, notes, locked, data_source_type, site_id
+            metric_id, period, value, value_numeric, value_text, value_boolean, value_json, submitted_by, submitted_at, notes, locked, data_source_type, site_id
           )
-          VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11, $12)
           RETURNING *
         `,
         [
           value.metricId,
           value.period,
           value.value ?? null,
+          value.valueNumeric ?? null,
+          value.valueText ?? null,
+          value.valueBoolean ?? null,
+          value.valueJson ?? null,
           value.submittedBy ?? null,
           value.notes ?? null,
           value.locked ?? false,
