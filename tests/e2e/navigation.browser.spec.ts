@@ -53,22 +53,25 @@ async function openWithMockRole(
   return { context, page };
 }
 
-async function ensureGroupOpen(page: Page, groupTestId: string, visibleItemText: string) {
-  const visibleItem = page.getByText(visibleItemText, { exact: true }).first();
-  if (!(await visibleItem.isVisible().catch(() => false))) {
-    await page.getByTestId(groupTestId).click();
+async function ensureAdvancedOpen(page: Page) {
+  const planSection = page.getByText("Plan and improve", { exact: true });
+  if (!(await planSection.isVisible().catch(() => false))) {
+    await page.getByTestId("nav-group-esg-advanced").click();
   }
 }
 
-async function expectMovedItemNavigation(page: Page, testId: string, expectedPath: RegExp, breadcrumbLabels: string[]) {
+function breadcrumbTestId(label: string) {
+  return "breadcrumb-" + label.toLowerCase().replace(/\s+/g, "-");
+}
+
+async function expectNavigation(page: Page, testId: string, expectedPath: RegExp, breadcrumbLabels: string[]) {
   await page.getByTestId(testId).click();
   await page.waitForLoadState("networkidle");
   await expect(page).toHaveURL(expectedPath);
-  await expect(page.getByTestId("app-breadcrumbs")).toBeVisible();
-  for (const label of breadcrumbLabels) {
-    await expect(page.getByTestId(`breadcrumb-${label.toLowerCase().replace(/\s+/g, "-")}`)).toBeVisible();
-  }
   await expect(page.getByTestId(testId)).toHaveAttribute("aria-current", "page");
+  for (const label of breadcrumbLabels) {
+    await expect(page.getByTestId(breadcrumbTestId(label))).toBeVisible();
+  }
 }
 
 async function expectSidebarSettingsMatchesUtility(page: Page, expectedPath: string) {
@@ -79,27 +82,31 @@ async function expectSidebarSettingsMatchesUtility(page: Page, expectedPath: str
   await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", expectedPath);
 }
 
-test.describe("Navigation structure", () => {
-  test("primary sidebar has only the four required top-level menu items", async ({ browser }) => {
+test.describe("Simplified SME navigation", () => {
+  test("sidebar exposes four primary jobs, Advanced, and the existing Settings destination", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
     const topLevelLabels = await Promise.all([
-      page.getByTestId("nav-dashboard").textContent(),
-      page.getByTestId("nav-group-esg-setup").textContent(),
-      page.getByTestId("nav-group-data-evidence").textContent(),
-      page.getByTestId("nav-reports").textContent(),
+      page.getByTestId("nav-dashboard").locator("span").first().textContent(),
+      page.getByTestId("nav-measure").locator("span").first().textContent(),
+      page.getByTestId("nav-control-centre").locator("span").first().textContent(),
+      page.getByTestId("nav-reports").locator("span").first().textContent(),
+      page.getByTestId("nav-group-esg-advanced").locator("span").first().textContent(),
     ]);
 
     expect(topLevelLabels.map(label => (label ?? "").trim())).toEqual([
-      "Dashboard",
-      "ESG Setup",
-      "Data and Evidence",
-      "Reports",
+      "Home",
+      "Measure",
+      "Improve",
+      "Share",
+      "Advanced",
     ]);
+    await expect(page.getByTestId("nav-group-esg-setup")).toHaveCount(0);
+    await expect(page.getByTestId("nav-group-data-evidence")).toHaveCount(0);
     await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
     await expectSidebarSettingsMatchesUtility(page, "/settings");
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Team");
+    await ensureAdvancedOpen(page);
     await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
 
     await page.getByTestId("nav-settings-console").click();
@@ -115,7 +122,7 @@ test.describe("Navigation structure", () => {
     await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
     await expectSidebarSettingsMatchesUtility(page, "/settings");
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Team");
+    await ensureAdvancedOpen(page);
     await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
 
     await page.getByTestId("nav-settings-console").click();
@@ -125,63 +132,54 @@ test.describe("Navigation structure", () => {
     await context.close();
   });
 
-  test("moved ESG Setup advanced items navigate, highlight, and breadcrumb correctly", async ({ browser }) => {
+  test("primary jobs retain their existing routes and breadcrumbs", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Advanced");
-    await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
-
-    await expect(page.getByTestId("nav-esg-advanced-items").getByText("Frameworks", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("nav-esg-advanced-items").getByText("Materiality", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("nav-esg-advanced-items").getByText("Targets and Actions", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("nav-esg-advanced-items").getByText("Risk Register", { exact: true })).toBeVisible();
-
-    await expectMovedItemNavigation(page, "nav-frameworks", /\/framework-readiness$/, ["ESG Setup", "Advanced", "Frameworks"]);
-    await expectMovedItemNavigation(page, "nav-materiality", /\/materiality$/, ["ESG Setup", "Advanced", "Materiality"]);
-    await expectMovedItemNavigation(page, "nav-targets-and-actions", /\/esg-targets$/, ["ESG Setup", "Advanced", "Targets and Actions"]);
-    await expectMovedItemNavigation(page, "nav-risk-register", /\/esg-risks$/, ["ESG Setup", "Advanced", "Risk Register"]);
+    await expectNavigation(page, "nav-measure", /\/data-entry$/, ["Measure"]);
+    await expectNavigation(page, "nav-control-centre", /\/control-centre$/, ["Improve"]);
+    await expectNavigation(page, "nav-reports", /\/reports$/, ["Share"]);
+    await expectNavigation(page, "nav-dashboard", /\/$/, ["Home"]);
 
     await context.close();
   });
 
-  test("Roadmap, policy, and control items sit directly under ESG Setup", async ({ browser }) => {
+  test("Advanced progressively exposes specialist deep links with routes and breadcrumbs intact", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Policy Generator");
+    await ensureAdvancedOpen(page);
+    const advanced = page.getByTestId("nav-esg-advanced-items");
+    await expect(advanced.getByText("Plan and improve", { exact: true })).toBeVisible();
+    await expect(advanced.getByText("Measure and assure", { exact: true })).toBeVisible();
+    await expect(advanced.getByText("Share and coordinate", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("nav-esg-policy")).toBeVisible();
+    await expect(page.getByTestId("nav-action-tracker")).toBeVisible();
+    await expect(page.getByTestId("nav-roadmap")).toBeVisible();
+    await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
+    await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
+    await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
+    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
+    await expect(page.getByTestId("nav-frameworks")).toBeVisible();
 
-    const setupItems = page.getByTestId("nav-esg-setup-items");
-    await expect(setupItems.getByText("Roadmap", { exact: true })).toBeVisible();
-    await expect(setupItems.getByText("Policy Generator", { exact: true })).toBeVisible();
-    await expect(setupItems.getByText("Policy Templates", { exact: true })).toBeVisible();
-    await expect(setupItems.getByText("Control Centre", { exact: true })).toBeVisible();
-    await expect(setupItems.getByText("Recommendations", { exact: true })).toHaveCount(0);
-    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
-    await expect(setupItems.getByText("Policies", { exact: true })).toHaveCount(0);
-
-    await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
-    const advancedItems = page.getByTestId("nav-esg-advanced-items");
-    await expect(advancedItems.getByText("Policy Generator", { exact: true })).toHaveCount(0);
-    await expect(advancedItems.getByText("Policy Templates", { exact: true })).toHaveCount(0);
-    await expect(advancedItems.getByText("Control Centre", { exact: true })).toHaveCount(0);
-    await expect(advancedItems.getByText("Recommendations", { exact: true })).toHaveCount(0);
-
-    await expectMovedItemNavigation(page, "nav-roadmap", /\/roadmap$/, ["ESG Setup", "Roadmap"]);
-    await expectMovedItemNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["ESG Setup", "Policy Generator"]);
-    await expectMovedItemNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["ESG Setup", "Policy Templates"]);
-    await expectMovedItemNavigation(page, "nav-control-centre", /\/control-centre$/, ["ESG Setup", "Control Centre"]);
+    await expectNavigation(page, "nav-esg-policy", /\/policy$/, ["Improve", "ESG Policy"]);
+    await expectNavigation(page, "nav-action-tracker", /\/actions$/, ["Improve", "Action Tracker"]);
+    await expectNavigation(page, "nav-roadmap", /\/roadmap$/, ["Improve", "Roadmap"]);
+    await expectNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["Improve", "Policies", "Policy Generator"]);
+    await expectNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["Improve", "Policies", "Policy Templates"]);
+    await expectNavigation(page, "nav-materiality", /\/materiality$/, ["Improve", "Materiality"]);
+    await expectNavigation(page, "nav-targets-and-actions", /\/esg-targets$/, ["Improve", "Targets and Actions"]);
+    await expectNavigation(page, "nav-risk-register", /\/esg-risks$/, ["Improve", "Risk Register"]);
+    await expectNavigation(page, "nav-metrics-library", /\/metrics-library$/, ["Measure", "Metrics Library"]);
+    await expectNavigation(page, "nav-frameworks", /\/framework-readiness$/, ["Share", "Frameworks"]);
 
     await context.close();
   });
 
-  test("Recommendations route remains directly accessible outside sidebar", async ({ browser }) => {
+  test("Recommendations remains directly accessible and is discoverable in Advanced", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin");
 
-    await page.goto("/recommendations");
-    await page.waitForLoadState("networkidle");
-
-    await expect(page).toHaveURL(/\/recommendations$/);
+    await ensureAdvancedOpen(page);
+    await expectNavigation(page, "nav-recommendations", /\/recommendations$/, ["Improve", "Recommendations"]);
     await expect(page.getByTestId("page-recommendations")).toBeVisible();
-    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
 
     await context.close();
   });
@@ -190,7 +188,7 @@ test.describe("Navigation structure", () => {
     const { context, page } = await openWithMockRole(browser, "admin", [{ url: "/policy-generator" }]);
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Policy Generator");
+    await ensureAdvancedOpen(page);
 
     const policyGenerator = page.getByTestId("nav-policy-generator");
     const label = policyGenerator.getByText("Policy Generator", { exact: true });
@@ -206,46 +204,46 @@ test.describe("Navigation structure", () => {
     await context.close();
   });
 
-  test("Data and Evidence exposes children directly without Data and Metrics", async ({ browser }) => {
+  test("Advanced retains former Data and Evidence destinations without another nested group", async ({ browser }) => {
     const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
 
-    await ensureGroupOpen(page, "nav-group-data-evidence", "Policy Register");
+    await ensureAdvancedOpen(page);
 
     await expect(page.getByTestId("nav-group-data-and-metrics")).toHaveCount(0);
     await expect(page.getByTestId("nav-metrics")).toBeVisible();
     await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
+    await expect(page.getByTestId("nav-evidence")).toBeVisible();
     await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
-    await expectMovedItemNavigation(page, "nav-esg-policy-register", /\/esg-policy-register$/, [
-      "Data and Evidence",
-      "Policy Register",
-    ]);
+    await expectNavigation(page, "nav-esg-policy-register", /\/esg-policy-register$/, ["Improve", "Policies", "Policy Register"]);
+    await expectNavigation(page, "nav-evidence", /\/evidence$/, ["Measure", "Supporting Documents"]);
 
     await context.close();
   });
 
-  test("moved item permission gates are preserved for viewer navigation", async ({ browser }) => {
+  test("viewer keeps Measure access without edit navigation and RBAC links stay hidden", async ({ browser }) => {
     const { context, page } = await openWithState(browser, VIEWER_STATE_FILE);
 
-    await ensureGroupOpen(page, "nav-group-esg-setup", "Advanced");
-    await ensureGroupOpen(page, "nav-group-esg-advanced", "Frameworks");
-    await ensureGroupOpen(page, "nav-group-data-evidence", "Policy Register");
+    await expect(page.getByTestId("nav-measure")).toHaveAttribute("href", "/metrics");
+    await expectNavigation(page, "nav-measure", /\/metrics$/, ["Measure", "Metrics"]);
+    await expect(page.getByTestId("nav-esg-advanced-items")).not.toBeVisible();
+    await ensureAdvancedOpen(page);
 
+    await expect(page.getByTestId("nav-metrics")).toHaveCount(0);
     await expect(page.getByTestId("nav-frameworks")).toBeVisible();
     await expect(page.getByTestId("nav-materiality")).toBeVisible();
     await expect(page.getByTestId("nav-targets-and-actions")).toBeVisible();
     await expect(page.getByTestId("nav-risk-register")).toBeVisible();
     await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
     await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
-    await expect(page.getByTestId("nav-control-centre")).toBeVisible();
     await expect(page.getByTestId("nav-roadmap")).toBeVisible();
-    await expect(page.getByTestId("nav-recommendations")).toHaveCount(0);
+    await expect(page.getByTestId("nav-recommendations")).toBeVisible();
     await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
-
-    await expect(page.getByTestId("nav-policies")).toHaveCount(0);
+    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
+    await expect(page.getByTestId("nav-questionnaires")).toBeVisible();
     await expect(page.getByTestId("nav-team")).toHaveCount(0);
     await expect(page.getByTestId("nav-framework-settings")).toHaveCount(0);
-    await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
     await expect(page.getByTestId("nav-my-approvals")).toHaveCount(0);
+    await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
     await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
     await expect(page.getByTestId("nav-settings-console")).toHaveCount(0);
 

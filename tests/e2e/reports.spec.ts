@@ -424,8 +424,9 @@ test.describe("Report generation", () => {
     await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
     await expect(page.getByTestId("text-report-library-count")).toContainText("1-2 of 2 reports");
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
-    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open file/);
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
     await expect(page.getByTestId("text-report-library-title-report-available")).toContainText("Mock Historical Report");
+    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
 
     const detailRequest = page.waitForRequest("**/api/reports/report-available");
     await page.getByTestId("button-view-report-report-available").click();
@@ -462,6 +463,18 @@ test.describe("Report generation", () => {
     await page.getByRole("option", { name: "Unavailable files" }).click();
     await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+  });
+
+  test("Report History shows access only for generated reports with files", async ({ page }) => {
+    await mockReportsPageApis(page);
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("report-history-report-available")).toBeVisible();
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
+    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+    await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");
+    await expect(page.getByTestId("button-download-report-file-report-unavailable")).toHaveCount(0);
   });
 
   for (const role of ["contributor", "viewer"] as const) {

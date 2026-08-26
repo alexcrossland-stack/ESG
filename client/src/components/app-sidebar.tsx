@@ -4,7 +4,7 @@ import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem,
   SidebarHeader, SidebarFooter, SidebarSeparator,
-  SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton,
+  SidebarMenuSub, SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { usePortfolioAccess } from "@/hooks/use-portfolio-access";
 import {
@@ -29,13 +29,8 @@ import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import {
-  DATA_AND_METRICS_ITEMS,
-  DATA_EVIDENCE_ROUTES,
-  ESG_SETUP_BASE_ITEMS,
-  ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
-  ESG_SETUP_ADVANCED_ROUTES,
-  ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
-  ESG_SETUP_ROUTES,
+  ADVANCED_NAV_SECTIONS,
+  SME_PRIMARY_NAV_ITEMS,
   canShowAdminMenu,
   getAdminMenuHref,
   getAdminMenuRoutes,
@@ -81,6 +76,7 @@ const ICON_BY_HREF: Record<string, LucideIcon> = {
   "/framework-settings": Settings,
   "/materiality": Star,
   "/esg-targets": Target,
+  "/actions": ClipboardCheck,
   "/esg-risks": AlertTriangle,
   "/compliance": Shield,
   "/benchmarks": TrendingUp,
@@ -98,6 +94,20 @@ const ICON_BY_HREF: Record<string, LucideIcon> = {
   "/data-entry": ClipboardList,
   "/esg-policy-register": FileText,
   "/evidence": FileCheck,
+};
+
+const PRIMARY_ICON_BY_LABEL: Record<string, LucideIcon> = {
+  Home: LayoutDashboard,
+  Measure: ClipboardList,
+  Improve: TrendingUp,
+  Share: Download,
+};
+
+const PRIMARY_TEST_ID_BY_LABEL: Record<string, string> = {
+  Home: "nav-dashboard",
+  Measure: "nav-measure",
+  Improve: "nav-control-centre",
+  Share: "nav-reports",
 };
 
 function navTestId(label: string) {
@@ -149,17 +159,29 @@ function canShowItem(item: NavItem, can: ReturnType<typeof usePermissions>["can"
   return !item.permission || can(item.permission);
 }
 
-function AdvancedNavLink({ item, location }: { item: NavItem; location: string }) {
+function advancedNavTestId(item: NavItem) {
+  const preservedIds: Record<string, string> = {
+    "/topics": "nav-topics",
+    "/esg-policy-register": "nav-esg-policy-register",
+    "/evidence": "nav-evidence",
+    "/carbon-calculator": "nav-carbon-calculator",
+  };
+  if (preservedIds[item.href]) return preservedIds[item.href];
+  return navTestId(item.label);
+}
+
+function AdvancedNavLink({ item, location, showNext }: { item: NavItem; location: string; showNext: boolean }) {
   const Icon = ICON_BY_HREF[item.href] ?? FileText;
   return (
     <Link
       href={item.href}
-      data-testid={navTestId(item.label)}
+      data-testid={advancedNavTestId(item)}
       className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
       aria-current={isActive(location, item.href) ? "page" : undefined}
     >
       <Icon className="w-3.5 h-3.5 shrink-0" />
       <NavItemLabel>{item.label}</NavItemLabel>
+      <NextBadge show={showNext} />
     </Link>
   );
 }
@@ -183,31 +205,33 @@ export function AppSidebar() {
   });
 
   const nextUrls = new Set<string>(
-    (programmeStatus?.nextBestActions ?? []).map((a: any) => a.url as string)
+    (programmeStatus?.nextBestActions ?? []).map((action: any) => action.url as string)
   );
 
   const user = authData?.user;
   const company = authData?.company;
   const activeNotifs = notifCount?.count || 0;
 
-  const esgGroupDefault = isGroupActive(location, ESG_SETUP_ROUTES);
-  const dataGroupDefault = isGroupActive(location, DATA_EVIDENCE_ROUTES);
-  const advancedGroupDefault = isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES);
-
-  const [esgOpen, setEsgOpen] = useGroupState("esg_setup", esgGroupDefault);
-  const [dataOpen, setDataOpen] = useGroupState("data_evidence", dataGroupDefault);
-  const [advancedOpen, setAdvancedOpen] = useGroupState("esg_advanced", advancedGroupDefault);
+  const primaryItems = SME_PRIMARY_NAV_ITEMS.flatMap(item => {
+    if (canShowItem(item, can)) return [item];
+    if (item.fallbackHref) return [{ ...item, href: item.fallbackHref, permission: undefined }];
+    return [];
+  });
+  const primaryHrefs = new Set(primaryItems.map(item => item.href));
+  const advancedSections = ADVANCED_NAV_SECTIONS
+    .map(section => ({
+      ...section,
+      items: section.items.filter(item => canShowItem(item, can) && !primaryHrefs.has(item.href)),
+    }))
+    .filter(section => section.items.length > 0);
+  const visibleAdvancedRoutes = advancedSections.flatMap(section => section.items.map(item => item.href));
+  const advancedGroupActive = isGroupActive(location, visibleAdvancedRoutes);
+  const [advancedOpen, setAdvancedOpen] = useGroupState("advanced_tools", advancedGroupActive);
 
   useEffect(() => {
-    if (isGroupActive(location, ESG_SETUP_ROUTES)) setEsgOpen(true);
-    if (isGroupActive(location, DATA_EVIDENCE_ROUTES)) setDataOpen(true);
-    if (isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES)) setAdvancedOpen(true);
-  }, [location]);
+    if (advancedGroupActive) setAdvancedOpen(true);
+  }, [advancedGroupActive]);
 
-  const advancedPrimaryItems = ESG_SETUP_ADVANCED_PRIMARY_ITEMS.filter(item => canShowItem(item, can));
-  const advancedSupportItems = ESG_SETUP_ADVANCED_SUPPORT_ITEMS.filter(item => canShowItem(item, can));
-  const esgSetupItems = ESG_SETUP_BASE_ITEMS.filter(item => canShowItem(item, can));
-  const dataMetricItems = DATA_AND_METRICS_ITEMS.filter(item => canShowItem(item, can));
   const adminMenuHref = getAdminMenuHref(role);
   const adminMenuActive = isGroupActive(location, getAdminMenuRoutes(role));
 
@@ -245,136 +269,67 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu data-testid="primary-navigation" aria-label="Primary navigation">
 
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild data-active={isActive(location, "/")}>
-                  <Link href="/" data-testid="nav-dashboard" aria-current={isActive(location, "/") ? "page" : undefined}>
-                    <LayoutDashboard className="w-4 h-4 shrink-0" />
-                    <span>Dashboard</span>
-                    {isActive(location, "/") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-
-              <SidebarMenuItem>
-                <Collapsible open={esgOpen} onOpenChange={setEsgOpen}>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      data-active={isGroupActive(location, ESG_SETUP_ROUTES) && !esgOpen}
-                      data-testid="nav-group-esg-setup"
-                    >
-                      <FileText className="w-4 h-4 shrink-0" />
-                      <span>ESG Setup</span>
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${esgOpen ? "rotate-180" : ""}`} />
+              {primaryItems.map(item => {
+                const Icon = PRIMARY_ICON_BY_LABEL[item.label] ?? LayoutDashboard;
+                const active = isActive(location, item.href);
+                return (
+                  <SidebarMenuItem key={item.label}>
+                    <SidebarMenuButton asChild data-active={active}>
+                      <Link
+                        href={item.href}
+                        data-testid={PRIMARY_TEST_ID_BY_LABEL[item.label] ?? navTestId(item.label)}
+                        aria-current={active ? "page" : undefined}
+                      >
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span data-testid={item.label === "Measure" && item.href === "/data-entry" ? "nav-enter-data" : undefined}>
+                          {item.label}
+                        </span>
+                        <NextBadge show={nextUrls.has(item.href)} />
+                        {active && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
+                      </Link>
                     </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub className="mx-2 px-1">
-                      <div className="space-y-0.5" data-testid="nav-esg-setup-items">
-                        {esgSetupItems.map(item => {
-                          const Icon = ICON_BY_HREF[item.href] ?? FileText;
-                          return (
-                            <SidebarMenuSubItem key={item.href}>
-                              <SidebarMenuSubButton asChild data-active={isActive(location, item.href)} className="gap-1 px-1">
-                                <Link href={item.href} data-testid={navTestId(item.label)} aria-current={isActive(location, item.href) ? "page" : undefined}>
-                                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                                  <NavItemLabel>{item.label}</NavItemLabel>
-                                  <NextBadge show={nextUrls.has(item.href)} />
-                                </Link>
-                              </SidebarMenuSubButton>
-                            </SidebarMenuSubItem>
-                          );
-                        })}
-                      </div>
-
-                      {advancedPrimaryItems.length + advancedSupportItems.length > 0 && (
-                        <SidebarMenuSubItem>
-                          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                            <CollapsibleTrigger asChild>
-                              <SidebarMenuSubButton
-                                data-active={isGroupActive(location, ESG_SETUP_ADVANCED_ROUTES) && !advancedOpen}
-                                data-testid="nav-group-esg-advanced"
-                                className="w-full gap-1.5 px-1.5"
-                              >
-                                <Gauge className="w-3.5 h-3.5 shrink-0" />
-                                <span>Advanced</span>
-                                <ChevronDown className={`w-3 h-3 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
-                              </SidebarMenuSubButton>
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                              <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-3" data-testid="nav-esg-advanced-items">
-                                {advancedPrimaryItems.map(item => (
-                                  <AdvancedNavLink key={item.href} item={item} location={location} />
-                                ))}
-                                {advancedSupportItems.length > 0 && (
-                                  <div className="my-1 h-px bg-border" aria-hidden="true" />
-                                )}
-                                {advancedSupportItems.map(item => (
-                                  <AdvancedNavLink key={item.href} item={item} location={location} />
-                                ))}
-                              </div>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        </SidebarMenuSubItem>
-                      )}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </Collapsible>
-              </SidebarMenuItem>
+                  </SidebarMenuItem>
+                );
+              })}
 
               <SidebarMenuItem>
-                <Collapsible open={dataOpen} onOpenChange={setDataOpen}>
+                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton
-                      data-active={isGroupActive(location, DATA_EVIDENCE_ROUTES) && !dataOpen}
-                      data-testid="nav-group-data-evidence"
+                      data-active={advancedGroupActive && !advancedOpen}
+                      data-testid="nav-group-esg-advanced"
                     >
-                      <ClipboardList className="w-4 h-4 shrink-0" />
-                      <span>Data and Evidence</span>
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${dataOpen ? "rotate-180" : ""}`} />
+                      <Gauge className="w-4 h-4 shrink-0" />
+                      <span>Advanced</span>
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto shrink-0 transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`} />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
-                      {dataMetricItems.map(item => {
-                        const Icon = ICON_BY_HREF[item.href] ?? BarChart3;
-                        return (
-                          <SidebarMenuSubItem key={item.href}>
-                            <SidebarMenuSubButton asChild data-active={isActive(location, item.href)}>
-                              <Link
-                                href={item.href}
-                                data-testid={item.href === "/esg-policy-register" ? "nav-esg-policy-register" : navTestId(item.label)}
-                                aria-current={isActive(location, item.href) ? "page" : undefined}
-                              >
-                                <Icon className="w-3.5 h-3.5 shrink-0" />
-                                <NavItemLabel>{item.label}</NavItemLabel>
-                                <NextBadge show={nextUrls.has(item.href)} />
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        );
-                      })}
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild data-active={isActive(location, "/evidence")}>
-                          <Link href="/evidence" data-testid="nav-evidence" aria-current={isActive(location, "/evidence") ? "page" : undefined}>
-                            <FileCheck className="w-3.5 h-3.5 shrink-0" />
-                            <NavItemLabel>Evidence</NavItemLabel>
-                            <NextBadge show={nextUrls.has("/evidence")} />
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
+                      <div className="space-y-2 py-1" data-testid="nav-esg-advanced-items">
+                        {advancedSections.map((section, sectionIndex) => (
+                          <div key={section.label} data-testid={`nav-advanced-section-${sectionIndex}`}>
+                            {sectionIndex > 0 && <div className="my-2 h-px bg-border" aria-hidden="true" />}
+                            <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                              {section.label}
+                            </p>
+                            <div className="space-y-0.5">
+                              {section.items.map(item => (
+                                <SidebarMenuSubItem key={item.href}>
+                                  <AdvancedNavLink
+                                    item={item}
+                                    location={location}
+                                    showNext={nextUrls.has(item.href)}
+                                  />
+                                </SidebarMenuSubItem>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </Collapsible>
-              </SidebarMenuItem>
-
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild data-active={isActive(location, "/reports")}>
-                  <Link href="/reports" data-testid="nav-reports" aria-current={isActive(location, "/reports") ? "page" : undefined}>
-                    <Download className="w-4 h-4 shrink-0" />
-                    <span>Reports</span>
-                    {isActive(location, "/reports") && <ChevronRight className="w-3.5 h-3.5 ml-auto text-sidebar-primary shrink-0" />}
-                  </Link>
-                </SidebarMenuButton>
               </SidebarMenuItem>
 
             </SidebarMenu>

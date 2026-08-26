@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 
 import {
-  DATA_AND_METRICS_ITEMS,
-  ESG_SETUP_ADVANCED_SUPPORT_ITEMS,
-  ESG_SETUP_BASE_ITEMS,
-  ESG_SETUP_ADVANCED_PRIMARY_ITEMS,
+  ADVANCED_NAV_ITEMS,
+  ADVANCED_NAV_ROUTES,
+  ADVANCED_NAV_SECTIONS,
   MAIN_NAV_TOP_LEVEL_LABELS,
-  MOVED_MENU_ITEM_TARGETS,
   SETTINGS_MENU_HREF,
   SETTINGS_MENU_ROUTES,
+  SME_PRIMARY_NAV_ITEMS,
   canShowAdminMenu,
   getAdminMenuHref,
   getAdminMenuRoutes,
@@ -21,12 +20,12 @@ const results: TestResult[] = [];
 
 function pass(name: string, detail?: string) {
   results.push({ name, passed: true, detail });
-  console.log(`  PASS  ${name}${detail ? ` — ${detail}` : ""}`);
+  console.log("  PASS  " + name + (detail ? " — " + detail : ""));
 }
 
 function fail(name: string, detail?: string) {
   results.push({ name, passed: false, detail });
-  console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
+  console.error("  FAIL  " + name + (detail ? " — " + detail : ""));
 }
 
 function labels(items: { label: string }[]) {
@@ -36,108 +35,130 @@ function labels(items: { label: string }[]) {
 function run() {
   try {
     assert.deepEqual([...MAIN_NAV_TOP_LEVEL_LABELS], [
-      "Dashboard",
-      "ESG Setup",
-      "Data and Evidence",
-      "Reports",
+      "Home",
+      "Measure",
+      "Improve",
+      "Share",
+      "Advanced",
     ]);
-    pass("Primary sidebar menu exposes only the four required top-level labels");
+    assert.deepEqual(labels(SME_PRIMARY_NAV_ITEMS), ["Home", "Measure", "Improve", "Share"]);
+    pass("Primary sidebar exposes four SME jobs plus progressive disclosure");
   } catch (error: any) {
-    fail("Primary sidebar menu exposes only the four required top-level labels", error.message);
+    fail("Primary sidebar exposes four SME jobs plus progressive disclosure", error.message);
   }
 
   try {
-    assert.deepEqual(labels(ESG_SETUP_BASE_ITEMS), [
-      "Topics",
-      "ESG Profile",
-      "Roadmap",
-      "Team",
-      "Policy Generator",
-      "Policy Templates",
-      "Control Centre",
+    assert.deepEqual(SME_PRIMARY_NAV_ITEMS.map(item => item.href), [
+      "/",
+      "/data-entry",
+      "/control-centre",
+      "/reports",
     ]);
-    assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Team")?.href, "/team");
-    assert.equal(ESG_SETUP_BASE_ITEMS.find(item => item.label === "Roadmap")?.href, "/roadmap");
-    assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Policy"), false);
-    assert.equal(labels(ESG_SETUP_BASE_ITEMS).includes("Recommendations"), false);
-    assert.equal(MOVED_MENU_ITEM_TARGETS.roadmap, "/roadmap");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.policyGenerator, "/policy-generator");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.policyTemplates, "/policy-templates");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.controlCentre, "/control-centre");
-    pass("ESG Setup exposes moved policy and control items without redundant Recommendations link");
+    const measure = SME_PRIMARY_NAV_ITEMS.find(item => item.label === "Measure");
+    assert.equal(measure?.permission, "metrics_data_entry");
+    assert.equal(measure?.fallbackHref, "/metrics");
+    pass("Core destinations retain existing routes and a read-only Measure fallback");
   } catch (error: any) {
-    fail("ESG Setup exposes moved policy and control items without redundant Recommendations link", error.message);
+    fail("Core destinations retain existing routes and a read-only Measure fallback", error.message);
   }
 
   try {
-    assert.deepEqual(labels(ESG_SETUP_ADVANCED_PRIMARY_ITEMS).slice(0, 5), [
-      "Frameworks",
-      "Framework Settings",
-      "Materiality",
-      "Targets and Actions",
-      "Risk Register",
+    assert.deepEqual(labels(ADVANCED_NAV_SECTIONS), [
+      "Plan and improve",
+      "Measure and assure",
+      "Share and coordinate",
     ]);
-    assert.equal(MOVED_MENU_ITEM_TARGETS.frameworks, "/framework-readiness");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.materiality, "/materiality");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.targetsAndActions, "/esg-targets");
-    assert.equal(MOVED_MENU_ITEM_TARGETS.riskRegister, "/esg-risks");
-    for (const movedLabel of ["Policy Generator", "Policy Templates", "Control Centre", "Recommendations"]) {
-      assert.equal(labels(ESG_SETUP_ADVANCED_SUPPORT_ITEMS).includes(movedLabel), false);
+    assert.equal(new Set(ADVANCED_NAV_ROUTES).size, ADVANCED_NAV_ROUTES.length);
+    for (const route of [
+      "/policy",
+      "/roadmap",
+      "/policy-generator",
+      "/policy-templates",
+      "/esg-policy-register",
+      "/actions",
+      "/recommendations",
+      "/framework-readiness",
+      "/framework-settings",
+      "/materiality",
+      "/esg-targets",
+      "/esg-risks",
+      "/compliance",
+      "/benchmarks",
+      "/my-tasks",
+      "/my-approvals",
+      "/questionnaire",
+      "/answer-library",
+      "/carbon-calculator",
+      "/evidence",
+      "/team",
+    ]) {
+      assert.equal(ADVANCED_NAV_ROUTES.includes(route), true, route + " should remain reachable");
     }
-    pass("Moved ESG Setup advanced items keep their existing page targets");
+    pass("Advanced retains specialist and formerly visible deep links");
   } catch (error: any) {
-    fail("Moved ESG Setup advanced items keep their existing page targets", error.message);
+    fail("Advanced retains specialist and formerly visible deep links", error.message);
   }
 
   try {
-    assert.deepEqual(labels(DATA_AND_METRICS_ITEMS), [
-      "Metrics",
-      "Metrics Library",
-      "Enter Data",
-      "Policy Register",
-    ]);
-    assert.equal(MOVED_MENU_ITEM_TARGETS.policyRegister, "/esg-policy-register");
-    pass("Policy Register is directly under Data and Evidence while retaining its route");
+    const byHref = new Map(ADVANCED_NAV_ITEMS.map(item => [item.href, item]));
+    assert.equal(byHref.get("/team")?.permission, "settings_admin");
+    assert.equal(byHref.get("/framework-settings")?.permission, "settings_admin");
+    assert.equal(byHref.get("/my-approvals")?.permission, "report_generation");
+    pass("Advanced navigation preserves existing role-based visibility");
   } catch (error: any) {
-    fail("Policy Register is directly under Data and Evidence while retaining its route", error.message);
+    fail("Advanced navigation preserves existing role-based visibility", error.message);
   }
 
   try {
     assert.deepEqual(getBreadcrumbs("/materiality").map(item => item.label), [
-      "ESG Setup",
-      "Advanced",
+      "Improve",
       "Materiality",
     ]);
-    assert.deepEqual(getBreadcrumbs("/policy-generator").map(item => item.label), [
-      "ESG Setup",
-      "Policy Generator",
-    ]);
-    assert.deepEqual(getBreadcrumbs("/control-centre").map(item => item.label), [
-      "ESG Setup",
-      "Control Centre",
-    ]);
     assert.deepEqual(getBreadcrumbs("/roadmap").map(item => item.label), [
-      "ESG Setup",
+      "Improve",
       "Roadmap",
     ]);
+    assert.deepEqual(getBreadcrumbs("/policy-generator").map(item => item.label), [
+      "Improve",
+      "Policies",
+      "Policy Generator",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/metrics-library").map(item => item.label), [
+      "Measure",
+      "Metrics Library",
+    ]);
     assert.deepEqual(getBreadcrumbs("/esg-policy-register").map(item => item.label), [
-      "Data and Evidence",
+      "Improve",
+      "Policies",
       "Policy Register",
     ]);
-    assert.deepEqual(getBreadcrumbs("/admin").map(item => item.label), [
-      "Settings",
+    assert.deepEqual(getBreadcrumbs("/framework-settings").map(item => item.label), [
+      "Share",
+      "Frameworks",
+      "Framework Settings",
     ]);
-    pass("Moved pages resolve to the updated breadcrumb hierarchy");
+    assert.deepEqual(getBreadcrumbs("/answer-library").map(item => item.label), [
+      "Share",
+      "Questionnaires",
+      "Answer Library",
+    ]);
+    assert.deepEqual(getBreadcrumbs("/team").map(item => item.label), [
+      "Settings",
+      "Team",
+    ]);
+    pass("Breadcrumbs use the simplified task-based hierarchy");
   } catch (error: any) {
-    fail("Moved pages resolve to the updated breadcrumb hierarchy", error.message);
+    fail("Breadcrumbs use the simplified task-based hierarchy", error.message);
   }
 
   try {
-    assert.equal(isGroupActive("/esg-targets", ["/materiality", "/esg-targets", "/esg-risks"]), true);
-    assert.equal(isGroupActive("/esg-policy-register", ["/metrics", "/metrics-library", "/data-entry", "/esg-policy-register"]), true);
-    pass("Active route matching recognizes moved items in their new groups");
+    assert.equal(isGroupActive("/esg-targets", ADVANCED_NAV_ROUTES), true);
+    assert.equal(isGroupActive("/metrics-library", ADVANCED_NAV_ROUTES), true);
+    assert.equal(isGroupActive("/reports", ADVANCED_NAV_ROUTES), false);
+    assert.deepEqual(getBreadcrumbs("/data-entry?highlight=estimated").map(item => item.label), ["Measure"]);
+    pass("Active route matching and query-string breadcrumbs remain stable");
   } catch (error: any) {
-    fail("Active route matching recognizes moved items in their new groups", error.message);
+    fail("Active route matching and query-string breadcrumbs remain stable", error.message);
   }
 
   try {
@@ -181,8 +202,8 @@ function run() {
 (async () => {
   console.log("\n=== Unit Tests: Navigation Structure ===\n");
   run();
-  const passed = results.filter((result) => result.passed).length;
+  const passed = results.filter(result => result.passed).length;
   const total = results.length;
-  console.log(`\n=== Navigation structure: ${passed}/${total} passed ===\n`);
+  console.log("\n=== Navigation structure: " + passed + "/" + total + " passed ===\n");
   if (passed < total) process.exit(1);
 })();

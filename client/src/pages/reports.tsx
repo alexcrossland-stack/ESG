@@ -1531,7 +1531,7 @@ export default function Reports() {
   const canApprove = can("report_generation");
   const canGenerateReportFiles = can("report_generation");
   const { isPro } = useBillingStatus();
-  const { activeSiteId, activeSite, sites: allSites } = useSiteContext();
+  const { activeSiteId, sites: allSites } = useSiteContext();
   const activeSites = allSites.filter((s: any) => s.status === "active");
   const archivedSites = allSites.filter((s: any) => s.status === "archived");
   const hasMultipleSites = allSites.length >= 1;
@@ -2649,7 +2649,7 @@ export default function Reports() {
         ) : reports.length === 0 ? (
           <EmptyState
             icon={FileText}
-            title={activeSite ? `No reports for ${activeSite.name} yet` : "No reports generated yet"}
+            title={reportScopeSite ? `No reports for ${reportScopeSite.name} yet` : "No reports generated yet"}
             description="Generate your first report using the form above. Once done, you can download it as a PDF or share it directly with whoever needs it."
             helpText="You'll need at least one period of data entered before your report will have meaningful figures."
           />
@@ -2669,7 +2669,22 @@ export default function Reports() {
                 <div key={report.id} className={`flex flex-wrap items-center gap-3 p-3 rounded-md border ${isSelected ? "border-primary bg-primary/5" : "border-border"}`} data-testid={`report-history-${report.id}`}>
                   <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium" data-testid={`text-report-library-title-${report.id}`}>{reportTitle}</p>
+                    {hasReportFile ? (
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-left text-primary underline-offset-4 hover:underline disabled:opacity-70"
+                        onClick={() => handleDownloadFile(report.latestDownloadUrl || "", downloadName, reportId)}
+                        disabled={isDownloading}
+                        data-testid={`link-report-file-${report.id}`}
+                      >
+                        <span data-testid={`text-report-library-title-${report.id}`}>{reportTitle}</span>
+                        {report.reportTemplate && (
+                          <span className="sr-only"> — {reportTemplateLabel(report.reportTemplate)}</span>
+                        )}
+                      </button>
+                    ) : (
+                      <p className="text-sm font-medium" data-testid={`text-report-library-title-${report.id}`}>{reportTitle}</p>
+                    )}
                     <p className="text-xs text-muted-foreground">
                       {report.companyName || companyData?.name || "Company"} · Generated {report.generatedAt ? format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm") : "Unknown date"}
                       {report.generatedByName ? ` by ${report.generatedByName}` : ""}
@@ -2766,7 +2781,7 @@ export default function Reports() {
                       data-testid={`button-download-report-file-${report.id}`}
                     >
                       {isDownloading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
-                      {isDownloading ? "Opening..." : "Open file"}
+                      {isDownloading ? "Opening..." : "Open report"}
                     </Button>
                   ) : (
                     <Badge variant="secondary" className="text-xs" data-testid={`badge-report-file-unavailable-${report.id}`}>

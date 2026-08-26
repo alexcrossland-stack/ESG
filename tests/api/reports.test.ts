@@ -7,7 +7,11 @@
  * Run: npx tsx tests/api/reports.test.ts
  */
 
-import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { seedTestTenants, apiRequest, apiRequestRaw } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
 import { Client } from "pg";
 import { inflateSync } from "zlib";
@@ -701,6 +705,43 @@ async function run(tenants: SeededTenants): Promise<void> {
   }
 
   // ── 11. List is company-scoped (Tenant B data absent from Tenant A list) ───
+  {
+    const name = "POST /api/reports/export/policy_register_summary returns a structurally valid DOCX package";
+    const exportRes = await apiRequestRaw("POST", "/api/reports/export/policy_register_summary", {
+      format: "docx",
+    }, tenantA.adminToken);
+    if (exportRes.status !== 200) fail(name, `status=${exportRes.status} body=${exportRes.body.toString("utf8").slice(0, 200)}`);
+    else if (!String(exportRes.headers["content-type"] || "").includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")) {
+      fail(name, `unexpected content-type=${exportRes.headers["content-type"]}`);
+    } else if (exportRes.body.length < 2048) {
+      fail(name, `payload too small (${exportRes.body.length} bytes)`);
+    } else if (exportRes.body[0] !== 0x50 || exportRes.body[1] !== 0x4b) {
+      fail(name, "payload does not start with ZIP signature");
+    } else {
+      const tempDir = mkdtempSync(join(tmpdir(), "policy-docx-"));
+      const docxPath = join(tempDir, "policy-register.docx");
+      try {
+        writeFileSync(docxPath, exportRes.body);
+        execFileSync("unzip", ["-t", docxPath], { stdio: "pipe" });
+        const entries = execFileSync("unzip", ["-Z1", docxPath], { encoding: "utf8" })
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        const documentXml = execFileSync("unzip", ["-p", docxPath, "word/document.xml"], { encoding: "utf8" });
+        const invalidXmlChars =
+          /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\uD800-\uDFFF]/.test(documentXml);
+        if (!entries.includes("[Content_Types].xml")) fail(name, "missing [Content_Types].xml");
+        else if (!entries.includes("word/document.xml")) fail(name, "missing word/document.xml");
+        else if (invalidXmlChars) fail(name, "word/document.xml contains invalid XML control characters");
+        else pass(name, `${exportRes.body.length} bytes`);
+      } catch (error: any) {
+        fail(name, error?.message || String(error));
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   {
     const name = "GET /api/reports is company-scoped (Tenant B companyId absent from Tenant A list)";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);
