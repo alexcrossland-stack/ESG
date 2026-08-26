@@ -27,6 +27,7 @@ import { useSiteContext } from "@/hooks/use-site-context";
 import { SourceBadge } from "@/components/source-badge";
 import { EvidenceCoverageCard } from "@/components/evidence-coverage-card";
 import { EsgMaturityProgress } from "@/components/esg-maturity-progress";
+import { SmeDashboardOverview } from "@/components/sme-dashboard-overview";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { Building2, ArrowRight } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
@@ -990,18 +991,32 @@ function BackToPortfolioBanner() {
 
 export default function Dashboard() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
+  const [advancedInsightsOpen, setAdvancedInsightsOpen] = useState(false);
   const [milestoneDismissed, setMilestoneDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem("milestone_first_report_dismissed") === "true"; } catch { return false; }
   });
+  const [milestoneSeenAtLoad] = useState<boolean>(() => {
+    try { return localStorage.getItem("milestone_first_report_seen") === "true"; } catch { return false; }
+  });
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
-  const { data: enhanced, isLoading: enhancedLoading } = useQuery<any>({ queryKey: ["/api/dashboard/enhanced", selectedPeriodId], queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()) });
+  const { data: latestEnhanced, isLoading: latestEnhancedLoading } = useQuery<any>({
+    queryKey: ["/api/dashboard/enhanced"],
+    queryFn: () => authFetch("/api/dashboard/enhanced").then(r => r.json()),
+  });
+  const { data: periodEnhanced, isLoading: periodEnhancedLoading } = useQuery<any>({
+    queryKey: ["/api/dashboard/enhanced", selectedPeriodId],
+    queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()),
+    enabled: selectedPeriodId !== "__latest__",
+  });
+  const enhanced = selectedPeriodId === "__latest__" ? latestEnhanced : periodEnhanced;
+  const enhancedLoading = selectedPeriodId === "__latest__" ? latestEnhancedLoading : periodEnhancedLoading;
   const { data: oldData, isLoading: oldLoading } = useQuery<any>({ queryKey: ["/api/dashboard"] });
   const { data: authData } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: carbonCalcs } = useQuery<any>({ queryKey: ["/api/carbon-calculations"] });
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
-  const { data: readiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
+  const { data: readiness, isLoading: readinessLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
   const { can, isAdmin } = usePermissions();
   const { activeSiteId } = useSiteContext();
 
@@ -1012,18 +1027,13 @@ export default function Dashboard() {
     ? (() => { const d = new Date(activePeriod.startDate); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })()
     : undefined;
 
-  const showMilestone = (() => {
-    if (milestoneDismissed || !readiness?.hasGeneratedReport) return false;
-    try {
-      return localStorage.getItem("milestone_first_report_seen") !== "true";
-    } catch { return false; }
-  })();
+  const showMilestone = !milestoneDismissed && !milestoneSeenAtLoad && Boolean(readiness?.hasGeneratedReport);
 
   useEffect(() => {
-    if (showMilestone) {
+    if (advancedInsightsOpen && showMilestone) {
       try { localStorage.setItem("milestone_first_report_seen", "true"); } catch {}
     }
-  }, [showMilestone]);
+  }, [advancedInsightsOpen, showMilestone]);
 
   if (isLoading) {
     return (
@@ -1098,52 +1108,83 @@ export default function Dashboard() {
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
       <BackToPortfolioBanner />
-      {showProvisional && (
-        <PageGuidance
-          pageKey="dashboard"
-          title="ESG Dashboard — what the numbers mean"
-          summary="This dashboard shows your overall ESG (Environmental, Social and Governance) performance. The score is calculated from the data you enter and the policies/evidence you have in place. A higher score means better data coverage and performance — it is not a regulatory rating."
-          goodLooksLike="ESG score above 60%, all key metrics showing data for the current month, and the activation checklist fully complete."
-          steps={[
-            "Check the 'Get up and running' checklist if it is visible — complete those steps first",
-            "Go to Data Entry to add your monthly/quarterly metric values (energy, headcount, waste, etc.)",
-            "Once data is entered, your score and charts will update automatically",
-            "Use the Reports page to generate a summary for customers, investors, or your own team",
-          ]}
-        />
-      )}
-      {showProvisional && <ActionPlanBanner company={company} />}
-
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">
-            {company?.name ? `${company.name} — ESG Dashboard` : "ESG Dashboard"}
+            {company?.name ? `${company.name} — ESG Home` : "ESG Home"}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Your ESG performance at a glance
+            Your baseline, confidence and next step
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {reportingPeriods.length > 0 && (
-            <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
-              <SelectTrigger className="w-44" data-testid="select-dashboard-period">
-                <SelectValue placeholder="Latest Data" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__latest__">Latest Data</SelectItem>
-                {reportingPeriods.map((rp: any) => (
-                  <SelectItem key={rp.id} value={rp.id}>{rp.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {enhanced?.latestPeriod && (
+          {latestEnhanced?.latestPeriod && (
             <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
-              {activePeriod ? activePeriod.name : `Latest: ${enhanced.latestPeriod}`}
+              Latest: {latestEnhanced.latestPeriod}
             </Badge>
           )}
         </div>
       </div>
+
+      <SmeDashboardOverview readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} />
+
+      <details
+        open={advancedInsightsOpen}
+        onToggle={(event) => setAdvancedInsightsOpen(event.currentTarget.open)}
+        className="group overflow-hidden rounded-lg border border-border bg-card"
+        data-testid="disclosure-advanced-insights"
+      >
+        <summary
+          className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset [&::-webkit-details-marker]:hidden"
+          data-testid="summary-advanced-insights"
+        >
+          <span className="flex min-w-0 items-center gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">Advanced insights</span>
+              <span className="block text-xs text-muted-foreground">Detailed scores, trends, alerts and recommendations</span>
+            </span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+        </summary>
+
+        <div className="space-y-5 border-t border-border p-4 sm:p-5" data-testid="section-advanced-insights">
+          {reportingPeriods.length > 0 && (
+            <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between" data-testid="advanced-period-scope">
+              <div>
+                <p className="text-sm font-medium">Detailed insight period</p>
+                <p className="text-xs text-muted-foreground">This changes the detailed scores and trends below; the Home baseline above always shows your latest overall position.</p>
+              </div>
+              <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
+                <SelectTrigger className="w-full sm:w-44" data-testid="select-dashboard-period">
+                  <SelectValue placeholder="Latest Data" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__latest__">Latest Data</SelectItem>
+                  {reportingPeriods.map((rp: any) => (
+                    <SelectItem key={rp.id} value={rp.id}>{rp.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {showProvisional && (
+            <PageGuidance
+              pageKey="dashboard"
+              title="ESG Dashboard — what the numbers mean"
+              summary="This dashboard shows your overall ESG (Environmental, Social and Governance) performance. The score is calculated from the data you enter and the policies/evidence you have in place. A higher score means better data coverage and performance — it is not a regulatory rating."
+              goodLooksLike="ESG score above 60%, all key metrics showing data for the current month, and the activation checklist fully complete."
+              steps={[
+                "Check the 'Get up and running' checklist if it is visible — complete those steps first",
+                "Go to Data Entry to add your monthly/quarterly metric values (energy, headcount, waste, etc.)",
+                "Once data is entered, your score and charts will update automatically",
+                "Use the Reports page to generate a summary for customers, investors, or your own team",
+              ]}
+            />
+          )}
+          {showProvisional && <ActionPlanBanner company={company} />}
 
       {showProvisional && <PostWizardPanel />}
       {showProvisional && <NextStepBanner />}
@@ -1636,6 +1677,8 @@ export default function Dashboard() {
       {showConfirmed && <ActivityFeed />}
 
       {showConfirmed && <NotificationsPanel />}
+        </div>
+      </details>
     </div>
   );
 }

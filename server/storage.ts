@@ -563,7 +563,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByEmail(email: string) {
-    const [user] = await db.select().from(users).where(eq(users.email, email));
+    const [user] = await db.select().from(users).where(sql`lower(${users.email}) = lower(${email})`);
     return user;
   }
 

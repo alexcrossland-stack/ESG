@@ -19,6 +19,7 @@ import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
   Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network, Sparkles, Info, FileCheck, PartyPopper,
+  Loader2,
 } from "lucide-react";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { format, subMonths } from "date-fns";
@@ -1301,7 +1302,7 @@ export default function Reports() {
   const { can } = usePermissions();
   const canApprove = can("report_generation");
   const { isPro } = useBillingStatus();
-  const { activeSiteId, activeSite, sites: allSites } = useSiteContext();
+  const { activeSiteId, sites: allSites } = useSiteContext();
   const activeSites = allSites.filter((s: any) => s.status === "active");
   const archivedSites = allSites.filter((s: any) => s.status === "archived");
   const hasMultipleSites = allSites.length >= 1;
@@ -1311,6 +1312,8 @@ export default function Reports() {
   const [reportType, setReportType] = useState("pdf");
   const [selectedTemplate, setSelectedTemplate] = useState("management");
   const [reportData, setReportData] = useState<any>(null);
+  const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
+  const [downloadErrorReportId, setDownloadErrorReportId] = useState<string | null>(null);
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
   const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
 
@@ -1475,7 +1478,11 @@ export default function Reports() {
     ).values()
   );
 
-  const handleDownloadFile = async (downloadUrl: string, filename: string) => {
+  const handleDownloadFile = async (downloadUrl: string, filename: string, reportId?: string) => {
+    if (reportId) {
+      setDownloadingReportId(reportId);
+      setDownloadErrorReportId(null);
+    }
     try {
       if (!downloadUrl) {
         throw new Error("File unavailable");
@@ -1493,12 +1500,16 @@ export default function Reports() {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+      if (reportId) setDownloadErrorReportId(null);
     } catch (error: any) {
+      if (reportId) setDownloadErrorReportId(reportId);
       toast({
         title: error?.message === "File not found" ? "File unavailable" : "Download failed",
         description: error?.message === "File not found" ? "This report entry is still in history, but the file is no longer available." : undefined,
         variant: "destructive",
       });
+    } finally {
+      if (reportId) setDownloadingReportId(current => current === reportId ? null : current);
     }
   };
 
@@ -2170,106 +2181,124 @@ export default function Reports() {
         ) : reports.length === 0 ? (
           <EmptyState
             icon={FileText}
-            title={activeSite ? `No reports for ${activeSite.name} yet` : "No reports generated yet"}
+            title={reportScopeSite ? `No reports for ${reportScopeSite.name} yet` : "No reports generated yet"}
             description="Generate your first report using the form above. Once done, you can download it as a PDF or share it directly with whoever needs it."
             helpText="You'll need at least one period of data entered before your report will have meaningful figures."
           />
         ) : (
           <div className="space-y-2">
-            {reports.map((report: any) => (
-              <div key={report.id} className="flex flex-wrap items-center gap-3 p-3 rounded-md border border-border" data-testid={`report-history-${report.id}`}>
-                <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">
-                    {REPORT_TEMPLATES.find(t => t.id === report.reportTemplate)?.label || "ESG Report"} — {report.period || "All Periods"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Generated {format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm")}
-                  </p>
-                  {report.fileAvailability === "available" ? (
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {reports.map((report: any) => {
+              const reportId = String(report.id);
+              const reportTitle = `${REPORT_TEMPLATES.find(t => t.id === report.reportTemplate)?.label || "ESG Report"} — ${report.period || "All Periods"}`;
+              const downloadName = report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`;
+              const hasReportFile = report.fileAvailability === "available" && !!report.latestDownloadUrl;
+              const isDownloading = downloadingReportId === reportId;
+              const hasDownloadError = downloadErrorReportId === reportId;
+
+              return (
+                <div key={report.id} className="flex flex-wrap items-center gap-3 p-3 rounded-md border border-border" data-testid={`report-history-${report.id}`}>
+                  <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    {hasReportFile ? (
                       <button
                         type="button"
-                        className="font-medium text-primary underline-offset-4 hover:underline"
-                        onClick={() => handleDownloadFile(report.latestDownloadUrl || "", report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`)}
+                        className="text-sm font-medium text-left text-primary underline-offset-4 hover:underline disabled:opacity-70"
+                        onClick={() => handleDownloadFile(report.latestDownloadUrl || "", downloadName, reportId)}
+                        disabled={isDownloading}
                         data-testid={`link-report-file-${report.id}`}
                       >
-                        {report.latestFilename || "Download file"}
+                        {reportTitle}
                       </button>
-                      <span>{report.latestFileType?.toUpperCase()}</span>
-                      {report.latestFileSize ? <span>{`${(report.latestFileSize / 1024).toFixed(1)} KB`}</span> : null}
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-xs text-muted-foreground" data-testid={`report-file-status-${report.id}`}>
-                      <span className="font-medium">Unavailable.</span>{" "}
-                      {report.fileUnavailableReason === "retained_history_only"
-                        ? "The history entry remains for audit purposes, but the file is no longer available."
-                        : "No downloadable file is available for this report entry."}
+                    ) : (
+                      <p className="text-sm font-medium">{reportTitle}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Generated {format(new Date(report.generatedAt), "dd MMM yyyy 'at' HH:mm")}
                     </p>
+                    {hasReportFile ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-medium">{report.latestFilename || "Generated report file"}</span>
+                        <span>{report.latestFileType?.toUpperCase()}</span>
+                        {report.latestFileSize ? <span>{`${(report.latestFileSize / 1024).toFixed(1)} KB`}</span> : null}
+                        {hasDownloadError && (
+                          <span className="text-destructive" data-testid={`report-download-error-${report.id}`}>
+                            Download failed. Try again.
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs text-muted-foreground" data-testid={`report-file-status-${report.id}`}>
+                        <span className="font-medium">Unavailable.</span>{" "}
+                        {report.fileUnavailableReason === "retained_history_only"
+                          ? "The history entry remains for audit purposes, but the file is no longer available."
+                          : "No downloadable file is available for this report entry."}
+                      </p>
+                    )}
+                  </div>
+                  <WorkflowBadge status={report.workflowStatus} size="sm" />
+                  <Badge variant="outline" className="text-xs">{report.reportType?.toUpperCase()}</Badge>
+                  {report.reportTemplate && <Badge variant="secondary" className="text-xs capitalize">{report.reportTemplate}</Badge>}
+                  {report.siteId && (
+                    <Badge variant="outline" className="text-xs flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      {report.siteName || "Site"}
+                    </Badge>
+                  )}
+                  {report.workflowStatus !== "approved" && report.workflowStatus !== "submitted" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => submitReportMutation.mutate(reportId)}
+                      disabled={submitReportMutation.isPending}
+                      data-testid={`button-submit-report-${report.id}`}
+                    >
+                      <Send className="w-3.5 h-3.5 mr-1.5" />
+                      Send for review
+                    </Button>
+                  )}
+                  {canApprove && report.workflowStatus === "submitted" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        onClick={() => reviewReportMutation.mutate({ reportId, action: "approve" })}
+                        disabled={reviewReportMutation.isPending}
+                        data-testid={`button-approve-report-${report.id}`}
+                      >
+                        <Check className="w-3.5 h-3.5 mr-1.5" />
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => reviewReportMutation.mutate({ reportId, action: "reject" })}
+                        disabled={reviewReportMutation.isPending}
+                        data-testid={`button-reject-report-${report.id}`}
+                      >
+                        <X className="w-3.5 h-3.5 mr-1.5" />
+                        Reject
+                      </Button>
+                    </>
+                  )}
+                  {hasReportFile ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDownloadFile(report.latestDownloadUrl || "", downloadName, reportId)}
+                      disabled={isDownloading}
+                      data-testid={`button-download-report-file-${report.id}`}
+                    >
+                      {isDownloading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
+                      {isDownloading ? "Opening..." : "Open report"}
+                    </Button>
+                  ) : (
+                    <Badge variant="secondary" className="text-xs" data-testid={`badge-report-file-unavailable-${report.id}`}>
+                      Unavailable
+                    </Badge>
                   )}
                 </div>
-                <WorkflowBadge status={report.workflowStatus} size="sm" />
-                <Badge variant="outline" className="text-xs">{report.reportType?.toUpperCase()}</Badge>
-                {report.reportTemplate && <Badge variant="secondary" className="text-xs capitalize">{report.reportTemplate}</Badge>}
-                {report.siteId && (
-                  <Badge variant="outline" className="text-xs flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {report.siteName || "Site"}
-                  </Badge>
-                )}
-                {report.workflowStatus !== "approved" && report.workflowStatus !== "submitted" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => submitReportMutation.mutate(String(report.id))}
-                    disabled={submitReportMutation.isPending}
-                    data-testid={`button-submit-report-${report.id}`}
-                  >
-                    <Send className="w-3.5 h-3.5 mr-1.5" />
-                    Send for review
-                  </Button>
-                )}
-                {canApprove && report.workflowStatus === "submitted" && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="default"
-                      onClick={() => reviewReportMutation.mutate({ reportId: String(report.id), action: "approve" })}
-                      disabled={reviewReportMutation.isPending}
-                      data-testid={`button-approve-report-${report.id}`}
-                    >
-                      <Check className="w-3.5 h-3.5 mr-1.5" />
-                      Approve
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => reviewReportMutation.mutate({ reportId: String(report.id), action: "reject" })}
-                      disabled={reviewReportMutation.isPending}
-                      data-testid={`button-reject-report-${report.id}`}
-                    >
-                      <X className="w-3.5 h-3.5 mr-1.5" />
-                      Reject
-                    </Button>
-                  </>
-                )}
-                {report.fileAvailability === "available" ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleDownloadFile(report.latestDownloadUrl || "", report.latestFilename || `${report.reportTemplate || "report"}-${report.period || "latest"}`)}
-                    data-testid={`button-download-report-file-${report.id}`}
-                  >
-                    <Download className="w-3.5 h-3.5 mr-1.5" />
-                    Download
-                  </Button>
-                ) : (
-                  <Badge variant="secondary" className="text-xs" data-testid={`badge-report-file-unavailable-${report.id}`}>
-                    Unavailable
-                  </Badge>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

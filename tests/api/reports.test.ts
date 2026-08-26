@@ -7,7 +7,11 @@
  * Run: npx tsx tests/api/reports.test.ts
  */
 
-import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { seedTestTenants, apiRequest, apiRequestRaw } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
@@ -129,6 +133,47 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
+  {
+    const name = "GET generated report download route returns file for matching report/file IDs";
+    if (!generatedReportId || !generatedFileId) {
+      pass(name, "skipped — generated file unavailable");
+    } else {
+      const res = await apiRequestRaw("GET", `/api/reports/${generatedReportId}/download/${generatedFileId}`, undefined, tenantA.adminToken);
+      const contentType = String(res.headers["content-type"] || "");
+      if (res.status !== 200) fail(name, `status=${res.status} body=${res.body.toString("utf8").slice(0, 200)}`);
+      else if (!contentType.includes("application/pdf")) fail(name, `unexpected content-type=${contentType}`);
+      else if (res.body.length === 0) fail(name, "empty report download body");
+      else pass(name, `${res.body.length} bytes`);
+    }
+  }
+
+  {
+    const name = "GET generated report download rejects a fileId from a different report";
+    if (!generatedFileId) {
+      pass(name, "skipped — generated file unavailable");
+    } else {
+      const secondReportRes = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "management",
+        period: "2024-01",
+        includeMetrics: true,
+        includePolicy: false,
+        includeTopics: false,
+      }, tenantA.adminToken);
+      if (![200, 201].includes(secondReportRes.status)) {
+        pass(name, `skipped — second report generation status=${secondReportRes.status}`);
+      } else {
+        const secondReportId = (JSON.parse(secondReportRes.body) as { report?: { id?: string } }).report?.id;
+        if (!secondReportId) fail(name, "missing second report id");
+        else {
+          const res = await apiRequest("GET", `/api/reports/${secondReportId}/download/${generatedFileId}`, undefined, tenantA.adminToken);
+          if (res.status !== 404) fail(name, `expected 404 got ${res.status}`);
+          else pass(name);
+        }
+      }
+    }
+  }
+
   // ── 5. Viewer blocked from generating reports → 403 ──────────────────────
   {
     const name = "viewer POST /api/reports/generate returns 403";
@@ -204,7 +249,66 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
+  {
+    const name = "Tenant A cannot download Tenant B generated report file";
+    if (!tenantB.reportId) {
+      pass(name, "skipped — Tenant B reportId unavailable");
+    } else {
+      const tenantBFileRes = await apiRequest("POST", `/api/reports/${tenantB.reportId}/generate-file`, {
+        format: "pdf",
+      }, tenantB.adminToken);
+      if (tenantBFileRes.status !== 200) {
+        pass(name, `skipped — Tenant B file generation status=${tenantBFileRes.status}`);
+      } else {
+        const tenantBFileId = (JSON.parse(tenantBFileRes.body) as { fileId?: string }).fileId;
+        if (!tenantBFileId) fail(name, "missing Tenant B file id");
+        else {
+          const res = await apiRequest("GET", `/api/reports/${tenantB.reportId}/download/${tenantBFileId}`, undefined, tenantA.adminToken);
+          if (res.status !== 404) fail(name, `expected 404 got ${res.status}`);
+          else pass(name);
+        }
+      }
+    }
+  }
+
   // ── 11. List is company-scoped (Tenant B data absent from Tenant A list) ───
+  {
+    const name = "POST /api/reports/export/policy_register_summary returns a structurally valid DOCX package";
+    const exportRes = await apiRequestRaw("POST", "/api/reports/export/policy_register_summary", {
+      format: "docx",
+    }, tenantA.adminToken);
+    if (exportRes.status !== 200) fail(name, `status=${exportRes.status} body=${exportRes.body.toString("utf8").slice(0, 200)}`);
+    else if (!String(exportRes.headers["content-type"] || "").includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")) {
+      fail(name, `unexpected content-type=${exportRes.headers["content-type"]}`);
+    } else if (exportRes.body.length < 2048) {
+      fail(name, `payload too small (${exportRes.body.length} bytes)`);
+    } else if (exportRes.body[0] !== 0x50 || exportRes.body[1] !== 0x4b) {
+      fail(name, "payload does not start with ZIP signature");
+    } else {
+      const tempDir = mkdtempSync(join(tmpdir(), "policy-docx-"));
+      const docxPath = join(tempDir, "policy-register.docx");
+      try {
+        writeFileSync(docxPath, exportRes.body);
+        execFileSync("unzip", ["-t", docxPath], { stdio: "pipe" });
+        const entries = execFileSync("unzip", ["-Z1", docxPath], { encoding: "utf8" })
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        const documentXml = execFileSync("unzip", ["-p", docxPath, "word/document.xml"], { encoding: "utf8" });
+        const invalidXmlChars =
+          /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\uD800-\uDFFF]/.test(documentXml);
+        if (!entries.includes("[Content_Types].xml")) fail(name, "missing [Content_Types].xml");
+        else if (!entries.includes("word/document.xml")) fail(name, "missing word/document.xml");
+        else if (invalidXmlChars) fail(name, "word/document.xml contains invalid XML control characters");
+        else pass(name, `${exportRes.body.length} bytes`);
+      } catch (error: any) {
+        fail(name, error?.message || String(error));
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   {
     const name = "GET /api/reports is company-scoped (Tenant B companyId absent from Tenant A list)";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);

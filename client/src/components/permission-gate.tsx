@@ -155,7 +155,7 @@ export function OwnershipHint({
   return (
     <p className={cn("text-[11px] text-muted-foreground/70 flex items-center gap-1", className)} data-testid="ownership-hint">
       <span className="text-primary/40">›</span>
-      {action ? `${action} — ` : ""}<span>Usually handled by {owner}</span>
+      <span>{action ? `${action} — ` : ""}Usually handled by {owner}</span>
     </p>
   );
 }

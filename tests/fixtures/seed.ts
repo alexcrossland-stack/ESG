@@ -81,6 +81,65 @@ export function apiRequest(
   });
 }
 
+export function apiRequestRaw(
+  method: string,
+  path: string,
+  body?: object,
+  token?: string
+): Promise<{ status: number; body: Buffer; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, BASE_URL);
+    const bodyStr = body ? JSON.stringify(body) : undefined;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (bodyStr) headers["Content-Length"] = String(Buffer.byteLength(bodyStr));
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const options: http.RequestOptions = {
+      hostname: url.hostname,
+      port: parseInt(url.port || "5000"),
+      path: url.pathname + url.search,
+      method,
+      headers,
+    };
+
+    const req = http.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on("end", () => resolve({
+        status: res.statusCode ?? 0,
+        body: Buffer.concat(chunks),
+        headers: res.headers,
+      }));
+    });
+    req.on("error", reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+export async function apiMultipartRequest(
+  method: string,
+  path: string,
+  body: FormData,
+  token?: string,
+): Promise<{ status: number; body: string }> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(new URL(path, BASE_URL), {
+    method,
+    headers,
+    body,
+  });
+
+  return {
+    status: res.status,
+    body: await res.text(),
+  };
+}
+
 export async function loginAndGetToken(email: string, password: string): Promise<string> {
   const res = await apiRequest("POST", "/api/auth/login", { email, password });
   if (res.status !== 200) {

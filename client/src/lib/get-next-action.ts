@@ -13,58 +13,77 @@ export function getNextAction(readiness: any): NextAction {
   const hasGeneratedReport: boolean = readiness?.hasGeneratedReport ?? false;
   const missingItems: string[] = readiness?.esgStatus?.missingItems ?? [];
   const missingPercent: number = readiness?.missingPercent ?? 0;
+  const filledMetrics: number = readiness?.filledMetrics ?? readiness?.esgStatus?.filledMetrics ?? 0;
+  const dataCompleteness: number = readiness?.dataCompletenessPercent ?? 0;
 
-  // Strict 5-step precedence across all states:
-
-  // Step 1: Missing core data (IN_PROGRESS uses a motivational first-score label)
-  if (missingItems.length > 0 || missingPercent > 0) {
-    const isFirstScore = state === "IN_PROGRESS";
+  // Activation precedence: reach a useful, evidenced baseline before asking an SME
+  // to complete every optional metric enabled by its sector pack.
+  if (filledMetrics === 0 || state === "IN_PROGRESS" && dataCompleteness === 0) {
     return {
-      title: isFirstScore ? "Get your first ESG score" : "Complete your ESG data",
-      description: isFirstScore
-        ? "Add a few key figures to see your first result."
-        : missingItems.length > 0
-          ? `${missingItems.length} key metric${missingItems.length > 1 ? "s are" : " is"} still missing.`
-          : "Some required data is still missing.",
-      ctaLabel: isFirstScore ? "Add your first data" : "Add missing data",
+      title: "Start your ESG baseline",
+      description: "Add a few figures from your bills, payroll or accounts to establish a useful starting point.",
+      ctaLabel: "Add your first data",
       href: "/data-entry",
     };
   }
 
-  // Step 2: Replace estimated values with real data
-  if (estimatedPct > 20) {
+  if (filledMetrics < 3 && dataCompleteness < 30) {
     return {
-      title: "Replace estimated data with real figures",
-      description: `${estimatedPct}% of your data is estimated. Real values improve your score confidence.`,
-      ctaLabel: "Update your data",
-      href: "/data-entry?highlight=estimated",
+      title: "Add two or three priority figures",
+      description: "A small, balanced starter set is enough to create your first useful baseline.",
+      ctaLabel: "Continue measuring",
+      href: "/data-entry",
     };
   }
 
-  // Step 3: Upload supporting documents
-  if (evidenceCoverage < 50) {
+  if (evidenceCoverage === 0) {
     return {
-      title: "Add supporting documents",
-      description: "Upload proof to strengthen your data and improve score confidence.",
-      ctaLabel: "Upload documents",
+      title: "Support one figure with evidence",
+      description: "Attach a bill, invoice or HR record so your baseline has a clear source.",
+      ctaLabel: "Add supporting evidence",
       href: "/evidence",
     };
   }
 
-  // Step 4: Generate first report (only when system is ready and report not yet created)
   if (reportingReadiness && !hasGeneratedReport) {
     return {
-      title: "Generate your first ESG report",
-      description: "You have enough data to create an ESG report to share with stakeholders.",
-      ctaLabel: "Generate report",
+      title: "Create your first baseline report",
+      description: "You now have enough data and source evidence for a practical first report.",
+      ctaLabel: "Create baseline report",
       href: "/reports",
     };
   }
 
-  // Step 5: Keep up to date
+  if (estimatedPct > 20) {
+    return {
+      title: "Replace estimates with measured figures",
+      description: `${estimatedPct}% of tracked data is estimated. Measured values improve confidence.`,
+      ctaLabel: "Review estimates",
+      href: "/data-entry?highlight=estimated",
+    };
+  }
+
+  if (missingItems.length > 0 || missingPercent > 0) {
+    return {
+      title: "Strengthen your baseline",
+      description: "Add another relevant figure when it becomes available; optional detail can wait.",
+      ctaLabel: "Review tracked metrics",
+      href: "/data-entry",
+    };
+  }
+
+  if (evidenceCoverage < 50) {
+    return {
+      title: "Add more supporting evidence",
+      description: "Link documents to important figures to make future reports more credible.",
+      ctaLabel: "Review evidence",
+      href: "/evidence",
+    };
+  }
+
   return {
-    title: "Keep your ESG data up to date",
-    description: "Add new data and track changes over time.",
+    title: "Keep your baseline current",
+    description: "Add the latest period's figures and track practical improvements over time.",
     ctaLabel: "Review latest data",
     href: "/data-entry",
   };

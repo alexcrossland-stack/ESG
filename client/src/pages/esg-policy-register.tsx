@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Users, Edit, Trash2, Shield } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
 
+type PolicyAttachment = {
+  id: string;
+  fileName: string;
+  storagePath: string | null;
+  objectKey: string | null;
+  mimeType: string | null;
+  size: number | null;
+  uploadedBy: string | null;
+  uploadedAt: string | null;
+  downloadUrl: string;
+};
+
 type PolicyRecord = {
   id: string;
   title: string;
@@ -26,6 +38,7 @@ type PolicyRecord = {
   reviewDate: string | null;
   documentLink: string | null;
   notes: string | null;
+  attachment: PolicyAttachment | null;
 };
 
 type GovernanceAssignment = {
@@ -65,6 +78,14 @@ const GOVERNANCE_AREAS = [
   { area: "privacy_cyber", label: "Privacy & Cyber" },
 ];
 
+const POLICY_ATTACHMENT_ACCEPT = ".pdf,.doc,.docx";
+
+function formatFileSize(size: number | null): string {
+  if (!size) return "";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function isOverdue(reviewDate: string | null): boolean {
   if (!reviewDate) return false;
   return new Date(reviewDate) < new Date();
@@ -79,7 +100,9 @@ function isUpcoming(reviewDate: string | null): boolean {
 }
 
 function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?: PolicyRecord }) {
-  const { register, handleSubmit, setValue, watch } = useForm({
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [removeExistingAttachment, setRemoveExistingAttachment] = useState(false);
+  const { register, handleSubmit, setValue } = useForm({
     defaultValues: {
       title: initial?.title ?? "",
       policyType: initial?.policyType ?? "other",
@@ -92,8 +115,30 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
     },
   });
 
+  const submitPolicy = (data: any) => {
+    if (selectedFile || removeExistingAttachment) {
+      const formData = new FormData();
+      formData.append("title", data.title);
+      formData.append("policyType", data.policyType);
+      formData.append("owner", data.owner || "");
+      formData.append("status", data.status);
+      formData.append("effectiveDate", data.effectiveDate || "");
+      formData.append("reviewDate", data.reviewDate || "");
+      formData.append("documentLink", data.documentLink || "");
+      formData.append("notes", data.notes || "");
+      if (selectedFile) formData.append("attachment", selectedFile, selectedFile.name);
+      if (removeExistingAttachment) formData.append("removeAttachment", "true");
+      onSave(formData);
+      return;
+    }
+
+    onSave(data);
+  };
+
   return (
-    <form onSubmit={handleSubmit(onSave)} className="space-y-4">
+    <form onSubmit={handleSubmit(submitPolicy)} className="space-y-4">
+      <input type="hidden" {...register("policyType")} />
+      <input type="hidden" {...register("status")} />
       <div className="space-y-1">
         <Label>Policy Title *</Label>
         <Input {...register("title", { required: true })} placeholder="e.g. Environmental Management Policy" data-testid="input-policy-title" />
@@ -101,7 +146,7 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
           <Label>Type</Label>
-          <Select defaultValue={initial?.policyType ?? "other"} onValueChange={v => setValue("policyType", v)}>
+          <Select defaultValue={initial?.policyType ?? "other"} onValueChange={(v: string) => setValue("policyType", v)}>
             <SelectTrigger data-testid="select-policy-type">
               <SelectValue />
             </SelectTrigger>
@@ -114,7 +159,7 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
         </div>
         <div className="space-y-1">
           <Label>Status</Label>
-          <Select defaultValue={initial?.status ?? "draft"} onValueChange={v => setValue("status", v)}>
+          <Select defaultValue={initial?.status ?? "draft"} onValueChange={(v: string) => setValue("status", v)}>
             <SelectTrigger data-testid="select-policy-status">
               <SelectValue />
             </SelectTrigger>
@@ -143,6 +188,72 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
       <div className="space-y-1">
         <Label>Document Link</Label>
         <Input {...register("documentLink")} placeholder="https://..." data-testid="input-policy-doc-link" />
+        <p className="text-xs text-muted-foreground">Provide a link, upload a file, or use both.</p>
+      </div>
+      <div className="space-y-2">
+        <Label>Policy Attachment</Label>
+        <Input
+          type="file"
+          accept={POLICY_ATTACHMENT_ACCEPT}
+          data-testid="input-policy-attachment"
+          onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            const nextFile = event.target.files?.[0] ?? null;
+            setSelectedFile(nextFile);
+            if (nextFile) setRemoveExistingAttachment(false);
+            event.target.value = "";
+          }}
+        />
+        <p className="text-xs text-muted-foreground">Accepted formats: PDF, DOC, DOCX. Max size 10 MB.</p>
+        {initial?.attachment && !removeExistingAttachment && !selectedFile && (
+          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs" data-testid="policy-existing-attachment">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium text-foreground truncate">{initial.attachment.fileName}</p>
+                <p className="text-muted-foreground">
+                  Existing attachment{initial.attachment.size ? ` • ${formatFileSize(initial.attachment.size)}` : ""}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setRemoveExistingAttachment(true)}
+                data-testid="button-remove-policy-attachment"
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+        )}
+        {removeExistingAttachment && !selectedFile && (
+          <div className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="policy-attachment-remove-pending">
+            Existing attachment will be removed when you save.
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ml-2 h-6 px-2 text-xs"
+              onClick={() => setRemoveExistingAttachment(false)}
+            >
+              Undo
+            </Button>
+          </div>
+        )}
+        {selectedFile && (
+          <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-xs" data-testid="policy-selected-attachment">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium text-foreground truncate">{selectedFile.name}</p>
+                <p className="text-muted-foreground">
+                  New upload{selectedFile.size ? ` • ${formatFileSize(selectedFile.size)}` : ""}
+                </p>
+              </div>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedFile(null)}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
       <div className="space-y-1">
         <Label>Notes</Label>
@@ -302,7 +413,7 @@ export default function EsgPolicyRegisterPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Track policies, owners, review dates and governance area assignments</p>
         </div>
-        <Dialog open={showDialog} onOpenChange={v => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
+        <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
 
           <DialogTrigger asChild>
             <Button size="sm" data-testid="button-add-policy">
@@ -327,7 +438,7 @@ export default function EsgPolicyRegisterPage() {
           "Click 'Add Policy' to create a new record for each ESG-related policy your business has.",
           "Set the policy type (e.g. Environmental, H&S, Diversity) and assign a named owner.",
           "Add the effective date and next review date so nothing slips through the cracks.",
-          "Optionally link to the actual policy document using the document link field.",
+          "Optionally add the policy document using a document link, a direct file upload, or both.",
           "Switch to the Governance tab to assign board or management accountability for each ESG area.",
           "Review and update the register at least annually or after major organisational changes.",
         ]}
@@ -408,12 +519,30 @@ export default function EsgPolicyRegisterPage() {
                           {policy.owner && <span>Owner: <span className="font-medium text-foreground">{policy.owner}</span></span>}
                           {policy.effectiveDate && <span>Effective: <span className="font-medium text-foreground">{new Date(policy.effectiveDate).toLocaleDateString()}</span></span>}
                           {policy.reviewDate && <span className={overdue ? "text-red-500" : upcoming ? "text-amber-500" : ""}>Review: <span className="font-medium">{new Date(policy.reviewDate).toLocaleDateString()}</span></span>}
-                          {policy.documentLink && (
-                            <a href={policy.documentLink} target="_blank" rel="noreferrer" className="text-primary hover:underline" data-testid={`link-policy-doc-${policy.id}`}>
-                              View Document
-                            </a>
-                          )}
                         </div>
+                        {(policy.documentLink || policy.attachment) && (
+                          <div className="mt-3 space-y-1.5 text-xs">
+                            {policy.documentLink && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-foreground">Document link:</span>
+                                <a href={policy.documentLink} target="_blank" rel="noreferrer" className="text-primary hover:underline" data-testid={`link-policy-doc-${policy.id}`}>
+                                  {policy.documentLink}
+                                </a>
+                              </div>
+                            )}
+                            {policy.attachment && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-foreground">Attachment:</span>
+                                <a href={policy.attachment.downloadUrl} className="text-primary hover:underline" data-testid={`link-policy-attachment-${policy.id}`}>
+                                  {policy.attachment.fileName}
+                                </a>
+                                {policy.attachment.size && (
+                                  <span className="text-muted-foreground">({formatFileSize(policy.attachment.size)})</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Button
