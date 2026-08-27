@@ -198,7 +198,10 @@ test.describe("Simplified SME navigation", () => {
     await expect(label).toHaveCSS("white-space", "nowrap");
     await expect(label).toHaveCSS("overflow", "hidden");
     await expect(label).toHaveCSS("text-overflow", "ellipsis");
-    await expect.poll(async () => label.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await expect.poll(
+      async () => label.evaluate(el => el.clientWidth - el.scrollWidth),
+      { message: "Policy Generator must fit without truncation beside the Next badge" },
+    ).toBeGreaterThanOrEqual(0);
     await expect(badge).toBeVisible();
 
     await context.close();

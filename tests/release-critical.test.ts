@@ -91,13 +91,13 @@ function main() {
     runStep(
       "Complete Chromium user-journey project",
       "npx",
-      ["playwright", "test", "--project=chromium", "--workers=1"],
+      ["playwright", "test", "--project=chromium", "--workers=1", "--output=test-results/chromium"],
       { failOnSkippedTests: true },
     );
     runStep(
       "Playwright API regression project",
       "npx",
-      ["playwright", "test", "--project=api", "--workers=1"],
+      ["playwright", "test", "--project=api", "--workers=1", "--output=test-results/api"],
       { failOnSkippedTests: true },
     );
   } else {

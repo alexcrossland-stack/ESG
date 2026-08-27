@@ -122,7 +122,7 @@ interface NavBadgeProps { show: boolean }
 function NextBadge({ show }: NavBadgeProps) {
   if (!show) return null;
   return (
-    <span className="ml-auto shrink-0 text-[9px] font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-primary/10 text-primary leading-tight">
+    <span className="ml-auto shrink-0 text-[9px] font-semibold uppercase tracking-wide px-0.5 py-0.5 rounded bg-primary/10 text-primary leading-tight">
       Next
     </span>
   );
@@ -176,7 +176,7 @@ function AdvancedNavLink({ item, location, showNext }: { item: NavItem; location
     <Link
       href={item.href}
       data-testid={advancedNavTestId(item)}
-      className={`flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
+      className={`flex items-center gap-1.5 w-full rounded-md px-1.5 py-1.5 text-xs transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${isActive(location, item.href) ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-muted-foreground"}`}
       aria-current={isActive(location, item.href) ? "page" : undefined}
     >
       <Icon className="w-3.5 h-3.5 shrink-0" />
