@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, authFetch, queryClient } from "@/lib/queryClient";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -17,6 +17,7 @@ import {
   AlertTriangle, CheckCircle2, HelpCircle, Building,
 } from "lucide-react";
 import type { CarbonCalculation, EmissionFactor } from "@shared/schema";
+import { CURRENT_UK_FACTOR_SOURCE, CURRENT_UK_FACTOR_YEAR } from "@shared/emission-factor-metadata";
 import { usePermissions } from "@/lib/permissions";
 import { PermissionBanner } from "@/components/permission-gate";
 
@@ -171,8 +172,9 @@ export default function CarbonCalculator() {
   const { toast } = useToast();
   const { can } = usePermissions();
   const canEdit = can("metrics_data_entry");
-  const { activeSiteId } = useSiteContext();
+  const { activeSiteId, activeSites } = useSiteContext();
   const [inputs, setInputs] = useState<CarbonInputs>(defaultInputs);
+  const [calculationScope, setCalculationScope] = useState(activeSiteId ?? "__org__");
   const [reportingPeriod, setReportingPeriod] = useState(PERIOD_OPTIONS[0]);
   const [periodType, setPeriodType] = useState("monthly");
   const [employeeCount, setEmployeeCount] = useState("");
@@ -186,8 +188,18 @@ export default function CarbonCalculator() {
     queryKey: ["/api/carbon/factors"],
   });
 
+  useEffect(() => {
+    setCalculationScope(activeSiteId ?? "__org__");
+  }, [activeSiteId]);
+
   const { data: history, isLoading: historyLoading } = useQuery<CalculationResult[]>({
-    queryKey: ["/api/carbon/calculations"],
+    queryKey: ["/api/carbon/calculations", calculationScope],
+    queryFn: async () => {
+      const siteId = calculationScope === "__org__" ? "null" : calculationScope;
+      const res = await authFetch(`/api/carbon/calculations?siteId=${encodeURIComponent(siteId)}`);
+      if (!res.ok) throw new Error("Failed to load carbon calculation history");
+      return res.json();
+    },
   });
 
   const calculateMutation = useMutation({
@@ -220,7 +232,7 @@ export default function CarbonCalculator() {
       periodType,
       employeeCount: employeeCount ? parseInt(employeeCount, 10) : null,
       dataQuality,
-      siteId: activeSiteId || undefined,
+      siteId: calculationScope === "__org__" ? null : calculationScope,
     });
   };
 
@@ -242,7 +254,7 @@ export default function CarbonCalculator() {
   const total = result ? parseFloat(String(result.totalEmissions || "0")) : 0;
   const empCount = result?.employeeCount || (employeeCount ? parseInt(employeeCount) : 0);
   const perEmployee = empCount > 0 ? total / empCount : 0;
-  const resultFactorYear = result?.factorYear || result?.results?.factorYear || 2024;
+  const resultFactorYear = result?.factorYear || result?.results?.factorYear || CURRENT_UK_FACTOR_YEAR;
   const methodNotes: MethodologyNote[] = result?.methodologyNotes || result?.results?.lineItems || [];
   const resultAssumptions: string[] = result?.assumptions || result?.results?.assumptions || [];
   const resultDq = result?.results?.dataQuality || {};
@@ -274,7 +286,7 @@ export default function CarbonCalculator() {
           </p>
         </div>
         <Badge variant="outline" className="text-xs" data-testid="badge-factor-year">
-          Factor Year: {(factors as any)?.[0]?.factorYear || 2024}
+          Factor Year: {(factors as any)?.[0]?.factorYear || CURRENT_UK_FACTOR_YEAR}
         </Badge>
       </div>
       {!canEdit && (
@@ -307,6 +319,26 @@ export default function CarbonCalculator() {
               <SelectItem value="annual">Annual</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Calculation boundary</Label>
+          <Select value={calculationScope} onValueChange={(value) => {
+            setCalculationScope(value);
+            setResult(null);
+          }}>
+            <SelectTrigger className="w-48" data-testid="select-carbon-scope">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__org__">Organisation-wide</SelectItem>
+              {activeSites.map((site) => (
+                <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="max-w-48 text-xs text-muted-foreground">
+            Save one organisation-wide estimate or a separate estimate for a specific site.
+          </p>
         </div>
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground">Employees</Label>
@@ -657,7 +689,7 @@ export default function CarbonCalculator() {
           <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-md border border-border">
             <Info className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
             <p className="text-xs text-muted-foreground" data-testid="text-disclaimer">
-              These calculations are estimates based on UK DEFRA {resultFactorYear} emission factors and should be reviewed before use in formal disclosures. Data quality indicators show the reliability of each input.
+              These calculations are estimates based on {methodNotes[0]?.factorSource || CURRENT_UK_FACTOR_SOURCE} and should be reviewed before use in formal disclosures. Data quality indicators show the reliability of each input.
             </p>
           </div>
         </div>
@@ -672,7 +704,7 @@ export default function CarbonCalculator() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Emission Factors</CardTitle>
-              <CardDescription>UK DEFRA {(factors as any)?.[0]?.factorYear || 2024} factors used in calculations</CardDescription>
+              <CardDescription>{(factors as any)?.[0]?.sourceLabel || CURRENT_UK_FACTOR_SOURCE} factors used in calculations</CardDescription>
             </CardHeader>
             <CardContent>
               {factorsLoading ? (
@@ -698,7 +730,7 @@ export default function CarbonCalculator() {
                         <TableCell className="text-sm text-muted-foreground">{f.category}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{f.unit}</TableCell>
                         <TableCell className="text-sm font-medium">{f.factor}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{f.factorYear || 2024}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{f.factorYear || CURRENT_UK_FACTOR_YEAR}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{f.fuelType || "-"}</TableCell>
                       </TableRow>
                     ))}
@@ -748,7 +780,7 @@ export default function CarbonCalculator() {
                     <TableCell className="text-sm">{formatEmissions(parseFloat(String(calc.scope2Total || "0")))}</TableCell>
                     <TableCell className="text-sm">{formatEmissions(parseFloat(String(calc.scope3Total || "0")))}</TableCell>
                     <TableCell className="text-sm font-medium">{formatEmissions(parseFloat(String(calc.totalEmissions || "0")))}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{calc.factorYear || "2024"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{calc.factorYear || "Not recorded"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {calc.createdAt ? new Date(calc.createdAt).toLocaleDateString() : "N/A"}
                     </TableCell>

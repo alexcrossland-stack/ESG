@@ -31,6 +31,8 @@ import { POLICY_TEMPLATES } from "./policy-templates";
 import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
 import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } from "./scheduler";
 import { buildSavedReportSnapshotSections, generatePdf, generateDocx } from "./report-engine";
+import { CURRENT_UK_FACTOR_YEAR, emissionFactorYearFromSet } from "@shared/emission-factor-metadata";
+import { REPORT_TEMPLATE_IDS, REPORT_TEMPLATE_LABELS } from "@shared/report-templates";
 import { sendEmail, generateSecureToken, buildInvitationEmail, buildPasswordResetEmail, buildReportReadyEmail, buildSupportConfirmationEmail } from "./email";
 import { SME_BENCHMARKS, compareAgainstBenchmarks } from "./benchmarks";
 import { seedCompanyDefaults, seedOnboardingChecklist, STANDARD_CHECKLIST_TASKS } from "./company-defaults";
@@ -66,9 +68,11 @@ import { createOpenAiAssistantReply } from "./openai-assist";
 import {
   formatBooleanMetricValue,
   formatMetricDisplayValue,
+  hasMetricReportedValue,
   isActiveEditableDataEntryMetric,
   isBooleanMetricDataType,
   parseBooleanMetricInput,
+  resolveMetricDataType,
 } from "@shared/data-entry-metrics";
 import {
   buildAnnualReportPeriod,
@@ -76,10 +80,27 @@ import {
   buildQuarterlyReportPeriod,
   getPreviousComparableReportPeriod,
   isPeriodWithinDateRange,
+  periodToMonthIndex,
   type ReportPeriodSelection,
   resolveReportPeriodSelection,
 } from "@shared/report-periods";
 import { calculateMetricTrends, type MetricTrend, type TrendMetricInput, type TrendValueInput } from "@shared/esg-trends";
+import { buildAssuranceEvidenceHistoryEntry } from "./assurance-pack";
+import { frameworkResponseSourceIsEligible, parseFrameworkReadinessPeriod } from "./framework-readiness";
+import {
+  buildPassportEvidenceConfidence,
+  calculatePassportCompletion,
+  DEFAULT_PUBLIC_PASSPORT_SECTIONS,
+  normalizePublicProfileSections,
+  passportSectionIsVisible,
+  selectPublicPassportSections,
+} from "@shared/esg-passport";
+import {
+  isPublicPassportPolicyRecord,
+  selectPassportCarbonCalculation,
+  selectPassportMetricValue,
+} from "./esg-passport-accuracy";
+import { classifyValueSource } from "@shared/value-source";
 
 type DashboardTrendCard = {
   key: string;
@@ -380,6 +401,17 @@ function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
     }
   }
   return map;
+}
+
+async function getConfiguredEmissionFactors(companyId: string, country = "UK") {
+  const settings = await storage.getCompanySettings(companyId);
+  const configuredYear = emissionFactorYearFromSet(settings?.emissionFactorSet);
+  const configured = await storage.getEmissionFactors(country, configuredYear);
+  if (configured.length > 0) return configured;
+
+  // An unavailable legacy selection must not cause hard-coded or mixed-year
+  // calculations. Fall back to the newest complete factor set in the database.
+  return storage.getEmissionFactors(country);
 }
 
 const BLOCKED_EXTENSIONS = /\.(exe|bat|cmd|sh|ps1|msi|vbs|js|jsx|ts|tsx|py|rb|pl|php|java|class|jar|dll|so|elf|dmg|pkg|app|cpl|scr|pif|com|gadget|reg|inf|sys|drv|bin|run|deb|rpm|apk)$/i;
@@ -854,9 +886,6 @@ function generateToken(): string {
 }
 
 function resolveAuth(req: Request): { userId: string; companyId: string } | null {
-  if ((req.session as any).userId) {
-    return { userId: (req.session as any).userId, companyId: (req.session as any).companyId };
-  }
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
@@ -865,6 +894,13 @@ function resolveAuth(req: Request): { userId: string; companyId: string } | null
       return { userId: session.userId, companyId: session.companyId };
     }
     if (session) tokenSessions.delete(token);
+    // An explicit bearer credential is authoritative. Never silently fall
+    // back to a cookie session when that credential is invalid or belongs to
+    // a different user.
+    return null;
+  }
+  if ((req.session as any).userId) {
+    return { userId: (req.session as any).userId, companyId: (req.session as any).companyId };
   }
   return null;
 }
@@ -916,9 +952,11 @@ function isOpenAiQuotaError(error: unknown): boolean {
   );
 }
 
-function createOpenAiIntegrationClient(): OpenAI {
+function createOpenAiIntegrationClient(): OpenAI | null {
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY?.trim();
+  if (!apiKey) return null;
   return new OpenAI({
-    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+    apiKey,
     baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
   });
 }
@@ -1006,17 +1044,42 @@ async function auditTokenAuthFailure(req: Request, input: {
 }
 
 async function requireAuth(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (bearerToken !== null) {
+    const sessionData = req.session as any;
+    const hadUserId = Object.prototype.hasOwnProperty.call(sessionData, "userId");
+    const hadCompanyId = Object.prototype.hasOwnProperty.call(sessionData, "companyId");
+    const cookieUserId = sessionData.userId;
+    const cookieCompanyId = sessionData.companyId;
+    let restored = false;
+    const restoreCookieIdentity = () => {
+      if (restored) return;
+      restored = true;
+      if (hadUserId) sessionData.userId = cookieUserId;
+      else delete sessionData.userId;
+      if (hadCompanyId) sessionData.companyId = cookieCompanyId;
+      else delete sessionData.companyId;
+    };
+    const sessionAwareEnd = res.end;
+    res.end = function (this: Response, ...args: any[]) {
+      restoreCookieIdentity();
+      // Bearer authentication is request-scoped. Prevent express-session from
+      // saving the temporary bearer identity or issuing/taking over a cookie.
+      (req as any).sessionID = null;
+      return (sessionAwareEnd as any).apply(this, args);
+    } as typeof res.end;
+    res.once("close", restoreCookieIdentity);
+  }
   const auth = resolveAuth(req);
   if (!auth) {
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
+    if (bearerToken !== null) {
       await auditTokenAuthFailure(req, { reason: "invalid_or_expired_bearer" });
     }
     return res.status(401).json({ error: "Not authenticated" });
   }
   (req as any)._auth = auth;
-  (req.session as any).userId = auth.userId;
-  (req.session as any).companyId = auth.companyId;
+  (req as any)._authMode = bearerToken !== null ? "bearer" : "cookie";
 
   try {
     const IDLE_TIMEOUT = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || "") || 4 * 60 * 60 * 1000;
@@ -1026,19 +1089,17 @@ async function requireAuth(req: Request, res: Response, next: Function) {
     const isExempt = sessionLifecycleExempt.some(p => req.path.startsWith(p));
 
     // Check if this is a bearer token request: enforce revocation and lifecycle via server-side session record
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const tokenSession = tokenSessions.get(token);
+    if (bearerToken !== null) {
+      const tokenSession = tokenSessions.get(bearerToken);
       if (tokenSession?.sessionId) {
         const extSession = await storage.getUserSession(tokenSession.sessionId).catch(() => null);
         if (extSession && extSession.revokedAt) {
-          tokenSessions.delete(token);
+          tokenSessions.delete(bearerToken);
           await auditTokenAuthFailure(req, { reason: "session_revoked", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
           return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
         }
         if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
-          tokenSessions.delete(token);
+          tokenSessions.delete(bearerToken);
           await auditTokenAuthFailure(req, { reason: "session_expired", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
           return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
         }
@@ -1047,12 +1108,12 @@ async function requireAuth(req: Request, res: Response, next: Function) {
           const idleMs = timestampAgeMs(extSession.lastSeenAt);
           const ageMs = timestampAgeMs(extSession.createdAt);
           if (idleMs !== null && idleMs > IDLE_TIMEOUT) {
-            tokenSessions.delete(token);
+            tokenSessions.delete(bearerToken);
             await auditTokenAuthFailure(req, { reason: "session_idle_timeout", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
             return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
           }
           if (ageMs !== null && ageMs > ABSOLUTE_LIFETIME) {
-            tokenSessions.delete(token);
+            tokenSessions.delete(bearerToken);
             await auditTokenAuthFailure(req, { reason: "session_absolute_timeout", userId: tokenSession.userId, companyId: tokenSession.companyId, sessionId: tokenSession.sessionId });
             return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
           }
@@ -1060,47 +1121,55 @@ async function requireAuth(req: Request, res: Response, next: Function) {
           storage.updateUserSessionLastSeen(tokenSession.sessionId).catch(() => {});
         }
       }
-    }
-
-    // Session lifecycle enforcement for cookie-based sessions
-    const sessionData = req.session as any;
-    if (sessionData.userId && sessionData.lastActivity !== undefined) {
-      const now = Date.now();
-      const idleMs = now - (sessionData.lastActivity || 0);
-      const ageMs = now - (sessionData.createdAt || 0);
-      if (!isExempt) {
-        if (idleMs > IDLE_TIMEOUT) {
-          req.session.destroy(() => {});
-          return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
+    } else {
+      // Cookie lifecycle is intentionally separate from bearer lifecycle. A
+      // valid explicit bearer credential must not be rejected, revoked, or
+      // aged according to an unrelated cookie that arrived on the request.
+      const sessionData = req.session as any;
+      if (sessionData.userId && sessionData.lastActivity !== undefined) {
+        const now = Date.now();
+        const idleMs = now - (sessionData.lastActivity || 0);
+        const ageMs = now - (sessionData.createdAt || 0);
+        if (!isExempt) {
+          if (idleMs > IDLE_TIMEOUT) {
+            req.session.destroy(() => {});
+            return res.status(401).json({ error: "Session expired due to inactivity. Please log in again.", code: "SESSION_IDLE_TIMEOUT" });
+          }
+          if (ageMs > ABSOLUTE_LIFETIME) {
+            req.session.destroy(() => {});
+            return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
+          }
         }
-        if (ageMs > ABSOLUTE_LIFETIME) {
+        // Update idle timer
+        sessionData.lastActivity = now;
+      }
+
+      // Check if cookie session has been server-side revoked.
+      const expressSessionId = req.session?.id;
+      if (expressSessionId) {
+        const extSession = await storage.getUserSession(expressSessionId).catch(() => null);
+        if (extSession && extSession.revokedAt) {
           req.session.destroy(() => {});
+          await auditTokenAuthFailure(req, { reason: "session_revoked", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
+          return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
+        }
+        if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
+          req.session.destroy(() => {});
+          await auditTokenAuthFailure(req, { reason: "session_expired", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
           return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
         }
+        // Update last seen asynchronously
+        if (extSession) {
+          storage.updateUserSessionLastSeen(expressSessionId).catch(() => {});
+        }
       }
-      // Update idle timer
-      sessionData.lastActivity = now;
     }
 
-    // Check if cookie session has been server-side revoked
-    const expressSessionId = req.session?.id;
-    if (expressSessionId) {
-      const extSession = await storage.getUserSession(expressSessionId).catch(() => null);
-      if (extSession && extSession.revokedAt) {
-        req.session.destroy(() => {});
-        await auditTokenAuthFailure(req, { reason: "session_revoked", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
-        return res.status(401).json({ error: "This session has been revoked. Please log in again.", code: "SESSION_REVOKED" });
-      }
-      if (extSession && await isUserSessionExpiredBySessionId(extSession.sessionId, extSession.expiresAt)) {
-        req.session.destroy(() => {});
-        await auditTokenAuthFailure(req, { reason: "session_expired", userId: auth.userId, companyId: auth.companyId, sessionId: expressSessionId });
-        return res.status(401).json({ error: "Session has expired. Please log in again.", code: "SESSION_ABSOLUTE_TIMEOUT" });
-      }
-      // Update last seen asynchronously
-      if (extSession) {
-        storage.updateUserSessionLastSeen(expressSessionId).catch(() => {});
-      }
-    }
+    // Existing handlers read identity from req.session. Populate the
+    // request-scoped view only after the selected credential has passed its
+    // own lifecycle checks.
+    (req.session as any).userId = auth.userId;
+    (req.session as any).companyId = auth.companyId;
 
     const user = await storage.getUser(auth.userId);
     if (user && !isPlatformSuperAdmin(user) && auth.companyId) {
@@ -1129,15 +1198,21 @@ async function requireAuth(req: Request, res: Response, next: Function) {
   return next();
 }
 
-async function requireStepUp(req: Request, res: Response, next: Function) {
-  // Resolve sessionId: prefer cookie session, fall back to bearer-token-linked sessionId
-  let sessionId = req.session?.id;
-  const authHeader = req.headers.authorization;
-  if (!sessionId && authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.slice(7);
-    const tokenSession = tokenSessions.get(token);
-    if (tokenSession?.sessionId) sessionId = tokenSession.sessionId;
+function getSelectedAuthSessionId(req: Request): string | undefined {
+  const authMode = (req as any)._authMode;
+  if (authMode === "bearer") {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) return undefined;
+    return tokenSessions.get(authHeader.slice(7))?.sessionId;
   }
+  if (authMode === "cookie") return req.session?.id;
+  return undefined;
+}
+
+async function requireStepUp(req: Request, res: Response, next: Function) {
+  // Step-up state must come from the same credential requireAuth selected.
+  // Never let an unrelated stepped-up cookie elevate an explicit bearer.
+  const sessionId = getSelectedAuthSessionId(req);
 
   const STEP_UP_VALIDITY = parseInt(process.env.STEP_UP_VALIDITY_MS || "") || 15 * 60 * 1000;
   const auth = (req as any)._auth;
@@ -1215,6 +1290,134 @@ function requireProvisioningPermission(action: ProvisioningAction) {
     }
     return next();
   };
+}
+
+function requireFrameworkResponseContribution(req: Request, res: Response, next: Function) {
+  return (async () => {
+    const userId = (req.session as any).userId;
+    const user = await storage.getUser(userId);
+    const role = user?.role === "editor" ? "contributor" : user?.role;
+    if (!user || (!isPlatformSuperAdmin(user) && role !== "admin" && role !== "contributor")) {
+      return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
+    }
+    return next();
+  })().catch((error) => sendServerError(res, error));
+}
+
+function requireFrameworkResponseReview(req: Request, res: Response, next: Function) {
+  return (async () => {
+    const userId = (req.session as any).userId;
+    const user = await storage.getUser(userId);
+    if (!user || (!isPlatformSuperAdmin(user) && user.role !== "admin" && user.role !== "approver")) {
+      return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
+    }
+    return next();
+  })().catch((error) => sendServerError(res, error));
+}
+
+function requireEvidenceUpdatePermission(req: Request, res: Response, next: Function) {
+  return (async () => {
+    const userId = (req.session as any).userId;
+    const companyId = (req as any)._auth?.companyId ?? (req.session as any).companyId;
+    const user = await storage.getUser(userId);
+    if (!user || !companyId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    if (isPlatformSuperAdmin(user) || hasProvisioningPermission(user.role, "upload_evidence")) {
+      return next();
+    }
+    if (user.role !== "approver") {
+      return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
+    }
+
+    const evidence = (await storage.getEvidenceFiles(companyId)).find((file) => file.id === req.params.id);
+    if (!evidence) return res.status(404).json({ error: "Evidence not found" });
+    const linkedModule = (evidence.linkedModule ?? "").replace(/[-_]/g, "").toLowerCase();
+    const bodyKeys = Object.keys(req.body ?? {});
+    const evidenceStatus = req.body?.evidenceStatus;
+    if (
+      linkedModule !== "frameworkrequirement" ||
+      bodyKeys.length !== 1 ||
+      bodyKeys[0] !== "evidenceStatus" ||
+      !["reviewed", "approved", "rejected"].includes(evidenceStatus)
+    ) {
+      return res.status(403).json({ error: "Approvers may only review framework requirement evidence", code: "PERMISSION_DENIED" });
+    }
+    return next();
+  })().catch((error) => sendServerError(res, error));
+}
+
+const frameworkResponseUpsertSchema = z.object({
+  period: z.string().trim().min(1).max(100),
+  siteId: z.string().trim().min(1).max(100).nullable().optional(),
+  responseText: z.string().trim().max(20_000).nullable().optional(),
+  linkedEntityType: z.enum(["policy", "target", "risk"]).nullable().optional(),
+  linkedEntityId: z.string().trim().min(1).max(100).nullable().optional(),
+  workflowStatus: z.enum(["draft", "submitted"]).default("draft"),
+});
+
+const frameworkResponseReviewSchema = z.object({
+  workflowStatus: z.enum(["approved", "rejected"]),
+  reviewComment: z.string().trim().max(2_000).nullable().optional(),
+});
+
+async function validateFrameworkResponseSource(
+  companyId: string,
+  requirementType: string,
+  input: {
+    responseText?: string | null;
+    linkedEntityType?: "policy" | "target" | "risk" | null;
+    linkedEntityId?: string | null;
+  },
+): Promise<
+  | { valid: true; responseText: string | null; linkedEntityType: "policy" | "target" | "risk" | null; linkedEntityId: string | null }
+  | { valid: false; status: number; error: string }
+> {
+  const responseText = input.responseText?.trim() || null;
+  const linkedEntityType = input.linkedEntityType ?? null;
+  const linkedEntityId = input.linkedEntityId?.trim() || null;
+
+  if (requirementType === "narrative") {
+    if (!responseText) return { valid: false, status: 400, error: "A narrative response is required" };
+    if (linkedEntityType || linkedEntityId) {
+      return { valid: false, status: 400, error: "Narrative responses cannot link a policy, target, or risk" };
+    }
+    return { valid: true, responseText, linkedEntityType: null, linkedEntityId: null };
+  }
+
+  if (requirementType !== "policy" && requirementType !== "target" && requirementType !== "risk") {
+    return { valid: false, status: 422, error: "This requirement is completed through metric data or direct evidence, not a response record" };
+  }
+  if (linkedEntityType !== requirementType || !linkedEntityId) {
+    return { valid: false, status: 400, error: `A company ${requirementType} must be linked to this requirement` };
+  }
+
+  if (linkedEntityType === "policy") {
+    const policy = await storage.getPolicyRecord(linkedEntityId, companyId);
+    if (!policy) return { valid: false, status: 404, error: "Linked policy not found" };
+    if (!frameworkResponseSourceIsEligible({ linkedEntityType, status: policy.status })) {
+      return { valid: false, status: 422, error: "Linked policy must be active" };
+    }
+  } else if (linkedEntityType === "target") {
+    const target = await storage.getEsgTarget(linkedEntityId, companyId);
+    if (!target) return { valid: false, status: 404, error: "Linked target not found" };
+    if (!frameworkResponseSourceIsEligible({
+      linkedEntityType,
+      status: target.status,
+      targetValue: target.targetValue,
+      targetYear: target.targetYear,
+    })) {
+      return { valid: false, status: 422, error: "Linked target must have a target value and year and must not be cancelled" };
+    }
+  } else {
+    const risk = await storage.getEsgRisk(linkedEntityId, companyId);
+    if (!risk) return { valid: false, status: 404, error: "Linked risk not found" };
+    if (!frameworkResponseSourceIsEligible({ linkedEntityType, status: risk.status, riskScore: risk.riskScore })) {
+      return { valid: false, status: 422, error: "Linked risk must have a completed risk score" };
+    }
+  }
+
+  return { valid: true, responseText, linkedEntityType, linkedEntityId };
 }
 
 const ROADMAP_STATUSES = ["planned", "in_progress", "blocked", "completed"] as const;
@@ -1440,10 +1643,10 @@ function buildCompanyMetricFromDefinition(companyId: string, def: any) {
   };
 }
 
-async function resolveCompanyMetricDataType(companyId: string, metric: { name?: string | null }): Promise<string> {
+async function resolveCompanyMetricDataType(companyId: string, metric: { name?: string | null; unit?: string | null; direction?: string | null }): Promise<string> {
   const defs = await storage.getMetricDefinitions({ isActive: true });
   const def = defs.find((item: any) => normalizeMetricName(item.name) === normalizeMetricName(metric.name));
-  return def?.dataType ?? "numeric";
+  return resolveMetricDataType(metric, def?.dataType);
 }
 
 function formatMetricAuditValue(value: any): string | null {
@@ -1698,7 +1901,7 @@ async function seedDatabase(companyId: string, userId: string) {
     hotelNights: "40",
     country: "UK",
   };
-  const factors = await storage.getEmissionFactors("UK");
+  const factors = await getConfiguredEmissionFactors(companyId, "UK");
   if (factors.length > 0) {
     const results = calculateEmissions(carbonInputs, factors);
     await storage.createCarbonCalculation({
@@ -2705,7 +2908,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/company/settings", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const settings = await storage.upsertCompanySettings(companyId, req.body);
+      const update = { ...req.body };
+      if (Object.prototype.hasOwnProperty.call(update, "emissionFactorSet")) {
+        if (typeof update.emissionFactorSet !== "string" || !/^UK_(?:DEFRA|GOVERNMENT)_\d{4}$/.test(update.emissionFactorSet)) {
+          return res.status(400).json({ error: "Select a published UK Government emission factor set." });
+        }
+        const requestedYear = emissionFactorYearFromSet(update.emissionFactorSet);
+        const available = await storage.getEmissionFactors("UK", requestedYear);
+        if (available.length === 0) {
+          return res.status(400).json({ error: `Emission factors for ${requestedYear} are not available.` });
+        }
+        update.emissionFactorSet = `UK_GOVERNMENT_${requestedYear}`;
+      }
+      const settings = await storage.upsertCompanySettings(companyId, update);
       res.json(settings);
     } catch (e: any) {
       sendServerError(res, e);
@@ -3523,7 +3738,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/metrics/:id/target", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.put("/api/metrics/:id/target", requireAuth, requireProvisioningPermission("manage_targets"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const existing = await storage.getMetric(req.params.id);
@@ -3697,7 +3912,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .filter(isActiveEditableDataEntryMetric)
         .map((metric: any) => ({
           ...metric,
-          dataType: definitionDataTypeByMetricName.get(normalizeMetricName(metric.name)) ?? "numeric",
+          dataType: resolveMetricDataType(metric, definitionDataTypeByMetricName.get(normalizeMetricName(metric.name))),
         })),
     });
   });
@@ -4064,7 +4279,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (periodVal) existingValues[m.name] = periodVal.value !== null ? Number(periodVal.value) : null;
       }
 
-      const dbFactors = await storage.getEmissionFactors();
+      const dbFactors = await getConfiguredEmissionFactors(companyId, "UK");
       const efMap = buildEmissionFactorMap(dbFactors);
       const calculated = runCalculationsForPeriod(rawInputs, efMap, existingValues);
       const updated: any[] = [];
@@ -4098,6 +4313,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             status,
             percentChange: pctChange?.toString() || null,
             siteId,
+            sourceType: "calculated",
           });
           updated.push({ metric: metricName, value: calcValue, status, updated: true });
         } else {
@@ -4111,6 +4327,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             percentChange: pctChange?.toString() || null,
             submittedBy: userId,
             notes: "Auto-calculated",
+            sourceType: "calculated",
             locked: false,
             siteId,
           });
@@ -4425,11 +4642,213 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // GET /api/framework-requirement-responses — company-scoped disclosure responses
+  app.get("/api/framework-requirement-responses", requireAuth, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId ?? (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const querySchema = z.object({
+        frameworkRequirementId: z.string().trim().min(1).max(100).optional(),
+        period: z.string().trim().min(1).max(100).optional(),
+        siteId: z.string().trim().min(1).max(100).optional(),
+      });
+      const parsed = querySchema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid response filters", details: parsed.error.errors });
+
+      const normalizedSiteId = parsed.data.siteId === "__all__"
+        ? undefined
+        : parsed.data.siteId === "__org__" || parsed.data.siteId === "null"
+          ? null
+          : parsed.data.siteId;
+      if (normalizedSiteId) {
+        const ownership = await validateSiteOwnership(normalizedSiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      const responses = await storage.getFrameworkRequirementResponses(companyId, {
+        frameworkRequirementId: parsed.data.frameworkRequirementId,
+        period: parsed.data.period,
+        siteId: normalizedSiteId,
+      });
+      res.json({
+        responses,
+        summary: {
+          total: responses.length,
+          draft: responses.filter((response) => response.workflowStatus === "draft").length,
+          submitted: responses.filter((response) => response.workflowStatus === "submitted").length,
+          approved: responses.filter((response) => response.workflowStatus === "approved").length,
+          rejected: responses.filter((response) => response.workflowStatus === "rejected").length,
+        },
+      });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  // PUT /api/framework-requirements/:requirementId/response — contributor/admin draft or submit
+  app.put(
+    "/api/framework-requirements/:requirementId/response",
+    requireAuth,
+    requireFrameworkResponseContribution,
+    async (req, res) => {
+      try {
+        const companyId = (req as any)._auth?.companyId ?? (req.session as any).companyId;
+        const userId = (req as any)._auth?.userId ?? (req.session as any).userId;
+        if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+
+        const parsed = frameworkResponseUpsertSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Invalid requirement response", details: parsed.error.errors });
+
+        const requirement = await storage.getFrameworkRequirement(String(req.params.requirementId));
+        if (!requirement) return res.status(404).json({ error: "Framework requirement not found" });
+        const selections = await storage.getBusinessFrameworkSelections(companyId);
+        if (!selections.some((selection) => selection.frameworkId === requirement.frameworkId && selection.isEnabled)) {
+          return res.status(409).json({ error: "Enable this framework before recording a requirement response" });
+        }
+
+        const rawSiteId = parsed.data.siteId;
+        const siteId = rawSiteId === "__org__" || rawSiteId === "null" || rawSiteId === undefined ? null : rawSiteId;
+        if (siteId) {
+          const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
+          if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+        }
+
+        const reportingPeriods = await storage.getReportingPeriods(companyId);
+        const matchedPeriod = reportingPeriods.find((period) => period.id === parsed.data.period || period.name === parsed.data.period);
+        const period = matchedPeriod?.name ?? parsed.data.period;
+        const sourceValidation = await validateFrameworkResponseSource(companyId, requirement.requirementType, parsed.data);
+        if (!sourceValidation.valid) return res.status(sourceValidation.status).json({ error: sourceValidation.error });
+
+        const before = (await storage.getFrameworkRequirementResponses(companyId, {
+          frameworkRequirementId: requirement.id,
+          period,
+          siteId,
+        }))[0] ?? null;
+        const response = await storage.upsertFrameworkRequirementResponse({
+          companyId,
+          frameworkRequirementId: requirement.id,
+          period,
+          siteId,
+          responseText: sourceValidation.responseText,
+          linkedEntityType: sourceValidation.linkedEntityType,
+          linkedEntityId: sourceValidation.linkedEntityId,
+          workflowStatus: parsed.data.workflowStatus,
+          actorUserId: userId,
+        });
+
+        auditLog({
+          companyId,
+          userId,
+          actorType: "user",
+          action: before ? "framework_requirement_response_updated" : "framework_requirement_response_created",
+          entityType: "framework_requirement_response",
+          entityId: response.id,
+          details: {
+            before: before ? { workflowStatus: before.workflowStatus, linkedEntityType: before.linkedEntityType, linkedEntityId: before.linkedEntityId } : null,
+            after: { requirementId: requirement.id, period, siteId, workflowStatus: response.workflowStatus, linkedEntityType: response.linkedEntityType, linkedEntityId: response.linkedEntityId },
+          },
+          req,
+        } as any);
+        res.json(response);
+      } catch (e: any) {
+        sendServerError(res, e);
+      }
+    },
+  );
+
+  // POST /api/framework-requirement-responses/:id/review — admin/approver decision
+  app.post(
+    "/api/framework-requirement-responses/:id/review",
+    requireAuth,
+    requireFrameworkResponseReview,
+    async (req, res) => {
+      try {
+        const companyId = (req as any)._auth?.companyId ?? (req.session as any).companyId;
+        const userId = (req as any)._auth?.userId ?? (req.session as any).userId;
+        if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+
+        const parsed = frameworkResponseReviewSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Invalid review decision", details: parsed.error.errors });
+        const existing = await storage.getFrameworkRequirementResponse(String(req.params.id), companyId);
+        if (!existing) return res.status(404).json({ error: "Framework requirement response not found" });
+        if (existing.workflowStatus !== "submitted") {
+          return res.status(409).json({ error: "Only submitted responses can be approved or rejected" });
+        }
+
+        if (parsed.data.workflowStatus === "approved") {
+          const requirement = await storage.getFrameworkRequirement(existing.frameworkRequirementId);
+          if (!requirement) return res.status(404).json({ error: "Framework requirement not found" });
+          const sourceValidation = await validateFrameworkResponseSource(companyId, requirement.requirementType, existing);
+          if (!sourceValidation.valid) return res.status(sourceValidation.status).json({ error: sourceValidation.error });
+        }
+
+        const response = await storage.reviewFrameworkRequirementResponse(existing.id, companyId, {
+          workflowStatus: parsed.data.workflowStatus,
+          reviewComment: parsed.data.reviewComment,
+          reviewerUserId: userId,
+        });
+        if (!response) return res.status(409).json({ error: "Response is no longer awaiting review" });
+
+        auditLog({
+          companyId,
+          userId,
+          actorType: "user",
+          action: `framework_requirement_response_${parsed.data.workflowStatus}`,
+          entityType: "framework_requirement_response",
+          entityId: response.id,
+          details: {
+            before: { workflowStatus: existing.workflowStatus },
+            after: { workflowStatus: response.workflowStatus, reviewComment: response.reviewComment ?? null },
+          },
+          req,
+        } as any);
+        res.json(response);
+      } catch (e: any) {
+        sendServerError(res, e);
+      }
+    },
+  );
+
   // GET /api/framework-readiness — readiness view for selected frameworks
   app.get("/api/framework-readiness", requireAuth, async (req, res) => {
     try {
-      const companyId = (req.session as any).companyId;
-      const readiness = await storage.getFrameworkReadiness(companyId);
+      const companyId = (req as any)._auth?.companyId ?? (req.session as any).companyId;
+      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+
+      const periodParam = req.query.period;
+      if (periodParam !== undefined && (typeof periodParam !== "string" || concreteFrameworkReportingPeriod(periodParam) === null)) {
+        return res.status(400).json({
+          error: "Framework readiness requires one concrete reporting period.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
+      let period = typeof periodParam === "string" ? concreteFrameworkReportingPeriod(periodParam) : null;
+
+      const siteIdParam = req.query.siteId;
+      if (siteIdParam !== undefined && typeof siteIdParam !== "string") {
+        return res.status(400).json({ error: "siteId must be a string" });
+      }
+      if (typeof siteIdParam === "string" && (!siteIdParam.trim() || siteIdParam.length > 100)) {
+        return res.status(400).json({ error: "siteId must be a non-empty string of at most 100 characters" });
+      }
+      const normalizedSiteId = typeof siteIdParam === "string" ? siteIdParam.trim() : undefined;
+      const siteId = normalizedSiteId === undefined || normalizedSiteId === "__all__"
+        ? undefined
+        : normalizedSiteId === "null" || normalizedSiteId === "__org__"
+          ? null
+          : normalizedSiteId;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      if (!period) {
+        const { resolveCompanyReportingContext } = await import("./reporting-context");
+        period = (await resolveCompanyReportingContext(companyId)).period.name;
+      }
+
+      const readiness = await storage.getFrameworkReadiness(companyId, { period, siteId });
       res.json(readiness);
     } catch (e: any) {
       sendServerError(res, e);
@@ -4489,7 +4908,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const { scoreFrameworkReadiness } = await import("./esg-scoring");
-      const result = await scoreFrameworkReadiness(companyId);
+      const period = req.query.period === undefined ? undefined : concreteFrameworkReportingPeriod(req.query.period);
+      if (req.query.period !== undefined && !period) {
+        return res.status(400).json({
+          error: "Framework readiness requires one concrete reporting period.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
+      const siteIdParam = req.query.siteId;
+      const siteId = siteIdParam === "null" || siteIdParam === "__org__" ? null
+        : siteIdParam === "__all__" || siteIdParam === undefined ? undefined
+        : typeof siteIdParam === "string" ? siteIdParam
+        : undefined;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+      const result = await scoreFrameworkReadiness(companyId, period ?? undefined, siteId);
       res.json(result);
     } catch (e: any) {
       sendServerError(res, e);
@@ -4502,6 +4937,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const { getEsgScoreWithConfidence } = await import("./esg-scoring");
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const frameworkPeriod = req.query.frameworkPeriod === undefined
+        ? undefined
+        : concreteFrameworkReportingPeriod(req.query.frameworkPeriod);
+      if (req.query.frameworkPeriod !== undefined && !frameworkPeriod) {
+        return res.status(400).json({
+          error: "frameworkPeriod must identify one concrete reporting period.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
       const siteIdParam = req.query.siteId;
       const siteId = siteIdParam === "null" ? null
         : typeof siteIdParam === "string" ? siteIdParam
@@ -4510,12 +4954,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const ownership = await validateSiteOwnership(siteId, companyId);
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
-      const { completeness, performance, managementMaturity: maturity, frameworkReadiness, scoreConfidenceLabel } = await getEsgScoreWithConfidence(companyId, period, siteId);
+      const { completeness, performance, managementMaturity: maturity, frameworkReadiness, scoreConfidenceLabel } = await getEsgScoreWithConfidence(
+        companyId,
+        period,
+        siteId,
+        frameworkPeriod ?? undefined,
+      );
       res.json({ completeness, performance, maturity, frameworkReadiness, scoreConfidenceLabel });
     } catch (e: any) {
       console.error("[api/esg-scores/all] failed", {
         companyId: (req.session as any).companyId,
         period: req.query.period,
+        frameworkPeriod: req.query.frameworkPeriod,
         siteId: req.query.siteId,
         error: e?.message,
         stack: e?.stack,
@@ -4600,40 +5050,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const {
+        filterMetricsDueForPeriod,
+        isSiteWithinReportingBoundary,
+        resolveCompanyReportingContext,
+      } = await import("./reporting-context");
+      const reportingContext = await resolveCompanyReportingContext(companyId, {
+        requestedPeriod: typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : undefined,
+      });
       const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = allMetrics.filter(m => m.enabled);
+      const enabledMetrics = filterMetricsDueForPeriod(
+        allMetrics.filter(m => m.enabled),
+        reportingContext.period.periodType,
+      );
       const settings = await storage.getCompanySettings(companyId);
       const materialTopics = await storage.getMaterialTopics(companyId);
 
-      // Resolve period: if reportingPeriodId passed, look up its name (the period label)
-      let forcedPeriod: string | null = null;
-      let selectedReportingPeriod: any | null = null;
-      if (req.query.reportingPeriodId && typeof req.query.reportingPeriodId === "string") {
-        const periods = await storage.getReportingPeriods(companyId);
-        const rp = periods.find(p => p.id === req.query.reportingPeriodId);
-        if (rp) {
-          selectedReportingPeriod = rp;
-          forcedPeriod = rp.name;
-        }
-      }
-
-      // Fetch active sites for archive exclusion (used in period scan and value aggregation)
-      const _dashboardSites = await storage.getSites(companyId);
-      const _activeSiteIdsForPeriod = new Set(_dashboardSites.filter(s => s.status === "active").map(s => s.id));
-
-      let latestPeriod = forcedPeriod || "";
-      if (!forcedPeriod) {
-        for (const metric of enabledMetrics) {
-          const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
-          for (const v of vals) {
-            // Only consider active-site or org-level values when determining latest period
-            if ((v.siteId === null || _activeSiteIdsForPeriod.has(v.siteId)) && v.period > latestPeriod) {
-              latestPeriod = v.period;
-            }
-          }
-        }
-      }
-      if (!latestPeriod) latestPeriod = new Date().toISOString().slice(0, 7);
+      const selectedReportingPeriod: any | null = reportingContext.period.isFallback
+        ? null
+        : reportingContext.period;
+      const latestPeriod = reportingContext.period.name;
+      const _activeSiteIdsForPeriod = new Set(reportingContext.siteBoundary.activeSiteIds);
       const statusCounts = { green: 0, amber: 0, red: 0, missing: 0 };
       const categorySummary: Record<string, { green: number; amber: number; red: number; missing: number; total: number }> = {
         environmental: { green: 0, amber: 0, red: 0, missing: 0, total: 0 },
@@ -4672,7 +5109,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
         const periodValues = values.filter(v =>
           v.period === latestPeriod &&
-          (v.siteId === null || activeSiteIds.has(v.siteId))
+          isSiteWithinReportingBoundary(v.siteId, reportingContext.siteBoundary)
         );
         // Aggregate ALL period values (active-site + unassigned) for org-level totals
         let latestVal: typeof periodValues[0] | null = null;
@@ -4780,7 +5217,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const evidenceFiles = (await storage.getEvidenceFiles(companyId, undefined, latestPeriod))
+        .filter((file: any) => isSiteWithinReportingBoundary(file.siteId, reportingContext.siteBoundary));
       const uniqueMetricsWithEvidence = new Set(
         evidenceFiles
           .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
@@ -4804,7 +5242,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         { scope: "all" },
       );
       const trendValues = trendValueRows
-        .filter((row: any) => row.siteId === null || activeSiteIds.has(row.siteId))
+        .filter((row: any) => isSiteWithinReportingBoundary(row.siteId, reportingContext.siteBoundary))
         .map((row: any): TrendValueInput => ({
           metricId: row.metricId,
           companyId: row.companyId,
@@ -4856,6 +5294,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         manualMetrics,
         trendSummary,
         siteBreakdown,
+        reportingContext,
       });
 
       generateReminders(companyId).catch(() => {});
@@ -4870,10 +5309,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const { evaluateEsgStatus } = await import("./esg-status");
+      const { resolveCompanyReportingContext } = await import("./reporting-context");
       const company = await storage.getCompany(companyId);
       const reportRuns = await storage.getReportRuns(companyId);
 
-      const status = await evaluateEsgStatus(companyId);
+      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const status = await evaluateEsgStatus(companyId, reportingContext);
 
       const hasGeneratedReport = reportRuns.length > 0;
       const isFirstReport = !hasGeneratedReport;
@@ -4941,6 +5382,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isFirstReport,
         plainEnglishSummary: summaryByState[dashboardState] || "",
         esgStatus: status,
+        reportingContext,
       });
     } catch (e: any) {
       sendServerError(res, e);
@@ -4951,8 +5393,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const { evaluateEsgStatus } = await import("./esg-status");
-      const status = await evaluateEsgStatus(companyId);
-      res.json(status);
+      const { resolveCompanyReportingContext } = await import("./reporting-context");
+      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const status = await evaluateEsgStatus(companyId, reportingContext);
+      res.json({ ...status, reportingContext });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -5144,6 +5588,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ── Report eligibility helper (shared by preflight + generate) ──────────────
+  function periodBelongsToReportScope(
+    valuePeriod: unknown,
+    dateFrom?: string,
+    dateTo?: string,
+    exactPeriod?: string,
+  ): boolean {
+    if (exactPeriod && valuePeriod === exactPeriod) return true;
+    if (periodToMonthIndex(valuePeriod) === null) return false;
+    return isPeriodWithinDateRange(valuePeriod, dateFrom, dateTo);
+  }
+
   async function checkReportEligibility(
     companyId: string,
     period: string | undefined,
@@ -5184,7 +5639,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ? (await Promise.all(enabledMetrics.map(async (metric: any) => {
           const values = await storage.getMetricValuesForMetric(companyId, metric.id, metricScope);
           return values.map((value: any) => ({ ...value, metricId: metric.id }));
-        }))).flat().filter((value: any) => isPeriodWithinDateRange(value.period, dateFrom, dateTo))
+        }))).flat().filter((value: any) => periodBelongsToReportScope(value.period, dateFrom, dateTo, resolvedPeriod))
       : (await storage.getMetricValuesByPeriod(companyId, resolvedPeriod))
         .filter((value: any) => enabledMetricIds.has(value.metricId));
     let values: typeof allPeriodValues;
@@ -5213,6 +5668,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   // Reports
+  function concreteFrameworkReportingPeriod(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    if (!normalized || normalized.toLowerCase() === "all" || normalized.length > 100) return null;
+    return normalized;
+  }
+
   async function recordReportExportAudit(req: Request, input: {
     reportType: string;
     format?: string;
@@ -5528,14 +5990,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   function reportLibraryTitleFromEntry(report: any) {
-    const templates: Record<string, string> = {
-      board: "Board Summary",
-      customer: "Customer Response Pack",
-      compliance: "Compliance Summary",
-      management: "Full ESG Report",
-    };
     return report.reportData?.reportTitle
-      || `${templates[report.reportTemplate] || "ESG Report"} — ${report.period || "All Periods"}`;
+      || `${REPORT_TEMPLATE_LABELS[report.reportTemplate as keyof typeof REPORT_TEMPLATE_LABELS] || "ESG Report"} — ${report.period || "All Periods"}`;
   }
 
   function reportLibraryStatusMatches(report: any, status: string) {
@@ -5669,6 +6125,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const { evaluateEsgStatus } = await import("./esg-status");
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
+      const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : undefined;
       const siteIdParam = req.query.siteId as string | undefined;
       const siteId = siteIdParam === "__all__" ? undefined : siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
       let selectedSiteName: string | null = null;
@@ -5683,13 +6141,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? "Organisation-wide records only"
           : selectedSiteName ? `Site: ${selectedSiteName}` : "Selected site";
 
-      const [esgStatus, policy, actions, allMetrics, evidenceFiles] = await Promise.all([
-        evaluateEsgStatus(companyId, period, siteId),
+      const [esgStatus, policy, actions, allMetrics, rawEvidenceFiles, activeReadinessSites] = await Promise.all([
+        evaluateEsgStatus(companyId, period, siteId, { dateFrom, dateTo }),
         storage.getPolicy(companyId).catch(() => null),
         storage.getActionPlans(companyId).catch(() => []),
         storage.getMetrics(companyId),
-        storage.getEvidenceFiles(companyId, siteId, period),
+        storage.getEvidenceFiles(companyId, siteId, dateFrom || dateTo ? undefined : period),
+        siteId === undefined ? storage.getSites(companyId, false) : Promise.resolve([]),
       ]);
+      const boundaryEvidenceFiles = siteId === undefined
+        ? rawEvidenceFiles.filter((file: any) =>
+            file.siteId === null || activeReadinessSites.some((site: any) => site.id === file.siteId),
+          )
+        : rawEvidenceFiles;
+      const evidenceFiles = dateFrom || dateTo
+        ? boundaryEvidenceFiles.filter((file: any) =>
+            periodBelongsToReportScope(file.linkedPeriod, dateFrom, dateTo, period),
+          )
+        : boundaryEvidenceFiles;
 
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
 
@@ -5755,12 +6224,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         scopeLabel,
         siteId: siteId ?? null,
         period: period ?? null,
+        dateFrom: dateFrom ?? null,
+        dateTo: dateTo ?? null,
         esgState: esgStatus.state,
         stateLabel: esgStatus.label,
         stateExplanation: esgStatus.explanation,
         completenessPercent: esgStatus.completenessPercentage,
         evidenceCoveragePercent,
         measuredCount: esgStatus.measuredCount,
+        derivedCount: esgStatus.derivedCount,
         estimateCount: esgStatus.estimateCount,
         missingCount: esgStatus.missingMetrics,
         totalMetrics: esgStatus.totalMetrics,
@@ -5821,11 +6293,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         includeSummary, includeCarbon, includeEvidence, includeMethodology, includeSignoff,
         siteId: bodySiteId,
       } = req.body;
-      const selectedReportPeriod = resolveReportPeriodSelection({ periodType, year, month, quarter, period, dateFrom, dateTo });
-      const reportPeriod = selectedReportPeriod?.period ?? period;
-      const reportPeriodLabel = selectedReportPeriod?.label ?? period;
-      const reportDateFrom = selectedReportPeriod?.dateFrom ?? (typeof dateFrom === "string" ? dateFrom : undefined);
-      const reportDateTo = selectedReportPeriod?.dateTo ?? (typeof dateTo === "string" ? dateTo : undefined);
+      const requestedReportPeriod = typeof period === "string" ? period.trim() : undefined;
+      let savedReportingContext: any | null = null;
+      const hasCalendarPeriodType = periodType === "monthly" || periodType === "quarterly" || periodType === "annual";
+      const hasCalendarPeriodValue = Boolean(requestedReportPeriod && /^\d{4}(?:-\d{2}|-Q[1-4])?$/.test(requestedReportPeriod));
+      if (requestedReportPeriod && (!hasCalendarPeriodType || !hasCalendarPeriodValue)) {
+        const { resolveCompanyReportingContext } = await import("./reporting-context");
+        const candidate = await resolveCompanyReportingContext(companyId, { requestedPeriod: requestedReportPeriod });
+        if (candidate.periodSource === "requested") {
+          savedReportingContext = candidate;
+        }
+      }
+
+      const selectedReportPeriod = savedReportingContext
+        ? null
+        : resolveReportPeriodSelection({ periodType, year, month, quarter, period, dateFrom, dateTo });
+      let reportPeriod = savedReportingContext?.period.name ?? selectedReportPeriod?.period ?? requestedReportPeriod;
+      let reportPeriodLabel = savedReportingContext?.period.name ?? selectedReportPeriod?.label ?? reportPeriod;
+      let reportDateFrom = savedReportingContext?.period.startDate
+        ?? selectedReportPeriod?.dateFrom
+        ?? (typeof dateFrom === "string" ? dateFrom : undefined);
+      let reportDateTo = savedReportingContext?.period.endDate
+        ?? selectedReportPeriod?.dateTo
+        ?? (typeof dateTo === "string" ? dateTo : undefined);
+
+      if (!reportPeriod && !reportDateFrom && !reportDateTo) {
+        const { resolveCompanyReportingContext } = await import("./reporting-context");
+        savedReportingContext = await resolveCompanyReportingContext(companyId);
+        reportPeriod = savedReportingContext.period.name;
+        reportPeriodLabel = savedReportingContext.period.name;
+        reportDateFrom = savedReportingContext.period.startDate ?? undefined;
+        reportDateTo = savedReportingContext.period.endDate ?? undefined;
+      }
+
+      if (req.body.includeComplianceStatus && (
+        concreteFrameworkReportingPeriod(reportPeriod) === null
+        || (!selectedReportPeriod && !savedReportingContext && Boolean(reportDateFrom || reportDateTo))
+      )) {
+        return res.status(400).json({
+          error: "Reports containing framework readiness require one concrete reporting period; all-period and arbitrary date-range modes are not supported.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
 
       if (bodySiteId) {
         // Reports can be generated for archived sites (historical reporting) — read-only ownership check (no write restriction)
@@ -5835,7 +6344,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // ── Eligibility pre-flight (shared helper — fails fast before heavy work) ──
       if (!selectedReportPeriod) {
-        const eligibility = await checkReportEligibility(companyId, reportPeriod, bodySiteId ?? null);
+        const eligibility = await checkReportEligibility(
+          companyId,
+          reportPeriod,
+          bodySiteId ?? null,
+          reportDateFrom,
+          reportDateTo,
+        );
         if (!eligibility.canGenerate) {
           return res.status(400).json({ error: eligibility.message, code: eligibility.code });
         }
@@ -5870,7 +6385,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? (await storage.getMetricValuesByPeriod(companyId, reportPeriod)).filter((value: any) => enabledMetricIds.has(value.metricId))
           : [];
       if (reportDateFrom || reportDateTo) {
-        allPeriodValues = allPeriodValues.filter((value: any) => isPeriodWithinDateRange(value.period, reportDateFrom, reportDateTo));
+        allPeriodValues = allPeriodValues.filter((value: any) =>
+          periodBelongsToReportScope(value.period, reportDateFrom, reportDateTo, reportPeriod),
+        );
       }
 
       // Apply aggregation scope rules:
@@ -5900,7 +6417,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (bodySiteId) {
         // Site-scoped: exact site, period-filtered
         allEvidence = await storage.getEvidenceFiles(companyId, bodySiteId, reportDateFrom && reportDateTo ? undefined : reportPeriod || undefined);
-        if (reportDateFrom || reportDateTo) allEvidence = allEvidence.filter((e: any) => isPeriodWithinDateRange(e.linkedPeriod, reportDateFrom, reportDateTo));
+        if (reportDateFrom || reportDateTo) allEvidence = allEvidence.filter((e: any) =>
+          periodBelongsToReportScope(e.linkedPeriod, reportDateFrom, reportDateTo, reportPeriod),
+        );
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === bodySiteId);
       } else {
@@ -5908,7 +6427,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const activeOnly = await storage.getSites(companyId, false);
         const activeIds = new Set(activeOnly.map((s: any) => s.id));
         let allEv = await storage.getEvidenceFiles(companyId, undefined, reportDateFrom && reportDateTo ? undefined : reportPeriod || undefined);
-        if (reportDateFrom || reportDateTo) allEv = allEv.filter((e: any) => isPeriodWithinDateRange(e.linkedPeriod, reportDateFrom, reportDateTo));
+        if (reportDateFrom || reportDateTo) allEv = allEv.filter((e: any) =>
+          periodBelongsToReportScope(e.linkedPeriod, reportDateFrom, reportDateTo, reportPeriod),
+        );
         allEvidence = allEv.filter((e: any) => e.siteId === null || activeIds.has(e.siteId));
         const tmpCarbon = await storage.getCarbonCalculations(companyId);
         allCarbonCalcs = tmpCarbon.filter((c: any) => c.siteId === null || activeIds.has(c.siteId));
@@ -5916,10 +6437,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const generatingUser = await storage.getUser(userId);
 
       const periodSchema = z.object({
-        period: z.string().regex(/^\d{4}(?:-\d{2}|-Q[1-4])?$/).optional(),
+        period: z.string().max(100).refine((value) =>
+          /^\d{4}(?:-\d{2}|-Q[1-4])?$/.test(value)
+          || savedReportingContext?.period.name === value,
+        ).optional(),
         periodType: z.enum(["monthly", "quarterly", "annual"]).optional(),
         reportType: z.enum(["pdf", "csv", "word"]).optional(),
-        reportTemplate: z.enum(["management", "customer", "annual"]).optional(),
+        reportTemplate: z.enum(REPORT_TEMPLATE_IDS).optional(),
       });
       const validation = periodSchema.safeParse({ period: reportPeriod, periodType, reportType, reportTemplate });
       if (!validation.success) {
@@ -5963,21 +6487,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           // Data source: if any is manual/estimated, reflect that
           const allEvidenced = rows.every((r: any) => r.dataSourceType === "evidenced");
           const anyEstimated = rows.some((r: any) => r.dataSourceType === "estimated");
+          const anyCalculated = metricDef?.metricType === "derived"
+            || metricDef?.metricType === "calculated"
+            || rows.some((r: any) => r.sourceType === "calculated" || r.dataSourceType === "calculated");
           aggregatedValues.push({
             ...rows[0],
             siteId: null,
             value: String(aggregatedValue),
             workflowStatus: minStatus.workflowStatus,
-            dataSourceType: allEvidenced ? "evidenced" : anyEstimated ? "estimated" : "manual",
+            dataSourceType: anyEstimated ? "estimated" : anyCalculated ? "calculated" : allEvidenced ? "evidenced" : "manual",
           });
         }
       }
 
       const valuesWithLabels = aggregatedValues.map((v: any) => {
         const hasEvidence = allEvidence.some((e: any) => e.linkedModule === "metric_value" && e.linkedEntityId === v.id);
-        const dataSourceLabel = hasEvidence ? "Evidenced" : (v.dataSourceType === "estimated" ? "Estimated" : "Manual");
+        const metric = enabledMetrics.find((item: any) => item.id === v.metricId);
+        const sourceClassification = classifyValueSource({ ...v, metricType: metric?.metricType });
+        const dataSourceLabel = sourceClassification === "derived"
+          ? "Derived"
+          : sourceClassification === "estimated"
+            ? "Estimated"
+            : hasEvidence
+              ? "Evidenced"
+              : "Manual";
         const workflowLabel = v.workflowStatus === "approved" ? "Approved" : v.workflowStatus === "submitted" ? "Submitted" : "Draft";
-        return { ...v, dataSourceLabel, workflowLabel };
+        return { ...v, dataSourceLabel, sourceClassification, workflowLabel };
       });
 
       // Evidence coverage computed from scoped data (same site/org-wide scope as metrics)
@@ -6036,7 +6571,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Carbon: use the same selected period boundary as metric values.
       const periodCarbonRows = reportDateFrom || reportDateTo
-        ? allCarbonCalcs.filter((c: any) => isPeriodWithinDateRange(c.reportingPeriod, reportDateFrom, reportDateTo))
+        ? allCarbonCalcs.filter((c: any) =>
+            periodBelongsToReportScope(c.reportingPeriod, reportDateFrom, reportDateTo, reportPeriod),
+          )
         : reportPeriod
           ? allCarbonCalcs.filter((c: any) => c.reportingPeriod === reportPeriod)
           : allCarbonCalcs;
@@ -6052,8 +6589,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const firstRow = periodCarbonRows[0]!;
         return {
           scope1, scope2, scope3, total,
+          unit: "kgCO2e",
           period: firstRow.reportingPeriod,
-          factorYear: firstRow.factorYear || 2024,
+          factorYear: firstRow.factorYear || CURRENT_UK_FACTOR_YEAR,
           employeeCount: totalEmployees || null,
           perEmployee: totalEmployees > 0 ? Math.round(total / totalEmployees * 100) / 100 : null,
           dataQuality: firstRow.dataQuality || {},
@@ -6069,11 +6607,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const draftCount = valuesWithLabels.filter((v: any) => v.workflowStatus === "draft").length;
       const evidencedCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Evidenced").length;
       const estimatedCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Estimated").length;
+      const derivedCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Derived").length;
       const manualCount = valuesWithLabels.filter((v: any) => v.dataSourceLabel === "Manual").length;
       const missingMetrics = enabledMetrics.filter((m: any) => !valuesWithLabels.find((v: any) => v.metricId === m.id));
 
       const dataQualityFlags = {
-        totalValues, approvedCount, draftCount, evidencedCount, estimatedCount, manualCount,
+        totalValues, approvedCount, draftCount, evidencedCount, estimatedCount, derivedCount, manualCount,
         missingCount: missingMetrics.length,
         missingMetrics: missingMetrics.map((m: any) => ({ name: m.name, category: m.category })),
         approvalRate: totalValues > 0 ? Math.round((approvedCount / totalValues) * 100) : 0,
@@ -6102,15 +6641,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         workflowStatus: policy?.status || "draft",
       } : null;
 
-      const emissionFactors = await db.select().from(emissionFactorsTable).orderBy(emissionFactorsTable.category);
+      const companySettings = await storage.getCompanySettings(companyId);
+      const requestedFactorYear = carbonSummary?.factorYear
+        || emissionFactorYearFromSet(companySettings?.emissionFactorSet);
+      const emissionFactors = await storage.getEmissionFactors("UK", requestedFactorYear);
+      const factorSource = emissionFactors[0]?.sourceLabel || "UK Government GHG Conversion Factors";
       const factorMethodology = {
-        factorYear: carbonSummary?.factorYear || emissionFactors[0]?.factorYear || 2024,
-        source: emissionFactors[0]?.sourceLabel || "UK DEFRA",
+        factorYear: carbonSummary?.factorYear || emissionFactors[0]?.factorYear || CURRENT_UK_FACTOR_YEAR,
+        source: factorSource,
         factorCount: emissionFactors.length,
         categories: [...new Set(emissionFactors.map((f: any) => f.category))],
       };
 
-      const companySettings = await storage.getCompanySettings(companyId);
       const branding = companySettings ? {
         name: companySettings.reportBrandingName || null,
         tagline: companySettings.reportBrandingTagline || null,
@@ -6163,23 +6705,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let complianceStatusData = null;
       if (req.body.includeComplianceStatus) {
-        const fws = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
-        const reqs = await db.execute(sql`SELECT * FROM compliance_requirements`);
-        const metricNamesWithData = new Set(valuesWithLabels.filter((v: any) => v.value != null).map((v: any) => {
-          const metric = enabledMetrics.find((m: any) => m.id === v.metricId);
-          return metric?.name;
-        }).filter(Boolean));
-        complianceStatusData = fws.rows.map((fw: any) => {
-          const fwReqs = reqs.rows.filter((r: any) => r.framework_id === fw.id);
-          let met = 0;
-          fwReqs.forEach((r: any) => {
-            const linked = r.linked_metric_ids || [];
-            if (linked.length > 0 && linked.some((name: string) => metricNamesWithData.has(name))) met++;
-          });
+        const frameworkCodes = reportTemplate === "vsme"
+          ? ["VSME"]
+          : reportTemplate === "ppn006"
+            ? ["PPN006"]
+            : undefined;
+        const readiness = await storage.getFrameworkReadiness(companyId, {
+          period: reportPeriod!,
+          siteId: bodySiteId || undefined,
+          frameworkCodes,
+        });
+        complianceStatusData = readiness.map((group: any) => {
+          const summary = group.summary || { covered: 0, partial: 0, missing: 0, total: 0 };
+          const readinessPercent = summary.total > 0
+            ? Math.round((summary.covered / summary.total) * 100)
+            : 0;
           return {
-            id: fw.id, name: fw.name, version: fw.version,
-            totalRequirements: fwReqs.length, metRequirements: met,
-            compliancePercent: fwReqs.length > 0 ? Math.round((met / fwReqs.length) * 100) : 0,
+            id: group.framework.id,
+            code: group.framework.code,
+            name: group.framework.name,
+            version: group.framework.version,
+            totalRequirements: summary.total,
+            readyRequirements: summary.covered,
+            partialRequirements: summary.partial,
+            missingRequirements: summary.missing,
+            readinessPercent,
+            scope: group.scope,
+            nextBestActions: group.nextBestActions,
           };
         });
       }
@@ -6198,27 +6750,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Determine report naming (T007): "Initial ESG Baseline Report" for first, "Draft ESG Summary" if high estimated coverage
       const existingReportRuns = await storage.getReportRuns(companyId);
       const isFirstReportEver = existingReportRuns.length === 0;
-      const reportEstimatedCount = valuesWithLabels.filter((v: any) => v.dataSourceType === "estimated").length;
-      const reportEstimatedPercent = valuesWithLabels.length > 0 ? Math.round((reportEstimatedCount / valuesWithLabels.length) * 100) : 0;
+      const reportEstimatedCount = valuesWithLabels.filter((v: any) => v.sourceClassification === "estimated").length;
+      const reportDerivedCount = valuesWithLabels.filter((v: any) => v.sourceClassification === "derived").length;
+      const reportMeasuredCount = valuesWithLabels.filter((v: any) => v.sourceClassification === "measured").length;
+      const reportEstimatedPercent = enabledMetrics.length > 0 ? Math.round((reportEstimatedCount / enabledMetrics.length) * 100) : 0;
+      const reportDerivedPercent = enabledMetrics.length > 0 ? Math.round((reportDerivedCount / enabledMetrics.length) * 100) : 0;
       const isDraftQuality = reportEstimatedPercent > 20 || (valuesWithLabels.length < Math.ceil(enabledMetrics.length * 0.6));
 
+      const selectedTemplateTitle = REPORT_TEMPLATE_LABELS[(reportTemplate || "management") as keyof typeof REPORT_TEMPLATE_LABELS] || "ESG Report";
+
       let reportTitle: string;
-      if (isFirstReportEver) {
+      if (isFirstReportEver && (!reportTemplate || reportTemplate === "management")) {
         reportTitle = "Initial ESG Baseline Report";
       } else if (isDraftQuality) {
-        reportTitle = "Draft ESG Summary";
+        reportTitle = `Draft ${selectedTemplateTitle}`;
       } else {
-        const templateName = reportTemplate === "customer" ? "Supply Chain" : reportTemplate === "annual" ? "Annual" : "Management";
-        reportTitle = `${templateName} ESG Report`;
+        reportTitle = selectedTemplateTitle;
       }
 
       const methodologyNote = isDraftQuality
-        ? `This report contains estimated data (${reportEstimatedPercent}% of metrics use sector-based estimates). Results should be treated as indicative until replaced with actual measured values.`
-        : "This report is based primarily on measured data and is suitable for stakeholder distribution.";
+        ? `This report has material data gaps or estimates (${reportEstimatedPercent}% estimated). Results should be treated as indicative until estimates and missing values are replaced with measured or well-supported derived data.`
+        : reportDerivedCount > reportMeasuredCount
+          ? `This report is based primarily on derived values (${reportDerivedPercent}% of metrics), calculated from saved inputs. Review the underlying inputs, approval and evidence before stakeholder distribution.`
+          : "This report is based primarily on measured data. Review its approval and evidence status before stakeholder distribution.";
 
-      const reportActualCount = valuesWithLabels.filter((v: any) => v.dataSourceType && v.dataSourceType !== "estimated").length;
       const reportMissingCount = enabledMetrics.length - valuesWithLabels.length;
-      const reportActualPercent = enabledMetrics.length > 0 ? Math.round((reportActualCount / enabledMetrics.length) * 100) : 0;
+      const reportMeasuredPercent = enabledMetrics.length > 0 ? Math.round((reportMeasuredCount / enabledMetrics.length) * 100) : 0;
       const reportMissingPercent = enabledMetrics.length > 0 ? Math.round((reportMissingCount / enabledMetrics.length) * 100) : 0;
 
       const dataQualitySummary = {
@@ -6226,12 +6783,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isFirstReport: isFirstReportEver,
         isDraftQuality,
         estimatedPercent: reportEstimatedPercent,
-        actualPercent: reportActualPercent,
+        actualPercent: reportMeasuredPercent,
+        measuredPercent: reportMeasuredPercent,
+        derivedPercent: reportDerivedPercent,
         missingPercent: Math.max(0, reportMissingPercent),
         totalMetrics: enabledMetrics.length,
         filledMetrics: valuesWithLabels.length,
         estimatedMetrics: reportEstimatedCount,
-        actualMetrics: reportActualCount,
+        actualMetrics: reportMeasuredCount,
+        measuredMetrics: reportMeasuredCount,
+        derivedMetrics: reportDerivedCount,
         missingMetrics: Math.max(0, reportMissingCount),
         methodologyNote,
       };
@@ -6243,7 +6804,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportTitle,
         dataQualitySummary,
         period: reportPeriod,
-        periodType: selectedReportPeriod?.periodType ?? null,
+        periodType: selectedReportPeriod?.periodType ?? savedReportingContext?.period.periodType ?? null,
         periodLabel: reportPeriodLabel,
         dateFrom: reportDateFrom ?? null,
         dateTo: reportDateTo ?? null,
@@ -6291,7 +6852,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           before: null,
           after: {
             period: reportPeriod,
-            periodType: selectedReportPeriod?.periodType ?? null,
+            periodType: selectedReportPeriod?.periodType ?? savedReportingContext?.period.periodType ?? null,
             dateFrom: reportDateFrom ?? null,
             dateTo: reportDateTo ?? null,
             trendCurrentPeriod: trendSummaryData?.currentPeriod ?? null,
@@ -6315,7 +6876,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               action: "first_report_generated",
               entityType: "report_run",
               entityId: report.id,
-              details: { period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? null, reportType: reportType ?? "pdf" },
+              details: { period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? savedReportingContext?.period.periodType ?? null, reportType: reportType ?? "pdf" },
             });
           }
         }).catch(() => {});
@@ -6327,7 +6888,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           companyId,
           action: "report_generated_for_site",
           page: "/reports",
-          details: { siteId: bodySiteId, reportId: report.id, period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? null, reportType: reportType || "pdf" },
+          details: { siteId: bodySiteId, reportId: report.id, period: reportPeriod, periodType: selectedReportPeriod?.periodType ?? savedReportingContext?.period.periodType ?? null, reportType: reportType || "pdf" },
         }).catch(() => {});
       }
 
@@ -6817,6 +7378,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
+      if (!openai) {
+        return res.status(503).json({
+          error: "AI drafting is not configured. You can continue using the non-AI policy workflow.",
+          code: "AI_NOT_CONFIGURED",
+        });
+      }
 
       const saved = await storage.createPolicyGenerationInput({ companyId, inputs });
 
@@ -6920,8 +7487,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ===== CARBON CALCULATOR =====
   app.get("/api/carbon/factors", requireAuth, async (req, res) => {
+    const companyId = (req.session as any).companyId;
     const country = (req.query.country as string) || "UK";
-    const factors = await storage.getEmissionFactors(country);
+    const factors = await getConfiguredEmissionFactors(companyId, country);
     res.json(factors);
   });
 
@@ -6934,7 +7502,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const results = calc.results as any;
       const methodNotes = (calc as any).methodologyNotes || results?.lineItems || [];
       const assumptions = (calc as any).assumptions || results?.assumptions || [];
-      const factorYear = (calc as any).factorYear || results?.factorYear || 2024;
+      const factorYear = (calc as any).factorYear || results?.factorYear || CURRENT_UK_FACTOR_YEAR;
+      const calculationFactorSource = methodNotes[0]?.factorSource
+        || `UK Government GHG Conversion Factors ${factorYear}`;
 
       let text = `CARBON FOOTPRINT ESTIMATE\n`;
       text += `========================\n\n`;
@@ -6973,7 +7543,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       text += `DISCLAIMER\n----------\n`;
-      text += `This is an estimate produced by an SME carbon estimator. Emission factors sourced from UK DEFRA ${factorYear} GHG Conversion Factors.\n`;
+      text += `This is an estimate produced by an SME carbon estimator. Emission factors sourced from ${calculationFactorSource}.\n`;
       text += `Values should be reviewed before use in formal disclosures or regulatory submissions.\n`;
       text += `Data quality indicators: Actual = measured/invoiced data, Estimated = calculated from partial data, Proxy = derived from industry benchmarks.\n`;
 
@@ -6989,7 +7559,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const siteIdParam = req.query.siteId as string | undefined;
-      const siteId = siteIdParam === "null" ? null : siteIdParam;
+      const siteId = siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
       if (siteId) {
         const own = await validateSiteOwnership(siteId, companyId);
         if (!own.valid) return res.status(own.status).json({ error: own.message });
@@ -7007,6 +7577,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const { inputs, reportingPeriod, periodType, employeeCount, dataQuality: dqMap, siteId: bodySiteId } = req.body;
+      const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
+      const activeSites = await storage.getSites(companyId, false);
+      if (activeSites.length >= 1 && !siteScopeProvided) {
+        return res.status(400).json({ error: "Please select a site or choose Organisation-wide before calculating emissions." });
+      }
       // Optional siteId — validate ownership if provided (write: true blocks archived sites)
       if (bodySiteId) {
         const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
@@ -7014,7 +7589,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const country = inputs.country || "UK";
-      const factors = await storage.getEmissionFactors(country);
+      const factors = await getConfiguredEmissionFactors(companyId, country);
 
       const results = calculateEmissions(inputs, factors, dqMap || {});
 
@@ -7047,6 +7622,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(calc);
     } catch (e: any) {
       console.error("Carbon calculation error:", e);
+      if (/emission factor set|selected factor set is missing/i.test(String(e?.message || ""))) {
+        return res.status(422).json({
+          error: e.message,
+          code: "EMISSION_FACTOR_UNAVAILABLE",
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -7194,7 +7775,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         let sourceData: string[] | null = null;
         let category = categorizeQuestion(sanitizedText);
 
-        if (confidence === "low" || !suggestedAnswer) {
+        if (openai && (confidence === "low" || !suggestedAnswer)) {
           try {
             const aiResult = await generateAIAnswer(openai, sanitizedText, context);
             suggestedAnswer = aiResult.suggestedAnswer || aiResult.answer;
@@ -7306,6 +7887,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
+      if (!openai) {
+        return res.status(503).json({
+          error: "AI drafting is not configured. You can continue using the non-AI policy workflow.",
+          code: "AI_NOT_CONFIGURED",
+        });
+      }
 
       const template = await storage.getPolicyTemplate(req.params.slug);
       if (!template) return res.status(404).json({ error: "Template not found" });
@@ -7447,13 +8034,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }).from(emissionFactorsTable);
       const setMap = new Map<string, { key: string; label: string; year: number; count: number }>();
       for (const f of factors) {
-        const key = `UK_DEFRA_${f.factorYear}`;
+        const year = f.factorYear || CURRENT_UK_FACTOR_YEAR;
+        const key = `UK_GOVERNMENT_${year}`;
         if (!setMap.has(key)) {
-          setMap.set(key, { key, label: f.sourceLabel || `DEFRA ${f.factorYear}`, year: f.factorYear || 2024, count: 0 });
+          setMap.set(key, {
+            key,
+            label: f.sourceLabel || `UK Government GHG Conversion Factors ${year}`,
+            year,
+            count: 0,
+          });
         }
         setMap.get(key)!.count++;
       }
-      res.json(Array.from(setMap.values()));
+      res.json(Array.from(setMap.values()).sort((a, b) => b.year - a.year));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -8180,6 +8773,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      const frameworkRequirementIds = Array.from(new Set(
+        files
+          .filter((file: any) => file.linkedModule === "framework_requirement" && file.linkedEntityId)
+          .map((file: any) => file.linkedEntityId as string)
+      ));
+      const frameworkRequirementContext = new Map<string, { code: string; title: string; requirementType: string }>();
+      if (frameworkRequirementIds.length > 0) {
+        const requirements = await storage.getAllFrameworkRequirements();
+        for (const requirement of requirements) {
+          if (!frameworkRequirementIds.includes(requirement.id)) continue;
+          frameworkRequirementContext.set(requirement.id, {
+            code: requirement.code,
+            title: requirement.title,
+            requirementType: requirement.requirementType,
+          });
+        }
+      }
+
       const uploaderIds = Array.from(new Set(files.map((file: any) => file.uploadedBy).filter(Boolean)));
       const uploaderContext = new Map<string, { name: string; email: string | null }>();
       if (uploaderIds.length > 0) {
@@ -8204,7 +8815,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const metricContext = metricContextFromValue || (directMetricId ? metricContextById.get(directMetricId) : undefined);
         const uploader = file.uploadedBy ? uploaderContext.get(file.uploadedBy) : undefined;
         const isMetricLinked = Boolean(metricContext);
-        const isOrphaned = !isMetricLinked;
+        const linkedFrameworkRequirement = file.linkedModule === "framework_requirement" && file.linkedEntityId
+          ? frameworkRequirementContext.get(file.linkedEntityId)
+          : undefined;
+        const isFrameworkRequirementLinked = Boolean(linkedFrameworkRequirement);
+        const isOrphaned = !isMetricLinked && !isFrameworkRequirementLinked;
 
         return {
           ...file,
@@ -8212,11 +8827,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           metricId: metricContext?.metricId ?? null,
           metricName: metricContext?.metricName ?? null,
           metricCategory: metricContext?.metricCategory ?? null,
+          frameworkRequirementId: isFrameworkRequirementLinked ? file.linkedEntityId : null,
+          frameworkRequirementCode: linkedFrameworkRequirement?.code ?? null,
+          frameworkRequirementTitle: linkedFrameworkRequirement?.title ?? null,
+          frameworkRequirementType: linkedFrameworkRequirement?.requirementType ?? null,
           resolvedLinkedPeriod: file.linkedPeriod ?? metricContextFromValue?.period ?? null,
           uploaderName: uploader?.name ?? null,
           uploaderEmail: uploader?.email ?? null,
           downloadUrl: buildEvidenceDownloadUrl(file.id),
           isMetricLinked,
+          isFrameworkRequirementLinked,
           isOrphaned,
         };
       });
@@ -8307,7 +8927,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (!isMultipartRequest(req)) {
-        return res.status(415).json({ error: "Evidence uploads must use multipart/form-data with a file and metricId." });
+        return res.status(415).json({ error: "Evidence uploads must use multipart/form-data with a file and either metricId or frameworkRequirementId." });
       }
 
       const formData = await parseMultipartFormData(req);
@@ -8317,13 +8937,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "Evidence file is required" });
       }
 
-      const metricId = getFormValue(formData, "metricId");
-      if (!metricId) {
-        return res.status(400).json({ error: "Metric selection is required" });
+      const metricId = getFormValue(formData, "metricId") || null;
+      const frameworkRequirementId = getFormValue(formData, "frameworkRequirementId") || null;
+      if (Boolean(metricId) === Boolean(frameworkRequirementId)) {
+        return res.status(400).json({ error: "Select exactly one metric or framework requirement" });
       }
-      const metric = await storage.getMetric(metricId);
-      if (!metric || metric.companyId !== companyId) {
-        return res.status(404).json({ error: "Metric not found" });
+
+      let linkedModule: "metric" | "framework_requirement";
+      let linkedEntityId: string;
+      if (metricId) {
+        const metric = await storage.getMetric(metricId);
+        if (!metric || metric.companyId !== companyId) {
+          return res.status(404).json({ error: "Metric not found" });
+        }
+        linkedModule = "metric";
+        linkedEntityId = metricId;
+      } else {
+        const requirement = await storage.getFrameworkRequirement(frameworkRequirementId!);
+        if (!requirement) return res.status(404).json({ error: "Framework requirement not found" });
+        const selections = await storage.getBusinessFrameworkSelections(companyId);
+        if (!selections.some((selection) => selection.frameworkId === requirement.frameworkId && selection.isEnabled)) {
+          return res.status(409).json({ error: "Enable this framework before uploading requirement evidence" });
+        }
+        linkedModule = "framework_requirement";
+        linkedEntityId = requirement.id;
       }
 
       const linkedPeriod = getFormValue(formData, "period") || getFormValue(formData, "linkedPeriod");
@@ -8362,8 +8999,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         storagePath: null,
         description: description || null,
         metricId,
-        linkedModule: "metric",
-        linkedEntityId: metricId,
+        linkedModule,
+        linkedEntityId,
         linkedPeriod: linkedPeriod || null,
         tags,
         evidenceStatus: "uploaded",
@@ -8396,7 +9033,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         entityId: savedFile.id,
         details: {
           before: null,
-          after: { filename: validation.fileName, metricId, linkedModule: "metric", linkedEntityId: metricId, linkedPeriod, tags },
+          after: { filename: validation.fileName, metricId, frameworkRequirementId, linkedModule, linkedEntityId, linkedPeriod, tags },
         },
         req,
       });
@@ -8413,7 +9050,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/evidence/:id", requireAuth, requireProvisioningPermission("upload_evidence"), async (req, res) => {
+  app.put("/api/evidence/:id", requireAuth, requireEvidenceUpdatePermission, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -8429,6 +9066,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const validStatuses = ["pending", "available", "quarantined", "rejected", "deleted", "uploaded", "reviewed", "approved", "expired"];
         if (!validStatuses.includes(evidenceStatus)) {
           return res.status(400).json({ error: "Invalid evidence status" });
+        }
+        const linkedModule = (owned.linkedModule ?? "").replace(/[-_]/g, "").toLowerCase();
+        if (linkedModule === "frameworkrequirement" && ["reviewed", "approved", "rejected"].includes(evidenceStatus)) {
+          const reviewer = await storage.getUser(userId);
+          if (!reviewer || (!isPlatformSuperAdmin(reviewer) && reviewer.role !== "admin" && reviewer.role !== "approver")) {
+            return res.status(403).json({ error: "Only an administrator or approver can review framework evidence", code: "PERMISSION_DENIED" });
+          }
         }
         const previousStatus = owned.evidenceStatus;
         updates.evidenceStatus = evidenceStatus;
@@ -8509,7 +9153,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         let score = 0;
 
-        const hasValue = latestVal && latestVal.value !== null;
+        const hasValue = hasMetricReportedValue(latestVal);
         if (hasValue) score += 30;
 
         const hasEvidence = hasValue && (
@@ -8597,43 +9241,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _csCo = await storage.getCompany(companyId);
       const { tier: _csTier } = _csCo ? await getEffectivePlanTier(_csCo) : { tier: "free" as const };
       if (_csTier !== "pro") return upgradeRequired(req, res);
-      const frameworks = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
-      const requirements = await db.execute(sql`SELECT * FROM compliance_requirements`);
-      const metricsResult = await db.execute(
-        sql`SELECT name, id, enabled FROM metrics WHERE company_id = ${companyId}`
-      );
-      const metricNames = new Set(metricsResult.rows.filter((m: any) => m.enabled).map((m: any) => m.name));
-      const latestPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-      const valuesResult = await db.execute(
-        sql`SELECT DISTINCT met.name FROM metric_values mv JOIN metrics met ON mv.metric_id = met.id WHERE met.company_id = ${companyId} AND mv.period = ${latestPeriod} AND mv.value IS NOT NULL`
-      );
-      const metricsWithData = new Set(valuesResult.rows.map((r: any) => r.name));
-      const evidenceResult = await db.execute(
-        sql`SELECT DISTINCT linked_module FROM evidence_files WHERE company_id = ${companyId}`
-      );
-      const hasEvidence = evidenceResult.rows.length > 0;
 
-      const frameworkStatus = frameworks.rows.map((fw: any) => {
-        const reqs = requirements.rows.filter((r: any) => r.framework_id === fw.id);
-        let met = 0;
-        const reqDetails = reqs.map((r: any) => {
-          const linkedMetrics = r.linked_metric_ids || [];
-          const hasLinkedMetrics = linkedMetrics.length > 0;
-          const metricsHaveData = hasLinkedMetrics && linkedMetrics.some((name: string) => metricsWithData.has(name));
-          const isMet = !hasLinkedMetrics ? false : metricsHaveData;
-          if (isMet) met++;
-          return {
-            id: r.id, code: r.code, title: r.title, description: r.description,
-            category: r.category, linkedMetricIds: linkedMetrics,
-            linkedPolicySection: r.linked_policy_section,
-            isMet, hasData: metricsHaveData, hasLinkedMetrics,
-          };
+      const rawPeriod = req.query.period;
+      if (rawPeriod !== undefined && (Array.isArray(rawPeriod) || concreteFrameworkReportingPeriod(rawPeriod) === null)) {
+        return res.status(400).json({
+          error: "Framework readiness requires one concrete reporting period.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
         });
+      }
+      const requestedPeriod = rawPeriod === undefined ? null : concreteFrameworkReportingPeriod(rawPeriod);
+
+      const rawSiteId = req.query.siteId;
+      if (rawSiteId !== undefined && (Array.isArray(rawSiteId) || typeof rawSiteId !== "string" || !rawSiteId.trim() || rawSiteId.length > 100)) {
+        return res.status(400).json({ error: "siteId must be a non-empty string of at most 100 characters" });
+      }
+      const normalizedSiteId = typeof rawSiteId === "string" ? rawSiteId.trim() : undefined;
+      const requestedSiteId = normalizedSiteId === undefined || normalizedSiteId === "__all__"
+        ? undefined
+        : normalizedSiteId === "null" || normalizedSiteId === "__org__"
+          ? null
+          : normalizedSiteId;
+      if (requestedSiteId) {
+        const ownership = await validateSiteOwnership(requestedSiteId, companyId);
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
+
+      let reportingPeriod = requestedPeriod;
+      if (!reportingPeriod) {
+        const { resolveCompanyReportingContext } = await import("./reporting-context");
+        reportingPeriod = (await resolveCompanyReportingContext(companyId)).period.name;
+      }
+
+      const frameworkReadiness = await storage.getFrameworkReadiness(companyId, {
+        period: reportingPeriod,
+        siteId: requestedSiteId,
+      });
+      const frameworkStatus = frameworkReadiness.map((group: any) => {
+        const summary = group.summary || { covered: 0, partial: 0, missing: 0, total: 0 };
+        const readinessPercent = summary.total > 0
+          ? Math.round((summary.covered / summary.total) * 100)
+          : 0;
+        const reqDetails = group.requirements.map((requirement: any) => ({
+          ...requirement,
+          isMet: requirement.status === "covered",
+          hasData: (requirement.factSummary?.enteredValues ?? 0) > 0,
+          hasLinkedMetrics: (requirement.factSummary?.mappedDefinitions ?? 0) > 0,
+        }));
         return {
-          id: fw.id, name: fw.name, description: fw.description, version: fw.version,
-          totalRequirements: reqs.length, metRequirements: met,
-          compliancePercent: reqs.length > 0 ? Math.round((met / reqs.length) * 100) : 0,
+          id: group.framework.id,
+          code: group.framework.code,
+          name: group.framework.name,
+          description: group.framework.description,
+          version: group.framework.version,
+          totalRequirements: summary.total,
+          readyRequirements: summary.covered,
+          partialRequirements: summary.partial,
+          missingRequirements: summary.missing,
+          readinessPercent,
           requirements: reqDetails,
+          nextBestActions: group.nextBestActions,
+          scope: group.scope,
         };
       });
 
@@ -8646,20 +9313,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/control-centre", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      const {
+        filterMetricsDueForPeriod,
+        isSiteWithinReportingBoundary,
+        resolveCompanyReportingContext,
+      } = await import("./reporting-context");
+      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const currentPeriod = reportingContext.period.name;
       const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
-      const values = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
+      const enabledMetrics = filterMetricsDueForPeriod(
+        allMetrics.filter((m: any) => m.enabled),
+        reportingContext.period.periodType,
+      );
+      const values = (await storage.getMetricValuesByPeriod(companyId, currentPeriod))
+        .filter((value: any) => isSiteWithinReportingBoundary(value.siteId, reportingContext.siteBoundary));
       const valueMap = new Map(values.map((v: any) => [v.metricId, v]));
 
       const missingData = enabledMetrics
         .filter((m: any) => !valueMap.has(m.id))
         .map((m: any) => ({ id: m.id, name: m.name, category: m.category, owner: m.dataOwner, linkUrl: "/data-entry" }));
 
-      const dqResult = await db.execute(
-        sql`SELECT metric_id, value, notes, workflow_status, data_source_type FROM metric_values mv JOIN metrics met ON mv.metric_id = met.id WHERE met.company_id = ${companyId} AND mv.period = ${currentPeriod}`
-      );
-      const evidenceFiles = await storage.getEvidenceFiles(companyId);
+      const evidenceFiles = (await storage.getEvidenceFiles(companyId, undefined, currentPeriod))
+        .filter((file: any) => isSiteWithinReportingBoundary(file.siteId, reportingContext.siteBoundary));
       const evidenceLinkedIds = new Set(evidenceFiles.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId));
       const lowQuality = enabledMetrics.map((m: any) => {
         const val = valueMap.get(m.id);
@@ -8699,20 +9374,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let unmetCompliance: any[] = [];
       try {
-        const fws = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
-        const reqs = await db.execute(sql`SELECT * FROM compliance_requirements`);
-        const metricNamesWithData = new Set(values.filter((v: any) => v.value != null).map((v: any) => {
-          const m = enabledMetrics.find((met: any) => met.id === v.metricId);
-          return m?.name;
-        }).filter(Boolean));
-        reqs.rows.forEach((r: any) => {
-          const linked = r.linked_metric_ids || [];
-          const isMet = linked.length > 0 && linked.some((name: string) => metricNamesWithData.has(name));
-          if (!isMet) {
-            const fw = fws.rows.find((f: any) => f.id === r.framework_id);
-            unmetCompliance.push({ id: r.id, code: r.code, title: r.title, framework: fw?.name || "", linkUrl: "/compliance" });
-          }
-        });
+        const readiness = await storage.getFrameworkReadiness(companyId, { period: currentPeriod });
+        unmetCompliance = readiness.flatMap((group: any) =>
+          group.requirements
+            .filter((requirement: any) => requirement.status !== "covered")
+            .map((requirement: any) => ({
+              id: requirement.id,
+              code: requirement.code,
+              title: requirement.title,
+              framework: group.framework.name,
+              readinessStatus: requirement.status,
+              nextStep: requirement.additionalNeeded?.[0] ?? "Complete this framework requirement",
+              linkUrl: `/framework-readiness?requirement=${encodeURIComponent(requirement.id)}`,
+            })),
+        );
       } catch {}
 
       const weights = { missingData: 3, lowQuality: 2, expiredEvidence: 2, overdueActions: 3, pendingApprovals: 1, unapprovedPolicies: 1, unmetCompliance: 2 };
@@ -8729,7 +9404,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           expiredEvidence: expiredEvidence.length, overdueActions: overdueActions.length,
           pendingApprovals: pendingApprovals.length, unapprovedPolicies: unapprovedPolicies.length,
           unmetCompliance: unmetCompliance.length,
-        }
+        },
+        reportingContext,
       });
     } catch (e: any) {
       sendServerError(res, e);
@@ -8742,18 +9418,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const recommendations: Array<{ id: string; title: string; description: string; impact: string; category: string; actionUrl: string; type: string }> = [];
       let id = 1;
 
-      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+      const {
+        filterMetricsDueForPeriod,
+        isSiteWithinReportingBoundary,
+        resolveCompanyReportingContext,
+      } = await import("./reporting-context");
+      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const currentPeriod = reportingContext.period.name;
       const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
-      const values = await storage.getMetricValuesByPeriod(companyId, currentPeriod);
-      const valueMap = new Map(values.map((v: any) => [v.metricId, v]));
+      const enabledMetrics = filterMetricsDueForPeriod(
+        allMetrics.filter((m: any) => m.enabled),
+        reportingContext.period.periodType,
+      );
+      const valueIsWithinReportingPeriod = (valuePeriod: string): boolean => {
+        if (valuePeriod === currentPeriod || valuePeriod === reportingContext.period.id) return true;
+        if (!reportingContext.period.startDate || !reportingContext.period.endDate) return false;
+        const valueBounds = parseFrameworkReadinessPeriod(valuePeriod);
+        if (!valueBounds) return false;
+        const valueStart = valueBounds.start.toISOString().slice(0, 10);
+        const valueEnd = valueBounds.end.toISOString().slice(0, 10);
+        return valueStart >= reportingContext.period.startDate && valueEnd <= reportingContext.period.endDate;
+      };
+      const values = (await Promise.all(enabledMetrics.map(async (metric: any) => {
+        const metricRows = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
+        return metricRows.filter((value: any) =>
+          valueIsWithinReportingPeriod(value.period)
+          && isSiteWithinReportingBoundary(value.siteId, reportingContext.siteBoundary),
+        );
+      }))).flat();
+      const valueMap = new Map<string, any>();
+      for (const value of values) {
+        // Storage returns newest periods first. Retain the most recent contained
+        // fact when a quarterly/annual context contains several monthly rows.
+        if (!valueMap.has(value.metricId)) valueMap.set(value.metricId, value);
+      }
 
       const missingCount = enabledMetrics.filter((m: any) => !valueMap.has(m.id)).length;
       if (missingCount > 0) {
         recommendations.push({
           id: String(id++), type: "missing_data",
           title: `Enter missing data for ${missingCount} metric${missingCount > 1 ? "s" : ""}`,
-          description: `${missingCount} enabled metric${missingCount > 1 ? "s are" : " is"} missing data for the current period. Complete your data entry to improve your ESG score and data completeness rating.`,
+          description: `${missingCount} enabled metric${missingCount > 1 ? "s are" : " is"} missing data for ${currentPeriod}. Complete your data entry to improve your ESG score and data completeness rating.`,
           impact: missingCount >= 5 ? "high" : missingCount >= 2 ? "medium" : "low",
           category: "data", actionUrl: "/data-entry",
         });
@@ -8796,10 +9501,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
+      const evidenceLinkedIds = new Set(
+        evidenceFiles
+          .filter((e: any) =>
+            e.linkedModule === "metric_value"
+            && isSiteWithinReportingBoundary(e.siteId, reportingContext.siteBoundary),
+          )
+          .map((e: any) => e.linkedEntityId),
+      );
       const lowQualityMetrics = enabledMetrics.map((m: any) => {
         const val = valueMap.get(m.id);
         if (!val) return null;
-        const evidenceLinkedIds = new Set(evidenceFiles.filter((e: any) => e.linkedModule === "metric_value").map((e: any) => e.linkedEntityId));
         let score = 0;
         if (val.value != null) score += 30;
         if (evidenceLinkedIds.has(val.id)) score += 20;
@@ -8819,23 +9531,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       try {
-        const fws = await db.execute(sql`SELECT * FROM compliance_frameworks WHERE is_active = true`);
-        const reqs = await db.execute(sql`SELECT * FROM compliance_requirements`);
-        const metricNamesWithData = new Set(values.filter((v: any) => v.value != null).map((v: any) => {
-          const m = enabledMetrics.find((met: any) => met.id === v.metricId);
-          return m?.name;
-        }).filter(Boolean));
-        const unmetCount = reqs.rows.filter((r: any) => {
-          const linked = r.linked_metric_ids || [];
-          return linked.length > 0 && !linked.some((name: string) => metricNamesWithData.has(name));
-        }).length;
+        const readiness = await storage.getFrameworkReadiness(companyId, { period: currentPeriod });
+        const unmetCount = readiness.reduce(
+          (count: number, group: any) => count + group.requirements.filter((requirement: any) => requirement.status !== "covered").length,
+          0,
+        );
         if (unmetCount > 0) {
           recommendations.push({
             id: String(id++), type: "compliance_gap",
-            title: `Address ${unmetCount} unmet compliance requirement${unmetCount > 1 ? "s" : ""}`,
-            description: `Your ESG data doesn't yet satisfy ${unmetCount} compliance framework requirement${unmetCount > 1 ? "s" : ""}. Enter the missing metric data to improve your compliance status.`,
+            title: `Address ${unmetCount} framework readiness gap${unmetCount > 1 ? "s" : ""}`,
+            description: `${unmetCount} selected-framework requirement${unmetCount > 1 ? "s are" : " is"} not yet ready. Add the requested data, approval or evidence to improve readiness.`,
             impact: unmetCount >= 5 ? "high" : "medium",
-            category: "compliance", actionUrl: "/compliance",
+            category: "frameworks", actionUrl: "/framework-readiness",
           });
         }
       } catch {}
@@ -8860,7 +9567,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { tier: _recTier } = _recCo ? await getEffectivePlanTier(_recCo) : { tier: "free" as const };
       const limited = _recTier !== "pro" && recommendations.length > 3;
       const displayed = limited ? recommendations.slice(0, 3) : recommendations;
-      res.json({ recommendations: displayed, total: recommendations.length, limited });
+      res.json({
+        recommendations: displayed,
+        total: recommendations.length,
+        limited,
+        period: currentPeriod,
+        reportingContext,
+      });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -9006,6 +9719,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Pull rich context from Phase 1-3 data
       let advisorContext = "";
       try {
+        const now = new Date();
+        const { resolveCompanyReportingContext } = await import("./reporting-context");
+        const reportingContext = await resolveCompanyReportingContext(companyId, {
+          requestedSiteId: chatSiteId || undefined,
+        });
         const [
           allMetrics,
           actions,
@@ -9020,15 +9738,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           storage.getPolicy(companyId),
           storage.getEvidenceFiles(companyId),
           storage.getMaterialTopics(companyId),
-          storage.getFrameworkReadiness(companyId).catch(() => []),
+          storage.getFrameworkReadiness(companyId, {
+            period: reportingContext.period.name,
+            siteId: reportingContext.siteBoundary.siteId,
+          }).catch(() => []),
           storage.getMetricDefinitions({ isActive: true }),
         ]);
 
         const enabledMetrics = allMetrics.filter(m => m.enabled);
 
         // Missing submissions — reuse completeness scoring to cover all enabled metrics with frequency-aware lookback
-        const now = new Date();
-        const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const currentPeriod = reportingContext.period.name;
         const { scoreCompleteness: _scoreComp } = await import("./esg-scoring");
         const completenessCtx = await _scoreComp(companyId, currentPeriod).catch(() => null);
         const missingMetrics: string[] = completenessCtx
@@ -9120,6 +9840,10 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       try {
         const openai = createOpenAiIntegrationClient();
+        if (!openai) {
+          res.json({ reply: "AI guidance is not configured. Please use the Help Centre and the platform's guided next actions." });
+          return;
+        }
         const reply = await createOpenAiAssistantReply(openai, {
           model: getOpenAiChatModel(),
           systemPrompt,
@@ -9281,11 +10005,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         .map((l: any) => ({ ...l, actor: userMap.get(l.userId) || l.userId }));
 
       const evidenceFiles = await storage.getEvidenceFiles(companyId);
-      const evidenceHistory = evidenceFiles.map((e: any) => ({
-        id: e.id, fileName: e.fileName, status: e.status,
-        linkedModule: e.linkedModule, linkedEntityId: e.linkedEntityId,
-        uploadedAt: e.createdAt, expiryDate: e.expiryDate,
-      }));
+      const evidenceHistory = evidenceFiles.map(buildAssuranceEvidenceHistoryEntry);
 
       const policy = await storage.getPolicy(companyId);
       let policyVersions: any[] = [];
@@ -9776,7 +10496,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           bestSource = ruleResult.source;
         }
 
-        if (!bestAnswer || bestConfidence === "low") {
+        if (openai && (!bestAnswer || bestConfidence === "low")) {
           try {
             const aiResult = await generateAIAnswer(openai, q, context);
             if (aiResult.confidence !== "low" || !bestAnswer) {
@@ -10073,25 +10793,48 @@ Use the live data above to give accurate, specific advice. If you don't have inf
   app.get("/api/company/esg-profile", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       const period = typeof req.query.period === "string" ? req.query.period.trim() : undefined;
-      const profile = await buildEsgProfile(companyId, { period });
+      const [company, user] = await Promise.all([
+        storage.getCompany(companyId),
+        storage.getUser(userId),
+      ]);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const { tier } = await getEffectivePlanTier(company);
+      const canManagePublicSharing = Boolean(
+        user
+        && (isPlatformSuperAdmin(user) || hasPermission(user.role, "settings_admin"))
+        && tier === "pro",
+      );
+      const profile = await buildEsgProfile(companyId, {
+        period,
+        includeShareToken: canManagePublicSharing,
+      });
       res.json(profile);
     } catch (e: any) {
       sendServerError(res, e);
     }
   });
 
-  app.post("/api/company/esg-profile/share", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.post("/api/company/esg-profile/share", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { enabled, expiresInDays, visibleSections } = req.body;
+      const parsed = z.object({
+        enabled: z.boolean(),
+        expiresInDays: z.coerce.number().int().min(1).max(3650).optional(),
+        visibleSections: z.array(z.string().max(80)).max(20).optional(),
+      }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid share settings" });
+      }
+      const { enabled, expiresInDays, visibleSections } = parsed.data;
       const _shareCo = await storage.getCompany(companyId);
       const { tier: _shareTier } = _shareCo ? await getEffectivePlanTier(_shareCo) : { tier: "free" as const };
       if (_shareTier !== "pro") return upgradeRequired(req, res);
-      const ALLOWED_SECTIONS = ["esg_scores", "key_metrics", "policy_status", "carbon_summary", "compliance_highlights", "evidence_coverage", "certifications"];
-      const sanitizedSections = Array.isArray(visibleSections)
-        ? visibleSections.filter((s: string) => ALLOWED_SECTIONS.includes(s))
-        : ["esg_scores", "key_metrics", "policy_status", "carbon_summary"];
+      const sanitizedSections = normalizePublicProfileSections(
+        visibleSections,
+        DEFAULT_PUBLIC_PASSPORT_SECTIONS,
+      );
 
       if (enabled) {
         const token = randomUUID();
@@ -10102,7 +10845,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           profileShareExpiresAt: expiresAt,
           profileVisibleSections: sanitizedSections,
         } as any);
-        res.json({ token, expiresAt, enabled: true });
+        res.json({ token, expiresAt, enabled: true, visibleSections: sanitizedSections });
       } else {
         await storage.updateCompany(companyId, {
           profileShareEnabled: false,
@@ -10116,9 +10859,16 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     }
   });
 
-  app.post("/api/company/esg-profile/rotate-token", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
+  app.post("/api/company/esg-profile/rotate-token", requireAuth, requirePermission("settings_admin"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const { tier } = await getEffectivePlanTier(company);
+      if (tier !== "pro") return upgradeRequired(req, res);
+      if (!(company as any).profileShareEnabled) {
+        return res.status(400).json({ error: "Enable public sharing before rotating the link" });
+      }
       const token = randomUUID();
       await storage.updateCompany(companyId, { profileShareToken: token } as any);
       res.json({ token });
@@ -10136,14 +10886,49 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       if (!company.profile_share_enabled) { res.status(404).json({ error: "Profile sharing is disabled" }); return; }
       if (company.profile_share_expires_at && new Date(company.profile_share_expires_at) < new Date()) { res.status(410).json({ error: "Profile link has expired" }); return; }
 
-      const profile = await buildEsgProfile(company.id);
-      const visibleSections = company.profile_visible_sections || ["esg_scores", "key_metrics", "policy_status", "carbon_summary"];
-      const filteredProfile: any = { company: { name: company.name, industry: company.industry, employeeCount: company.employee_count } };
-      for (const section of visibleSections) {
-        if (profile[section] !== undefined) filteredProfile[section] = profile[section];
+      const profile = await buildEsgProfile(company.id, { publishedOnly: true });
+      const visibleSections = normalizePublicProfileSections(
+        company.profile_visible_sections,
+        DEFAULT_PUBLIC_PASSPORT_SECTIONS,
+      );
+      const passport = selectPublicPassportSections(profile.passport, visibleSections);
+      const latestReport = passport.reportAccess?.latest;
+      if (latestReport) {
+        const { reportId, fileId, ...publicReport } = latestReport;
+        passport.reportAccess = {
+          ...passport.reportAccess,
+          latest: {
+            ...publicReport,
+            downloadUrl: `/api/company/esg-profile/public/${encodeURIComponent(req.params.token)}/reports/${encodeURIComponent(reportId)}/download/${encodeURIComponent(fileId)}`,
+          },
+        };
       }
-      if (profile.reporting_period && (visibleSections.includes("esg_scores") || visibleSections.includes("key_metrics"))) {
-        filteredProfile.reporting_period = profile.reporting_period;
+
+      const filteredProfile: any = {
+        company: { name: company.name, industry: company.industry, employeeCount: company.employee_count },
+        reporting_period: profile.reporting_period,
+        passport,
+      };
+      for (const section of visibleSections) {
+        if (section === "key_metrics" && Array.isArray(profile.key_metrics)) {
+          filteredProfile.key_metrics = profile.key_metrics.map((metric: any) => ({
+            name: metric.name,
+            value: metric.value,
+            hasValue: metric.hasValue,
+            unit: metric.unit,
+            category: metric.category,
+            period: metric.period,
+            aggregationMethod: metric.aggregationMethod,
+            aggregationLabel: metric.aggregationLabel,
+            sourceScope: metric.sourceScope,
+            sourceLabel: metric.sourceLabel,
+            workflowStatus: metric.workflowStatus,
+            workflowLabel: metric.workflowLabel,
+            contributingSiteCount: metric.contributingSiteCount,
+          }));
+        } else if ((profile as any)[section] !== undefined) {
+          filteredProfile[section] = (profile as any)[section];
+        }
       }
 
       try {
@@ -10152,10 +10937,87 @@ Use the live data above to give accurate, specific advice. If you don't have inf
           action: "public_profile_view",
           entityType: "company_profile",
           details: { ip: req.ip, token: req.params.token.slice(0, 8) + "..." },
-        });
+        } as any);
       } catch {}
 
+      res.setHeader("Cache-Control", "private, no-store");
       res.json(filteredProfile);
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
+  });
+
+  app.get("/api/company/esg-profile/public/:token/reports/:reportId/download/:fileId", async (req, res) => {
+    try {
+      if (!featureFlags.reportGenerationEnabled) {
+        return res.status(404).json({ error: "Report not found" });
+      }
+      const result = await db.execute(sql`SELECT * FROM companies WHERE profile_share_token = ${req.params.token}`);
+      if (!result.rows.length) return res.status(404).json({ error: "Report not found" });
+      const company = result.rows[0] as any;
+      if (!company.profile_share_enabled) return res.status(404).json({ error: "Report not found" });
+      if (company.profile_share_expires_at && new Date(company.profile_share_expires_at) < new Date()) {
+        return res.status(410).json({ error: "Profile link has expired" });
+      }
+      const visibleSections = normalizePublicProfileSections(
+        company.profile_visible_sections,
+        DEFAULT_PUBLIC_PASSPORT_SECTIONS,
+      );
+      if (!passportSectionIsVisible(visibleSections, "reportAccess")) {
+        return res.status(404).json({ error: "Report not found" });
+      }
+
+      const [report] = await db.select({ id: reportRuns.id })
+        .from(reportRuns)
+        .where(and(
+          eq(reportRuns.id, req.params.reportId),
+          eq(reportRuns.companyId, company.id),
+          eq(reportRuns.workflowStatus, "approved"),
+        ))
+        .limit(1);
+      if (!report) return res.status(404).json({ error: "Report not found" });
+
+      const [file] = await db.select()
+        .from(generatedFiles)
+        .where(and(
+          eq(generatedFiles.id, req.params.fileId),
+          eq(generatedFiles.companyId, company.id),
+          eq(generatedFiles.reportRunId, report.id),
+          sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
+        ))
+        .limit(1);
+      if (!file?.fileData) return res.status(404).json({ error: "Report not found" });
+
+      try {
+        await storage.createAuditLog({
+          companyId: company.id,
+          actorType: "public",
+          action: "public_report_download",
+          entityType: "report_run",
+          entityId: report.id,
+          ipAddress: getClientIp(req),
+          userAgent: req.headers["user-agent"] || null,
+          details: {
+            fileId: file.id,
+            fileType: file.fileType,
+            tokenPrefix: req.params.token.slice(0, 8),
+          },
+        } as any);
+      } catch {}
+
+      const filename = String(file.filename || "esg-report")
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .slice(0, 180);
+      const contentType = file.fileType === "pdf"
+        ? "application/pdf"
+        : file.fileType === "docx"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/octet-stream";
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(Buffer.from(file.fileData, "base64"));
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -10293,6 +11155,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       try {
         if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
           const aiOpenai = createOpenAiIntegrationClient();
+          if (!aiOpenai) throw new Error("AI integration is not configured");
 
           const prompt = `You are an ESG implementation advisor for SME businesses. Generate a 12-month ESG implementation roadmap.
 
@@ -11218,8 +12081,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       `);
       const adminUserId = (req as any)._superAdmin?.id ?? "system";
       await db.execute(sql`
-        INSERT INTO super_admin_actions (id, admin_user_id, action, target_company_id, target_user_id, metadata)
-        VALUES (gen_random_uuid()::text, ${adminUserId}, 'beta_access_granted', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, expiresInDays, reason: reason ?? null, companyId: targetUser.company_id, grantedBy })}::jsonb)
+        INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata)
+        VALUES (${adminUserId}, 'beta_access_granted', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, expiresInDays, reason: reason ?? null, companyId: targetUser.company_id, grantedBy })}::jsonb)
       `);
       console.log(`[Beta] Granted beta access to company ${targetUser.company_id} (user: ${email}) by ${grantedBy}, expires ${betaExpiresAt.toISOString()}`);
       res.json({ success: true, companyId: targetUser.company_id, betaExpiresAt: betaExpiresAt.toISOString() });
@@ -11249,8 +12112,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const revokedBy = (req as any)._superAdmin?.email ?? "super_admin";
       const revokeAdminId = (req as any)._superAdmin?.id ?? "system";
       await db.execute(sql`
-        INSERT INTO super_admin_actions (id, admin_user_id, action, target_company_id, target_user_id, metadata)
-        VALUES (gen_random_uuid()::text, ${revokeAdminId}, 'beta_access_revoked', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, companyId: targetUser.company_id, revokedBy })}::jsonb)
+        INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata)
+        VALUES (${revokeAdminId}, 'beta_access_revoked', ${targetUser.company_id}, ${targetUser.id}, ${JSON.stringify({ email, companyId: targetUser.company_id, revokedBy })}::jsonb)
       `);
       console.log(`[Beta] Revoked beta access from company ${targetUser.company_id} (user: ${email}) by ${revokedBy}`);
       res.json({ success: true });
@@ -11307,7 +12170,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   });
 
   registerAgentRoutes(app);
-  startScheduler();
+  // Regression suites seed many disposable tenants and invoke reminder
+  // generation directly. Running the background worker as well creates noisy,
+  // non-deterministic side effects that are unrelated to request acceptance.
+  if (process.env.REGRESSION_TEST !== "1") startScheduler();
 
   // ============================================================
   // SUPER ADMIN ROUTES
@@ -12884,6 +13750,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { format: fmt = "pdf", period, periodType, siteId, dateFrom, dateTo } = req.body;
+      const frameworkPeriod = reportType === "framework_readiness_summary"
+        ? concreteFrameworkReportingPeriod(period)
+        : null;
       const requestedFormat = String(fmt || "pdf").toLowerCase();
       if (!["pdf", "docx"].includes(requestedFormat)) {
         await recordReportExportAudit(req, {
@@ -12937,6 +13806,30 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         });
         return res.status(400).json({ error: `Invalid report type. Must be one of: ${VALID_TYPES.join(", ")}` });
       }
+      if (reportType === "framework_readiness_summary" && (!frameworkPeriod || dateFrom || dateTo)) {
+        await recordReportExportAudit(req, {
+          reportType,
+          format: requestedFormat,
+          period,
+          periodType,
+          siteId,
+          dateFrom,
+          dateTo,
+          outcome: "failure",
+          reason: "framework_requires_period",
+          statusCode: 400,
+        });
+        return res.status(400).json({
+          error: "Framework readiness exports require one concrete reporting period; all-period and date-range modes are not supported.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
+      const savedFrameworkPeriod = frameworkPeriod
+        ? (await storage.getReportingPeriods(companyId)).find((reportingPeriod) =>
+            reportingPeriod.id === frameworkPeriod || reportingPeriod.name === frameworkPeriod,
+          )
+        : undefined;
+      const resolvedFrameworkPeriod = savedFrameworkPeriod?.name ?? frameworkPeriod;
 
       // Helper: filter values by date range (period string "YYYY-MM" comparison) and siteId
       function filterValues(values: any[], opts: { siteId?: string | null; siteScopeProvided?: boolean; dateFrom?: string | null; dateTo?: string | null }): any[] {
@@ -12959,6 +13852,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const company = await storage.getCompany(companyId);
       const companyName = company?.name || "Organisation";
       let requestedSiteName: string | null = null;
+      if (requestedSiteId) {
+        const requestedSite = await storage.getSite(requestedSiteId, companyId);
+        requestedSiteName = requestedSite?.name ?? null;
+      }
 
       const {
         buildEsgMetricsSummaryReport,
@@ -12981,7 +13878,6 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         let site: any = null;
         if (requestedSiteId) {
           site = await storage.getSite(requestedSiteId, companyId);
-          requestedSiteName = site?.name ?? null;
         }
 
         // Fetch values: use period if given, else use date range if given, else all values
@@ -13056,12 +13952,24 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }
 
       } else if (reportType === "framework_readiness_summary") {
-        const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
+        const frameworkReadiness = await storage.getFrameworkReadiness(companyId, {
+          period: frameworkPeriod!,
+          siteId: requestedSiteId,
+        });
         const allFrameworks = await storage.getFrameworks(true);
         const selections = await storage.getBusinessFrameworkSelections(companyId);
         const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
         const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
-        reportData = buildFrameworkReadinessSummaryReport({ company, frameworkReadiness, selectedFrameworks, period, dateFrom: dateFrom || null, dateTo: dateTo || null });
+        reportData = buildFrameworkReadinessSummaryReport({
+          company,
+          frameworkReadiness,
+          selectedFrameworks,
+          period: resolvedFrameworkPeriod!,
+          siteId: requestedSiteId,
+          siteName: requestedSiteName,
+          dateFrom: dateFrom || null,
+          dateTo: dateTo || null,
+        });
 
       } else if (reportType === "target_progress_summary") {
         let targets = await storage.getEsgTargets(companyId);
@@ -13167,11 +14075,22 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       try {
         const { evaluateEsgStatus } = await import("./esg-status");
         const { buildStandaloneMetaSections } = await import("./report-engine");
-        const esgStatus = await evaluateEsgStatus(companyId, period, requestedSiteId);
+        const frameworkReportingContext = savedFrameworkPeriod
+          ? await (await import("./reporting-context")).resolveCompanyReportingContext(companyId, {
+              requestedPeriod: savedFrameworkPeriod.id,
+              requestedSiteId,
+            })
+          : null;
+        const esgStatus = frameworkReportingContext
+          ? await evaluateEsgStatus(companyId, frameworkReportingContext)
+          : await evaluateEsgStatus(companyId, resolvedFrameworkPeriod ?? period, requestedSiteId, {
+              dateFrom: dateFrom || undefined,
+              dateTo: dateTo || undefined,
+            });
         const estimatedPercent = esgStatus.totalMetrics > 0
           ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100)
           : 0;
-        const reportingPeriodLabel = period || (dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : "All periods");
+        const reportingPeriodLabel = resolvedFrameworkPeriod || period || (dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : "All periods");
         const scopeStatement = requestedSiteId === undefined
           ? `This report covers the ESG performance of ${companyName} for the reporting period ${reportingPeriodLabel}. It includes data from all active sites and organisational-level metric entries. The reporting boundary is the legal entity of ${companyName}.`
           : requestedSiteId === null
@@ -13242,6 +14161,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const { reportType } = req.params;
       const { period, periodType, siteId, dateFrom, dateTo } = req.query as { period?: string; periodType?: string; siteId?: string; dateFrom?: string; dateTo?: string };
+      const frameworkPeriod = reportType === "framework_readiness_summary"
+        ? concreteFrameworkReportingPeriod(period)
+        : null;
       const rawFormat = (req.query as Record<string, unknown>).format;
       const requestedFormat = Array.isArray(rawFormat) ? rawFormat[0] : rawFormat;
       if (requestedFormat !== undefined && String(requestedFormat).toLowerCase() !== "json") {
@@ -13259,6 +14181,29 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         });
         return res.status(400).json({ error: "Format must be json" });
       }
+      if (reportType === "framework_readiness_summary" && (!frameworkPeriod || dateFrom || dateTo)) {
+        await recordReportExportDataAudit(req, {
+          reportType,
+          format: "json",
+          period,
+          periodType,
+          siteId,
+          dateFrom,
+          dateTo,
+          outcome: "failure",
+          reason: "framework_requires_period",
+          statusCode: 400,
+        });
+        return res.status(400).json({
+          error: "Framework readiness exports require one concrete reporting period; all-period and date-range modes are not supported.",
+          code: "FRAMEWORK_PERIOD_REQUIRED",
+        });
+      }
+      const resolvedFrameworkPeriod = frameworkPeriod
+        ? (await storage.getReportingPeriods(companyId)).find((reportingPeriod) =>
+            reportingPeriod.id === frameworkPeriod || reportingPeriod.name === frameworkPeriod,
+          )?.name ?? frameworkPeriod
+        : null;
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.query ?? {}, "siteId");
       const requestedSiteId = siteId === "__all__" ? undefined : siteId === "null" || siteId === "__org__" ? null : siteId || undefined;
       if (requestedSiteId) {
@@ -13336,13 +14281,31 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         });
         res.json({ metrics: enabledMetrics, values: enabledValues, site, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null, trendSummary });
       } else if (reportType === "framework_readiness_summary") {
-        const frameworkReadiness = await storage.getFrameworkReadiness(companyId);
+        const frameworkReadiness = await storage.getFrameworkReadiness(companyId, {
+          period: frameworkPeriod!,
+          siteId: requestedSiteId,
+        });
         const allFrameworks = await storage.getFrameworks(true);
         const selections = await storage.getBusinessFrameworkSelections(companyId);
         const enabledIds = new Set(selections.filter((s: any) => s.isEnabled).map((s: any) => s.frameworkId));
         const selectedFrameworks = allFrameworks.filter((f: any) => enabledIds.has(f.id));
-        await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
-        res.json({ frameworkReadiness, selectedFrameworks, period, periodType: periodType ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null });
+        const selectedSite = requestedSiteId ? await storage.getSite(requestedSiteId, companyId) : null;
+        const scope = frameworkReadiness[0]?.scope ?? {
+          period: resolvedFrameworkPeriod!,
+          siteMode: requestedSiteId === undefined ? "all" : requestedSiteId === null ? "organisation" : "site",
+          siteId: requestedSiteId ?? null,
+        };
+        await recordReportExportDataAudit(req, { reportType, format: "json", period: resolvedFrameworkPeriod!, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
+        res.json({
+          frameworkReadiness,
+          selectedFrameworks,
+          scope,
+          site: selectedSite ? { id: selectedSite.id, name: selectedSite.name } : null,
+          period: resolvedFrameworkPeriod!,
+          periodType: periodType ?? null,
+          dateFrom: dateFrom ?? null,
+          dateTo: dateTo ?? null,
+        });
       } else if (reportType === "target_progress_summary") {
         const targets = await storage.getEsgTargets(companyId);
         await recordReportExportDataAudit(req, { reportType, format: "json", period, periodType, siteId, dateFrom, dateTo, outcome: "success", statusCode: 200 });
@@ -14268,7 +15231,8 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const { userId, companyId } = (req as any)._auth;
       const { password, totpToken, backupCode } = req.body;
-      const sessionId = req.session?.id;
+      const authMode = (req as any)._authMode;
+      const sessionId = getSelectedAuthSessionId(req);
       const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
       const clientUa = req.headers["user-agent"] || null;
 
@@ -14333,10 +15297,28 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         }
       }
 
-      // Rotate the browser session id when granting elevated privilege, while
-      // keeping any persisted bearer token linked to the new tracked session.
-      const previousCreatedAt = (req.session as any).createdAt || Date.now();
       const extSession = await storage.getUserSession(sessionId).catch(() => null);
+      if (authMode === "bearer") {
+        if (!extSession) {
+          return res.status(401).json({ error: "No active session" });
+        }
+        await storage.setUserSessionStepUp(sessionId);
+        await storage.createAuditLog({
+          companyId: companyId || undefined,
+          userId,
+          actorType: "user",
+          action: "step_up_success",
+          entityType: "auth",
+          ipAddress: clientIp,
+          userAgent: clientUa,
+          details: { sessionId, previousSessionRotated: false, authMode: "bearer" },
+        } as any).catch(() => {});
+        return res.json({ ok: true, stepUpGranted: true });
+      }
+
+      // Cookie-authenticated step-up rotates the browser session id to prevent
+      // fixation while preserving any token that was linked to that session.
+      const previousCreatedAt = (req.session as any).createdAt || Date.now();
       await new Promise<void>((resolve, reject) => {
         req.session.regenerate((err: Error | null) => err ? reject(err) : resolve());
       });
@@ -14385,7 +15367,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.get("/api/auth/step-up/status", requireAuth, async (req, res) => {
     try {
-      const sessionId = req.session?.id;
+      const sessionId = getSelectedAuthSessionId(req);
       const STEP_UP_VALIDITY = parseInt(process.env.STEP_UP_VALIDITY_MS || "") || 15 * 60 * 1000;
       if (!sessionId) {
         return res.json({ stepUpValid: false, requiresMfa: false });
@@ -14989,6 +15971,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         return res.status(409).json({ error: "A user with that email is already a member of this company" });
       }
 
+      const company = await storage.getCompany(targetCompanyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
       const { plaintext, hash } = generateSecureToken();
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
       await storage.createAuthToken({
@@ -15002,11 +15987,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           inviteeName: inviteeName ?? null,
           inviterUserId: callerUser.id,
           inviterRole: callerUser.role ?? null,
-          companyName: company?.name ?? null,
+          companyName: company.name,
         },
       });
 
-      const company = await storage.getCompany(targetCompanyId);
       const actor = await storage.getUser(callerUser.id);
       const emailPayload = buildInvitationEmail({
         inviteeName: inviteeName || email,
@@ -15563,7 +16547,10 @@ async function generateScheduledReminders(companyId: string, storage: any, db: a
   return count;
 }
 
-async function buildEsgProfile(companyId: string, options: { period?: string } = {}) {
+async function buildEsgProfile(
+  companyId: string,
+  options: { period?: string; includeShareToken?: boolean; publishedOnly?: boolean } = {},
+) {
   const metrics = await storage.getMetrics(companyId);
   const enabledMetrics = Array.from(
     new Map(metrics.filter((m: any) => m.enabled).map((m: any) => [m.id, m])).values()
@@ -15572,10 +16559,34 @@ async function buildEsgProfile(companyId: string, options: { period?: string } =
   const policy = await storage.getPolicy(companyId);
   const evidence = await storage.getEvidenceFiles(companyId);
   const carbonCalcs = await storage.getCarbonCalculations(companyId);
-  const latestCarbon = carbonCalcs.sort((a: any, b: any) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
+  const companyInfo = await storage.getCompany(companyId);
+  const [
+    activeSites,
+    targets,
+    esgActions,
+    actionPlans,
+    generatedPolicies,
+    policyRecords,
+    reportHistory,
+  ] = await Promise.all([
+    storage.getSites(companyId, false).catch(() => []),
+    storage.getEsgTargets(companyId).catch(() => []),
+    storage.getEsgActions(companyId).catch(() => []),
+    storage.getActionPlans(companyId).catch(() => []),
+    storage.getGeneratedPolicies(companyId).catch(() => []),
+    storage.getPolicyRecords(companyId).catch(() => []),
+    storage.getReportRuns(companyId).catch(() => []),
+  ]);
+  const activeSiteIds = activeSites.map((site: any) => String(site.id));
+  const carbonSelection = selectPassportCarbonCalculation({
+    calculations: carbonCalcs,
+    reportingPeriod: reportingPeriod.period,
+    activeSiteIds,
+  });
 
   let envScore = 0, socScore = 0, govScore = 0;
   let envCount = 0, socCount = 0, govCount = 0;
+  let filledMetricCount = 0, measuredMetricCount = 0, estimatedMetricCount = 0;
   const keyMetrics: any[] = [];
 
   const metricValuesByMetric = await Promise.all(
@@ -15586,11 +16597,20 @@ async function buildEsgProfile(companyId: string, options: { period?: string } =
   );
 
   for (const { metric: m, values: vals } of metricValuesByMetric) {
-    const latest = vals
-      .filter((value: any) => value.period === reportingPeriod.period)
-      .sort((a: any, b: any) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime())[0];
-    const formattedValue = formatProfileMetricValue(latest?.value);
+    const selected = selectPassportMetricValue({
+      metric: m,
+      values: vals,
+      period: reportingPeriod.period,
+      activeSiteIds,
+      publishedOnly: options.publishedOnly,
+    });
+    const formattedValue = formatProfileMetricValue(selected.value);
     const hasValue = formattedValue !== null;
+    if (hasValue) {
+      filledMetricCount++;
+      if (selected.containsEstimatedData) estimatedMetricCount++;
+      else measuredMetricCount++;
+    }
 
     keyMetrics.push({
       id: m.id,
@@ -15599,12 +16619,21 @@ async function buildEsgProfile(companyId: string, options: { period?: string } =
       hasValue,
       unit: m.unit,
       category: m.category,
-      status: latest?.status || null,
-      period: latest?.period || null,
+      status: selected.status,
+      period: hasValue ? selected.period : null,
+      dataSourceType: selected.dataSourceType,
+      dataSourceLabel: selected.dataSourceLabel,
+      workflowStatus: selected.workflowStatus,
+      workflowLabel: selected.workflowLabel,
+      sourceScope: selected.sourceScope,
+      sourceLabel: selected.sourceLabel,
+      aggregationMethod: selected.aggregationMethod,
+      aggregationLabel: selected.aggregationLabel,
+      contributingSiteCount: selected.contributingSiteCount,
     });
 
     if (hasValue) {
-      const score = latest.status === "green" ? 100 : latest.status === "amber" ? 60 : latest.status === "red" ? 20 : 50;
+      const score = selected.status === "green" ? 100 : selected.status === "amber" ? 60 : selected.status === "red" ? 20 : 50;
       if (m.category === "environmental") { envScore += score; envCount++; }
       else if (m.category === "social") { socScore += score; socCount++; }
       else if (m.category === "governance") { govScore += score; govCount++; }
@@ -15618,7 +16647,6 @@ async function buildEsgProfile(companyId: string, options: { period?: string } =
     overall: (envCount + socCount + govCount) > 0 ? Math.round((envScore + socScore + govScore) / (envCount + socCount + govCount)) : 0,
   };
 
-  const companyInfo = await storage.getCompany(companyId);
   const complianceResult = await db.execute(sql`
     SELECT cf.name as framework_name, COUNT(cr.id) as total,
       COUNT(CASE WHEN cr.linked_metric_ids IS NOT NULL THEN 1 END) as linked
@@ -15630,19 +16658,237 @@ async function buildEsgProfile(companyId: string, options: { period?: string } =
 
   const totalEvidence = evidence.length;
   const reviewedEvidence = evidence.filter(e => e.evidenceStatus === "approved" || e.evidenceStatus === "reviewed").length;
+  const approvedEvidence = evidence.filter(e => e.evidenceStatus === "approved").length;
+  const { calculateEvidenceConfidence } = await import("./esg-status");
+  const metricEvidence = calculateEvidenceConfidence(
+    enabledMetrics.map((metric: any) => metric.id),
+    evidence,
+    { period: reportingPeriod.period },
+  );
+  const completion = calculatePassportCompletion(enabledMetrics.length, filledMetricCount);
+  const evidenceConfidence = {
+    ...buildPassportEvidenceConfidence({
+      totalMetrics: enabledMetrics.length,
+      filledMetrics: filledMetricCount,
+      measuredCount: measuredMetricCount,
+      estimatedCount: estimatedMetricCount,
+      sourceLinked: metricEvidence.sourceLinked,
+      reviewed: metricEvidence.reviewed,
+      evidenceBacked: metricEvidence.evidenceBacked,
+      independentlyAssured: metricEvidence.independentlyAssured,
+    }),
+    documents: {
+      total: totalEvidence,
+      reviewed: reviewedEvidence,
+      approved: approvedEvidence,
+    },
+  };
+
+  const policyCandidates = [
+    ...(policy ? [{
+      title: "Company ESG policy",
+      status: policy.status || "draft",
+      workflowStatus: undefined,
+      publishedAt: policy.publishedAt || null,
+      reviewDate: policy.reviewDate || null,
+    }] : []),
+    ...generatedPolicies.map((item: any) => ({
+      title: item.title || item.templateSlug || "ESG policy",
+      status: item.status || "draft",
+      workflowStatus: item.workflowStatus || null,
+      publishedAt: item.approvedAt || item.reviewedAt || null,
+      reviewDate: item.reviewDate || null,
+    })),
+    ...policyRecords.map((item: any) => ({
+      title: item.title || "Policy",
+      status: item.status || "draft",
+      workflowStatus: undefined,
+      publishedAt: item.effectiveDate || null,
+      reviewDate: item.reviewDate || null,
+    })),
+  ];
+  const eligiblePolicyCandidates = policyCandidates.filter(isPublicPassportPolicyRecord);
+  const selectedPolicyCandidates = options.publishedOnly ? eligiblePolicyCandidates : policyCandidates;
+  const policyItems = selectedPolicyCandidates.map(({ workflowStatus: _workflowStatus, ...item }) => item);
+  const publicPolicies = {
+    total: policyItems.length,
+    published: options.publishedOnly ? policyItems.length : eligiblePolicyCandidates.length,
+    items: policyItems.slice(0, 8),
+  };
+
+  const now = Date.now();
+  const actionItems = [...esgActions, ...actionPlans].map((item: any) => {
+    const status = String(item.status || "not_started");
+    const isComplete = status === "complete" || status === "completed";
+    const isOverdue = status === "overdue"
+      || (!isComplete && item.dueDate && new Date(item.dueDate).getTime() < now);
+    return {
+      title: item.title || "ESG action",
+      status: isOverdue ? "overdue" : status,
+      dueDate: item.dueDate || null,
+      progressPercent: Number.isFinite(Number(item.progressPercent)) ? Number(item.progressPercent) : null,
+    };
+  });
+  const publicActions = {
+    total: actionItems.length,
+    completed: actionItems.filter((item) => item.status === "complete" || item.status === "completed").length,
+    inProgress: actionItems.filter((item) => item.status === "in_progress").length,
+    overdue: actionItems.filter((item) => item.status === "overdue").length,
+    items: actionItems.slice(0, 8),
+  };
+
+  const metricById = new Map(enabledMetrics.map((metric: any) => [metric.id, metric]));
+  const targetItems = targets.map((item: any) => ({
+    title: item.title || "ESG target",
+    pillar: item.pillar || null,
+    baselineValue: formatProfileMetricValue(item.baselineValue),
+    baselineYear: item.baselineYear || null,
+    targetValue: formatProfileMetricValue(item.targetValue),
+    targetYear: item.targetYear || null,
+    unit: item.linkedMetricId ? (metricById.get(item.linkedMetricId) as any)?.unit || null : null,
+    status: item.status || "not_started",
+    progressPercent: Number.isFinite(Number(item.progressPercent)) ? Number(item.progressPercent) : 0,
+  }));
+  const publicTargets = {
+    total: targetItems.length,
+    achieved: targetItems.filter((item: any) => item.status === "achieved").length,
+    inProgress: targetItems.filter((item: any) => item.status === "in_progress").length,
+    items: targetItems.slice(0, 8),
+  };
+
+  const approvedReports = (reportHistory as any[])
+    .filter((report) => report.workflowStatus === "approved")
+    .sort((a, b) => {
+      const aMatches = a.period === reportingPeriod.period ? 1 : 0;
+      const bMatches = b.period === reportingPeriod.period ? 1 : 0;
+      if (aMatches !== bMatches) return bMatches - aMatches;
+      return new Date(b.generatedAt || 0).getTime() - new Date(a.generatedAt || 0).getTime();
+    });
+  let latestApprovedReport: any = null;
+  if (approvedReports.length > 0) {
+    const reportIds = approvedReports.map((report) => report.id);
+    const reportFiles = await db.select({
+      id: generatedFiles.id,
+      reportRunId: generatedFiles.reportRunId,
+      filename: generatedFiles.filename,
+      fileType: generatedFiles.fileType,
+      fileSize: generatedFiles.fileSize,
+      generatedAt: generatedFiles.generatedAt,
+    })
+      .from(generatedFiles)
+      .where(and(
+        eq(generatedFiles.companyId, companyId),
+        inArray(generatedFiles.reportRunId, reportIds),
+        sql`(${generatedFiles.expiresAt} IS NULL OR ${generatedFiles.expiresAt} > NOW())`,
+      ))
+      .orderBy(desc(generatedFiles.generatedAt));
+    const latestFileByReport = new Map<string, any>();
+    for (const file of reportFiles) {
+      if (file.reportRunId && !latestFileByReport.has(file.reportRunId)) {
+        latestFileByReport.set(file.reportRunId, file);
+      }
+    }
+    const report = approvedReports.find((candidate) => latestFileByReport.has(candidate.id));
+    if (report) {
+      const file = latestFileByReport.get(report.id);
+      latestApprovedReport = {
+        reportId: report.id,
+        fileId: file.id,
+        title: report.reportData?.reportTitle
+          || REPORT_TEMPLATE_LABELS[report.reportTemplate as keyof typeof REPORT_TEMPLATE_LABELS]
+          || "Approved ESG report",
+        reportingPeriod: report.period || null,
+        generatedAt: report.generatedAt || file.generatedAt || null,
+        fileType: file.fileType,
+        fileSize: file.fileSize,
+        filename: file.filename,
+        status: "approved",
+      };
+    }
+  }
+  const reportAccess = {
+    available: Boolean(latestApprovedReport),
+    latest: latestApprovedReport,
+    note: latestApprovedReport
+      ? "This is the latest approved report with a retained generated file."
+      : "No approved generated report is currently available through this passport.",
+  };
+
+  const emissions = {
+    ...carbonSelection,
+    unit: "kgCO2e",
+    basis: carbonSelection.available
+      ? "SME carbon estimator"
+      : "No carbon calculation recorded for this reporting period",
+  };
+  const usesOrganisationMetricData = keyMetrics.some((metric) => metric.sourceScope === "organisation");
+  const usesActiveSiteMetricData = keyMetrics.some((metric) => metric.sourceScope === "active_sites");
+  const publicCompanyPolicy = policy && isPublicPassportPolicyRecord({ status: policy.status });
+
+  const passport = {
+    version: 1,
+    title: "SME ESG Passport",
+    organisation: {
+      name: companyInfo?.name || "Organisation",
+      industry: companyInfo?.industry || null,
+      employeeCount: companyInfo?.employeeCount || null,
+    },
+    reportingBoundary: {
+      type: activeSites.length > 0 ? "whole_organisation" : "legal_entity",
+      label: activeSites.length > 0
+        ? `Whole-organisation view: organisation-level records take precedence; otherwise ${activeSites.length} active site${activeSites.length === 1 ? " is" : "s are"} aggregated`
+        : `Legal entity: ${companyInfo?.name || "Organisation"}; organisation-level records only`,
+      legalEntity: companyInfo?.name || "Organisation",
+      activeSiteCount: activeSites.length,
+      organisationLevelDataPrecedence: true,
+      includesOrganisationLevelData: usesOrganisationMetricData || carbonSelection.sourceScope === "organisation",
+      includesActiveSiteData: usesActiveSiteMetricData || carbonSelection.sourceScope === "active_sites",
+      metricAggregationLabel: "For each metric, the latest organisation-level record takes precedence. If absent, latest active-site values are summed for additive metrics and averaged for percentages or rates.",
+      carbonAggregationLabel: "Carbon uses this Passport period only: the latest organisation calculation takes precedence, otherwise one latest calculation per active site is summed.",
+    },
+    reportingPeriod,
+    completion,
+    evidenceConfidence,
+    emissions,
+    policies: publicPolicies,
+    actions: publicActions,
+    targets: publicTargets,
+    reportAccess,
+    generatedAt: new Date().toISOString(),
+    disclaimer: "This passport presents reported facts and evidence status. It is not an ESG rating or independent assurance unless explicitly stated.",
+  };
 
   return {
     company: { name: companyInfo?.name, industry: companyInfo?.industry, employeeCount: companyInfo?.employeeCount },
     reporting_period: reportingPeriod,
     esg_scores,
     key_metrics: keyMetrics,
-    policy_status: { status: policy?.status || "not_created", publishedAt: policy?.publishedAt, reviewDate: policy?.reviewDate },
-    carbon_summary: latestCarbon ? { scope1: latestCarbon.scope1Total, scope2: latestCarbon.scope2Total, scope3: latestCarbon.scope3Total, total: latestCarbon.totalEmissions, period: latestCarbon.reportingPeriod } : null,
+    policy_status: options.publishedOnly
+      ? publicCompanyPolicy
+        ? { status: policy.status, publishedAt: policy.publishedAt, reviewDate: policy.reviewDate }
+        : { status: policy ? "not_published" : "not_created", publishedAt: null, reviewDate: null }
+      : { status: policy?.status || "not_created", publishedAt: policy?.publishedAt, reviewDate: policy?.reviewDate },
+    carbon_summary: carbonSelection.available ? {
+      scope1: carbonSelection.scope1,
+      scope2: carbonSelection.scope2,
+      scope3: carbonSelection.scope3,
+      total: carbonSelection.total,
+      period: carbonSelection.reportingPeriod,
+      unit: "kgCO2e",
+      factorYear: carbonSelection.factorYear,
+      sourceScope: carbonSelection.sourceScope,
+      sourceLabel: carbonSelection.sourceLabel,
+      aggregationMethod: carbonSelection.aggregationMethod,
+      aggregationLabel: carbonSelection.aggregationLabel,
+      contributingSiteCount: carbonSelection.contributingSiteCount,
+    } : null,
     compliance_highlights: (complianceResult as any).rows || [],
     evidence_coverage: { total: totalEvidence, reviewed: reviewedEvidence, percentage: totalEvidence > 0 ? Math.round((reviewedEvidence / totalEvidence) * 100) : 0 },
+    passport,
+    report_access: reportAccess,
     shareSettings: {
       enabled: (companyInfo as any)?.profileShareEnabled || false,
-      token: (companyInfo as any)?.profileShareToken || null,
+      token: options.includeShareToken ? (companyInfo as any)?.profileShareToken || null : null,
       expiresAt: (companyInfo as any)?.profileShareExpiresAt || null,
       visibleSections: (companyInfo as any)?.profileVisibleSections || [],
     },
@@ -15675,6 +16921,12 @@ function formatProfileMetricValue(value: unknown): string | null {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return null;
   return numericValue.toFixed(2);
+}
+
+function parseProfileNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
 }
 
 function sanitizeQuestionText(text: string): string {
@@ -15766,7 +17018,19 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const r = (v: number) => Math.round(v * 10000) / 10000;
   const r2 = (v: number) => Math.round(v * 100) / 100;
   const dq = (key: string): "actual" | "estimated" | "proxy" => (dataQualityMap[key] as any) || "actual";
-  const factorYear = factors[0]?.factorYear || 2024;
+  if (factors.length === 0) {
+    throw new Error("No emission factor set is configured. Ask an administrator to select a published factor set.");
+  }
+  const factorYear = factors[0]?.factorYear || CURRENT_UK_FACTOR_YEAR;
+  const readFactor = (factor: any, label: string): number => {
+    const value = factor ? Number(factor.factor) : Number.NaN;
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`The selected factor set is missing a valid ${label} factor.`);
+    }
+    return value;
+  };
+  const factorSource = (factor: any) =>
+    factor?.sourceLabel || `UK Government GHG Conversion Factors ${factorYear}`;
 
   const lineItems: CarbonLineItem[] = [];
   const assumptions: string[] = [];
@@ -15774,11 +17038,11 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const elecVal = parseFloat(inputs.electricity) || 0;
   if (elecVal > 0) {
     const ef = findFactor("electricity");
-    const fv = ef ? parseFloat(ef.factor) : 0.20707;
+    const fv = readFactor(ef, "grid electricity");
     lineItems.push({
       key: "electricity", label: "Grid Electricity", scope: 2,
       activityValue: elecVal, activityUnit: "kWh", factor: fv, factorUnit: "kgCO2e/kWh",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(elecVal * fv), dataQuality: dq("electricity"),
       methodology: ef?.methodology || "Location-based, UK national grid average.",
       assumptions: dq("electricity") === "proxy" ? ["Electricity estimated from floor area proxy"] : [],
@@ -15787,12 +17051,12 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
 
   const gasVal = parseFloat(inputs.gas) || 0;
   if (gasVal > 0) {
-    const ef = findFactor("gas");
-    const fv = ef ? parseFloat(ef.factor) : 0.18293;
+    const ef = findFactor("gas", "natural_gas");
+    const fv = readFactor(ef, "natural gas");
     lineItems.push({
       key: "gas", label: "Natural Gas", scope: 1,
       activityValue: gasVal, activityUnit: "kWh", factor: fv, factorUnit: "kgCO2e/kWh",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(gasVal * fv), dataQuality: dq("gas"), fuelType: "natural_gas",
       methodology: ef?.methodology || "Gross calorific value basis.",
       assumptions: [],
@@ -15802,11 +17066,11 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const dieselVal = parseFloat(inputs.diesel) || 0;
   if (dieselVal > 0) {
     const ef = findFactor("fuel", "diesel") || findFactor("fuel");
-    const fv = ef ? parseFloat(ef.factor) : 2.70559;
+    const fv = readFactor(ef, "diesel");
     lineItems.push({
       key: "diesel", label: "Diesel", scope: 1,
       activityValue: dieselVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(dieselVal * fv), dataQuality: dq("diesel"), fuelType: "diesel",
       methodology: ef?.methodology || "Per litre of automotive diesel.",
       assumptions: [],
@@ -15816,11 +17080,11 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const petrolVal = parseFloat(inputs.petrol) || 0;
   if (petrolVal > 0) {
     const ef = findFactor("fuel", "petrol") || findFactor("fuel");
-    const fv = ef ? parseFloat(ef.factor) : 2.31482;
+    const fv = readFactor(ef, "petrol");
     lineItems.push({
       key: "petrol", label: "Petrol", scope: 1,
       activityValue: petrolVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(petrolVal * fv), dataQuality: dq("petrol"), fuelType: "petrol",
       methodology: ef?.methodology || "Per litre of motor gasoline.",
       assumptions: [],
@@ -15830,11 +17094,11 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const lpgVal = parseFloat(inputs.lpg) || 0;
   if (lpgVal > 0) {
     const ef = findFactor("fuel", "lpg") || findFactorByName("LPG");
-    const fv = ef ? parseFloat(ef.factor) : 1.55537;
+    const fv = readFactor(ef, "LPG");
     lineItems.push({
       key: "lpg", label: "LPG", scope: 1,
       activityValue: lpgVal, activityUnit: "litres", factor: fv, factorUnit: "kgCO2e/litre",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(lpgVal * fv), dataQuality: dq("lpg"), fuelType: "lpg",
       methodology: ef?.methodology || "Per litre of LPG.",
       assumptions: [],
@@ -15845,7 +17109,7 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   const vehicleFuelType = inputs.vehicleFuelType && inputs.vehicleFuelType !== "avg" ? inputs.vehicleFuelType : null;
   if (vehicleVal > 0) {
     const ef = findFactor("vehicles", vehicleFuelType);
-    const fv = ef ? parseFloat(ef.factor) : 0.27436;
+    const fv = readFactor(ef, "average company car");
     const vehicleLabel = vehicleFuelType
       ? `Company Vehicle (${vehicleFuelType.charAt(0).toUpperCase() + vehicleFuelType.slice(1)})`
       : "Company Vehicle (Average)";
@@ -15854,30 +17118,30 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
     lineItems.push({
       key: "vehicles", label: vehicleLabel, scope: 1,
       activityValue: vehicleVal, activityUnit: "miles", factor: fv, factorUnit: "kgCO2e/mile",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(vehicleVal * fv), dataQuality: dq("vehicleMileage"), fuelType: vehicleFuelType || "mixed",
       methodology: ef?.methodology || "Average company car per mile.",
       assumptions: vAssumptions,
     });
   }
 
-  const travelItems: { key: string; inputKey: string; label: string; name: string; unit: string; fallback: number }[] = [
-    { key: "domesticFlights", inputKey: "domesticFlights", label: "Domestic Flights", name: "Domestic Flight", unit: "passenger-km", fallback: 0.24587 },
-    { key: "shortHaulFlights", inputKey: "shortHaulFlights", label: "Short-haul Flights", name: "Short-haul Flight", unit: "passenger-km", fallback: 0.15353 },
-    { key: "longHaulFlights", inputKey: "longHaulFlights", label: "Long-haul Flights", name: "Long-haul Flight", unit: "passenger-km", fallback: 0.19309 },
-    { key: "rail", inputKey: "railTravel", label: "Rail Travel", name: "Rail Travel", unit: "passenger-km", fallback: 0.03549 },
-    { key: "hotelNights", inputKey: "hotelNights", label: "Hotel Nights", name: "Hotel Nights", unit: "nights", fallback: 10.24 },
+  const travelItems: { key: string; inputKey: string; label: string; name: string; unit: string }[] = [
+    { key: "domesticFlights", inputKey: "domesticFlights", label: "Domestic Flights", name: "Domestic Flight", unit: "passenger-km" },
+    { key: "shortHaulFlights", inputKey: "shortHaulFlights", label: "Short-haul Flights", name: "Short-haul Flight", unit: "passenger-km" },
+    { key: "longHaulFlights", inputKey: "longHaulFlights", label: "Long-haul Flights", name: "Long-haul Flight", unit: "passenger-km" },
+    { key: "rail", inputKey: "railTravel", label: "Rail Travel", name: "Rail Travel", unit: "passenger-km" },
+    { key: "hotelNights", inputKey: "hotelNights", label: "Hotel Nights", name: "Hotel Nights", unit: "nights" },
   ];
 
   for (const ti of travelItems) {
     const val = parseFloat(inputs[ti.inputKey]) || 0;
     if (val > 0) {
       const ef = findFactorByName(ti.name);
-      const fv = ef ? parseFloat(ef.factor) : ti.fallback;
+      const fv = readFactor(ef, ti.label.toLowerCase());
       lineItems.push({
         key: ti.key, label: ti.label, scope: 3,
         activityValue: val, activityUnit: ti.unit, factor: fv, factorUnit: `kgCO2e/${ti.unit}`,
-        factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+        factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
         emissions: r2(val * fv), dataQuality: dq(ti.inputKey),
         methodology: ef?.methodology || `Standard emission factor for ${ti.label.toLowerCase()}.`,
         assumptions: [],
@@ -15890,12 +17154,12 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
     const proxyFactor = 120;
     const annualKwh = proxyElec * proxyFactor;
     const ef = findFactor("electricity");
-    const fv = ef ? parseFloat(ef.factor) : 0.20707;
+    const fv = readFactor(ef, "grid electricity");
     assumptions.push(`Electricity estimated from floor area: ${proxyElec} m2 x ${proxyFactor} kWh/m2/yr`);
     lineItems.push({
       key: "electricity", label: "Grid Electricity (Proxy)", scope: 2,
       activityValue: annualKwh, activityUnit: "kWh (estimated)", factor: fv, factorUnit: "kgCO2e/kWh",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(annualKwh * fv), dataQuality: "proxy",
       methodology: "Proxy calculation: floor area (m2) x typical energy use intensity (120 kWh/m2/yr for UK offices).",
       assumptions: [`Floor area ${proxyElec} m2`, `Energy use intensity assumed at ${proxyFactor} kWh/m2/yr`, "Based on CIBSE TM46 benchmark for general office"],
@@ -15906,13 +17170,13 @@ function calculateEmissions(inputs: any, factors: any[], dataQualityMap: Record<
   if (proxyGas > 0 && gasVal === 0) {
     const proxyFactor = 80;
     const annualKwh = proxyGas * proxyFactor;
-    const ef = findFactor("gas");
-    const fv = ef ? parseFloat(ef.factor) : 0.18293;
+    const ef = findFactor("gas", "natural_gas");
+    const fv = readFactor(ef, "natural gas");
     assumptions.push(`Gas estimated from floor area: ${proxyGas} m2 x ${proxyFactor} kWh/m2/yr`);
     lineItems.push({
       key: "gas", label: "Natural Gas (Proxy)", scope: 1,
       activityValue: annualKwh, activityUnit: "kWh (estimated)", factor: fv, factorUnit: "kgCO2e/kWh",
-      factorSource: ef?.sourceLabel || "UK DEFRA 2024", factorYear: ef?.factorYear || factorYear,
+      factorSource: factorSource(ef), factorYear: ef?.factorYear || factorYear,
       emissions: r2(annualKwh * fv), dataQuality: "proxy", fuelType: "natural_gas",
       methodology: "Proxy calculation: floor area (m2) x typical gas use intensity (80 kWh/m2/yr for UK offices).",
       assumptions: [`Floor area ${proxyGas} m2`, `Gas use intensity assumed at ${proxyFactor} kWh/m2/yr`, "Based on CIBSE TM46 benchmark for general office"],

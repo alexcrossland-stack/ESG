@@ -35,14 +35,14 @@ const TOUR_STEPS = [
   },
   {
     icon: Shield,
-    title: "Compliance Tracking",
-    description: "Track your alignment with GRI Standards, ISO 14001, and UN SDGs. See which requirements are met based on your actual data and evidence.",
+    title: "Framework Readiness",
+    description: "Track strict, evidence-aware readiness for selected standards. Requirements stay missing or in progress until the required company facts, approvals, and evidence are present.",
     highlight: "page-compliance",
   },
   {
     icon: Download,
     title: "Reports & Exports",
-    description: "Generate four types of ready-to-use reports: Board Summary, Customer Response Pack, Compliance Summary, and Full ESG Report. Every report labels approved, draft, and missing information.",
+    description: "Generate VSME, PPN 006 readiness, board, customer, framework-readiness, and management reports. Every report labels measured, estimated, approved, evidenced, and missing information.",
     highlight: "button-generate-report",
   },
   {

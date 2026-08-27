@@ -7,6 +7,7 @@ import {
   isActiveEditableDataEntryMetric,
   isBooleanMetricDataType,
   parseBooleanMetricInput,
+  resolveMetricDataType,
 } from "@shared/data-entry-metrics";
 import { db, storage } from "./storage";
 import { trackTelemetryEvent } from "./telemetry";
@@ -268,7 +269,7 @@ async function loadCompanyMetrics(companyId: string): Promise<BulkGridMetric[]> 
     unit: metric.unit,
     metricType: metric.metricType,
     enabled: Boolean(metric.enabled),
-    dataType: definitionDataTypeByMetricName.get(normalizeMetricName(metric.name)) ?? "numeric",
+    dataType: resolveMetricDataType(metric, definitionDataTypeByMetricName.get(normalizeMetricName(metric.name))),
     readOnly: false,
   }));
 }

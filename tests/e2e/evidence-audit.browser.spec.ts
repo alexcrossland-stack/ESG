@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STATE_FILE } from "./global-setup.js";
+import { ADMIN_STATE_FILE, VIEWER_STATE_FILE } from "./global-setup.js";
 import fs from "fs";
 import { apiMultipartRequest, apiRequest } from "../fixtures/seed.js";
 
@@ -13,7 +13,7 @@ function readSeedInfo() {
 }
 
 test.describe("Evidence audit workflow", () => {
-  test("data entry attaches evidence in-row and evidence page filters audit records", async ({ browser }) => {
+  test("Measure evidence focus attaches in-row, shows assurance states, and keeps the audit view available", async ({ browser }) => {
     const { tenantA } = readSeedInfo();
 
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
@@ -59,8 +59,8 @@ test.describe("Evidence audit workflow", () => {
     const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
     const page = await context.newPage();
 
-    await page.goto("/data-entry");
-    await page.waitForLoadState("networkidle");
+    await page.goto("/data-entry?focus=evidence");
+    await page.waitForLoadState("domcontentloaded");
 
     if (page.url().includes("/auth") || page.url().includes("/onboarding")) {
       test.skip(true, "Admin auth state not fully persisted for browser flow");
@@ -68,7 +68,9 @@ test.describe("Evidence audit workflow", () => {
       return;
     }
 
-    await page.getByTestId("tab-manual-entry").click();
+    await expect(page.getByTestId("panel-measure-evidence-focus")).toBeVisible();
+    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
+    await expect(page).toHaveURL(/\/data-entry\?focus=evidence$/);
     const editableRow = page.locator('[data-testid^="manual-row-"]')
       .filter({ has: page.locator('[data-testid^="button-save-manual-"]') })
       .filter({ has: page.locator('[data-testid^="input-manual-"]:not(:disabled)') })
@@ -79,6 +81,8 @@ test.describe("Evidence audit workflow", () => {
     const inRowFilename = `browser-row-${Date.now()}.txt`;
 
     await editableRow.locator('[data-testid^="input-manual-"]').first().fill("77");
+    await expect(editableRow.getByTestId(/^badge-inline-evidence-/)).toHaveText("Evidence needed");
+    await expect(editableRow).toHaveAttribute("data-evidence-focus", "true");
     await editableRow.locator('[data-testid^="button-attach-evidence-"]').click();
     await editableRow.locator('[data-testid^="input-evidence-files-"]').setInputFiles({
       name: inRowFilename,
@@ -89,20 +93,46 @@ test.describe("Evidence audit workflow", () => {
     await expect(editableRow.getByText("Ready to upload")).toBeVisible();
     await expect(editableRow.getByText(inRowFilename)).toBeVisible();
 
+    const saveResponsePromise = page.waitForResponse((response) => (
+      response.url().endsWith("/api/data-entry")
+      && response.request().method() === "POST"
+      && response.status() >= 200
+      && response.status() < 300
+    ));
     await editableRow.locator('[data-testid^="button-save-manual-"]').click();
+    const saveResponse = await saveResponsePromise;
+    const saveBody = await saveResponse.json() as { newlyCreatedAttachments?: Array<{ id?: string }> };
+    const inRowEvidenceId = saveBody.newlyCreatedAttachments?.[0]?.id;
+    expect(inRowEvidenceId, "inline evidence id").toBeTruthy();
     await expect(editableRow.getByText("Attached to this metric")).toBeVisible({ timeout: 10000 });
     await expect(editableRow.getByText(inRowFilename)).toBeVisible({ timeout: 10000 });
+    await expect(editableRow.getByTestId(/^badge-inline-evidence-/)).toHaveText("Source linked");
 
     await page.reload();
-    await page.waitForLoadState("networkidle");
-    await page.getByTestId("tab-manual-entry").click();
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
     const refreshedRow = page.locator('[data-testid^="manual-row-"]').filter({
       hasText: metricName,
     }).first();
     await expect(refreshedRow.getByText(inRowFilename)).toBeVisible({ timeout: 10000 });
+    await expect(refreshedRow.getByTestId(/^badge-inline-evidence-/)).toHaveText("Source linked");
+
+    const reviewRes = await apiRequest("PUT", `/api/evidence/${inRowEvidenceId}`, { evidenceStatus: "reviewed" }, tenantA.adminToken);
+    expect(reviewRes.status).toBe(200);
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    const reviewedRow = page.locator('[data-testid^="manual-row-"]').filter({ hasText: metricName }).first();
+    await expect(reviewedRow.getByTestId(/^badge-inline-evidence-/)).toHaveText("Reviewed", { timeout: 10000 });
+
+    const approveRes = await apiRequest("PUT", `/api/evidence/${inRowEvidenceId}`, { evidenceStatus: "approved" }, tenantA.adminToken);
+    expect(approveRes.status).toBe(200);
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    const backedRow = page.locator('[data-testid^="manual-row-"]').filter({ hasText: metricName }).first();
+    await expect(backedRow.getByTestId(/^badge-inline-evidence-/)).toHaveText("Evidence-backed", { timeout: 10000 });
 
     await page.goto("/evidence");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const evidenceFilename = (filename: string) => page
       .getByTestId(/^text-evidence-filename-/)
       .filter({ hasText: filename });
@@ -134,6 +164,28 @@ test.describe("Evidence audit workflow", () => {
     await page.getByRole("option", { name: "Orphaned only" }).click();
     await expect(evidenceFilename(auditFileA)).toHaveCount(0);
     await expect(evidenceFilename(centralFile)).toHaveCount(0);
+
+    await context.close();
+  });
+
+  test("Measure evidence focus remains read-only for viewers", async ({ browser }) => {
+    const context = await browser.newContext({ storageState: VIEWER_STATE_FILE });
+    const page = await context.newPage();
+
+    await page.goto("/data-entry?focus=evidence");
+    await page.waitForLoadState("domcontentloaded");
+
+    if (page.url().includes("/auth") || page.url().includes("/onboarding")) {
+      test.skip(true, "Viewer auth state not fully persisted for browser flow");
+      await context.close();
+      return;
+    }
+
+    await expect(page.getByTestId("panel-measure-evidence-focus")).toContainText("read-only");
+    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("banner-data-entry-permission")).toBeVisible();
+    await expect(page.locator('[data-testid^="button-attach-evidence-"]').first()).toBeDisabled();
+    await expect(page).toHaveURL(/\/data-entry\?focus=evidence$/);
 
     await context.close();
   });

@@ -150,10 +150,19 @@ async function run(tenants: SeededTenants): Promise<void> {
       pass(name, `skipped — status=${res.status}`);
     } else {
       try {
-        const body = JSON.parse(res.body) as { trendSummary?: { cards?: Array<{ state?: string }> } };
+        const body = JSON.parse(res.body) as {
+          trendSummary?: {
+            cards?: Array<{ state?: string }>;
+            metrics?: Array<{ reason?: string; currentValue?: number | null; previousValue?: number | null }>;
+          };
+        };
         const cards = body.trendSummary?.cards;
+        const metrics = body.trendSummary?.metrics || [];
+        const hasSparseMetric = metrics.some((metric) =>
+          metric.reason !== "ok" || metric.currentValue === null || metric.previousValue === null,
+        );
         if (!Array.isArray(cards) || cards.length === 0) fail(name, "missing trend cards");
-        else if (!cards.some((card) => card.state === "insufficient_data")) fail(name, "expected at least one insufficient-data trend state");
+        else if (!cards.some((card) => card.state === "insufficient_data") && !hasSparseMetric) fail(name, "expected a sparse card or metric trend state");
         else pass(name);
       } catch {
         fail(name, "invalid JSON");
@@ -176,6 +185,21 @@ async function run(tenants: SeededTenants): Promise<void> {
         const metricB = metricsB.find((metric) => /electricity|energy/i.test(metric.name || "")) || metricsB[0];
         if (!metricA?.id || !metricB?.id) fail(name, "missing metric id");
         else {
+          const reportingPeriodRes = await apiRequest("POST", "/api/reporting-periods", {
+            name: "2099-05",
+            periodType: "monthly",
+            startDate: "2099-05-01",
+            endDate: "2099-05-31",
+          }, tenantA.adminToken);
+          if (reportingPeriodRes.status !== 201) {
+            fail(name, `reporting period status=${reportingPeriodRes.status} body=${reportingPeriodRes.body.slice(0, 200)}`);
+            return;
+          }
+          const reportingPeriod = JSON.parse(reportingPeriodRes.body) as { id?: string };
+          if (!reportingPeriod.id) {
+            fail(name, "reporting period id missing");
+            return;
+          }
           const seedResponses = await Promise.all([
             apiRequest("POST", "/api/data-entry", { metricId: metricA.id, period: "2099-04", value: 100, notes: "dashboard trend previous" }, tenantA.adminToken),
             apiRequest("POST", "/api/data-entry", { metricId: metricA.id, period: "2099-05", value: 80, notes: "dashboard trend current" }, tenantA.adminToken),
@@ -187,7 +211,12 @@ async function run(tenants: SeededTenants): Promise<void> {
             fail(name, `seed data-entry status=${failedSeed.status} body=${failedSeed.body.slice(0, 200)}`);
             return;
           }
-          const dashboardRes = await apiRequest("GET", "/api/dashboard/enhanced", undefined, tenantA.adminToken);
+          const dashboardRes = await apiRequest(
+            "GET",
+            `/api/dashboard/enhanced?reportingPeriodId=${encodeURIComponent(reportingPeriod.id)}`,
+            undefined,
+            tenantA.adminToken,
+          );
           if (dashboardRes.status !== 200) fail(name, `dashboard status=${dashboardRes.status} body=${dashboardRes.body.slice(0, 200)}`);
           else {
             const body = JSON.parse(dashboardRes.body) as {
@@ -210,6 +239,56 @@ async function run(tenants: SeededTenants): Promise<void> {
         }
       } catch (err) {
         fail(name, err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
+  // ── 13. Dashboard score periods keep metric and framework semantics separate ─
+  {
+    const name = "quarterly dashboard scoring keeps YYYY-MM metric scores and full framework period scope";
+    const suffix = Date.now();
+    const reportingPeriodRes = await apiRequest("POST", "/api/reporting-periods", {
+      name: `Dashboard FY 2098 Q2 ${suffix}`,
+      periodType: "quarterly",
+      startDate: "2098-04-01",
+      endDate: "2098-06-30",
+    }, tenantA.adminToken);
+    if (reportingPeriodRes.status !== 201) {
+      fail(name, `reporting period status=${reportingPeriodRes.status} body=${reportingPeriodRes.body.slice(0, 200)}`);
+    } else {
+      const reportingPeriod = JSON.parse(reportingPeriodRes.body) as { id?: string; name?: string };
+      if (!reportingPeriod.id) {
+        fail(name, "reporting period id missing");
+      } else {
+        const metricOnly = await apiRequest(
+          "GET",
+          "/api/esg-scores/all?period=2098-04",
+          undefined,
+          tenantA.adminToken,
+        );
+        const scoped = await apiRequest(
+          "GET",
+          `/api/esg-scores/all?period=2098-04&frameworkPeriod=${encodeURIComponent(reportingPeriod.id)}`,
+          undefined,
+          tenantA.adminToken,
+        );
+        if (metricOnly.status !== 200 || scoped.status !== 200) {
+          fail(name, `score status baseline=${metricOnly.status} scoped=${scoped.status}`);
+        } else {
+          const baseline = JSON.parse(metricOnly.body) as any;
+          const selected = JSON.parse(scoped.body) as any;
+          if (selected.frameworkReadiness?.reportingPeriod !== reportingPeriod.name) {
+            fail(name, `framework period collapsed to ${selected.frameworkReadiness?.reportingPeriod}`);
+          } else if (baseline.frameworkReadiness?.reportingPeriod !== "2098-04") {
+            fail(name, `legacy framework period fallback changed: ${baseline.frameworkReadiness?.reportingPeriod}`);
+          } else if (JSON.stringify(selected.completeness) !== JSON.stringify(baseline.completeness)) {
+            fail(name, "frameworkPeriod changed the YYYY-MM completeness result");
+          } else if (JSON.stringify(selected.performance) !== JSON.stringify(baseline.performance)) {
+            fail(name, "frameworkPeriod changed the YYYY-MM performance result");
+          } else {
+            pass(name);
+          }
+        }
       }
     }
   }

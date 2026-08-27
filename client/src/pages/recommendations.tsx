@@ -68,7 +68,7 @@ function RecommendationCard({ rec }: { rec: Recommendation }) {
 
 export default function Recommendations() {
   const { isPro } = useBillingStatus();
-  const { data, isLoading, refetch, isRefetching } = useQuery<{ recommendations: Recommendation[]; total: number; limited?: boolean }>({
+  const { data, isLoading, refetch, isRefetching } = useQuery<{ recommendations: Recommendation[]; total: number; limited?: boolean; period?: string }>({
     queryKey: ["/api/recommendations"],
   });
 
@@ -82,7 +82,7 @@ export default function Recommendations() {
         <div>
           <h1 className="text-lg sm:text-xl font-semibold">ESG Recommendations</h1>
           <p className="text-sm text-muted-foreground">
-            Personalised suggestions based on your current ESG data
+            Personalised suggestions based on your ESG data{data?.period ? ` for ${data.period}` : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">

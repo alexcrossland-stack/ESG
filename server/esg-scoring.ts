@@ -1,6 +1,7 @@
 import { storage } from "./storage";
 import { getTrafficLightStatus } from "./calculations";
 import { getScoreReadiness } from "./score-readiness";
+import { resolveCompanyReportingContext } from "./reporting-context";
 
 export interface CompletenessScore {
   score: number;
@@ -39,6 +40,7 @@ export interface ManagementMaturityScore {
 
 export interface FrameworkReadinessScore {
   score: number;
+  reportingPeriod: string;
   frameworks: {
     id: string;
     name: string;
@@ -477,12 +479,26 @@ export async function scoreManagementMaturity(companyId: string): Promise<Manage
   return { score, dimensions, explanation, gaps };
 }
 
-export async function scoreFrameworkReadiness(companyId: string): Promise<FrameworkReadinessScore> {
-  const readiness = await storage.getFrameworkReadiness(companyId);
+export async function scoreFrameworkReadiness(
+  companyId: string,
+  period?: string,
+  siteId?: string | null,
+): Promise<FrameworkReadinessScore> {
+  const requestedPeriod = period?.trim();
+  const storedPeriod = requestedPeriod
+    ? (await storage.getReportingPeriods(companyId)).find((candidate) =>
+        candidate.id === requestedPeriod || candidate.name === requestedPeriod,
+      )
+    : undefined;
+  const reportingPeriod = storedPeriod?.name
+    ?? requestedPeriod
+    ?? (await resolveCompanyReportingContext(companyId)).period.name;
+  const readiness = await storage.getFrameworkReadiness(companyId, { period: reportingPeriod, siteId });
 
   if (!readiness || readiness.length === 0) {
     return {
       score: 0,
+      reportingPeriod,
       frameworks: [],
       overallCovered: 0,
       overallPartial: 0,
@@ -506,7 +522,7 @@ export async function scoreFrameworkReadiness(companyId: string): Promise<Framew
     overallTotal += total;
 
     const readinessPercent = total > 0
-      ? Math.round(((covered + partial * 0.5) / total) * 100)
+      ? Math.round((covered / total) * 100)
       : 0;
 
     return {
@@ -521,7 +537,7 @@ export async function scoreFrameworkReadiness(companyId: string): Promise<Framew
   });
 
   const score = overallTotal > 0
-    ? Math.round(((overallCovered + overallPartial * 0.5) / overallTotal) * 100)
+    ? Math.round((overallCovered / overallTotal) * 100)
     : 0;
 
   const topGaps: string[] = [];
@@ -536,17 +552,18 @@ export async function scoreFrameworkReadiness(companyId: string): Promise<Framew
 
   let explanation = "";
   if (score >= 80) {
-    explanation = `Strong framework alignment — most requirements across ${frameworks.length} selected framework(s) are covered or partially covered.`;
+    explanation = `Strong framework readiness — most requirements across ${frameworks.length} selected framework(s) are fully covered.`;
   } else if (score >= 60) {
-    explanation = `Reasonable alignment — ${overallCovered} requirements fully covered, ${overallPartial} partially covered. Address the ${overallMissing} gaps to improve your readiness position.`;
+    explanation = `Reasonable readiness — ${overallCovered} requirements fully covered and ${overallPartial} partially covered. Complete partial items and address the ${overallMissing} gaps to improve readiness.`;
   } else if (score >= 40) {
-    explanation = `Partial alignment — significant gaps remain across your selected frameworks. Focus on core requirements first.`;
+    explanation = `Partial readiness — significant gaps remain across your selected frameworks. Focus on core requirements first.`;
   } else {
-    explanation = `Early stage alignment — ${overallMissing} of ${overallTotal} requirements are not yet covered. Start with core metric and policy requirements.`;
+    explanation = `Early-stage readiness — only fully covered requirements count toward this score; ${overallPartial} are partial and ${overallMissing} are missing. Start with core metric and policy requirements.`;
   }
 
   return {
     score,
+    reportingPeriod,
     frameworks,
     overallCovered,
     overallPartial,
@@ -568,13 +585,14 @@ export interface EsgScoreWithConfidence {
 export async function getEsgScoreWithConfidence(
   companyId: string,
   period?: string,
-  siteId?: string | null
+  siteId?: string | null,
+  frameworkPeriod?: string,
 ): Promise<EsgScoreWithConfidence> {
   const [completeness, performance, managementMaturity, frameworkReadiness, readiness] = await Promise.all([
     scoreCompleteness(companyId, period),
     scorePerformance(companyId, period, siteId),
     scoreManagementMaturity(companyId),
-    scoreFrameworkReadiness(companyId),
+    scoreFrameworkReadiness(companyId, frameworkPeriod ?? period, siteId),
     getScoreReadiness(companyId),
   ]);
 

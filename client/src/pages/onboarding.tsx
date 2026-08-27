@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
-import { format, subMonths } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,10 +18,18 @@ import {
   Leaf, Users, ArrowRight, ArrowLeft, CheckCircle2,
   Building2, BarChart3, Zap, Factory, Truck, Briefcase,
   Globe, ClipboardList, AlertCircle, FileText, Upload,
-  TrendingUp, Lightbulb, LayoutGrid,
+  Lightbulb, LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EsgStatusBadge, EsgStatusCard, type EsgStatusData } from "@/components/esg-status-badge";
+import {
+  buildOnboardingMetricSubmission,
+  isEditableStarterMetric,
+  selectEditableStarterMetrics,
+  type LabelledOnboardingMetric,
+  type MetricLabel,
+  type OnboardingMetric,
+} from "@/lib/onboarding-metrics";
 
 const WIZARD_STEPS = [
   {
@@ -137,11 +144,11 @@ type EsgProfile = {
   hasContractors: boolean;
 };
 
-type MetricLabel = "Essential" | "Recommended next" | "Optional later";
-
-function getMetricLabel(metric: any, profile: EsgProfile): MetricLabel {
+function getMetricLabel(metric: OnboardingMetric, profile: EsgProfile): MetricLabel {
   const name = (metric.name || "").toLowerCase();
   const cat = (metric.category || "").toLowerCase();
+
+  if (!isEditableStarterMetric(metric)) return "Calculated for you";
 
   if (name.includes("electricity") || name.includes("energy consumption")) return "Essential";
   if (
@@ -154,6 +161,10 @@ function getMetricLabel(metric: any, profile: EsgProfile): MetricLabel {
     name.includes("headcount") ||
     name.includes("total employee") ||
     name.includes("employees") && cat === "social"
+  ) return "Essential";
+  if (
+    cat === "governance" &&
+    (name.includes("anti-bribery") || name.includes("responsibility assigned"))
   ) return "Essential";
   if (
     profile.hasVehicles &&
@@ -172,19 +183,22 @@ function getMetricLabel(metric: any, profile: EsgProfile): MetricLabel {
 function labelTier(label: MetricLabel): number {
   if (label === "Essential") return 0;
   if (label === "Recommended next") return 1;
-  return 2;
+  if (label === "Optional later") return 2;
+  return 3;
 }
 
 const LABEL_COLORS: Record<MetricLabel, string> = {
   "Essential": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
   "Recommended next": "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
   "Optional later": "bg-muted text-muted-foreground",
+  "Calculated for you": "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300",
 };
 
 const LABEL_DOT: Record<MetricLabel, string> = {
   "Essential": "bg-emerald-500",
   "Recommended next": "bg-blue-500",
   "Optional later": "bg-muted-foreground",
+  "Calculated for you": "bg-violet-500",
 };
 
 const PILLAR_ICONS: Record<string, any> = {
@@ -244,18 +258,20 @@ export default function Onboarding() {
     hasContractors: false,
   });
 
-  const [dataEntries, setDataEntries] = useState<Record<number, string>>({});
-  const [savedMetricIds, setSavedMetricIds] = useState<Set<number>>(new Set());
+  const [dataEntries, setDataEntries] = useState<Record<string, string>>({});
+  const [dataSourceTypes, setDataSourceTypes] = useState<Record<string, "manual" | "estimated">>({});
+  const [savedMetricIds, setSavedMetricIds] = useState<Set<string>>(new Set());
+  const [failedMetrics, setFailedMetrics] = useState<Record<string, string>>({});
 
   const { data: companyData, isLoading: companyLoading } = useQuery({ queryKey: ["/api/company"] });
   const company = (companyData as any)?.company;
 
-  const { data: rawMetrics = [], isLoading: metricsLoading } = useQuery<any[]>({
+  const { data: rawMetrics = [], isLoading: metricsLoading } = useQuery<OnboardingMetric[]>({
     queryKey: ["/api/metrics"],
     enabled: currentStep >= 2,
   });
 
-  const defaultPeriod = format(subMonths(new Date(), 1), "yyyy-MM");
+  const defaultPeriod = step1.reportingYearStart;
 
   const {
     data: preflight,
@@ -312,18 +328,21 @@ export default function Onboarding() {
 
   const completeMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/onboarding/complete", data).then((r: any) => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/company"] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/company"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }),
+      ]);
       setLocation("/");
     },
   });
 
-  const labelledMetrics = [...rawMetrics]
-    .map((m: any) => ({ ...m, wizardLabel: getMetricLabel(m, esgProfile) }))
-    .sort((a: any, b: any) => labelTier(a.wizardLabel) - labelTier(b.wizardLabel));
+  const labelledMetrics: LabelledOnboardingMetric[] = [...rawMetrics]
+    .map((metric) => ({ ...metric, wizardLabel: getMetricLabel(metric, esgProfile) }))
+    .sort((a, b) => labelTier(a.wizardLabel) - labelTier(b.wizardLabel));
 
   const displayMetrics = labelledMetrics.slice(0, 10);
-  const essentialMetrics = labelledMetrics.filter((m: any) => m.wizardLabel === "Essential").slice(0, 5);
+  const essentialMetrics = selectEditableStarterMetrics(labelledMetrics);
 
   async function saveStep(nextStepIndex: number) {
     const payload: any = {
@@ -361,23 +380,41 @@ export default function Onboarding() {
   async function handleSaveDataEntries() {
     setIsSaving(true);
     try {
-      const entries = Object.entries(dataEntries).filter(([, v]) => v.trim() !== "");
+      const entries = Object.entries(dataEntries).filter(([metricId, value]) => (
+        value.trim() !== "" && !savedMetricIds.has(metricId)
+      ));
       const results = await Promise.allSettled(
         entries.map(([metricId, value]) =>
-          dataMutation.mutateAsync({
-            metricId: Number(metricId),
-            period: defaultPeriod,
-            value: Number(value.replace(/,/g, "")),
-            notes: "Entered during setup wizard",
-          })
+          dataMutation.mutateAsync(buildOnboardingMetricSubmission(
+            metricId,
+            value,
+            defaultPeriod,
+            dataSourceTypes[metricId] ?? "estimated",
+          ))
         )
       );
       const saved = entries
         .filter((_, i) => results[i].status === "fulfilled")
-        .map(([id]) => Number(id));
+        .map(([id]) => id);
       setSavedMetricIds(prev => new Set([...Array.from(prev), ...saved]));
+      const failures = entries.reduce<Record<string, string>>((acc, [metricId], index) => {
+        const result = results[index];
+        if (result.status === "rejected") {
+          acc[metricId] = resolveApiError(result.reason).description || "This figure could not be saved. Please try again.";
+        }
+        return acc;
+      }, {});
+      setFailedMetrics(failures);
       if (saved.length > 0) {
         trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { source: "wizard", count: saved.length });
+      }
+      if (Object.keys(failures).length > 0) {
+        toast({
+          title: "Some figures were not saved",
+          description: `${Object.keys(failures).length} figure${Object.keys(failures).length === 1 ? "" : "s"} still need attention. Your successful saves are preserved; retry the highlighted rows.`,
+          variant: "destructive",
+        });
+        return;
       }
       await saveStep(4);
       setCurrentStep(4);
@@ -484,8 +521,22 @@ export default function Onboarding() {
               isLoading={metricsLoading}
               period={defaultPeriod}
               entries={dataEntries}
+              sourceTypes={dataSourceTypes}
               savedIds={savedMetricIds}
-              onChange={setDataEntries}
+              failedMetrics={failedMetrics}
+              onChange={(metricId, value) => {
+                setDataEntries(current => ({ ...current, [metricId]: value }));
+                setFailedMetrics(current => {
+                  if (!(metricId in current)) return current;
+                  const next = { ...current };
+                  delete next[metricId];
+                  return next;
+                });
+              }}
+              onSourceTypeChange={(metricId, sourceType) => setDataSourceTypes(current => ({
+                ...current,
+                [metricId]: sourceType,
+              }))}
             />
           )}
           {currentStep === 4 && (
@@ -548,7 +599,7 @@ function WizardHeader({
             <StepIcon className="w-4 h-4 text-primary" />
           </div>
           <div>
-            <h1 className="text-base font-semibold text-foreground">{stepInfo.label}</h1>
+            <h1 className="text-base font-semibold text-foreground" data-testid="text-onboarding-title">{stepInfo.label}</h1>
             <p className="text-sm text-muted-foreground mt-0.5">{stepInfo.desc}</p>
           </div>
         </div>
@@ -615,7 +666,7 @@ function WizardFooter({
               disabled={isSaving}
               data-testid="button-wizard-complete"
             >
-              {isSaving ? "Finishing up…" : "Go to your dashboard"}
+              {isSaving ? "Finishing up…" : "Finish setup"}
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           ) : (
@@ -830,7 +881,7 @@ function Step3StarterMetrics({
   isLoading,
   esgProfile,
 }: {
-  metrics: any[];
+  metrics: LabelledOnboardingMetric[];
   isLoading: boolean;
   esgProfile: EsgProfile;
 }) {
@@ -855,9 +906,10 @@ function Step3StarterMetrics({
     );
   }
 
-  const essentials = metrics.filter((m: any) => m.wizardLabel === "Essential");
-  const recommended = metrics.filter((m: any) => m.wizardLabel === "Recommended next");
-  const optional = metrics.filter((m: any) => m.wizardLabel === "Optional later");
+  const essentials = metrics.filter((metric) => metric.wizardLabel === "Essential");
+  const recommended = metrics.filter((metric) => metric.wizardLabel === "Recommended next");
+  const optional = metrics.filter((metric) => metric.wizardLabel === "Optional later");
+  const calculated = metrics.filter((metric) => metric.wizardLabel === "Calculated for you");
 
   return (
     <div className="space-y-6" data-testid="step-starter-metrics">
@@ -889,6 +941,13 @@ function Step3StarterMetrics({
           metrics={optional}
         />
       )}
+      {calculated.length > 0 && (
+        <MetricGroup
+          label="Calculated for you"
+          description="These update automatically from the operational figures you enter."
+          metrics={calculated}
+        />
+      )}
     </div>
   );
 }
@@ -900,7 +959,7 @@ function MetricGroup({
 }: {
   label: MetricLabel;
   description: string;
-  metrics: any[];
+  metrics: LabelledOnboardingMetric[];
 }) {
   const PillarIcon = (cat: string) => PILLAR_ICONS[cat] || Globe;
 
@@ -914,7 +973,7 @@ function MetricGroup({
         <span className="text-xs text-muted-foreground">{description}</span>
       </div>
       <div className="space-y-2">
-        {metrics.map((m: any) => {
+        {metrics.map((m) => {
           const Icon = PillarIcon(m.category);
           return (
             <div
@@ -942,15 +1001,21 @@ function Step4DataEntry({
   isLoading,
   period,
   entries,
+  sourceTypes,
   savedIds,
+  failedMetrics,
   onChange,
+  onSourceTypeChange,
 }: {
-  metrics: any[];
+  metrics: LabelledOnboardingMetric[];
   isLoading: boolean;
   period: string;
-  entries: Record<number, string>;
-  savedIds: Set<number>;
-  onChange: (e: Record<number, string>) => void;
+  entries: Record<string, string>;
+  sourceTypes: Record<string, "manual" | "estimated">;
+  savedIds: Set<string>;
+  failedMetrics: Record<string, string>;
+  onChange: (metricId: string, value: string) => void;
+  onSourceTypeChange: (metricId: string, sourceType: "manual" | "estimated") => void;
 }) {
   if (isLoading) {
     return (
@@ -976,22 +1041,28 @@ function Step4DataEntry({
       <div className="rounded-lg bg-muted/50 border border-border p-3 flex gap-2">
         <FileText className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
         <p className="text-xs text-muted-foreground">
-          Reporting period: <strong>{period}</strong> · Enter figures from your records — an invoice, bill, or spreadsheet.
-          Estimates are fine for now. You can correct them any time.
+          Reporting year: <strong>{period}</strong> · Enter figures from an invoice, bill, payroll record, account or spreadsheet.
+          Mark each figure as actual or estimated so its confidence is preserved.
         </p>
       </div>
 
       <div className="space-y-4">
-        {metrics.map((m: any) => {
+        {metrics.map((m) => {
           const isSaved = savedIds.has(m.id);
+          const failure = failedMetrics[m.id];
           const val = entries[m.id] || "";
+          const sourceType = sourceTypes[m.id] ?? "estimated";
 
           return (
             <div
               key={m.id}
               className={cn(
                 "p-4 rounded-lg border transition-colors",
-                isSaved ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700" : "border-border bg-card"
+                isSaved
+                  ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700"
+                  : failure
+                    ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20"
+                    : "border-border bg-card"
               )}
               data-testid={`data-entry-metric-${m.id}`}
             >
@@ -1005,6 +1076,9 @@ function Step4DataEntry({
                 {isSaved && (
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 )}
+                {!isSaved && failure && (
+                  <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Input
@@ -1012,13 +1086,18 @@ function Step4DataEntry({
                   inputMode="numeric"
                   placeholder={getExample(m.name)}
                   value={val}
-                  onChange={e => onChange({ ...entries, [m.id]: e.target.value })}
+                  onChange={e => onChange(m.id, e.target.value)}
                   className="flex-1"
                   disabled={isSaved}
                   data-testid={`input-metric-value-${m.id}`}
                 />
                 <span className="text-xs text-muted-foreground whitespace-nowrap">{m.unit}</span>
               </div>
+              {failure && !isSaved && (
+                <p className="mt-1.5 text-xs text-red-700 dark:text-red-300" role="alert" data-testid={`error-metric-save-${m.id}`}>
+                  Not saved: {failure}
+                </p>
+              )}
               {!m.helpText && (
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {getExample(m.name) !== "Enter a number"
@@ -1026,6 +1105,33 @@ function Step4DataEntry({
                     : "Enter the figure for this period."}
                 </p>
               )}
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="text-xs text-muted-foreground">This figure is</span>
+                <div className="inline-flex rounded-md border border-border p-0.5" role="group" aria-label={`${m.name} data quality`}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={sourceType === "manual" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    disabled={isSaved}
+                    onClick={() => onSourceTypeChange(m.id, "manual")}
+                    data-testid={`source-actual-${m.id}`}
+                  >
+                    Actual
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={sourceType === "estimated" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    disabled={isSaved}
+                    onClick={() => onSourceTypeChange(m.id, "estimated")}
+                    data-testid={`source-estimated-${m.id}`}
+                  >
+                    Estimated
+                  </Button>
+                </div>
+              </div>
             </div>
           );
         })}
@@ -1052,10 +1158,7 @@ function Step5BaselineReady({
   savedCount: number;
   period: string;
 }) {
-  const [, setLocation] = useLocation();
-  const canGenerate = preflight?.canGenerate ?? false;
   const metricsWithData = preflight?.metricsWithData ?? savedCount;
-  const totalMetrics = preflight?.totalMetrics ?? 0;
 
   const { data: esgStatus } = useQuery<EsgStatusData>({
     queryKey: ["/api/esg-status"],
@@ -1069,32 +1172,21 @@ function Step5BaselineReady({
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : canGenerate ? (
+      ) : metricsWithData > 0 ? (
         <div className="rounded-xl border border-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-700 p-5 text-center space-y-2">
           <CheckCircle2 className="w-10 h-10 text-emerald-600 dark:text-emerald-400 mx-auto" />
-          <h2 className="text-base font-semibold text-foreground">You have enough data for a Baseline ESG Report</h2>
+          <h2 className="text-base font-semibold text-foreground">Your starter ESG baseline is set</h2>
           <p className="text-sm text-muted-foreground">
-            {metricsWithData} of {totalMetrics} metrics have data for {period}.
-            You can generate your first report now, or continue adding data first.
+            You captured {metricsWithData} priority metric{metricsWithData === 1 ? "" : "s"} for {period} across the business areas that matter first.
           </p>
           <p className="text-xs text-muted-foreground">
-            This is a baseline starting output — not a final audited report. It's meant to show where you are today.
+            This is a practical starting point, not an audited assessment. Home will guide you through evidence and your first shareable report.
           </p>
         </div>
       ) : (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-5 space-y-2">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
-            <h2 className="text-base font-semibold text-foreground">A few more data points needed</h2>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {metricsWithData > 0
-              ? `You have data for ${metricsWithData} metric${metricsWithData === 1 ? "" : "s"} so far. Add a few more to unlock your first report.`
-              : "Enter at least one metric value on the previous step to get started."}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            You can still go to your dashboard now and enter data from there — it only takes a few minutes.
-          </p>
+        <div className="rounded-xl border border-blue-300 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-700 p-5 space-y-2">
+          <h2 className="text-base font-semibold text-foreground">Your workspace is ready</h2>
+          <p className="text-sm text-muted-foreground">Start with any figure you can find in a bill, payroll record, or business account. Home will keep the next step clear.</p>
         </div>
       )}
 
@@ -1105,82 +1197,19 @@ function Step5BaselineReady({
         />
       )}
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-foreground">What to do next</p>
-        <div className="grid gap-2">
-          <NextActionCard
-            icon={TrendingUp}
-            title="Enter more data"
-            desc="Add figures for more metrics to build a complete picture."
-            onClick={() => setLocation("/data-entry")}
-            testId="action-enter-data"
-          />
-          <NextActionCard
-            icon={Upload}
-            title="Upload proof"
-            desc="Attach invoices or certificates to back up your figures."
-            onClick={() => setLocation("/evidence")}
-            testId="action-upload-proof"
-          />
-          <NextActionCard
-            icon={FileText}
-            title="Generate your first report"
-            desc="Create a baseline report to share with customers or investors."
-            onClick={() => setLocation("/reports")}
-            testId="action-generate-report"
-            highlighted={canGenerate}
-          />
-          <NextActionCard
-            icon={ClipboardList}
-            title="Create your first policy"
-            desc="Set out your commitment with a simple written ESG policy."
-            onClick={() => setLocation("/policy")}
-            testId="action-create-policy"
-          />
+      <div className="rounded-lg border border-primary/25 bg-primary/5 p-4" data-testid="onboarding-next-step-preview">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+            <Upload className="h-4 w-4 text-primary" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">Your next step: support one figure</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              After you finish setup, attach one bill, invoice, or HR record. This gives your baseline a clear source without asking you to complete every optional metric first.
+            </p>
+          </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function NextActionCard({
-  icon: Icon,
-  title,
-  desc,
-  onClick,
-  testId,
-  highlighted = false,
-}: {
-  icon: any;
-  title: string;
-  desc: string;
-  onClick: () => void;
-  testId: string;
-  highlighted?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:bg-muted/50",
-        highlighted
-          ? "border-primary/40 bg-primary/5 hover:bg-primary/10"
-          : "border-border bg-card"
-      )}
-      data-testid={testId}
-    >
-      <div className={cn(
-        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
-        highlighted ? "bg-primary/10" : "bg-muted"
-      )}>
-        <Icon className={cn("w-4 h-4", highlighted ? "text-primary" : "text-muted-foreground")} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className={cn("text-sm font-medium", highlighted ? "text-primary" : "text-foreground")}>{title}</p>
-        <p className="text-xs text-muted-foreground">{desc}</p>
-      </div>
-      <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0" />
-    </button>
   );
 }

@@ -49,7 +49,7 @@ async function createDbClient(): Promise<Client> {
 
 async function enableProPlan(client: Client, companyId: string) {
   await client.query(
-    "UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1::uuid",
+    "UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1",
     [companyId],
   );
 }
@@ -70,8 +70,12 @@ async function getTenantAMetricIds(adminToken: string, count: number): Promise<s
   if (res.status !== 200) {
     throw new Error(`GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
   }
-  const metrics = JSON.parse(res.body) as Array<{ id: string }>;
-  const metricIds = metrics.slice(0, count).map((metric) => metric.id).filter(Boolean);
+  const metrics = JSON.parse(res.body) as Array<{ id: string; enabled?: boolean; metricType?: string | null }>;
+  const metricIds = metrics
+    .filter((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"))
+    .slice(0, count)
+    .map((metric) => metric.id)
+    .filter(Boolean);
   if (metricIds.length < count) throw new Error(`Expected at least ${count} metrics for bulk paste test`);
   return metricIds;
 }
@@ -109,11 +113,11 @@ async function countMetricValues(client: Client, metricId: string, period: strin
         MAX(value_text) AS value_text,
         BOOL_OR(value_boolean) FILTER (WHERE value_boolean IS NOT NULL) AS value_boolean
       FROM metric_values
-      WHERE metric_id = $1::uuid
+      WHERE metric_id = $1
         AND period = $2
         AND (
           ($3::text IS NULL AND site_id IS NULL)
-          OR site_id = $3::uuid
+          OR site_id = $3::text
         )
     `,
     [metricId, period, siteId],
@@ -161,7 +165,7 @@ async function createBooleanMetricForCompany(client: Client, companyId: string) 
         is_default,
         metric_type
       )
-      VALUES ($1::uuid, $2, 'Bulk boolean regression fixture', 'governance', 'Yes/No', 'monthly', true, false, 'manual')
+      VALUES ($1, $2, 'Bulk boolean regression fixture', 'governance', 'Yes/No', 'monthly', true, false, 'manual')
       RETURNING id
     `,
     [companyId, name],
@@ -183,16 +187,16 @@ async function countMetricDefinitionValues(
     `
       SELECT COUNT(*)::int AS count, MAX(value_numeric::text) AS value_numeric
       FROM metric_definition_values
-      WHERE business_id = $1::uuid
-        AND metric_definition_id = $2::uuid
+      WHERE business_id = $1
+        AND metric_definition_id = $2
         AND reporting_period_start = $3::timestamp
         AND reporting_period_end = $4::timestamp
         AND (
           ($5::text IS NULL AND site_id IS NULL)
-          OR site_id = $5::uuid
+          OR site_id = $5::text
         )
     `,
-    [businessId, metricDefinitionId, periodStart, periodEnd, siteId],
+    [businessId, metricDefinitionId, new Date(periodStart), new Date(periodEnd), siteId],
   );
   return {
     count: Number(result.rows[0]?.count ?? 0),
@@ -258,6 +262,7 @@ async function testMetricValuesUpsert(adminToken: string, metricId: string, clie
       period: CONCURRENT_PERIOD,
       value: 100 + idx,
       notes: `concurrent-${idx}`,
+      siteId: "__org__",
     }, adminToken),
   );
   const concurrentResponses = await Promise.all(concurrentBodies);
@@ -496,7 +501,7 @@ async function insertLockedReportingPeriod(client: Client, companyId: string, mo
   await client.query(
     `
       INSERT INTO reporting_periods (company_id, name, period_type, start_date, end_date, status)
-      VALUES ($1::uuid, $2, 'monthly', $3::timestamp, $4::timestamp, 'locked')
+      VALUES ($1, $2, 'monthly', $3::timestamp, $4::timestamp, 'locked')
     `,
     [
       companyId,
@@ -514,8 +519,8 @@ async function testBulkMetricPasteValidationEdges(adminToken: string, companyId:
     mode: "validate",
     cells: [
       { metricId: metricIds[0], period: "2026-05", rawValue: "100" },
-      { metricId: metricIds[0], period: "2026-06", rawValue: "1000" },
-      { metricId: metricIds[1], period: "2026-06", rawValue: "not-a-number" },
+      { metricId: metricIds[1], period: "2026-05", rawValue: "1000" },
+      { metricId: metricIds[0], period: "2026-06", rawValue: "not-a-number" },
     ],
   }, adminToken);
 

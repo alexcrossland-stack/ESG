@@ -180,6 +180,15 @@ async function mockReportsPageApis(page: Page, options?: {
   role?: MockRole;
   failAvailableDownloadOnce?: boolean;
   onGenerateFile?: (reportId: string, format: string) => void;
+  onComplianceStatusRequest?: (url: URL) => void;
+  reportingPeriods?: Array<{
+    id: string;
+    name: string;
+    periodType: "monthly" | "quarterly" | "annual";
+    startDate: string;
+    endDate: string;
+    status: string;
+  }>;
 }) {
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
   let reports = cloneMockReports();
@@ -203,22 +212,45 @@ async function mockReportsPageApis(page: Page, options?: {
           generatedBy: "Mock Admin",
           values: [{
             id: "generated-value-1",
-            metricName: "Generated Electricity",
+            metricName: "Calculated Carbon Intensity",
             category: "environmental",
             value: "456.78",
-            unit: "kWh",
+            unit: "kgCO2e/employee",
+            dataSourceLabel: "Derived",
+            sourceClassification: "derived",
+            workflowLabel: "Approved",
           }],
           metricsByCategory: {
             environmental: [{
               id: "generated-value-1",
-              metricName: "Generated Electricity",
+              metricName: "Calculated Carbon Intensity",
               category: "environmental",
               value: "456.78",
-              unit: "kWh",
+              unit: "kgCO2e/employee",
+              dataSourceLabel: "Derived",
+              sourceClassification: "derived",
+              workflowLabel: "Approved",
             }],
           },
           factorMethodology: { factorYear: 2024, source: "UK DEFRA" },
-          dataQualityFlags: { approvalRate: 0, evidenceRate: 0, missingCount: 0 },
+          dataQualityFlags: { approvalRate: 100, evidenceRate: 0, missingCount: 0, derivedCount: 1, manualCount: 0 },
+          dataQualitySummary: {
+            reportTitle: "New Generated Report",
+            isDraftQuality: false,
+            actualPercent: 0,
+            measuredPercent: 0,
+            derivedPercent: 100,
+            estimatedPercent: 0,
+            missingPercent: 0,
+            totalMetrics: 1,
+            filledMetrics: 1,
+            actualMetrics: 0,
+            measuredMetrics: 0,
+            derivedMetrics: 1,
+            estimatedMetrics: 0,
+            missingMetrics: 0,
+            methodologyNote: "This report is based on a derived value calculated from saved inputs.",
+          },
           trendSummary: {
             currentPeriod: "2026-05",
             previousPeriod: "2026-04",
@@ -229,8 +261,8 @@ async function mockReportsPageApis(page: Page, options?: {
             worsening: [{ metricId: "generated-value-1" }],
             metrics: [{
               metricId: "generated-value-1",
-              metricName: "Generated Electricity",
-              unit: "kWh",
+              metricName: "Calculated Carbon Intensity",
+              unit: "kgCO2e/employee",
               currentValue: 456.78,
               previousValue: 400,
               absoluteDelta: 56.78,
@@ -333,11 +365,15 @@ async function mockReportsPageApis(page: Page, options?: {
     if (url.pathname === "/api/admin/impersonation/status") return json({ isImpersonating: false });
     if (url.pathname === "/api/billing/status") return json({ planTier: "pro" });
     if (url.pathname === "/api/sites") return json([]);
+    if (url.pathname === "/api/reporting-periods") return json(options?.reportingPeriods ?? []);
     if (url.pathname === "/api/metrics") return json([]);
     if (url.pathname === "/api/actions") return json([]);
     if (url.pathname === "/api/policy") return json(null);
     if (url.pathname === "/api/company") return json({ id: "company-a", name: "Mock Co" });
-    if (url.pathname === "/api/compliance/status") return json({});
+    if (url.pathname === "/api/compliance/status") {
+      options?.onComplianceStatusRequest?.(url);
+      return json([]);
+    }
     if (url.pathname === "/api/evidence/coverage") return json({});
     if (url.pathname === "/api/dashboard/readiness") return json({});
     if (url.pathname === "/api/onboarding/status") {
@@ -417,6 +453,103 @@ test.describe("Report generation", () => {
     expect(res.status()).toBe(403);
   });
 
+  test("Reports exposes Annual ESG Report and positions VSME as a readiness draft pack", async ({ page }) => {
+    await mockReportsPageApis(page);
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("template-annual")).toContainText("Annual ESG Report");
+    await expect(page.getByTestId("template-annual")).not.toContainText("Annual ESG Summary");
+    await expect(page.getByTestId("template-vsme")).toContainText("VSME Readiness & Draft Pack");
+    await expect(page.getByTestId("template-vsme")).toContainText("draft VSME-aligned pack");
+    await expect(page.getByTestId("template-vsme")).toContainText("not a completed statutory disclosure");
+  });
+
+  test("Framework Readiness export is restricted to a reporting period", async ({ page }) => {
+    await mockReportsPageApis(page);
+
+    await page.goto("/reports");
+    await page.getByTestId("button-export-type-framework_readiness_summary").click();
+
+    await expect(page.getByTestId("button-scope-daterange")).toBeDisabled();
+    await expect(page.getByText(/Framework readiness is period-specific/)).toBeVisible();
+    await expect(page.getByTestId("select-export-period")).toBeVisible();
+    await expect(page.getByTestId("select-export-period")).not.toHaveText(/All periods/);
+  });
+
+  test("Framework Readiness export offers saved fiscal reporting periods", async ({ page }) => {
+    await mockReportsPageApis(page, {
+      reportingPeriods: [{
+        id: "fiscal-period-id",
+        name: "FY 2025/26",
+        periodType: "annual",
+        startDate: "2025-04-01",
+        endDate: "2026-03-31",
+        status: "open",
+      }],
+    });
+
+    await page.goto("/reports");
+    await page.getByTestId("button-export-type-framework_readiness_summary").click();
+    await expect(page.getByTestId("select-export-period")).toContainText("FY 2025/26");
+  });
+
+  test("report builder generates against the selected saved fiscal period", async ({ page }) => {
+    await mockReportsPageApis(page, {
+      reportingPeriods: [{
+        id: "fiscal-period-id",
+        name: "FY 2025/26",
+        periodType: "annual",
+        startDate: "2025-04-01",
+        endDate: "2026-03-31",
+        status: "open",
+      }],
+    });
+
+    await page.goto("/reports");
+    await page.getByTestId("select-report-period-type").click();
+    await page.getByRole("option", { name: "Saved / fiscal period" }).click();
+
+    await expect(page.getByTestId("select-saved-report-period")).toContainText("FY 2025/26");
+    await expect(page.getByTestId("text-report-period-range")).toContainText("FY 2025/26 · 2025-04-01 to 2026-03-31");
+    await expect(page.getByTestId("select-report-year")).toHaveCount(0);
+
+    const generateRequest = page.waitForRequest((request) =>
+      new URL(request.url()).pathname === "/api/reports/generate" && request.method() === "POST",
+    );
+    await page.getByTestId("button-generate-report").click();
+    const requestBody = (await generateRequest).postDataJSON();
+
+    expect(requestBody.period).toBe("fiscal-period-id");
+    expect(requestBody).not.toHaveProperty("periodType");
+    expect(requestBody).not.toHaveProperty("year");
+    expect(requestBody).not.toHaveProperty("dateFrom");
+    expect(requestBody).not.toHaveProperty("dateTo");
+  });
+
+  test("visible Framework Readiness pack uses and labels the selected report period", async ({ page }) => {
+    const complianceRequests: URL[] = [];
+    await mockReportsPageApis(page, {
+      onComplianceStatusRequest: (url) => complianceRequests.push(url),
+    });
+
+    await page.goto("/reports");
+    await expect.poll(() => complianceRequests.length).toBeGreaterThan(0);
+    const reportingPeriod = complianceRequests.at(-1)?.searchParams.get("period");
+    expect(reportingPeriod).toBeTruthy();
+    expect(reportingPeriod).not.toBe("all");
+    const periodRangeText = await page.getByTestId("text-report-period-range").textContent();
+    const reportingPeriodLabel = periodRangeText?.split(" · ")[0]?.trim();
+    expect(reportingPeriodLabel).toBeTruthy();
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("button-export-compliance").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain(reportingPeriod!);
+    const downloadPath = await download.path();
+    expect(downloadPath).toBeTruthy();
+    expect(fs.readFileSync(downloadPath!, "utf8")).toContain(`Reporting period: ${reportingPeriodLabel}`);
+  });
+
   test("Report Library opens historical snapshots and keeps unavailable files marked", async ({ page }) => {
     await mockReportsPageApis(page);
 
@@ -424,8 +557,9 @@ test.describe("Report generation", () => {
     await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
     await expect(page.getByTestId("text-report-library-count")).toContainText("1-2 of 2 reports");
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
-    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open file/);
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
     await expect(page.getByTestId("text-report-library-title-report-available")).toContainText("Mock Historical Report");
+    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
 
     const detailRequest = page.waitForRequest("**/api/reports/report-available");
     await page.getByTestId("button-view-report-report-available").click();
@@ -462,6 +596,18 @@ test.describe("Report generation", () => {
     await page.getByRole("option", { name: "Unavailable files" }).click();
     await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+  });
+
+  test("Report History shows access only for generated reports with files", async ({ page }) => {
+    await mockReportsPageApis(page);
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("report-history-report-available")).toBeVisible();
+    await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
+    await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
+    await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
+    await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");
+    await expect(page.getByTestId("button-download-report-file-report-unavailable")).toHaveCount(0);
   });
 
   for (const role of ["contributor", "viewer"] as const) {
@@ -534,7 +680,15 @@ test.describe("Report generation", () => {
     await expect(page.getByTestId("report-preview")).toContainText("New Generated Report");
     await expect(page.getByTestId("report-preview").getByTestId("section-trend-summary")).toContainText("Trend Summary");
     await expect(page.getByTestId("report-preview").getByTestId("text-report-trend-comparison")).toContainText("Compared with previous month");
-    await expect(page.getByTestId("report-preview").getByTestId("section-metric-trends")).toContainText("Generated Electricity");
+    await expect(page.getByTestId("report-preview").getByTestId("section-metric-trends")).toContainText("Calculated Carbon Intensity");
+    const derivedMetricRow = page.getByTestId("row-metric-generated-value-1");
+    await expect(derivedMetricRow.getByTestId("badge-source-derived")).toHaveText("Derived");
+    await expect(derivedMetricRow.getByTestId("badge-source-actual")).toHaveCount(0);
+    await expect(derivedMetricRow.getByText("Measured", { exact: true })).toHaveCount(0);
+    const methodology = page.getByTestId("report-preview").getByTestId("section-data-quality-methodology");
+    await expect(methodology.getByTestId("badge-source-derived")).toHaveText("Derived");
+    await expect(methodology).toContainText("100% of metrics");
+    await expect(methodology).toContainText("derived value calculated from saved inputs");
 
     await page.getByTestId("button-download-pdf").click();
     await expect.poll(() => generatedFiles).toEqual([{ reportId: "report-generated", format: "pdf" }]);

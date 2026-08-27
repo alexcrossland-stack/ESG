@@ -17,11 +17,13 @@ export function PermissionBanner({
   action,
   customMessage,
   className,
+  testId,
 }: {
   module?: PermissionModule;
   action?: string;
   customMessage?: string;
   className?: string;
+  testId?: string;
 }) {
   const who = module ? whoCanDo(module) : undefined;
   const nextStep = module ? getNextStepForModule(module) : "Ask your Company Admin if you need access.";
@@ -33,7 +35,7 @@ export function PermissionBanner({
       : `You don't have permission to ${label} here.`);
 
   return (
-    <Alert className={cn("border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700", className)} data-testid="permission-banner">
+    <Alert className={cn("border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700", className)} data-testid={testId ?? "permission-banner"}>
       <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
       <AlertDescription className="text-sm">
         <span className="font-medium text-amber-800 dark:text-amber-300">{message}</span>
@@ -155,7 +157,7 @@ export function OwnershipHint({
   return (
     <p className={cn("text-[11px] text-muted-foreground/70 flex items-center gap-1", className)} data-testid="ownership-hint">
       <span className="text-primary/40">›</span>
-      {action ? `${action} — ` : ""}<span>Usually handled by {owner}</span>
+      <span>{action ? `${action} — ` : ""}Usually handled by {owner}</span>
     </p>
   );
 }

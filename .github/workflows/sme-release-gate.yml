@@ -1,0 +1,94 @@
+name: SME release gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sme-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: SME release acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: simplyesg
+          POSTGRES_PASSWORD: simplyesg-ci
+          POSTGRES_DB: simplyesg_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U simplyesg -d simplyesg_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "1"
+      DATABASE_URL: postgresql://simplyesg:simplyesg-ci@127.0.0.1:5432/simplyesg_ci
+      SESSION_SECRET: simplyesg-ci-session-secret-2026
+      MFA_ENCRYPTION_KEY: simplyesg-ci-mfa-encryption-key-2026
+      BASE_URL: http://127.0.0.1:5000
+      PORT: "5000"
+      REGRESSION_TEST: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Create clean database schema
+        run: npm run db:push
+
+      - name: Start application
+        run: |
+          npm run dev > /tmp/simplyesg-ci-server.log 2>&1 &
+          app_pid=$!
+          echo "${app_pid}" > /tmp/simplyesg-ci-server.pid
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5000/health > /dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "${app_pid}" 2>/dev/null; then
+              cat /tmp/simplyesg-ci-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/simplyesg-ci-server.log
+          exit 1
+
+      - name: Run fail-closed SME release acceptance
+        env:
+          STRICT_RELEASE: "1"
+          RUN_E2E_RELEASE: "1"
+        run: npm run test:release
+
+      - name: Upload acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sme-release-acceptance
+          if-no-files-found: ignore
+          path: |
+            test-results/
+            playwright-report/
+            /tmp/simplyesg-ci-server.log

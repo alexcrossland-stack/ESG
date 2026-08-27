@@ -13,35 +13,22 @@ import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { PermissionBanner } from "@/components/permission-gate";
+import { UpgradeButton, useBillingStatus } from "@/components/upgrade-prompt";
+import { usePermissions } from "@/lib/permissions";
+import { DEFAULT_PUBLIC_PASSPORT_SECTIONS } from "@shared/esg-passport";
 import {
-  Leaf, Shield, Users, Factory, FileText, Share2, Copy,
-  RefreshCw, ExternalLink, Download, CheckCircle, Clock,
+  Shield, Factory, FileText, Share2, Copy, Lock,
+  RefreshCw, CheckCircle, Clock,
 } from "lucide-react";
 
 const SECTION_OPTIONS = [
-  { key: "esg_scores", label: "ESG Scores" },
-  { key: "key_metrics", label: "Key Metrics" },
-  { key: "policy_status", label: "Policy Status" },
-  { key: "carbon_summary", label: "Carbon Summary" },
-  { key: "compliance_highlights", label: "Compliance Highlights" },
-  { key: "evidence_coverage", label: "Evidence Coverage" },
+  { key: "passport_summary", label: "Boundary, period and completion" },
+  { key: "evidence_confidence", label: "Evidence-confidence ladder" },
+  { key: "emissions", label: "Emissions by scope" },
+  { key: "policies_actions_targets", label: "Policies, actions and targets" },
+  { key: "report_access", label: "Approved report access" },
 ];
-
-function ScoreBadge({ label, score, icon: Icon }: { label: string; score: number; icon: any }) {
-  const color = score >= 70 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
-    : score >= 40 ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-    : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-
-  return (
-    <div className={`rounded-lg p-4 ${color}`} data-testid={`score-${label.toLowerCase()}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <Icon className="w-4 h-4" />
-        <span className="text-xs font-medium">{label}</span>
-      </div>
-      <span className="text-2xl font-bold">{score}%</span>
-    </div>
-  );
-}
 
 function hasMetricValue(metric: any) {
   return metric?.hasValue !== false && metric?.value !== null && metric?.value !== undefined && metric?.value !== "";
@@ -67,8 +54,10 @@ function getReportingPeriodLabel(profile: any) {
 export default function EsgProfilePage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
   const [expiryDays, setExpiryDays] = useState("30");
-  const [selectedSections, setSelectedSections] = useState<string[]>(["esg_scores", "key_metrics", "policy_status", "carbon_summary"]);
+  const [selectedSections, setSelectedSections] = useState<string[]>([...DEFAULT_PUBLIC_PASSPORT_SECTIONS]);
   const [selectedPeriod, setSelectedPeriod] = useState("");
 
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
@@ -86,6 +75,17 @@ export default function EsgProfilePage() {
       setSelectedPeriod(profile.reporting_period.period);
     }
   }, [profile?.reporting_period?.period, selectedPeriod]);
+
+  useEffect(() => {
+    const savedSections = profile?.shareSettings?.visibleSections;
+    if (Array.isArray(savedSections) && savedSections.length > 0) {
+      const allowed = new Set(SECTION_OPTIONS.map((section) => section.key));
+      const selected = savedSections.filter((section: unknown): section is string =>
+        typeof section === "string" && allowed.has(section)
+      );
+      if (selected.length > 0) setSelectedSections(selected);
+    }
+  }, [profile?.shareSettings?.visibleSections]);
 
   const periodOptions = useMemo(() => {
     const options = [
@@ -118,8 +118,10 @@ export default function EsgProfilePage() {
     );
   }
 
-  const shareEnabled = profile?.shareSettings?.enabled || false;
-  const shareToken = profile?.shareSettings?.token;
+  const canManageSettings = can("settings_admin");
+  const canManagePublicSharing = canManageSettings && isPro;
+  const shareEnabled = canManagePublicSharing && (profile?.shareSettings?.enabled || false);
+  const shareToken = canManagePublicSharing ? profile?.shareSettings?.token : null;
   const shareUrl = shareToken ? `${window.location.origin}/public/esg/${shareToken}` : null;
   const reportingPeriodLabel = getReportingPeriodLabel(profile);
 
@@ -131,8 +133,8 @@ export default function EsgProfilePage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="text-profile-title">ESG Company Profile</h1>
-          <p className="text-sm text-muted-foreground mt-1">Your company's ESG performance at a glance</p>
+          <h1 className="text-2xl font-bold" data-testid="text-profile-title">SME ESG Passport</h1>
+          <p className="text-sm text-muted-foreground mt-1">Review and share clear ESG facts, evidence and progress</p>
           <div className="mt-2">
             <Badge variant="outline" className="text-xs" data-testid="text-profile-reporting-period">
               Reporting Period: {reportingPeriodLabel}
@@ -164,17 +166,35 @@ export default function EsgProfilePage() {
         </CardHeader>
       </Card>
 
-      {profile?.esg_scores && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <ScoreBadge label="Environmental" score={profile.esg_scores.environmental} icon={Leaf} />
-          <ScoreBadge label="Social" score={profile.esg_scores.social} icon={Users} />
-          <ScoreBadge label="Governance" score={profile.esg_scores.governance} icon={Shield} />
-          <div className="rounded-lg p-4 bg-primary/10" data-testid="score-overall">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-medium text-primary">Overall</span>
-            </div>
-            <span className="text-2xl font-bold text-primary">{profile.esg_scores.overall}%</span>
-          </div>
+      {profile?.passport && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3" data-testid="passport-fact-summary">
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Data completion</p>
+              <p className="mt-1 text-2xl font-semibold">{profile.passport.completion?.percentage || 0}%</p>
+              <p className="text-xs text-muted-foreground">
+                {profile.passport.completion?.reportedMetrics || 0} of {profile.passport.completion?.totalMetrics || 0} tracked metrics
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Evidence confidence</p>
+              <p className="mt-1 text-sm font-semibold">{profile.passport.evidenceConfidence?.label || "Not yet evidenced"}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {profile.passport.evidenceConfidence?.description || "Add and review evidence to strengthen confidence."}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground">Reporting boundary</p>
+              <p className="mt-1 text-sm font-semibold">
+                {profile.passport.reportingBoundary?.label || "Boundary not stated"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">No composite score is used as the passport outcome.</p>
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -226,11 +246,11 @@ export default function EsgProfilePage() {
             <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Factory className="w-4 h-4" /> Carbon Summary</CardTitle></CardHeader>
             <CardContent>
               <div className="space-y-2">
-                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 1</span><span className="font-medium">{profile.carbon_summary.scope1 || 0} tCO2e</span></div>
-                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 2</span><span className="font-medium">{profile.carbon_summary.scope2 || 0} tCO2e</span></div>
-                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 3</span><span className="font-medium">{profile.carbon_summary.scope3 || 0} tCO2e</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 1</span><span className="font-medium">{profile.carbon_summary.scope1 || 0} {profile.carbon_summary.unit || "kgCO2e"}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 2</span><span className="font-medium">{profile.carbon_summary.scope2 || 0} {profile.carbon_summary.unit || "kgCO2e"}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Scope 3</span><span className="font-medium">{profile.carbon_summary.scope3 || 0} {profile.carbon_summary.unit || "kgCO2e"}</span></div>
                 <Separator />
-                <div className="flex justify-between text-sm font-bold"><span>Total</span><span>{profile.carbon_summary.total || 0} tCO2e</span></div>
+                <div className="flex justify-between text-sm font-bold"><span>Total</span><span>{profile.carbon_summary.total || 0} {profile.carbon_summary.unit || "kgCO2e"}</span></div>
               </div>
             </CardContent>
           </Card>
@@ -268,86 +288,117 @@ export default function EsgProfilePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2"><Share2 className="w-4 h-4" /> Share Settings</CardTitle>
+          <CardTitle className="text-sm flex items-center gap-2"><Share2 className="w-4 h-4" /> Share SME ESG Passport</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Share plain ESG facts with an expiring link. The passport does not lead with a composite ESG score.
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <Label>Enable public sharing</Label>
-            <Switch
-              checked={shareEnabled}
-              onCheckedChange={(checked) => {
-                shareMutation.mutate({
-                  enabled: checked,
-                  expiresInDays: checked ? parseInt(expiryDays) || 30 : undefined,
-                  visibleSections: checked ? selectedSections : undefined,
-                });
-              }}
-              data-testid="switch-share-enabled"
+          {billingLoading ? (
+            <Skeleton className="h-20 w-full" data-testid="passport-share-loading" />
+          ) : !canManageSettings ? (
+            <PermissionBanner
+              module="settings_admin"
+              customMessage="This passport is read-only for your role."
+              testId="passport-share-read-only"
             />
-          </div>
-
-          {shareEnabled && (
-            <>
-              <div className="space-y-2">
-                <Label className="text-xs">Expiry (days)</Label>
-                <Input
-                  type="number"
-                  value={expiryDays}
-                  onChange={(e) => setExpiryDays(e.target.value)}
-                  className="w-32"
-                  data-testid="input-expiry-days"
+          ) : !isPro ? (
+            <div
+              className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/20 sm:flex-row sm:items-center sm:justify-between"
+              data-testid="passport-share-upgrade"
+            >
+              <div className="flex items-start gap-3">
+                <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                <div>
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Public Passport sharing is available on Pro.</p>
+                  <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">You can keep reviewing and improving the passport here without publishing a live link.</p>
+                </div>
+              </div>
+              <UpgradeButton feature="ESG Passport sharing" size="sm" data-testid="button-upgrade-passport-sharing">
+                Upgrade to share
+              </UpgradeButton>
+            </div>
+          ) : (
+            <div className="space-y-4" data-testid="passport-share-admin-controls">
+              <div className="flex items-center justify-between">
+                <Label>Enable public sharing</Label>
+                <Switch
+                  checked={shareEnabled}
+                  onCheckedChange={(checked) => {
+                    shareMutation.mutate({
+                      enabled: checked,
+                      expiresInDays: checked ? parseInt(expiryDays) || 30 : undefined,
+                      visibleSections: checked ? selectedSections : undefined,
+                    });
+                  }}
+                  data-testid="switch-share-enabled"
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-xs">Visible Sections</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  {SECTION_OPTIONS.map(s => (
-                    <label key={s.key} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={selectedSections.includes(s.key)}
-                        onCheckedChange={() => toggleSection(s.key)}
-                        data-testid={`checkbox-section-${s.key}`}
-                      />
-                      {s.label}
-                    </label>
-                  ))}
-                </div>
-              </div>
+              {shareEnabled && (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Expiry (days)</Label>
+                    <Input
+                      type="number"
+                      value={expiryDays}
+                      onChange={(e) => setExpiryDays(e.target.value)}
+                      className="w-32"
+                      data-testid="input-expiry-days"
+                    />
+                  </div>
 
-              <Button
-                size="sm"
-                onClick={() => shareMutation.mutate({ enabled: true, expiresInDays: parseInt(expiryDays) || 30, visibleSections: selectedSections })}
-                disabled={shareMutation.isPending}
-                data-testid="button-update-share"
-              >
-                Update Share Settings
-              </Button>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Visible facts</Label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {SECTION_OPTIONS.map(s => (
+                        <label key={s.key} className="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            checked={selectedSections.includes(s.key)}
+                            onCheckedChange={() => toggleSection(s.key)}
+                            data-testid={`checkbox-section-${s.key}`}
+                          />
+                          {s.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
 
-              {shareUrl && (
-                <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-                  <Input value={shareUrl} readOnly className="text-xs flex-1" data-testid="input-share-url" />
                   <Button
-                    size="icon"
-                    variant="outline"
-                    onClick={() => { navigator.clipboard.writeText(shareUrl); toast({ title: "Link copied" }); }}
-                    data-testid="button-copy-link"
+                    size="sm"
+                    onClick={() => shareMutation.mutate({ enabled: true, expiresInDays: parseInt(expiryDays) || 30, visibleSections: selectedSections })}
+                    disabled={shareMutation.isPending}
+                    data-testid="button-update-share"
                   >
-                    <Copy className="w-4 h-4" />
+                    Update Share Settings
                   </Button>
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    onClick={() => rotateMutation.mutate()}
-                    disabled={rotateMutation.isPending}
-                    data-testid="button-rotate-token"
-                    title="Rotate token"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </Button>
-                </div>
+
+                  {shareUrl && (
+                    <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
+                      <Input value={shareUrl} readOnly className="text-xs flex-1" data-testid="input-share-url" />
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => { navigator.clipboard.writeText(shareUrl); toast({ title: "Link copied" }); }}
+                        data-testid="button-copy-link"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => rotateMutation.mutate()}
+                        disabled={rotateMutation.isPending}
+                        data-testid="button-rotate-token"
+                        title="Rotate token"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+                </>
               )}
-            </>
+            </div>
           )}
         </CardContent>
       </Card>

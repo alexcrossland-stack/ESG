@@ -7,6 +7,15 @@ import { ensureIndexes } from "./ensure-indexes";
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
 import { seedFrameworks } from "./seed-frameworks";
+import { seedCurrentEmissionFactors } from "./seed-emission-factors";
+import {
+  CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS,
+  FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
+  missingFrameworkRequirementResponseColumns,
+  missingFrameworkRequirementResponseIndexes,
+  runStartupMigrationStatements,
+} from "./startup-schema-migrations";
+import { redactResponseForLog } from "./log-redaction";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -125,7 +134,7 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (!isProd && capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        logLine += ` :: ${JSON.stringify(redactResponseForLog(capturedJsonResponse))}`;
       }
       if (duration > 2000) {
         log(`[SLOW ROUTE] ${logLine}`, "perf");
@@ -279,14 +288,24 @@ app.use((req, res, next) => {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS super_admin_actions (
         id serial PRIMARY KEY,
-        admin_user_id integer,
+        admin_user_id varchar,
         action text NOT NULL,
-        target_company_id integer,
-        target_user_id integer,
+        target_company_id varchar,
+        target_user_id varchar,
         metadata jsonb,
+        ip_address text,
+        user_agent text,
         created_at timestamp DEFAULT now() NOT NULL
       )
     `);
+    await db.execute(sql`
+      ALTER TABLE super_admin_actions
+        ALTER COLUMN admin_user_id TYPE varchar USING admin_user_id::text,
+        ALTER COLUMN target_company_id TYPE varchar USING target_company_id::text,
+        ALTER COLUMN target_user_id TYPE varchar USING target_user_id::text
+    `);
+    await db.execute(sql`ALTER TABLE super_admin_actions ADD COLUMN IF NOT EXISTS ip_address text`);
+    await db.execute(sql`ALTER TABLE super_admin_actions ADD COLUMN IF NOT EXISTS user_agent text`);
   } catch {}
   try {
     await db.execute(sql`
@@ -336,6 +355,52 @@ app.use((req, res, next) => {
     `);
   } catch (e: any) {
     console.error("[Startup] FATAL: Could not ensure evidence_files attachment metadata columns exist");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
+    await runStartupMigrationStatements(
+      (statement) => db.execute(sql.raw(statement)),
+      FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
+    );
+    const frameworkResponseColumnsResult = await db.execute(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'framework_requirement_responses'
+    `);
+    const missingColumns = missingFrameworkRequirementResponseColumns(
+      (frameworkResponseColumnsResult as any).rows ?? [],
+    );
+    if (missingColumns.length > 0) {
+      throw new Error(`framework_requirement_responses is missing columns: ${missingColumns.join(", ")}`);
+    }
+    const frameworkResponseIndexesResult = await db.execute(sql`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'framework_requirement_responses'
+    `);
+    const missingIndexes = missingFrameworkRequirementResponseIndexes(
+      (frameworkResponseIndexesResult as any).rows ?? [],
+    );
+    if (missingIndexes.length > 0) {
+      throw new Error(`framework_requirement_responses is missing indexes: ${missingIndexes.join(", ")}`);
+    }
+    console.log("[Startup] Framework requirement response schema migration applied and validated");
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not create or validate framework_requirement_responses");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
+    await runStartupMigrationStatements(
+      (statement) => db.execute(sql.raw(statement)),
+      CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS,
+    );
+    console.log("[Startup] 2026 emission factor defaults reconciled");
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not reconcile 2026 emission factor defaults");
     console.error("[Startup] FATAL:", e.message ?? e);
     process.exit(1);
   }
@@ -420,6 +485,11 @@ app.use((req, res, next) => {
     await seedFrameworks();
   } catch (e: any) {
     console.warn("[Startup] WARN: Framework seeding failed:", e.message ?? e);
+  }
+  try {
+    await seedCurrentEmissionFactors();
+  } catch (e: any) {
+    console.warn("[Startup] WARN: Emission factor seeding failed:", e.message ?? e);
   }
 
   // MFA & GDPR schema migrations

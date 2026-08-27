@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
+import { CURRENT_UK_FACTOR_SET } from "@shared/emission-factor-metadata";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { Link } from "wouter";
 
@@ -567,9 +568,20 @@ function MfaCard() {
       return res.json();
     },
     onSuccess: (data) => {
-      setBackupCodes(data.backupCodes || []);
+      const codes = data.backupCodes || [];
+      setBackupCodes(codes);
       setStep("backup");
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
+      // MFA is already enabled when this response returns. Update the active
+      // status immediately so finishing the backup-code step cannot briefly
+      // return the user to the "Enable MFA" state while the refetch is in
+      // flight. The background refresh still reconciles server-owned details.
+      queryClient.setQueryData(["/api/auth/mfa/status"], (current: any) => ({
+        ...current,
+        mfaEnabled: true,
+        mfaEnabledAt: current?.mfaEnabledAt || new Date().toISOString(),
+        backupCodesCount: codes.length,
+      }));
+      void queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/status"] });
       toast({ title: "MFA enabled", description: "Two-factor authentication is now active on your account." });
     },
     onError: (e: any) => toast({ title: "Invalid token", description: e.message, variant: "destructive" }),
@@ -1885,7 +1897,8 @@ function EmissionFactorAdmin() {
 
   if (isLoading || settingsLoading) return <Skeleton className="h-32" />;
 
-  const currentSet = settings?.emissionFactorSet || "UK_DEFRA_2024";
+  const configuredYear = String(settings?.emissionFactorSet || CURRENT_UK_FACTOR_SET).match(/_(\d{4})$/)?.[1];
+  const currentSet = configuredYear ? `UK_GOVERNMENT_${configuredYear}` : CURRENT_UK_FACTOR_SET;
 
   return (
     <Card data-testid="card-admin-factors">

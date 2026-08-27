@@ -265,6 +265,8 @@ test.describe("Browser-connected core ESG flow", () => {
 
     await page.goto("/");
     await expect(page.getByTestId("text-dashboard-title")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("summary-advanced-insights").click();
+    await expect(page.getByTestId("section-advanced-insights")).toBeVisible();
     await chooseOption(page, "select-dashboard-period", period);
     await expect(page.getByTestId("badge-latest-period")).toContainText(period, { timeout: 15000 });
     await expect(page.getByTestId("stat-submission-rate")).toBeVisible();
@@ -277,16 +279,21 @@ test.describe("Browser-connected core ESG flow", () => {
     await expect(page.getByTestId("text-profile-title")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("text-profile-reporting-period")).toContainText(period, { timeout: 15000 });
     await expect(page.getByText(`Values shown for ${period}`)).toBeVisible();
+    await expect(page.getByTestId("passport-fact-summary")).toContainText("organisation-level records take precedence");
     const profileMetricCard = page.locator('[data-testid^="metric-card-"]').filter({ hasText: metricName }).first();
     await expect(profileMetricCard).toBeVisible({ timeout: 15000 });
-    await expect(profileMetricCard).toContainText("202.50");
+    await expect(profileMetricCard).toContainText("101.75");
     await expect(profileMetricCard).not.toContainText("303.25");
-    await expect(profileMetricCard).not.toContainText("101.75");
+    await expect(profileMetricCard).not.toContainText("202.50");
 
     await page.goto("/reports");
     await chooseOption(page, "select-report-scope", siteAName);
     await expect(page.getByTestId("text-readiness-scope")).toContainText(`Site: ${siteAName}`, { timeout: 15000 });
     await expect(page.getByTestId("text-completeness-percent")).toBeVisible();
+    await expect.poll(async () => {
+      const text = await page.getByTestId("text-completeness-percent").textContent();
+      return Number((text || "0").replace("%", ""));
+    }).toBeGreaterThan(0);
     await page.getByTestId("button-generate-report").click();
     await expect(page.getByTestId("report-preview")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("section-metrics")).toContainText(metricName);

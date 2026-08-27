@@ -200,10 +200,126 @@ async function main() {
     assert(!res.body.includes("CSRF_REJECTED"), `bearer request was incorrectly CSRF rejected: ${res.body}`);
   });
 
-  await check("existing bearer logout regression still invalidates stale token", async () => {
+  await check("explicit contributor bearer overrides an admin cookie without taking over its session", async () => {
     const session = new CookieSession();
     await session.login(seeded.tenantA.adminEmail);
-    const token = session.token;
+    const adminCookie = session.cookie;
+    const metrics = parseJson<Array<{ id: string }>>(
+      await session.request("GET", "/api/metrics"),
+      "GET /api/metrics as cookie admin",
+    );
+    assert(metrics[0]?.id, "no metric available for mixed-credential authorization check");
+
+    const blocked = await session.request(
+      "PUT",
+      `/api/metrics/${metrics[0].id}/target`,
+      { targetValue: 42, targetYear: 2030 },
+      { bearer: seeded.tenantA.contributorToken },
+    );
+    expectStatus(blocked, 403, "contributor bearer with admin cookie");
+    assert(!getSessionCookie(blocked.headers), "mixed bearer request unexpectedly issued a session cookie");
+    assert(session.cookie === adminCookie, "mixed bearer request replaced the admin cookie");
+
+    const cookieIdentity = parseJson<{ user?: { role?: string } }>(
+      await session.request("GET", "/api/auth/me"),
+      "GET /api/auth/me after mixed bearer request",
+    );
+    assert(cookieIdentity.user?.role === "admin", `cookie identity changed to ${cookieIdentity.user?.role || "unknown"}`);
+  });
+
+  await check("invalid explicit bearer returns 401 and cannot fall back to a valid cookie", async () => {
+    const session = new CookieSession();
+    await session.login(seeded.tenantA.viewerEmail);
+    const viewerCookie = session.cookie;
+    const rejected = await session.request(
+      "GET",
+      "/api/metrics",
+      undefined,
+      { bearer: `invalid-bearer-${Date.now()}` },
+    );
+    expectStatus(rejected, 401, "invalid bearer with valid viewer cookie");
+    assert(!getSessionCookie(rejected.headers), "invalid bearer request unexpectedly issued a session cookie");
+    assert(session.cookie === viewerCookie, "invalid bearer request replaced the viewer cookie");
+
+    const cookieIdentity = parseJson<{ user?: { role?: string } }>(
+      await session.request("GET", "/api/auth/me"),
+      "GET /api/auth/me after invalid bearer request",
+    );
+    assert(cookieIdentity.user?.role === "viewer", `valid cookie was damaged after invalid bearer request: ${cookieIdentity.user?.role || "unknown"}`);
+  });
+
+  await check("bearer step-up cannot inherit an unrelated stepped-up cookie", async () => {
+    const session = new CookieSession();
+    await session.login(seeded.tenantA.contributorEmail);
+    expectStatus(
+      await session.request("POST", "/api/auth/step-up", { password: TEST_PASSWORD }),
+      200,
+      "contributor cookie step-up",
+    );
+
+    const mixed = await session.request(
+      "PATCH",
+      "/api/admin/mfa-policy",
+      { policy: "optional" },
+      { bearer: seeded.tenantA.viewerToken },
+    );
+    expectStatus(mixed, 403, "viewer bearer with stepped-up contributor cookie");
+    const body = parseAnyJson<{ code?: string }>(mixed, "mixed-credential step-up response");
+    assert(body.code === "STEP_UP_REQUIRED", `bearer inherited cookie step-up or reached the wrong guard: ${mixed.body}`);
+    assert(!getSessionCookie(mixed.headers), "mixed step-up request unexpectedly issued a session cookie");
+  });
+
+  await check("bearer-only request does not create a cookie session", async () => {
+    const res = await fetch(new URL("/api/metrics", BASE_URL), {
+      headers: { Authorization: `Bearer ${seeded.tenantA.contributorToken}` },
+    });
+    assert(res.status === 200, `bearer-only GET /api/metrics status=${res.status}`);
+    assert(!getSessionCookie(res.headers), "bearer-only request unexpectedly issued a session cookie");
+    await res.text();
+  });
+
+  await check("bearer step-up grants the bearer session and permits API key creation without a cookie", async () => {
+    const token = seeded.tenantB.adminToken;
+    const stepUp = await fetch(new URL("/api/auth/step-up", BASE_URL), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ password: TEST_PASSWORD }),
+    });
+    const stepUpBody = await stepUp.text();
+    assert(stepUp.status === 200, `bearer step-up status=${stepUp.status} body=${stepUpBody}`);
+    assert(!getSessionCookie(stepUp.headers), "bearer step-up unexpectedly issued a session cookie");
+
+    const status = await fetch(new URL("/api/auth/step-up/status", BASE_URL), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const statusBody = await status.text();
+    assert(status.status === 200, `bearer step-up status check=${status.status} body=${statusBody}`);
+    const statusJson = JSON.parse(statusBody) as { stepUpValid?: boolean };
+    assert(statusJson.stepUpValid === true, `bearer session was not marked stepped up: ${statusBody}`);
+    assert(!getSessionCookie(status.headers), "bearer step-up status unexpectedly issued a session cookie");
+
+    const label = `Bearer step-up regression ${Date.now()}`;
+    const created = await fetch(new URL("/api/company/api-keys", BASE_URL), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ label, scopes: ["read:metrics"] }),
+    });
+    const createdBody = await created.text();
+    assert(created.status === 201, `API key creation after bearer step-up status=${created.status} body=${createdBody}`);
+    const createdJson = JSON.parse(createdBody) as { id?: string; key?: string };
+    assert(createdJson.id, `created API key response missing id: ${createdBody}`);
+    assert(/^esgk_/.test(createdJson.key || ""), `created API key response missing plaintext key: ${createdBody}`);
+    assert(!getSessionCookie(created.headers), "bearer API key creation unexpectedly issued a session cookie");
+
+    const revoked = await fetch(new URL(`/api/company/api-keys/${createdJson.id}`, BASE_URL), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert(revoked.status === 200, `cleanup API key revoke status=${revoked.status} body=${await revoked.text()}`);
+  });
+
+  await check("existing bearer logout regression still invalidates stale token", async () => {
+    const token = seeded.tenantB.adminToken;
     expectStatus(await apiRequest("POST", "/api/auth/logout", undefined, token), 200, "bearer logout");
     expectStatus(await apiRequest("GET", "/api/auth/me", undefined, token), 401, "stale bearer after logout");
   });

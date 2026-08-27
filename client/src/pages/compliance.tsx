@@ -63,18 +63,18 @@ function FrameworkCard({ framework }: { framework: any }) {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <ScoreRing score={framework.compliancePercent} />
+            <ScoreRing score={framework.readinessPercent} />
             <div className="text-right">
-              <p className="text-lg font-bold" data-testid={`text-compliance-percent-${framework.id}`}>
-                {framework.compliancePercent}%
+              <p className="text-lg font-bold" data-testid={`text-readiness-percent-${framework.id}`}>
+                {framework.readinessPercent}%
               </p>
               <p className="text-xs text-muted-foreground">
-                {framework.metRequirements}/{framework.totalRequirements} met
+                {framework.readyRequirements}/{framework.totalRequirements} ready
               </p>
             </div>
           </div>
         </div>
-        <Progress value={framework.compliancePercent} className="h-2 mt-3" />
+        <Progress value={framework.readinessPercent} className="h-2 mt-3" />
       </CardHeader>
       <CardContent className="pt-0">
         <Button
@@ -107,7 +107,7 @@ function FrameworkCard({ framework }: { framework: any }) {
                         data-testid={`requirement-${req.id}`}
                       >
                         <div className="flex items-start gap-2 flex-1 min-w-0">
-                          {req.isMet ? (
+                          {req.status === "covered" ? (
                             <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                           ) : (
                             <XCircle className="w-4 h-4 text-muted-foreground/40 shrink-0 mt-0.5" />
@@ -129,7 +129,7 @@ function FrameworkCard({ framework }: { framework: any }) {
                                 <SourceBadge
                                   entityType="requirement"
                                   entityId={req.id}
-                                  status={req.isMet ? "approved" : "draft"}
+                                  status={req.status === "covered" ? "approved" : "draft"}
                                   owner={req.owner}
                                   reviewedAt={req.lastReviewedAt}
                                 />
@@ -138,11 +138,11 @@ function FrameworkCard({ framework }: { framework: any }) {
                           </div>
                         </div>
                         <Badge
-                          variant={req.isMet ? "default" : "secondary"}
-                          className={`text-xs shrink-0 ${req.isMet ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : ""}`}
+                          variant={req.status === "covered" ? "default" : "secondary"}
+                          className={`text-xs shrink-0 ${req.status === "covered" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : ""}`}
                           data-testid={`badge-requirement-status-${req.id}`}
                         >
-                          {req.isMet ? "Met" : req.hasLinkedMetrics ? "Data needed" : "Policy only"}
+                          {req.status === "covered" ? "Ready" : req.status === "partial" ? "In progress" : "Missing"}
                         </Badge>
                       </div>
                     ))}
@@ -172,8 +172,8 @@ export default function Compliance() {
   }
 
   const frameworks = frameworkStatus || [];
-  const overallCompliance = frameworks.length > 0
-    ? Math.round(frameworks.reduce((s, f) => s + f.compliancePercent, 0) / frameworks.length)
+  const overallReadiness = frameworks.length > 0
+    ? Math.round(frameworks.reduce((s, f) => s + f.readinessPercent, 0) / frameworks.length)
     : 0;
 
   return (
@@ -182,18 +182,18 @@ export default function Compliance() {
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
             <Shield className="w-5 h-5 text-primary" />
-            Compliance Tracking
+            Framework Readiness
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Track your alignment with ESG reporting frameworks and standards
+            Track fact-based alignment with selected ESG frameworks. Readiness is not certification, assurance, or legal advice.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right">
-            <p className="text-xs text-muted-foreground">Overall Compliance</p>
-            <p className="text-2xl font-bold">{overallCompliance}%</p>
+            <p className="text-xs text-muted-foreground">Overall readiness</p>
+            <p className="text-2xl font-bold">{overallReadiness}%</p>
           </div>
-          <ScoreRing score={overallCompliance} />
+          <ScoreRing score={overallReadiness} />
         </div>
       </div>
 
@@ -201,10 +201,10 @@ export default function Compliance() {
         {frameworks.map((fw: any) => (
           <Card key={fw.id} className="text-center">
             <CardContent className="pt-6 pb-4">
-              <ScoreRing score={fw.compliancePercent} size={64} />
+              <ScoreRing score={fw.readinessPercent} size={64} />
               <p className="text-sm font-medium mt-2">{fw.name}</p>
               <p className="text-xs text-muted-foreground">
-                {fw.metRequirements}/{fw.totalRequirements} requirements met
+                {fw.readyRequirements}/{fw.totalRequirements} requirements ready
               </p>
             </CardContent>
           </Card>
@@ -221,7 +221,7 @@ export default function Compliance() {
         <Card>
           <CardContent className="py-12 text-center">
             <Shield className="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
-            <p className="text-sm text-muted-foreground">No compliance frameworks configured</p>
+            <p className="text-sm text-muted-foreground">No frameworks selected</p>
           </CardContent>
         </Card>
       )}

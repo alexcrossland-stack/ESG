@@ -11,15 +11,26 @@ export interface EmissionFactorMap {
   hotelNight?: number;
 }
 
+function requireFactor(value: number | undefined, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`No valid emission factor is configured for ${label}`);
+  }
+  return value;
+}
+
 export function calculateScope1(gasKwh: number, vehicleFuelLitres: number, factors: EmissionFactorMap): number {
-  const gasFactor = factors.naturalGas || 0.18293;
-  const fuelFactor = factors.diesel || 2.70559;
-  return (gasKwh * gasFactor + vehicleFuelLitres * fuelFactor) / 1000;
+  const gasEmissions = gasKwh > 0
+    ? gasKwh * requireFactor(factors.naturalGas, "natural gas")
+    : 0;
+  const fuelEmissions = vehicleFuelLitres > 0
+    ? vehicleFuelLitres * requireFactor(factors.diesel, "diesel")
+    : 0;
+  return (gasEmissions + fuelEmissions) / 1000;
 }
 
 export function calculateScope2(electricityKwh: number, factors: EmissionFactorMap): number {
-  const factor = factors.electricity || 0.20707;
-  return (electricityKwh * factor) / 1000;
+  if (electricityKwh <= 0) return 0;
+  return (electricityKwh * requireFactor(factors.electricity, "UK grid electricity")) / 1000;
 }
 
 export function calculateRecyclingRate(recycledWaste: number, totalWaste: number): number | null {
@@ -39,12 +50,12 @@ export function calculateBusinessTravelEmissions(
   factors: EmissionFactorMap
 ): number {
   let total = 0;
-  if (travelData.domesticFlightKm) total += travelData.domesticFlightKm * (factors.domesticFlight || 0.24587);
-  if (travelData.shortHaulFlightKm) total += travelData.shortHaulFlightKm * (factors.shortHaulFlight || 0.15353);
-  if (travelData.longHaulFlightKm) total += travelData.longHaulFlightKm * (factors.longHaulFlight || 0.19309);
-  if (travelData.railKm) total += travelData.railKm * (factors.rail || 0.03549);
-  if (travelData.hotelNights) total += travelData.hotelNights * (factors.hotelNight || 10.24);
-  if (travelData.carMiles) total += travelData.carMiles * (factors.companyCar || 0.27436);
+  if (travelData.domesticFlightKm) total += travelData.domesticFlightKm * requireFactor(factors.domesticFlight, "domestic flights");
+  if (travelData.shortHaulFlightKm) total += travelData.shortHaulFlightKm * requireFactor(factors.shortHaulFlight, "short-haul flights");
+  if (travelData.longHaulFlightKm) total += travelData.longHaulFlightKm * requireFactor(factors.longHaulFlight, "long-haul flights");
+  if (travelData.railKm) total += travelData.railKm * requireFactor(factors.rail, "national rail");
+  if (travelData.hotelNights) total += travelData.hotelNights * requireFactor(factors.hotelNight, "UK hotel nights");
+  if (travelData.carMiles) total += travelData.carMiles * requireFactor(factors.companyCar, "average company car");
   return total / 1000;
 }
 

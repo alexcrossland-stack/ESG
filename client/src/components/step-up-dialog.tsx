@@ -20,7 +20,12 @@ export function StepUpDialog({ open, onClose, onSuccess, actionLabel }: {
   const [backupCode, setBackupCode] = useState("");
   const [useTotpOrBackup, setUseTotpOrBackup] = useState<"totp" | "backup">("totp");
 
-  const { data: mfaStatus } = useQuery<any>({ queryKey: ["/api/auth/mfa/status"] });
+  // The dialog is mounted globally, including on the signed-out page. Only
+  // ask for security state when a signed-in user actually opens it.
+  const { data: mfaStatus } = useQuery<any>({
+    queryKey: ["/api/auth/mfa/status"],
+    enabled: open,
+  });
   const requiresMfa = mfaStatus?.mfaEnabled;
 
   const stepUpMutation = useMutation({

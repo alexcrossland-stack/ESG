@@ -119,6 +119,13 @@ async function attachMetricEvidence(opts: {
   return id;
 }
 
+async function approveEvidence(token: string, evidenceId: string): Promise<void> {
+  const response = await apiRequest("PUT", `/api/evidence/${evidenceId}`, {
+    evidenceStatus: "approved",
+  }, token);
+  parseJson(response, "PUT /api/evidence/:id approve");
+}
+
 async function getExportData(token: string, period: string, siteId: string | null | "__all__") {
   const qs = new URLSearchParams({ period, siteId: siteId === null ? "null" : siteId });
   const res = await apiRequest("GET", `/api/reports/export-data/esg_metrics_summary?${qs.toString()}`, undefined, token);
@@ -248,7 +255,7 @@ async function run(tenants: SeededTenants): Promise<void> {
   const siteBOnlyMetricId = await createMetric(tenantA.adminToken, siteBOnlyMetricName, "m3");
   const tenantBMetricId = await createMetric(tenantB.adminToken, tenantBMetricName);
 
-  await attachMetricEvidence({
+  const orgEvidenceId = await attachMetricEvidence({
     token: tenantA.adminToken,
     metricId: primaryMetricId,
     period,
@@ -256,8 +263,9 @@ async function run(tenants: SeededTenants): Promise<void> {
     siteId: null,
     filename: `export-org-${suffix}.txt`,
   });
+  await approveEvidence(tenantA.adminToken, orgEvidenceId);
   await saveMetricValue({ token: tenantA.adminToken, metricId: primaryMetricId, period: "2099-09", value: 77.7, siteId: null });
-  await attachMetricEvidence({
+  const siteAEvidenceId = await attachMetricEvidence({
     token: tenantA.adminToken,
     metricId: primaryMetricId,
     period,
@@ -265,7 +273,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     siteId: siteAId,
     filename: `export-site-a-${suffix}.txt`,
   });
-  await attachMetricEvidence({
+  await approveEvidence(tenantA.adminToken, siteAEvidenceId);
+  const siteBEvidenceId = await attachMetricEvidence({
     token: tenantA.adminToken,
     metricId: primaryMetricId,
     period,
@@ -273,6 +282,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     siteId: siteBId,
     filename: `export-site-b-${suffix}.txt`,
   });
+  await approveEvidence(tenantA.adminToken, siteBEvidenceId);
   await saveMetricValue({ token: tenantA.adminToken, metricId: siteBOnlyMetricId, period, value: 404.4, siteId: siteBId });
   await saveMetricValue({ token: tenantB.adminToken, metricId: tenantBMetricId, period, value: 9999.99, siteId: tenantBSiteId });
 
@@ -323,7 +333,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     assert(orgReadiness.filledMetrics === 1 && orgReadiness.evidenceCoveragePercent === 50, `unexpected org readiness counts ${JSON.stringify(orgReadiness)}`);
     assert(siteAReadiness.filledMetrics === 1 && siteAReadiness.evidenceCoveragePercent === 50, `unexpected Site A readiness counts ${JSON.stringify(siteAReadiness)}`);
     assert(siteBReadiness.filledMetrics === 2 && siteBReadiness.evidenceCoveragePercent === 50, `unexpected Site B readiness counts ${JSON.stringify(siteBReadiness)}`);
-    assert(allReadiness.filledMetrics === 2 && allReadiness.evidenceCoveragePercent === 100, `unexpected all-scope readiness counts ${JSON.stringify(allReadiness)}`);
+    assert(allReadiness.filledMetrics === 2 && allReadiness.evidenceCoveragePercent === 50, `unexpected all-scope readiness counts ${JSON.stringify(allReadiness)}`);
   });
 
   await check("DOCX exports render correct reporting period, scope labels, values, precision, and evidence status", async () => {
@@ -367,7 +377,9 @@ async function run(tenants: SeededTenants): Promise<void> {
     expectIncludes(allText, "all active sites and organisational-level metric entries");
     expectIncludes(allText, "607.50");
     expectIncludes(allText, "404.40");
-    expectIncludes(allText, "Evidence Coverage 100%");
+    // Three approved source files support one of two enabled metrics. Coverage
+    // is metric-based, so repeated evidence does not inflate the result.
+    expectIncludes(allText, "Evidence Coverage 50%");
     expectExcludes(allText, "9,999.99");
     expectExcludes(allText, tenantBMetricName);
   });

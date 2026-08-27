@@ -43,7 +43,9 @@ await check("routes do not use legacy OPENAI_API_KEY", () => {
 
 await check("shared OpenAI client uses configured API key and base URL", () => {
   assert(routes.includes("function createOpenAiIntegrationClient()"), "missing shared OpenAI integration client");
-  assert(routes.includes("apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY"), "client does not use AI_INTEGRATIONS_OPENAI_API_KEY");
+  assert(routes.includes("const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY?.trim()"), "client does not read AI_INTEGRATIONS_OPENAI_API_KEY safely");
+  assert(routes.includes("if (!apiKey) return null"), "client does not degrade gracefully when AI is unconfigured");
+  assert(routes.includes("apiKey,"), "configured API key is not passed to the OpenAI client");
   assert(routes.includes("baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL"), "client does not use AI_INTEGRATIONS_OPENAI_BASE_URL");
 });
 

@@ -1,4 +1,8 @@
-import { buildSavedReportSnapshotSections, buildTrendReportSections } from "../../server/report-engine";
+import {
+  buildEsgMetricsSummaryReport,
+  buildSavedReportSnapshotSections,
+  buildTrendReportSections,
+} from "../../server/report-engine";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -113,6 +117,60 @@ await check("saved report snapshot sections preserve stored metrics and trend se
   assert(titles.includes("Metric Trends"), `missing Metric Trends in ${titles.join(",")}`);
   const metrics = sections.find((section) => section.title === "ESG Metrics");
   assert(metrics?.tableRows?.[0]?.[0] === "Electricity Consumption", "snapshot metric row missing stored metric");
+});
+
+await check("saved report converts canonical kgCO2e carbon totals to tonnes", () => {
+  const sections = buildSavedReportSnapshotSections({
+    carbonSummary: {
+      scope1: 1_250,
+      scope2: 500,
+      scope3: 250,
+      total: 2_000,
+      unit: "kgCO2e",
+    },
+  });
+
+  const carbon = sections.find((section) => section.title === "Carbon Summary");
+  assert(carbon?.rows?.[0]?.value === "1.25 tCO2e", `unexpected Scope 1 ${carbon?.rows?.[0]?.value}`);
+  assert(carbon?.rows?.[3]?.value === "2.00 tCO2e", `unexpected total ${carbon?.rows?.[3]?.value}`);
+});
+
+await check("saved report preserves explicitly tonne-based legacy carbon values", () => {
+  const sections = buildSavedReportSnapshotSections({
+    carbon: {
+      scope1: 1.25,
+      scope2: 0.5,
+      scope3: 0.25,
+      totalEmissions: 2,
+      unit: "tCO2e",
+    },
+  });
+
+  const carbon = sections.find((section) => section.title === "Carbon Summary");
+  assert(carbon?.rows?.[0]?.value === "1.25 tCO2e", `unexpected Scope 1 ${carbon?.rows?.[0]?.value}`);
+  assert(carbon?.rows?.[3]?.value === "2.00 tCO2e", `unexpected total ${carbon?.rows?.[3]?.value}`);
+});
+
+await check("calculated metrics are labelled Derived even when legacy rows defaulted to manual", () => {
+  const report = buildEsgMetricsSummaryReport({
+    company: { name: "Example SME" },
+    metrics: [{
+      id: "scope-2",
+      name: "Scope 2 Emissions",
+      category: "environmental",
+      unit: "tCO2e",
+      metricType: "calculated",
+    }],
+    values: [{
+      metricId: "scope-2",
+      value: "0.1600",
+      dataSourceType: "manual",
+      notes: "Auto-calculated",
+    }],
+    period: "2026-08",
+  });
+  const environmental = report.sections.find((section) => section.title === "Environmental Metrics");
+  assert(environmental?.tableRows?.[0]?.[3] === "Derived", `unexpected source ${environmental?.tableRows?.[0]?.[3]}`);
 });
 
 const passed = results.filter((result) => result.passed).length;

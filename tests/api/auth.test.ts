@@ -94,6 +94,16 @@ async function run(tenants: SeededTenants): Promise<void> {
     }
   }
 
+  {
+    const name = "login email matching is case-insensitive";
+    const res = await apiRequest("POST", "/api/auth/login", {
+      email: tenantA.adminEmail.toUpperCase(),
+      password: PASSWORD,
+    });
+    if (res.status !== 200) fail(name, `status=${res.status}`);
+    else pass(name);
+  }
+
   // ── 2. Login as viewer ───────────────────────────────────────────────────
   {
     const name = "viewer login returns 200 with correct role";

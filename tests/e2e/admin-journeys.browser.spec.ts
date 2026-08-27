@@ -22,9 +22,13 @@ async function makeAdminContext(browser: import("@playwright/test").Browser): Pr
 test.describe("Admin journeys", () => {
   test("dashboard loads with activation checklist or main content visible", async ({ browser }) => {
     const { context, page } = await makeAdminContext(browser);
+    let benchmarkComparisonRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/api/benchmarks/comparison")) benchmarkComparisonRequests += 1;
+    });
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 15000 });
 
@@ -43,6 +47,8 @@ test.describe("Admin journeys", () => {
     }
 
     await expect(dashboardTitle).toBeVisible();
+    await page.waitForTimeout(250);
+    expect(benchmarkComparisonRequests, "Free users should see the Pro prompt without a failing benchmark request").toBe(0);
 
     await context.close();
   });
@@ -51,7 +57,7 @@ test.describe("Admin journeys", () => {
     const { context, page } = await makeAdminContext(browser);
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 15000 });
     const dashboardTitle = page.getByTestId("text-dashboard-title");
@@ -68,7 +74,7 @@ test.describe("Admin journeys", () => {
       await page.goto("/data-entry");
     }
 
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
     expect(page.url()).toContain("/data-entry");
 
@@ -79,7 +85,7 @@ test.describe("Admin journeys", () => {
     const { context, page } = await makeAdminContext(browser);
 
     await page.goto("/data-entry");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
 
@@ -108,11 +114,17 @@ test.describe("Admin journeys", () => {
 
   test("admin generates ESG report and preview appears", async ({ browser }) => {
     const { context, page } = await makeAdminContext(browser);
+    let complianceStatusRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/api/compliance/status")) complianceStatusRequests += 1;
+    });
 
     await page.goto("/reports");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
+    await page.waitForTimeout(250);
+    expect(complianceStatusRequests, "Free users should not trigger a failing Pro compliance request").toBe(0);
 
     const firstTypeBtn = page.locator('[data-testid^="button-export-type-"]').first();
     const typeBtnVisible = await firstTypeBtn.isVisible({ timeout: 5000 }).catch(() => false);

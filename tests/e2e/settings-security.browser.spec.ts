@@ -8,6 +8,7 @@
 
 import { expect, test } from "@playwright/test";
 import fs from "fs";
+import { loginAndGetToken } from "../fixtures/seed.js";
 import { ADMIN_STATE_FILE, SEED_INFO_FILE, VIEWER_STATE_FILE } from "./global-setup.js";
 
 function readSeedInfo() {
@@ -60,13 +61,16 @@ test.describe("Settings/Security browser boundaries", () => {
   });
 
   test("admin browser fetch sees step-up requirement before sensitive settings mutation", async ({ browser }) => {
-    const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
+    const { tenantA } = readSeedInfo();
+    // Use an independent session so a step-up granted by another security test
+    // cannot leak into this assertion through the shared admin storage state.
+    const freshAdminToken = await loginAndGetToken(tenantA.adminEmail, "Test1234!");
+    const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto("/");
-    await expect(page.getByRole("main")).toBeVisible();
+    await page.goto("/auth");
+    await page.waitForLoadState("domcontentloaded");
 
-    const result = await page.evaluate(async () => {
-      const token = localStorage.getItem("auth_token");
+    const result = await page.evaluate(async (token) => {
       const res = await fetch("/api/company/api-keys", {
         method: "POST",
         headers: {
@@ -76,7 +80,7 @@ test.describe("Settings/Security browser boundaries", () => {
         body: JSON.stringify({ label: "Needs step-up", scopes: ["read:metrics"] }),
       });
       return { status: res.status, body: await res.json().catch(() => ({})) };
-    });
+    }, freshAdminToken);
 
     expect(result.status).toBe(403);
     expect(result.body.code).toBe("STEP_UP_REQUIRED");

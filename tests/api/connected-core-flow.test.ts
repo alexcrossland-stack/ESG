@@ -175,6 +175,27 @@ async function getReadiness(token: string, period: string, siteId: string | null
   }>(res, "GET /api/reports/readiness-detail");
 }
 
+async function getRangeReadiness(
+  token: string,
+  period: string,
+  siteId: string | null | "__all__",
+  dateFrom: string,
+  dateTo: string,
+) {
+  const qs = new URLSearchParams({
+    period,
+    siteId: siteId === null ? "null" : siteId,
+    dateFrom,
+    dateTo,
+  });
+  const res = await apiRequest("GET", `/api/reports/readiness-detail?${qs.toString()}`, undefined, token);
+  return parseJson<{
+    filledMetrics?: number;
+    dateFrom?: string | null;
+    dateTo?: string | null;
+  }>(res, "GET /api/reports/readiness-detail date range");
+}
+
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA } = tenants;
   const suffix = Date.now().toString();
@@ -302,7 +323,16 @@ async function run(tenants: SeededTenants): Promise<void> {
   await check("ESG Profile shows active reporting period and active metric values for that period", async () => {
     const profile = parseJson<{
       reporting_period?: { period?: string; source?: string; hasActivePeriod?: boolean };
-      key_metrics?: Array<{ id?: string; name?: string; value?: string | null; period?: string | null; hasValue?: boolean }>;
+      key_metrics?: Array<{
+        id?: string;
+        name?: string;
+        value?: string | null;
+        period?: string | null;
+        hasValue?: boolean;
+        sourceScope?: string;
+        aggregationMethod?: string;
+        contributingSiteCount?: number;
+      }>;
     }>(
       await apiRequest("GET", "/api/company/esg-profile", undefined, tenantA.adminToken),
       "GET /api/company/esg-profile",
@@ -318,6 +348,13 @@ async function run(tenants: SeededTenants): Promise<void> {
     assert(siteBOnly.period === period, `expected secondary profile metric period ${period}, got ${siteBOnly.period}`);
     assert(/^\d+\.\d{2}$/.test(primary.value || ""), `expected two-decimal primary profile value, got ${primary.value}`);
     assert(/^\d+\.\d{2}$/.test(siteBOnly.value || ""), `expected two-decimal secondary profile value, got ${siteBOnly.value}`);
+    assert(primary.value === "101.00", `expected organisation record to take precedence, got ${primary.value}`);
+    assert(primary.sourceScope === "organisation", `expected organisation source scope, got ${primary.sourceScope}`);
+    assert(primary.aggregationMethod === "organisation_record", `expected organisation record selection, got ${primary.aggregationMethod}`);
+    assert(siteBOnly.value === "404.00", `expected Site B-only value 404.00, got ${siteBOnly.value}`);
+    assert(siteBOnly.sourceScope === "active_sites", `expected active-sites source scope, got ${siteBOnly.sourceScope}`);
+    assert(siteBOnly.aggregationMethod === "sum", `expected site-only additive metric to be summed, got ${siteBOnly.aggregationMethod}`);
+    assert(siteBOnly.contributingSiteCount === 1, `expected one contributing site, got ${siteBOnly.contributingSiteCount}`);
   });
 
   await check("Report readiness labels and counts stay scoped", async () => {
@@ -335,6 +372,19 @@ async function run(tenants: SeededTenants): Promise<void> {
     assert(allReadiness.filledMetrics === 2, `expected all-scope filledMetrics=2, got ${allReadiness.filledMetrics}`);
     assert(orgReadiness.scopeLabel?.includes("Organisation-wide"), `unexpected org label ${orgReadiness.scopeLabel}`);
     assert(allReadiness.scopeLabel?.includes("All scopes"), `unexpected all-scope label ${allReadiness.scopeLabel}`);
+  });
+
+  await check("Quarterly readiness includes monthly values inside its date range", async () => {
+    const readiness = await getRangeReadiness(
+      tenantA.adminToken,
+      "2099-Q3",
+      "__all__",
+      "2099-07-01",
+      "2099-09-30",
+    );
+    assert(readiness.filledMetrics === 2, `expected Q3 filledMetrics=2, got ${readiness.filledMetrics}`);
+    assert(readiness.dateFrom === "2099-07-01", `unexpected Q3 dateFrom ${readiness.dateFrom}`);
+    assert(readiness.dateTo === "2099-09-30", `unexpected Q3 dateTo ${readiness.dateTo}`);
   });
 
   await check("Report export-data isolates Site A, Site B, org-wide, and all-scope values", async () => {

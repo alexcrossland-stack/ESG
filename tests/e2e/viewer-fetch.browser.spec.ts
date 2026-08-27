@@ -15,7 +15,7 @@ test.describe("Viewer in-browser fetch restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
     if (url.includes("/auth")) {
@@ -54,7 +54,7 @@ test.describe("Viewer in-browser fetch restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
     if (url.includes("/auth")) {
@@ -93,7 +93,7 @@ test.describe("Viewer in-browser fetch restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
     if (url.includes("/auth")) {

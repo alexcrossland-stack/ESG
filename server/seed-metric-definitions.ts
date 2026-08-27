@@ -1,6 +1,7 @@
 import { db } from "./storage";
 import { metricDefinitions } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { DEFAULT_METRICS } from "./default-metrics";
+import { resolveMetricDataType } from "@shared/data-entry-metrics";
 
 interface MetricSeed {
   code: string;
@@ -1089,16 +1090,49 @@ const METRIC_DEFINITIONS: MetricSeed[] = [
   },
 ];
 
+function normalizeSeedMetricName(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "natural gas consumption" ? "gas / fuel consumption" : normalized;
+}
+
+/**
+ * The original advanced catalogue and the SME starter catalogue were created
+ * at different times. Ensure every metric actually enabled for a new SME is
+ * represented in Metrics Library with the same name and input semantics.
+ */
+const SME_DEFAULT_DEFINITIONS: MetricSeed[] = DEFAULT_METRICS.map((metric, index) => ({
+  code: `SME_DEFAULT_${String(index + 1).padStart(2, "0")}`,
+  name: metric.name,
+  pillar: metric.category,
+  category: metric.category,
+  description: metric.description,
+  dataType: resolveMetricDataType(metric),
+  unit: metric.unit,
+  inputFrequency: metric.frequency,
+  isCore: true,
+  isActive: true,
+  isDerived: Boolean(metric.metricType && metric.metricType !== "manual"),
+  formulaJson: metric.formulaText
+    ? { type: metric.calculationType || "calculated", description: metric.formulaText }
+    : undefined,
+  frameworkTags: [],
+  scoringWeight: "1",
+  sortOrder: 2000 + index,
+  evidenceRequired: false,
+  rollupMethod: metric.unit === "%" || metric.unit === "yes/no" ? "none" : "sum",
+}));
+
 export async function seedMetricDefinitions() {
   let seeded = 0;
   let skipped = 0;
-  for (const m of METRIC_DEFINITIONS) {
-    const existing = await db.select({ id: metricDefinitions.id })
-      .from(metricDefinitions)
-      .where(eq(metricDefinitions.code, m.code))
-      .limit(1);
+  const existing = await db.select({ code: metricDefinitions.code, name: metricDefinitions.name })
+    .from(metricDefinitions);
+  const existingCodes = new Set(existing.map((definition) => definition.code));
+  const existingNames = new Set(existing.map((definition) => normalizeSeedMetricName(definition.name)));
 
-    if (existing.length > 0) {
+  for (const m of [...METRIC_DEFINITIONS, ...SME_DEFAULT_DEFINITIONS]) {
+    const normalizedName = normalizeSeedMetricName(m.name);
+    if (existingCodes.has(m.code) || existingNames.has(normalizedName)) {
       skipped++;
       continue;
     }
@@ -1122,6 +1156,8 @@ export async function seedMetricDefinitions() {
       evidenceRequired: m.evidenceRequired || false,
       rollupMethod: m.rollupMethod,
     });
+    existingCodes.add(m.code);
+    existingNames.add(normalizedName);
     seeded++;
   }
 

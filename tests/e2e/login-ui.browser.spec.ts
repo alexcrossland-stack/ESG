@@ -17,7 +17,7 @@ test.describe("Login UI", () => {
     const password = "Test1234!";
 
     await page.goto("/auth");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.getByTestId("input-email").fill(email);
     await page.getByTestId("input-password").fill(password);
@@ -37,7 +37,7 @@ test.describe("Login UI", () => {
 
   test("bad credentials show error, no redirect", async ({ page }) => {
     await page.goto("/auth");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.getByTestId("input-email").fill(`nobody-${Date.now()}@nowhere.example`);
     await page.getByTestId("input-password").fill("WrongPass123!");
@@ -52,7 +52,7 @@ test.describe("Login UI", () => {
     const page = await context.newPage();
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 15000 });
 
@@ -68,11 +68,19 @@ test.describe("Login UI", () => {
   });
 
   test("logout via sidebar → redirected to /auth", async ({ browser }) => {
-    const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
+    // Log in with a fresh browser session so logging out cannot revoke the
+    // bearer token stored in ADMIN_STATE_FILE and invalidate later tests.
+    const seedInfo = JSON.parse(
+      fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")
+    ) as { tenantA: { adminEmail: string } };
+    const context = await browser.newContext();
     const page = await context.newPage();
 
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.goto("/auth");
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("input-email").fill(seedInfo.tenantA.adminEmail);
+    await page.getByTestId("input-password").fill("Test1234!");
+    await page.getByTestId("button-login").click();
     await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 15000 });
 
     const logoutBtn = page.getByTestId("button-logout");

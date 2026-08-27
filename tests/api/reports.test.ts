@@ -7,10 +7,15 @@
  * Run: npx tsx tests/api/reports.test.ts
  */
 
-import { seedTestTenants, apiRequest } from "../fixtures/seed.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { seedTestTenants, apiRequest, apiRequestRaw } from "../fixtures/seed.js";
 import type { SeededTenants } from "../fixtures/seed.js";
 import { Client } from "pg";
 import { inflateSync } from "zlib";
+import { REPORT_TEMPLATE_IDS, REPORT_TEMPLATE_LABELS } from "../../shared/report-templates.js";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
@@ -24,6 +29,18 @@ function pass(name: string, detail?: string) {
 function fail(name: string, detail?: string) {
   results.push({ name, passed: false, detail });
   console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+async function withDb<T>(run: (client: Client) => Promise<T>): Promise<T> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  try {
+    return await run(client);
+  } finally {
+    await client.end();
+  }
 }
 
 async function apiRequestBinary(method: string, path: string, body?: object, token?: string) {
@@ -127,6 +144,43 @@ async function prepareReportDownloadTenant(companyId: string, token: string): Pr
   }
 }
 
+async function seedReportSourceClassificationFixture(companyId: string) {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var not set");
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  const suffix = Date.now().toString();
+  const period = "2188-06";
+  const measuredMetricName = `Report measured source ${suffix}`;
+  const derivedMetricName = `Report derived source ${suffix}`;
+  try {
+    const metricRows = await client.query<{ id: string; name: string }>(
+      `INSERT INTO metrics (company_id, name, category, unit, enabled, metric_type, display_order)
+       VALUES
+         ($1, $2, 'environmental', 'kWh', true, 'manual', 9970),
+         ($1, $3, 'environmental', 'kgCO2e/employee', true, 'calculated', 9971)
+       RETURNING id, name`,
+      [companyId, measuredMetricName, derivedMetricName],
+    );
+    const metricIdByName = new Map(metricRows.rows.map((row) => [row.name, row.id]));
+    const measuredMetricId = metricIdByName.get(measuredMetricName);
+    const derivedMetricId = metricIdByName.get(derivedMetricName);
+    if (!measuredMetricId || !derivedMetricId) throw new Error("source classification fixture metric IDs are missing");
+
+    await client.query(
+      `INSERT INTO metric_values
+         (metric_id, period, value, status, data_source_type, source_type, workflow_status, notes)
+       VALUES
+         ($1, $3, '100.0000', 'green', 'manual', 'manual', 'approved', 'directly measured fixture value'),
+         ($2, $3, '25.0000', 'green', 'manual', 'calculated', 'approved', 'calculated fixture value')`,
+      [measuredMetricId, derivedMetricId, period],
+    );
+    return { period, measuredMetricName, derivedMetricName };
+  } finally {
+    await client.end();
+  }
+}
+
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA, tenantB } = tenants;
 
@@ -159,6 +213,237 @@ async function run(tenants: SeededTenants): Promise<void> {
         generatedReportId = id;
         pass(name, `id=${id}`);
       }
+    }
+  }
+
+  // ── 1b. Every user-visible report template is accepted by the API ────────
+  {
+    const name = "all shared report templates generate, including VSME and PPN 006 readiness";
+    const failures: string[] = [];
+    if (REPORT_TEMPLATE_LABELS.annual !== "Annual ESG Report") {
+      failures.push(`annual: expected user-facing label Annual ESG Report, got ${REPORT_TEMPLATE_LABELS.annual}`);
+    }
+    if (REPORT_TEMPLATE_LABELS.vsme !== "VSME Readiness & Draft Pack") {
+      failures.push(`vsme: expected readiness/draft-pack label, got ${REPORT_TEMPLATE_LABELS.vsme}`);
+    }
+    for (const reportTemplate of REPORT_TEMPLATE_IDS.filter((template) => template !== "management")) {
+      const response = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate,
+        period: "2024-01",
+        includeMetrics: true,
+        includePolicy: true,
+        includeComplianceStatus: true,
+      }, tenantA.adminToken);
+      if (![200, 201].includes(response.status)) {
+        failures.push(`${reportTemplate}: status=${response.status} body=${response.body.slice(0, 120)}`);
+        continue;
+      }
+      const body = JSON.parse(response.body) as {
+        report?: { reportTemplate?: string };
+        data?: {
+          reportTemplate?: string;
+          reportTitle?: string;
+          complianceStatus?: Array<{ code?: string; readinessPercent?: number }>;
+        };
+      };
+      if (body.report?.reportTemplate !== reportTemplate || body.data?.reportTemplate !== reportTemplate) {
+        failures.push(`${reportTemplate}: response did not preserve the selected template`);
+      }
+      if (reportTemplate === "annual" && !body.data?.reportTitle?.endsWith("Annual ESG Report")) {
+        failures.push(`annual: unexpected report title ${body.data?.reportTitle}`);
+      }
+      if (reportTemplate === "vsme" && !body.data?.reportTitle?.endsWith("VSME Readiness & Draft Pack")) {
+        failures.push(`vsme: title does not identify a readiness/draft pack (${body.data?.reportTitle})`);
+      }
+      const expectedFrameworkCode = reportTemplate === "vsme" ? "VSME" : reportTemplate === "ppn006" ? "PPN006" : null;
+      if (expectedFrameworkCode) {
+        const readiness = body.data?.complianceStatus || [];
+        const target = readiness.find((framework) => framework.code === expectedFrameworkCode);
+        if (!target || !Number.isFinite(target.readinessPercent)) {
+          failures.push(`${reportTemplate}: missing strict ${expectedFrameworkCode} readiness snapshot`);
+        }
+      }
+    }
+    if (failures.length > 0) fail(name, failures.join("; "));
+    else pass(name, `${REPORT_TEMPLATE_IDS.length} shared template ids remain server-compatible`);
+  }
+
+  // ── 1c. Calculated report values stay Derived, not measured/actual ─────────
+  {
+    const name = "framework-ready report resolves saved fiscal context and rejects unbounded scope";
+    let reportingPeriodId: string | null = null;
+    let fixtureMetricId: string | null = null;
+    try {
+      const today = new Date();
+      const isoDate = (date: Date) => [
+        date.getUTCFullYear(),
+        String(date.getUTCMonth() + 1).padStart(2, "0"),
+        String(date.getUTCDate()).padStart(2, "0"),
+      ].join("-");
+      const startDate = isoDate(today);
+      const endDateValue = new Date(Date.UTC(today.getUTCFullYear() + 1, today.getUTCMonth(), today.getUTCDate() - 1));
+      const endDate = isoDate(endDateValue);
+      const containedMonth = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, "0")}`;
+      const canonicalName = `Acceptance FY ${today.getUTCFullYear()}-${Date.now()}`;
+      const fixture = await withDb(async (client) => {
+        const reportingPeriod = await client.query<{ id: string }>(
+          `INSERT INTO reporting_periods (company_id, name, period_type, start_date, end_date, status)
+           VALUES ($1, $2, 'annual', $3::date, $4::date, 'open')
+           RETURNING id`,
+          [tenantA.companyId, canonicalName, startDate, endDate],
+        );
+        const metric = await client.query<{ id: string }>(
+          `INSERT INTO metrics (company_id, name, category, unit, enabled, metric_type, display_order)
+           VALUES ($1, $2, 'environmental', 'kWh', true, 'manual', 9965)
+           RETURNING id`,
+          [tenantA.companyId, `Canonical contained month ${Date.now()}`],
+        );
+        await client.query(
+          `INSERT INTO metric_values
+             (metric_id, period, value, status, data_source_type, source_type, workflow_status, notes)
+           VALUES ($1, $2, '77.0000', 'green', 'manual', 'manual', 'approved', 'contained monthly canonical-period fixture')`,
+          [metric.rows[0].id, containedMonth],
+        );
+        return { reportingPeriodId: reportingPeriod.rows[0].id, metricId: metric.rows[0].id, containedMonth };
+      });
+      reportingPeriodId = fixture.reportingPeriodId;
+      fixtureMetricId = fixture.metricId;
+
+      const canonicalPeriod = canonicalName;
+      const generated = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "annual",
+        period: fixture.reportingPeriodId,
+        periodType: "annual",
+        year: today.getUTCFullYear(),
+        includeMetrics: true,
+        includePolicy: false,
+        includeTopics: false,
+        includeComplianceStatus: true,
+      }, tenantA.adminToken);
+      const allPeriod = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "annual",
+        period: "all",
+        includeMetrics: true,
+        includeComplianceStatus: true,
+      }, tenantA.adminToken);
+      const arbitraryRange = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "annual",
+        dateFrom: "2025-01-01",
+        dateTo: "2025-12-31",
+        includeMetrics: true,
+        includeComplianceStatus: true,
+      }, tenantA.adminToken);
+
+      if (![200, 201].includes(generated.status)) {
+        fail(name, `saved-period generation status=${generated.status} body=${generated.body.slice(0, 300)}`);
+      } else {
+        const body = JSON.parse(generated.body) as {
+          report?: { period?: string };
+          data?: {
+            period?: string;
+            periodType?: string | null;
+            dateFrom?: string | null;
+            dateTo?: string | null;
+            values?: Array<{ metricId?: string; period?: string }>;
+            complianceStatus?: Array<{ scope?: { period?: string } }>;
+          };
+        };
+        const readinessPeriods = new Set((body.data?.complianceStatus ?? []).map((item) => item.scope?.period));
+        const parseErrorCode = (response: { body: string }) => {
+          try { return (JSON.parse(response.body) as { code?: string }).code; } catch { return undefined; }
+        };
+        if (body.report?.period !== canonicalPeriod || body.data?.period !== canonicalPeriod) {
+          fail(name, `canonical period mismatch report=${body.report?.period} data=${body.data?.period} expected=${canonicalPeriod}`);
+        } else if (body.data?.periodType !== "annual") {
+          fail(name, `saved annual context was not selected: period=${canonicalPeriod} type=${body.data?.periodType}`);
+        } else if (body.data?.dateFrom !== startDate || body.data?.dateTo !== endDate) {
+          fail(name, `canonical date boundary missing: ${body.data?.dateFrom}/${body.data?.dateTo}`);
+        } else if (!body.data?.values?.some((value) => value.metricId === fixture.metricId && value.period === fixture.containedMonth)) {
+          fail(name, "monthly Data Entry fact inside the canonical annual period was omitted");
+        } else if (readinessPeriods.size > 0 && (readinessPeriods.size !== 1 || !readinessPeriods.has(canonicalPeriod))) {
+          fail(name, `readiness scopes drifted: ${Array.from(readinessPeriods).join(",")}`);
+        } else if (allPeriod.status !== 400 || parseErrorCode(allPeriod) !== "FRAMEWORK_PERIOD_REQUIRED") {
+          fail(name, `all-period request did not fail closed: status=${allPeriod.status} body=${allPeriod.body.slice(0, 200)}`);
+        } else if (arbitraryRange.status !== 400 || parseErrorCode(arbitraryRange) !== "FRAMEWORK_PERIOD_REQUIRED") {
+          fail(name, `arbitrary range did not fail closed: status=${arbitraryRange.status} body=${arbitraryRange.body.slice(0, 200)}`);
+        } else {
+          pass(name, `canonical=${canonicalPeriod}; all/range rejected`);
+        }
+      }
+    } catch (error: any) {
+      fail(name, error?.message || String(error));
+    } finally {
+      if (reportingPeriodId || fixtureMetricId) {
+        await withDb(async (client) => {
+          if (fixtureMetricId) {
+            await client.query("DELETE FROM metric_values WHERE metric_id = $1", [fixtureMetricId]);
+            await client.query("DELETE FROM metrics WHERE id = $1", [fixtureMetricId]);
+          }
+          if (reportingPeriodId) await client.query("DELETE FROM reporting_periods WHERE id = $1", [reportingPeriodId]);
+        }).catch(() => undefined);
+      }
+    }
+  }
+
+  // ── 1d. Calculated report values stay Derived, not measured/actual ─────────
+  {
+    const name = "calculated report metrics are labelled and counted as Derived";
+    try {
+      const fixture = await seedReportSourceClassificationFixture(tenantA.companyId);
+      const response = await apiRequest("POST", "/api/reports/generate", {
+        reportType: "pdf",
+        reportTemplate: "annual",
+        period: fixture.period,
+        periodType: "monthly",
+        includeMetrics: true,
+        includePolicy: false,
+        includeTopics: false,
+        includeDataQualityAssessment: true,
+      }, tenantA.adminToken);
+      if (![200, 201].includes(response.status)) {
+        fail(name, `status=${response.status} body=${response.body.slice(0, 240)}`);
+      } else {
+        const body = JSON.parse(response.body) as {
+          data?: {
+            reportTitle?: string;
+            values?: Array<{
+              metricName?: string;
+              dataSourceLabel?: string;
+              sourceClassification?: string;
+            }>;
+            dataQualityFlags?: {
+              derivedCount?: number;
+              manualCount?: number;
+              estimatedCount?: number;
+            };
+            dataQualitySummary?: {
+              actualMetrics?: number;
+              measuredMetrics?: number;
+              derivedMetrics?: number;
+              estimatedMetrics?: number;
+            };
+          };
+        };
+        const derived = body.data?.values?.find((value) => value.metricName === fixture.derivedMetricName);
+        const measured = body.data?.values?.find((value) => value.metricName === fixture.measuredMetricName);
+        const flags = body.data?.dataQualityFlags;
+        const summary = body.data?.dataQualitySummary;
+
+        if (!body.data?.reportTitle?.endsWith("Annual ESG Report")) fail(name, `unexpected annual title ${body.data?.reportTitle}`);
+        else if (derived?.sourceClassification !== "derived" || derived.dataSourceLabel !== "Derived") fail(name, `derived value misclassified: ${JSON.stringify(derived)}`);
+        else if (measured?.sourceClassification !== "measured" || measured.dataSourceLabel !== "Manual") fail(name, `measured value misclassified: ${JSON.stringify(measured)}`);
+        else if (flags?.derivedCount !== 1 || flags.manualCount !== 1 || flags.estimatedCount !== 0) fail(name, `unexpected data-quality flags ${JSON.stringify(flags)}`);
+        else if (summary?.derivedMetrics !== 1) fail(name, `expected one derived metric, got ${summary?.derivedMetrics}`);
+        else if (summary.actualMetrics !== 1 || summary.measuredMetrics !== 1) fail(name, `derived metric leaked into actual/measured counts ${JSON.stringify(summary)}`);
+        else if (summary.estimatedMetrics !== 0) fail(name, `unexpected estimated count ${summary.estimatedMetrics}`);
+        else pass(name, "Derived=1, measured/actual=1, estimated=0");
+      }
+    } catch (error: any) {
+      fail(name, error?.message || String(error));
     }
   }
 
@@ -322,24 +607,27 @@ async function run(tenants: SeededTenants): Promise<void> {
       const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
       if (!metricId) fail(name, "missing metric id");
       else {
-        const saves = await Promise.all([
-          apiRequest("POST", "/api/data-entry", { metricId, period: "2024-12", value: 90, notes: "Q4 comparison" }, tenantA.adminToken),
-          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-01", value: 101, notes: "Q1 included" }, tenantA.adminToken),
-          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-03", value: 103, notes: "Q1 included" }, tenantA.adminToken),
-          apiRequest("POST", "/api/data-entry", { metricId, period: "2025-04", value: 204, notes: "Q2 excluded" }, tenantA.adminToken),
-        ]);
+        const saves = [];
+        for (const entry of [
+          { metricId, period: "2094-12", value: 90, notes: "Q4 comparison" },
+          { metricId, period: "2095-01", value: 101, notes: "Q1 included" },
+          { metricId, period: "2095-03", value: 103, notes: "Q1 included" },
+          { metricId, period: "2095-04", value: 204, notes: "Q2 excluded" },
+        ]) {
+          saves.push(await apiRequest("POST", "/api/data-entry", entry, tenantA.adminToken));
+        }
         const failedSave = saves.find((res) => ![200, 201].includes(res.status));
         if (failedSave) fail(name, `data-entry status=${failedSave.status} body=${failedSave.body.slice(0, 200)}`);
         else {
           const reportRes = await apiRequest("POST", "/api/reports/generate", {
             reportType: "pdf",
             reportTemplate: "management",
-            period: "2025-Q1",
+            period: "2095-Q1",
             periodType: "quarterly",
-            year: 2025,
+            year: 2095,
             quarter: 1,
-            dateFrom: "2025-01-01",
-            dateTo: "2025-03-31",
+            dateFrom: "2095-01-01",
+            dateTo: "2095-03-31",
             includeMetrics: true,
             includePolicy: false,
             includeTopics: false,
@@ -351,12 +639,12 @@ async function run(tenants: SeededTenants): Promise<void> {
               data?: { period?: string; periodType?: string | null; dateFrom?: string | null; dateTo?: string | null; values?: Array<{ period?: string; value?: string }>; trendSummary?: { currentPeriod?: string; previousPeriod?: string; metrics?: Array<{ metricId?: string; currentValue?: number | null; previousValue?: number | null }> } };
             };
             const periods = new Set((body.data?.values || []).map((value) => value.period));
-            if (body.report?.period !== "2025-Q1" || body.data?.period !== "2025-Q1") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
+            if (body.report?.period !== "2095-Q1" || body.data?.period !== "2095-Q1") fail(name, `period metadata mismatch report=${body.report?.period} data=${body.data?.period}`);
             else if (body.data?.periodType !== "quarterly") fail(name, `expected quarterly periodType, got ${body.data?.periodType}`);
-            else if (body.data?.dateFrom !== "2025-01-01" || body.data?.dateTo !== "2025-03-31") fail(name, `date metadata mismatch ${body.data?.dateFrom}/${body.data?.dateTo}`);
-            else if (!Array.from(periods).some((period) => period === "2025-01" || period === "2025-02" || period === "2025-03")) fail(name, `missing Q1 values: ${Array.from(periods).join(",")}`);
-            else if (periods.has("2025-04")) fail(name, "Q2 value leaked into Q1 report");
-            else if (body.data?.trendSummary?.currentPeriod !== "2025-Q1" || body.data.trendSummary.previousPeriod !== "2024-Q4") fail(name, `trend period mismatch ${body.data?.trendSummary?.currentPeriod}/${body.data?.trendSummary?.previousPeriod}`);
+            else if (body.data?.dateFrom !== "2095-01-01" || body.data?.dateTo !== "2095-03-31") fail(name, `date metadata mismatch ${body.data?.dateFrom}/${body.data?.dateTo}`);
+            else if (!Array.from(periods).some((period) => period === "2095-01" || period === "2095-02" || period === "2095-03")) fail(name, `missing Q1 values: ${Array.from(periods).join(",")}`);
+            else if (periods.has("2095-04")) fail(name, "Q2 value leaked into Q1 report");
+            else if (body.data?.trendSummary?.currentPeriod !== "2095-Q1" || body.data.trendSummary.previousPeriod !== "2094-Q4") fail(name, `trend period mismatch ${body.data?.trendSummary?.currentPeriod}/${body.data?.trendSummary?.previousPeriod}`);
             else if (!body.data.trendSummary.metrics?.some((trend) => trend.metricId === metricId && trend.currentValue === 204 && trend.previousValue === 90)) fail(name, "quarterly trend comparison missing expected metric values");
             else pass(name);
           }
@@ -701,6 +989,43 @@ async function run(tenants: SeededTenants): Promise<void> {
   }
 
   // ── 11. List is company-scoped (Tenant B data absent from Tenant A list) ───
+  {
+    const name = "POST /api/reports/export/policy_register_summary returns a structurally valid DOCX package";
+    const exportRes = await apiRequestRaw("POST", "/api/reports/export/policy_register_summary", {
+      format: "docx",
+    }, tenantA.adminToken);
+    if (exportRes.status !== 200) fail(name, `status=${exportRes.status} body=${exportRes.body.toString("utf8").slice(0, 200)}`);
+    else if (!String(exportRes.headers.get("content-type") || "").includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")) {
+      fail(name, `unexpected content-type=${exportRes.headers.get("content-type")}`);
+    } else if (exportRes.body.length < 2048) {
+      fail(name, `payload too small (${exportRes.body.length} bytes)`);
+    } else if (exportRes.body[0] !== 0x50 || exportRes.body[1] !== 0x4b) {
+      fail(name, "payload does not start with ZIP signature");
+    } else {
+      const tempDir = mkdtempSync(join(tmpdir(), "policy-docx-"));
+      const docxPath = join(tempDir, "policy-register.docx");
+      try {
+        writeFileSync(docxPath, exportRes.body);
+        execFileSync("unzip", ["-t", docxPath], { stdio: "pipe" });
+        const entries = execFileSync("unzip", ["-Z1", docxPath], { encoding: "utf8" })
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        const documentXml = execFileSync("unzip", ["-p", docxPath, "word/document.xml"], { encoding: "utf8" });
+        const invalidXmlChars =
+          /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\uD800-\uDFFF]/.test(documentXml);
+        if (!entries.includes("[Content_Types].xml")) fail(name, "missing [Content_Types].xml");
+        else if (!entries.includes("word/document.xml")) fail(name, "missing word/document.xml");
+        else if (invalidXmlChars) fail(name, "word/document.xml contains invalid XML control characters");
+        else pass(name, `${exportRes.body.length} bytes`);
+      } catch (error: any) {
+        fail(name, error?.message || String(error));
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   {
     const name = "GET /api/reports is company-scoped (Tenant B companyId absent from Tenant A list)";
     const res = await apiRequest("GET", "/api/reports", undefined, tenantA.adminToken);

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   deploy:
@@ -42,6 +43,20 @@ jobs:
 
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Verify SME release gate for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          deploy_sha="$(git rev-parse HEAD)"
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${deploy_sha}/check-runs" --jq '[.check_runs[] | select(.name == "SME release acceptance")] | sort_by(.completed_at) | last | .conclusion // "missing"')"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::SME release acceptance for ${deploy_sha} is ${conclusion}; production deploy is blocked"
+            exit 1
+          fi
+          echo "DEPLOY_SHA=${deploy_sha}" >> "${GITHUB_ENV}"
+          echo "Verified successful SME release acceptance for ${deploy_sha}"
 
       - name: Start ssh-agent and add deploy key
         uses: webfactory/ssh-agent@v0.10.0
@@ -215,8 +230,15 @@ jobs:
 
       - name: Deploy
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          # shellcheck disable=SC2029
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "DEPLOY_SHA='${DEPLOY_SHA}' bash -s" << 'EOF'
             set -Eeuo pipefail
+
+            if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::DEPLOY_SHA is not a full Git commit SHA" >&2
+              exit 1
+            fi
 
             log() {
               echo
@@ -265,13 +287,17 @@ jobs:
 
             cd /root/ESG
 
-            DEPLOY_STAGE="fetching latest main"
+            DEPLOY_STAGE="fetching verified commit"
             log "$DEPLOY_STAGE"
-            git fetch origin
+            git fetch origin "${DEPLOY_SHA}"
 
-            DEPLOY_STAGE="resetting checkout"
+            DEPLOY_STAGE="resetting checkout to verified commit"
             log "$DEPLOY_STAGE"
-            git reset --hard origin/main
+            git reset --hard "${DEPLOY_SHA}"
+            if [ "$(git rev-parse HEAD)" != "${DEPLOY_SHA}" ]; then
+              echo "::error::Remote checkout does not match the release-gated commit" >&2
+              exit 1
+            fi
 
             DEPLOY_STAGE="removing stale dependencies"
             log "$DEPLOY_STAGE"

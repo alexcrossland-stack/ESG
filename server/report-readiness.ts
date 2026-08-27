@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { hasMetricReportedValue } from "@shared/data-entry-metrics";
 
 export interface ReportReadiness {
   isReportReady: boolean;
@@ -23,10 +24,11 @@ function classifyEsgCategory(cat: unknown): "env" | "soc" | "gov" | null {
 }
 
 export async function getReportReadiness(companyId: string): Promise<ReportReadiness> {
+  const currentPeriod = getCurrentPeriod();
   const [company, metrics, rawData] = await Promise.all([
     storage.getCompany(companyId),
     storage.getMetrics(companyId),
-    storage.getRawDataByPeriod(companyId, getCurrentPeriod()),
+    storage.getRawDataByPeriod(companyId, currentPeriod),
   ]);
 
   const missingCriticalItems: string[] = [];
@@ -56,17 +58,19 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
   const metricValues = await Promise.all(
     enabledMetrics.map(m => storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" }))
   );
-  const allMetricValues = metricValues.flat().filter(v => v.value !== null && v.value !== undefined);
+  const currentMetricValues = metricValues.flat().filter(value =>
+    hasMetricReportedValue(value) && (!value.period || value.period === currentPeriod)
+  );
 
-  const hasEnvData = envEntries.length > 0 || allMetricValues.some(v => {
+  const hasEnvData = envEntries.length > 0 || currentMetricValues.some(v => {
     const m = enabledMetrics.find(m => m.id === v.metricId);
     return m?.category === "environmental";
   });
-  const hasSocData = socEntries.length > 0 || allMetricValues.some(v => {
+  const hasSocData = socEntries.length > 0 || currentMetricValues.some(v => {
     const m = enabledMetrics.find(m => m.id === v.metricId);
     return m?.category === "social";
   });
-  const hasGovData = govEntries.length > 0 || allMetricValues.some(v => {
+  const hasGovData = govEntries.length > 0 || currentMetricValues.some(v => {
     const m = enabledMetrics.find(m => m.id === v.metricId);
     return m?.category === "governance";
   });
@@ -93,12 +97,9 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
     ? Math.round((actualEntries / totalEntries) * 100)
     : 0;
 
-  const currentPeriod = getCurrentPeriod();
   const totalMetrics = enabledMetrics.length;
   const coveredMetricIds = new Set(
-    allMetricValues
-      .filter(v => !v.period || v.period === currentPeriod)
-      .map(v => v.metricId)
+    currentMetricValues.map(v => v.metricId)
   );
   const dataCompleteness = totalMetrics > 0
     ? Math.round((coveredMetricIds.size / totalMetrics) * 100)
