@@ -1,6 +1,6 @@
 # Hetzner Preflight
 
-Use this as the final launch gate for the standalone company release on the Hetzner host.
+Use this as the final launch gate for a disposable, production-like Hetzner test host. Never run the mutating test commands in this document against production or a shared staging database.
 
 This preflight is intentionally limited to:
 
@@ -12,11 +12,14 @@ Portfolio/group workflows are not part of this launch gate.
 
 ## Preconditions
 
-- The app code is deployed at `/root/ESG`
+- The app code is deployed to an isolated test checkout
 - `.env` exists and includes `DATABASE_URL`
 - The app is already reachable at `http://127.0.0.1:5000`
 - Playwright dependencies are installed on the host
-- The database is the same one the app is currently using
+- `DATABASE_URL` points to a disposable database created solely for this test run
+- Evidence uploads use disposable storage
+
+The Playwright global setup seeds tenants directly through SQL. The security, upsert, API and browser suites create, update and delete records. Do not point `test:preflight:standalone`, `test:release`, `db:push`, Playwright global setup or `tests/api/*.test.ts` at production.
 
 ## One-Time Setup Check
 
@@ -94,16 +97,14 @@ Capture:
 - current commit SHA
 - recent app logs
 
-Then follow [launch-rollback.md](/Users/alexcrossland/Documents/Playground/ESG/docs/runbooks/launch-rollback.md) if the candidate build is already deployed.
+If the candidate has already reached production, follow the rollback checklist in [production-deployment.md](./production-deployment.md) and first confirm database compatibility with the previous release.
 
 ## Post-Preflight Sanity Check
 
-After all tests pass:
+After all disposable-environment tests pass, production receives read-only public probes plus an approved internal-tenant smoke test only:
 
 ```bash
-curl -fsS http://127.0.0.1:5000/health
-curl -fsS http://127.0.0.1:5000/api/onboarding/status >/dev/null
-curl -fsS http://127.0.0.1:5000/api/reports >/dev/null
+curl -fsS https://www.simplyesg.co.uk/health
+curl -fsS -o /dev/null https://www.simplyesg.co.uk/
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://www.simplyesg.co.uk/api/auth/me)" = "401"
 ```
-
-Those last two should be run with an authenticated session or bearer token if you are validating them outside the browser tests.

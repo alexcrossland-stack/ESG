@@ -181,6 +181,7 @@ export function registerAgentRoutes(app: Express) {
       status: ok ? "ok" : "degraded",
       db: dbStatus,
       scheduler: schedulerStatus,
+      releaseSha: process.env.RELEASE_SHA || "unknown",
       timestamp: new Date().toISOString(),
     });
   });

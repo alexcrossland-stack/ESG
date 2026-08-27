@@ -5,10 +5,27 @@ import {
   FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
   REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_COLUMNS,
   REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_INDEXES,
+  invalidSuperAdminActionIdentifierColumns,
   missingFrameworkRequirementResponseColumns,
   missingFrameworkRequirementResponseIndexes,
   runStartupMigrationStatements,
 } from "../../server/startup-schema-migrations";
+
+assert.deepEqual(
+  invalidSuperAdminActionIdentifierColumns([
+    { column_name: "admin_user_id", data_type: "character varying" },
+    { column_name: "target_company_id", data_type: "character varying" },
+    { column_name: "target_user_id", data_type: "character varying" },
+  ]),
+  [],
+);
+assert.deepEqual(
+  invalidSuperAdminActionIdentifierColumns([
+    { column_name: "admin_user_id", data_type: "integer" },
+    { column_name: "target_company_id", data_type: "character varying" },
+  ]),
+  ["admin_user_id", "target_user_id"],
+);
 
 const allColumns = REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_COLUMNS.map((column_name) => ({ column_name }));
 assert.deepEqual(missingFrameworkRequirementResponseColumns(allColumns), []);

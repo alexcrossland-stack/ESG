@@ -15,6 +15,10 @@ permissions:
   contents: read
   checks: read
 
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
 jobs:
   deploy-staging:
     name: Deploy staging target
@@ -35,8 +39,10 @@ jobs:
       STAGING_CSRF_TRUSTED_ORIGINS: ${{ secrets.STAGING_CSRF_TRUSTED_ORIGINS }}
       STAGING_REPLIT_DOMAINS: ${{ secrets.STAGING_REPLIT_DOMAINS }}
       STAGING_RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
+      STAGING_EMAIL_FROM: ${{ secrets.STAGING_EMAIL_FROM }}
       STAGING_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY }}
       STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL }}
+      STAGING_AI_INTEGRATIONS_OPENAI_MODEL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_MODEL }}
       STAGING_STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
       STAGING_STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
       STAGING_STRIPE_PRO_PRICE_ID: ${{ secrets.STAGING_STRIPE_PRO_PRICE_ID }}
@@ -65,8 +71,10 @@ jobs:
             STAGING_CSRF_TRUSTED_ORIGINS
             STAGING_REPLIT_DOMAINS
             STAGING_RESEND_API_KEY
+            STAGING_EMAIL_FROM
             STAGING_AI_INTEGRATIONS_OPENAI_API_KEY
             STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL
+            STAGING_AI_INTEGRATIONS_OPENAI_MODEL
             STAGING_STRIPE_SECRET_KEY
             STAGING_STRIPE_WEBHOOK_SECRET
             STAGING_STRIPE_PRO_PRICE_ID
@@ -150,21 +158,29 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          {
-            printf 'NODE_ENV=production\n'
-            printf 'DATABASE_URL=%s\n' "${STAGING_DATABASE_URL}"
-            printf 'SESSION_SECRET=%s\n' "${STAGING_SESSION_SECRET}"
-            printf 'MFA_ENCRYPTION_KEY=%s\n' "${STAGING_MFA_ENCRYPTION_KEY}"
-            printf 'APP_BASE_URL=%s\n' "${STAGING_APP_BASE_URL}"
-            printf 'CSRF_TRUSTED_ORIGINS=%s\n' "${STAGING_CSRF_TRUSTED_ORIGINS}"
-            printf 'REPLIT_DOMAINS=%s\n' "${STAGING_REPLIT_DOMAINS}"
-            printf 'RESEND_API_KEY=%s\n' "${STAGING_RESEND_API_KEY}"
-            printf 'AI_INTEGRATIONS_OPENAI_API_KEY=%s\n' "${STAGING_AI_INTEGRATIONS_OPENAI_API_KEY}"
-            printf 'AI_INTEGRATIONS_OPENAI_BASE_URL=%s\n' "${STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL}"
-            printf 'STRIPE_SECRET_KEY=%s\n' "${STAGING_STRIPE_SECRET_KEY}"
-            printf 'STRIPE_WEBHOOK_SECRET=%s\n' "${STAGING_STRIPE_WEBHOOK_SECRET}"
-            printf 'STRIPE_PRO_PRICE_ID=%s\n' "${STAGING_STRIPE_PRO_PRICE_ID}"
-          } > staging.env
+          node <<'NODE'
+          const fs = require("node:fs");
+          const entries = [
+            ["NODE_ENV", "production"],
+            ["DATABASE_URL", process.env.STAGING_DATABASE_URL],
+            ["SESSION_SECRET", process.env.STAGING_SESSION_SECRET],
+            ["MFA_ENCRYPTION_KEY", process.env.STAGING_MFA_ENCRYPTION_KEY],
+            ["APP_BASE_URL", process.env.STAGING_APP_BASE_URL],
+            ["CSRF_TRUSTED_ORIGINS", process.env.STAGING_CSRF_TRUSTED_ORIGINS],
+            ["REPLIT_DOMAINS", process.env.STAGING_REPLIT_DOMAINS],
+            ["RESEND_API_KEY", process.env.STAGING_RESEND_API_KEY],
+            ["EMAIL_FROM", process.env.STAGING_EMAIL_FROM],
+            ["AI_INTEGRATIONS_OPENAI_API_KEY", process.env.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY],
+            ["AI_INTEGRATIONS_OPENAI_BASE_URL", process.env.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL],
+            ["AI_INTEGRATIONS_OPENAI_MODEL", process.env.STAGING_AI_INTEGRATIONS_OPENAI_MODEL],
+            ["STRIPE_SECRET_KEY", process.env.STAGING_STRIPE_SECRET_KEY],
+            ["STRIPE_WEBHOOK_SECRET", process.env.STAGING_STRIPE_WEBHOOK_SECRET],
+            ["STRIPE_PRO_PRICE_ID", process.env.STAGING_STRIPE_PRO_PRICE_ID],
+            ["RELEASE_SHA", process.env.DEPLOY_SHA],
+          ];
+          const lines = entries.map(([key, value]) => `${key}=${JSON.stringify(String(value ?? ""))}`);
+          fs.writeFileSync("staging.env", `${lines.join("\n")}\n`, { mode: 0o600 });
+          NODE
 
       - name: Deploy to staging host
         shell: bash
@@ -253,6 +269,9 @@ jobs:
 
               DEPLOY_STAGE="restarting staging pm2 process"
               log "$DEPLOY_STAGE"
+              set -a
+              . ./.env
+              set +a
               if pm2 describe "${STAGING_PM2_PROCESS}" >/dev/null 2>&1; then
                 pm2 restart "${STAGING_PM2_PROCESS}" --update-env
               else
@@ -265,13 +284,29 @@ jobs:
 
               DEPLOY_STAGE="checking staging health endpoint"
               log "$DEPLOY_STAGE"
-              . ./.env
               app_base="${APP_BASE_URL%/}"
               wait_for_url "staging health endpoint" "${app_base}/health"
               wait_for_url "staging app shell" "${app_base}/"
 
               log "staging deployment completed"
           EOF
+
+      - name: Verify public staging release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base_url="${STAGING_APP_BASE_URL%/}"
+          health_json="$(curl --fail --silent --show-error --max-time 30 "${base_url}/health")"
+          HEALTH_JSON="${health_json}" EXPECTED_SHA="${DEPLOY_SHA}" node <<'NODE'
+          const health = JSON.parse(process.env.HEALTH_JSON);
+          if (health.status !== "ok" || health.db !== "connected" || health.scheduler !== "running") {
+            throw new Error(`Staging health is degraded: ${JSON.stringify(health)}`);
+          }
+          if (health.releaseSha !== process.env.EXPECTED_SHA) {
+            throw new Error(`Staging release SHA ${health.releaseSha} does not match ${process.env.EXPECTED_SHA}`);
+          }
+          console.log(`Public staging health confirms release ${process.env.EXPECTED_SHA}`);
+          NODE
 
       - name: Remove local staging env file on failure
         if: always()

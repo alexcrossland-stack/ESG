@@ -11,6 +11,7 @@ import { seedCurrentEmissionFactors } from "./seed-emission-factors";
 import {
   CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS,
   FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
+  invalidSuperAdminActionIdentifierColumns,
   missingFrameworkRequirementResponseColumns,
   missingFrameworkRequirementResponseIndexes,
   runStartupMigrationStatements,
@@ -238,7 +239,24 @@ app.use((req, res, next) => {
 
   try {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS esg_roadmap jsonb`);
-  } catch {}
+    const superAdminActionColumns = await db.execute(sql`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'super_admin_actions'
+        AND column_name IN ('admin_user_id', 'target_company_id', 'target_user_id')
+    `);
+    const invalidColumns = invalidSuperAdminActionIdentifierColumns(
+      (superAdminActionColumns as any).rows ?? [],
+    );
+    if (invalidColumns.length > 0) {
+      throw new Error(`super_admin_actions has invalid identifier column types: ${invalidColumns.join(", ")}`);
+    }
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not create or validate super_admin_actions");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
   try {
     await db.execute(sql`ALTER TYPE role ADD VALUE IF NOT EXISTS 'super_admin'`);
   } catch {}

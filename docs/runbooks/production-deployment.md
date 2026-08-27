@@ -8,6 +8,8 @@ Production deployment is manual-gated. Pushing or merging to `main` must not dep
 
 Do not use the production deployment workflow for staging/pre-production validation. Use `docs/runbooks/staging-deployment.md` and the `Deploy to Staging` workflow when validating a release before production.
 
+For the August 2026 SME release, also follow [2026-08-27-sme-release-migration.md](./2026-08-27-sme-release-migration.md). The deployment workflow creates a server-side database/evidence recovery point before changing the checkout or runtime configuration.
+
 The production workflow writes the GitHub `production` environment secrets into `/root/ESG/.env` on the Hetzner host before restart, sources that file in the remote shell, and then runs `pm2 restart esg --update-env`. Secret values must never be printed in workflow logs. The workflow validates required secret presence by name only, uploads the runtime env file with `0600` permissions, and verifies selected PM2 runtime env keys as present/configured without printing values.
 
 ## 1. Pre-Deploy Checks
@@ -115,6 +117,8 @@ If smoke checks fail or production health degrades:
 8. Verify MFA/step-up behavior after rollback.
 9. Review audit logs for failed export/download/auth actions during the incident window.
 10. Document whether any follow-up cleanup is required.
+
+Do not automatically restore the pre-release database for an application-only rollback. The August 2026 migrations are additive and the previous application must first be checked against the upgraded schema. Restore the database only as an incident-recovery decision with an explicit data-loss assessment.
 
 ## 5. Post-Deploy Monitoring
 

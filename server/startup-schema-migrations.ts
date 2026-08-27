@@ -83,6 +83,27 @@ export const CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS = [
      ALTER COLUMN factor_year SET DEFAULT 2026`,
 ] as const;
 
+export const REQUIRED_SUPER_ADMIN_ACTION_IDENTIFIER_COLUMNS = [
+  "admin_user_id",
+  "target_company_id",
+  "target_user_id",
+] as const;
+
+export function invalidSuperAdminActionIdentifierColumns(
+  rows: Array<{ column_name?: unknown; data_type?: unknown }>,
+): string[] {
+  const actualTypes = new Map(
+    rows
+      .filter((row): row is { column_name: string; data_type: string } =>
+        typeof row.column_name === "string" && typeof row.data_type === "string",
+      )
+      .map((row) => [row.column_name, row.data_type]),
+  );
+  return REQUIRED_SUPER_ADMIN_ACTION_IDENTIFIER_COLUMNS.filter(
+    (column) => actualTypes.get(column) !== "character varying",
+  );
+}
+
 export async function runStartupMigrationStatements(
   execute: StartupMigrationExecutor,
   statements: readonly string[],
