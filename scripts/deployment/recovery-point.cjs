@@ -660,7 +660,7 @@ function validateRestoredDatabase(databaseUrl, database) {
       "--tuples-only",
       "--no-align",
       "--command",
-      "SELECT json_build_object('probe', 1, 'tableCount', count(*)) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema')",
+      "SELECT json_build_object('probe', 1, 'tableCount', count(*), 'readableTableCount', count(*) FILTER (WHERE has_schema_privilege(current_user, n.oid, 'USAGE') AND has_table_privilege(current_user, c.oid, 'SELECT'))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema')",
     ],
     { capture: true, env: target.env },
   ).trim();
@@ -670,7 +670,13 @@ function validateRestoredDatabase(databaseUrl, database) {
   } catch {
     fail("Restored database validation result is invalid");
   }
-  if (result.probe !== 1 || !Number.isInteger(result.tableCount) || result.tableCount < 1) {
+  if (
+    result.probe !== 1
+    || !Number.isInteger(result.tableCount)
+    || result.tableCount < 1
+    || !Number.isInteger(result.readableTableCount)
+    || result.readableTableCount < 1
+  ) {
     fail("Restored database validation query failed");
   }
 }
@@ -686,6 +692,20 @@ function setLocalDatabaseConnectionLimit(databaseUrl, database, limit) {
       "postgres",
       "--command",
       `ALTER DATABASE ${quoteIdentifier(database)} CONNECTION LIMIT ${limit}`,
+    ],
+  );
+}
+
+function grantLocalRehearsalConnect(databaseUrl, database, applicationRole) {
+  localPostgresAdmin(
+    databaseUrl,
+    "psql",
+    [
+      "--no-psqlrc",
+      "--dbname",
+      "postgres",
+      "--command",
+      `GRANT CONNECT ON DATABASE ${quoteIdentifier(database)} TO ${quoteIdentifier(applicationRole)}`,
     ],
   );
 }
@@ -776,7 +796,15 @@ function restoreOriginalDatabase(databaseUrl, database, backupDir, authority) {
   }
 }
 
-function recreateRehearsalDatabase(databaseUrl, database, owner, backupDir, authority, connectionLimit) {
+function recreateRehearsalDatabase(
+  databaseUrl,
+  database,
+  owner,
+  applicationRole,
+  backupDir,
+  authority,
+  connectionLimit,
+) {
   const maintenance = databaseConnection(databaseUrl, "postgres");
   const dump = path.join(backupDir, "database.dump");
   if (authority === LOCAL_RECOVERY_AUTHORITY) {
@@ -789,6 +817,10 @@ function recreateRehearsalDatabase(databaseUrl, database, owner, backupDir, auth
       { stdinFile: dump },
     );
     setLocalDatabaseConnectionLimit(databaseUrl, database, connectionLimit);
+    // A restore into a differently named pre-created database does not replay
+    // the source database's CONNECT ACL. Mirror only the runtime role's known
+    // ability to connect to the source; CREATE remains with the database owner.
+    grantLocalRehearsalConnect(databaseUrl, database, applicationRole);
     return;
   }
   run("dropdb", ["--force", "--if-exists", database], { env: maintenance.env });
@@ -801,34 +833,37 @@ function recreateRehearsalDatabase(databaseUrl, database, owner, backupDir, auth
   setDatabaseConnectionLimit(databaseUrl, database, connectionLimit, authority);
 }
 
-function createRestoreSentinel(databaseUrl, database) {
-  run(
-    "psql",
-    [
-      "--no-psqlrc",
-      "--dbname",
-      database,
-      "--command",
-      "CREATE SCHEMA recovery_post_backup_sentinel; CREATE TABLE recovery_post_backup_sentinel.must_not_survive (id integer PRIMARY KEY)",
-    ],
-    { env: databaseConnection(databaseUrl, database).env },
-  );
+function createRestoreSentinel(databaseUrl, database, authority) {
+  const args = [
+    "--no-psqlrc",
+    "--dbname",
+    database,
+    "--command",
+    "CREATE SCHEMA recovery_post_backup_sentinel; CREATE TABLE recovery_post_backup_sentinel.must_not_survive (id integer PRIMARY KEY)",
+  ];
+  if (authority === LOCAL_RECOVERY_AUTHORITY) {
+    // The sentinel tests that the second restore is clean. Creating test-only
+    // objects must not require granting CREATE on the database to the runtime
+    // application role when production uses a separate database owner.
+    localPostgresAdmin(databaseUrl, "psql", args);
+  } else {
+    run("psql", args, { env: databaseConnection(databaseUrl, database).env });
+  }
 }
 
-function assertRestoreSentinelAbsent(databaseUrl, database) {
-  const result = run(
-    "psql",
-    [
-      "--no-psqlrc",
-      "--tuples-only",
-      "--no-align",
-      "--dbname",
-      database,
-      "--command",
-      "SELECT to_regclass('recovery_post_backup_sentinel.must_not_survive') IS NULL",
-    ],
-    { capture: true, env: databaseConnection(databaseUrl, database).env },
-  ).trim();
+function assertRestoreSentinelAbsent(databaseUrl, database, authority) {
+  const args = [
+    "--no-psqlrc",
+    "--tuples-only",
+    "--no-align",
+    "--dbname",
+    database,
+    "--command",
+    "SELECT to_regclass('recovery_post_backup_sentinel.must_not_survive') IS NULL",
+  ];
+  const result = authority === LOCAL_RECOVERY_AUTHORITY
+    ? localPostgresAdmin(databaseUrl, "psql", args, { capture: true }).trim()
+    : run("psql", args, { capture: true, env: databaseConnection(databaseUrl, database).env }).trim();
   if (result !== "t") fail("Post-backup database objects survived recovery");
 }
 
@@ -871,6 +906,11 @@ function rehearseDatabaseRestore(envFile, backupDir, suffix) {
     if (authority === LOCAL_RECOVERY_AUTHORITY) {
       localPostgresAdmin(runtime.DATABASE_URL, "pg_restore", initialRestoreArgs, { stdinFile: dump });
       setLocalDatabaseConnectionLimit(runtime.DATABASE_URL, rehearsalDatabase, metadata.databaseIdentity.connectionLimit);
+      grantLocalRehearsalConnect(
+        runtime.DATABASE_URL,
+        rehearsalDatabase,
+        metadata.databaseIdentity.currentUser,
+      );
     } else {
       run("pg_restore", initialRestoreArgs, {
         env: databaseConnection(runtime.DATABASE_URL, rehearsalDatabase).env,
@@ -878,17 +918,18 @@ function rehearseDatabaseRestore(envFile, backupDir, suffix) {
       });
     }
     validateRestoredDatabase(runtime.DATABASE_URL, rehearsalDatabase);
-    createRestoreSentinel(runtime.DATABASE_URL, rehearsalDatabase);
+    createRestoreSentinel(runtime.DATABASE_URL, rehearsalDatabase, authority);
     recreateRehearsalDatabase(
       runtime.DATABASE_URL,
       rehearsalDatabase,
       metadata.databaseIdentity.databaseOwner,
+      metadata.databaseIdentity.currentUser,
       backupDir,
       authority,
       metadata.databaseIdentity.connectionLimit,
     );
     validateRestoredDatabase(runtime.DATABASE_URL, rehearsalDatabase);
-    assertRestoreSentinelAbsent(runtime.DATABASE_URL, rehearsalDatabase);
+    assertRestoreSentinelAbsent(runtime.DATABASE_URL, rehearsalDatabase, authority);
   } finally {
     if (created && authority === LOCAL_RECOVERY_AUTHORITY) {
       localPostgresAdmin(runtime.DATABASE_URL, "dropdb", ["--force", "--if-exists", "--maintenance-db", "postgres", rehearsalDatabase]);
@@ -958,7 +999,7 @@ function restoreRecoveryPoint(envFile, backupDir) {
   try {
     setDatabaseConnectionLimit(runtime.DATABASE_URL, identity.databaseName, identity.connectionLimit, authority);
     validateRestoredDatabase(runtime.DATABASE_URL, identity.databaseName);
-    assertRestoreSentinelAbsent(runtime.DATABASE_URL, identity.databaseName);
+    assertRestoreSentinelAbsent(runtime.DATABASE_URL, identity.databaseName, authority);
     setDatabaseConnectionLimit(runtime.DATABASE_URL, identity.databaseName, 0, authority);
     restoreEvidence(backupDir, metadata);
     setDatabaseConnectionLimit(runtime.DATABASE_URL, identity.databaseName, identity.connectionLimit, authority);

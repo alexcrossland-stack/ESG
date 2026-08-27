@@ -43,32 +43,53 @@ if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname)) {
 const databaseName = `simplyesg_privileged_${runId.slice(-12)}_${runAttempt}`.slice(0, 63);
 if (!/^[a-zA-Z0-9_]+$/.test(databaseName)) throw new Error("Unsafe privileged rehearsal database name");
 
-const maintenanceUrl = new URL(sourceUrl);
-maintenanceUrl.pathname = "/postgres";
 const databaseUrl = new URL(sourceUrl);
 databaseUrl.pathname = `/${databaseName}`;
 const quoteIdentifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
+const recoveryOwner = "simplyesg_recovery_owner";
+const applicationRole = decodeURIComponent(parsed.username);
 const { Client } = pg;
 
-async function recreateDatabase(): Promise<void> {
-  const client = new Client({ connectionString: maintenanceUrl.toString() });
-  await client.connect();
-  try {
-    await client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`);
-    await client.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
-  } finally {
-    await client.end();
+function runPostgresAdmin(command: "createdb" | "dropdb" | "psql", args: string[]): string {
+  const binary = `/usr/bin/${command}`;
+  const socketDirectory = "/var/run/postgresql";
+  if (!existsSync(binary) || !existsSync(path.join(socketDirectory, `.s.PGSQL.${parsed.port || "5432"}`))) {
+    throw new Error(`Privileged PostgreSQL test dependency is unavailable: ${command}`);
   }
+  const result = spawnSync(
+    "/usr/sbin/runuser",
+    [
+      "--user",
+      "postgres",
+      "--",
+      binary,
+      `--host=${socketDirectory}`,
+      `--port=${parsed.port || "5432"}`,
+      "--username=postgres",
+      ...args,
+    ],
+    { encoding: "utf8", stdio: "pipe" },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(`${command} failed: ${result.error?.message || result.stderr}`);
+  }
+  return String(result.stdout || "");
 }
 
-async function dropDatabase(): Promise<void> {
-  const client = new Client({ connectionString: maintenanceUrl.toString() });
-  await client.connect();
-  try {
-    await client.query(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`);
-  } finally {
-    await client.end();
-  }
+function recreateDatabase(): void {
+  runPostgresAdmin("dropdb", ["--force", "--if-exists", "--maintenance-db=postgres", databaseName]);
+  runPostgresAdmin("createdb", ["--maintenance-db=postgres", "--template=template0", `--owner=${recoveryOwner}`, databaseName]);
+  runPostgresAdmin("psql", [
+    `--dbname=${databaseName}`,
+    "--no-psqlrc",
+    "--set=ON_ERROR_STOP=on",
+    "--command",
+    `REVOKE ALL ON DATABASE ${quoteIdentifier(databaseName)} FROM PUBLIC; GRANT CONNECT ON DATABASE ${quoteIdentifier(databaseName)} TO ${quoteIdentifier(applicationRole)}; REVOKE CREATE ON DATABASE ${quoteIdentifier(databaseName)} FROM ${quoteIdentifier(applicationRole)}; SET ROLE ${quoteIdentifier(recoveryOwner)}; CREATE TABLE public.privileged_recovery_probe (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO public.privileged_recovery_probe (id, value) VALUES (1, 'before-upgrade'); RESET ROLE; GRANT USAGE ON SCHEMA public TO ${quoteIdentifier(applicationRole)}; GRANT SELECT, UPDATE ON TABLE public.privileged_recovery_probe TO ${quoteIdentifier(applicationRole)}`,
+  ]);
+}
+
+function dropDatabase(): void {
+  runPostgresAdmin("dropdb", ["--force", "--if-exists", "--maintenance-db=postgres", databaseName]);
 }
 
 function assertProtectedDumpCannotBeOpenedByPostgres(dump: string): void {
@@ -96,12 +117,20 @@ const backupDir = `/root/esg-deploy-backups/${runInstance}-c0ffee123456`;
 const originalEvidence = "privileged recovery evidence";
 
 try {
-  await recreateDatabase();
+  recreateDatabase();
   const database = new Client({ connectionString: databaseUrl.toString() });
   await database.connect();
   try {
-    await database.query("CREATE TABLE privileged_recovery_probe (id integer PRIMARY KEY, value text NOT NULL)");
-    await database.query("INSERT INTO privileged_recovery_probe (id, value) VALUES (1, 'before-upgrade')");
+    const identity = await database.query(
+      "SELECT pg_get_userbyid(datdba) AS owner, current_user AS application_role, has_database_privilege(current_user, current_database(), 'CREATE') AS can_create_database_objects FROM pg_database WHERE datname = current_database()",
+    );
+    assert.deepEqual(identity.rows, [{
+      owner: recoveryOwner,
+      application_role: applicationRole,
+      can_create_database_objects: false,
+    }]);
+    const probe = await database.query("SELECT id, value FROM privileged_recovery_probe ORDER BY id");
+    assert.deepEqual(probe.rows, [{ id: 1, value: "before-upgrade" }]);
   } finally {
     await database.end();
   }
@@ -143,11 +172,16 @@ try {
   await mutated.connect();
   try {
     await mutated.query("UPDATE privileged_recovery_probe SET value = 'after-upgrade' WHERE id = 1");
-    await mutated.query("CREATE SCHEMA privileged_post_backup_residue");
-    await mutated.query("CREATE TABLE privileged_post_backup_residue.must_not_survive (id integer PRIMARY KEY)");
   } finally {
     await mutated.end();
   }
+  runPostgresAdmin("psql", [
+    `--dbname=${databaseName}`,
+    "--no-psqlrc",
+    "--set=ON_ERROR_STOP=on",
+    "--command",
+    `SET ROLE ${quoteIdentifier(recoveryOwner)}; CREATE TABLE public.privileged_post_backup_residue_must_not_survive (id integer PRIMARY KEY); RESET ROLE`,
+  ]);
   writeFileSync(evidenceFile, "mutated privileged evidence");
 
   restoreRecoveryPoint(envFile, backupDir);
@@ -158,15 +192,31 @@ try {
   try {
     const rows = await restored.query("SELECT id, value FROM privileged_recovery_probe ORDER BY id");
     assert.deepEqual(rows.rows, [{ id: 1, value: "before-upgrade" }]);
-    const residue = await restored.query("SELECT to_regclass('privileged_post_backup_residue.must_not_survive') AS relation");
+    const residue = await restored.query("SELECT to_regclass('privileged_post_backup_residue_must_not_survive') AS relation");
     assert.equal(residue.rows[0]?.relation, null);
+    const restoredIdentity = await restored.query(
+      "SELECT pg_get_userbyid(datdba) AS owner, current_user AS application_role, has_database_privilege(current_user, current_database(), 'CONNECT') AS can_connect, has_database_privilege(current_user, current_database(), 'CREATE') AS can_create_database_objects, has_table_privilege(current_user, 'public.privileged_recovery_probe', 'SELECT') AS can_read_probe, datacl IS NOT NULL AS has_explicit_database_acl, COALESCE((SELECT bool_or(privilege_type = 'CONNECT') FROM aclexplode(COALESCE(datacl, acldefault('d', datdba))) WHERE grantee = 0), false) AS public_can_connect FROM pg_database WHERE datname = current_database()",
+    );
+    assert.deepEqual(restoredIdentity.rows, [{
+      owner: recoveryOwner,
+      application_role: applicationRole,
+      can_connect: true,
+      can_create_database_objects: false,
+      can_read_probe: true,
+      has_explicit_database_acl: true,
+      public_can_connect: false,
+    }]);
   } finally {
     await restored.end();
   }
   assert.equal(readFileSync(evidenceFile, "utf8"), originalEvidence);
   console.log("privileged PostgreSQL recovery rehearsal passed");
 } finally {
-  await dropDatabase().catch(() => undefined);
+  try {
+    dropDatabase();
+  } catch {
+    // Preserve the primary test failure when cleanup also fails.
+  }
   if (existsSync(preflightDir)) cleanupPreflightDirectory(preflightDir);
   if (existsSync(backupDir)) {
     if (realpathSync(backupDir) !== backupDir) throw new Error("Refusing to remove a symlinked privileged backup");

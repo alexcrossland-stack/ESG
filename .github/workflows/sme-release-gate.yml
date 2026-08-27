@@ -37,6 +37,7 @@ jobs:
         run: |
           sudo systemctl start postgresql.service
           sudo -u postgres psql --no-psqlrc --set ON_ERROR_STOP=on --command "CREATE ROLE simplyesg LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'simplyesg-ci'"
+          sudo -u postgres psql --no-psqlrc --set ON_ERROR_STOP=on --command "CREATE ROLE simplyesg_recovery_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
           sudo -u postgres createdb --maintenance-db=postgres --owner=simplyesg simplyesg_ci
           server_version="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --no-psqlrc --tuples-only --no-align --command 'SHOW server_version_num')"
           case "${server_version}" in

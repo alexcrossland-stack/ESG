@@ -11,6 +11,10 @@ const scheduler = await readFile(new URL("../../server/scheduler.ts", import.met
 const preflight = await readFile(new URL("../../docs/runbooks/hetzner-preflight.md", import.meta.url), "utf8");
 const remoteDeploy = await readFile(new URL("../../scripts/deployment/remote-production.sh", import.meta.url), "utf8");
 const recovery = await readFile(new URL("../../scripts/deployment/recovery-point.cjs", import.meta.url), "utf8");
+const privilegedRecoveryTest = await readFile(
+  new URL("../integration/recovery-point-local-authority-rehearsal.test.ts", import.meta.url),
+  "utf8",
+);
 const ecosystem = await readFile(new URL("../../ecosystem.config.cjs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
 const npmrc = await readFile(new URL("../../.npmrc", import.meta.url), "utf8");
@@ -39,6 +43,7 @@ assert.doesNotMatch(production, /git reset --hard/);
 assert.match(releaseGate, /runs-on: ubuntu-24\.04/);
 assert.match(releaseGate, /sudo systemctl start postgresql\.service/);
 assert.match(releaseGate, /CREATE ROLE simplyesg LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS/);
+assert.match(releaseGate, /CREATE ROLE simplyesg_recovery_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS/);
 assert.match(releaseGate, /SELECT host\(inet_server_addr\(\)\)/);
 assert.doesNotMatch(releaseGate, /services:\s+postgres:/);
 assert.match(releaseGate, /Rehearse privileged production recovery authority/);
@@ -125,9 +130,18 @@ assert.match(recovery, /pg_control_system\(\)/);
 assert.match(recovery, /inet_server_addr\(\)/);
 assert.match(recovery, /setDatabaseConnectionLimit\(databaseUrl, database, 0, authority\)/);
 assert.match(recovery, /Could not terminate all database sessions before recovery/);
+assert.match(recovery, /readableTableCount/);
+assert.match(recovery, /has_schema_privilege\(current_user, n\.oid, 'USAGE'\)/);
+assert.match(recovery, /GRANT CONNECT ON DATABASE \$\{quoteIdentifier\(database\)\} TO \$\{quoteIdentifier\(applicationRole\)\}/);
+assert.match(recovery, /createRestoreSentinel\(databaseUrl, database, authority\)/);
+assert.match(recovery, /localPostgresAdmin\(databaseUrl, "psql", args\)/);
 assert.match(recovery, /Post-backup database objects survived recovery/);
 assert.match(recovery, /restore-state\.json/);
 assert.match(recovery, /state: "completed"/);
+assert.match(privilegedRecoveryTest, /const recoveryOwner = "simplyesg_recovery_owner"/);
+assert.match(privilegedRecoveryTest, /can_create_database_objects: false/);
+assert.match(privilegedRecoveryTest, /acldefault\('d', datdba\)/);
+assert.match(privilegedRecoveryTest, /public_can_connect: false/);
 assert.match(recovery, /markRestoreCompleted\(backupDir, metadata, authority\)/);
 assert.match(recovery, /Recovery restore marker does not match this checked recovery point/);
 assert.match(recovery, /Recovery resume PostgreSQL system identifier changed/);
