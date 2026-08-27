@@ -25,9 +25,9 @@ jobs:
       PRODUCTION_DATABASE_URL: ${{ secrets.DATABASE_URL }}
       PRODUCTION_SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       PRODUCTION_MFA_ENCRYPTION_KEY: ${{ secrets.MFA_ENCRYPTION_KEY }}
-      PRODUCTION_APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-      PRODUCTION_CSRF_TRUSTED_ORIGINS: ${{ secrets.CSRF_TRUSTED_ORIGINS }}
-      PRODUCTION_REPLIT_DOMAINS: ${{ secrets.REPLIT_DOMAINS }}
+      PRODUCTION_APP_BASE_URL: https://www.simplyesg.co.uk
+      PRODUCTION_CSRF_TRUSTED_ORIGINS: https://www.simplyesg.co.uk
+      PRODUCTION_REPLIT_DOMAINS: www.simplyesg.co.uk,simplyesg.co.uk
       PRODUCTION_RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
       PRODUCTION_EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       PRODUCTION_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.AI_INTEGRATIONS_OPENAI_API_KEY }}
@@ -538,7 +538,7 @@ jobs:
 
       - name: Verify public production release
         env:
-          PUBLIC_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          PUBLIC_BASE_URL: https://www.simplyesg.co.uk
         run: |
           set -Eeuo pipefail
           base_url="${PUBLIC_BASE_URL%/}"

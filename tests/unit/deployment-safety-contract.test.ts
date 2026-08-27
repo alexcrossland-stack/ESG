@@ -9,6 +9,8 @@ const preflight = await readFile(new URL("../../docs/runbooks/hetzner-preflight.
 
 assert.match(production, /group: deploy-production\s+cancel-in-progress: false/);
 assert.match(production, /GITHUB_REF[^\n]+refs\/heads\/main/);
+assert.match(production, /PRODUCTION_APP_BASE_URL: https:\/\/www\.simplyesg\.co\.uk/);
+assert.match(production, /PRODUCTION_CSRF_TRUSTED_ORIGINS: https:\/\/www\.simplyesg\.co\.uk/);
 assert.match(production, /ref: main\s+fetch-depth: 0/);
 assert.match(production, /Verify checkout is the remote main tip/);
 assert.match(production, /Create production recovery point/);
