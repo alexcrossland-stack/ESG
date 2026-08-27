@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const production = await readFile(new URL("../../.github/workflows/deploy.yml", import.meta.url), "utf8");
 const staging = await readFile(new URL("../../.github/workflows/deploy-staging.yml", import.meta.url), "utf8");
+const releaseGate = await readFile(new URL("../../.github/workflows/sme-release-gate.yml", import.meta.url), "utf8");
 const healthRoute = await readFile(new URL("../../server/agent-routes.ts", import.meta.url), "utf8");
 const startup = await readFile(new URL("../../server/index.ts", import.meta.url), "utf8");
 const routes = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
@@ -34,6 +35,12 @@ assert.match(production, /systemctl show/);
 assert.match(production, /Verify public production release and safe anonymous contracts/);
 assert.doesNotMatch(production, /\. \.\/\.env|source .*\.env/);
 assert.doesNotMatch(production, /git reset --hard/);
+
+assert.match(releaseGate, /runs-on: ubuntu-24\.04/);
+assert.match(releaseGate, /sudo systemctl start postgresql\.service/);
+assert.match(releaseGate, /CREATE ROLE simplyesg LOGIN CREATEDB/);
+assert.match(releaseGate, /SELECT inet_server_addr\(\)::text/);
+assert.doesNotMatch(releaseGate, /services:\s+postgres:/);
 
 assert.match(staging, /group: deploy-staging\s+cancel-in-progress: false/);
 assert.match(staging, /node-version: 24\.20\.0/);

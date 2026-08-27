@@ -16,22 +16,11 @@ concurrency:
 jobs:
   acceptance:
     name: SME release acceptance
-    runs-on: ubuntu-latest
+    # The recovery contract verifies the connected PostgreSQL server is truly
+    # loopback. A Docker service published on 127.0.0.1 reports its bridge
+    # address from inet_server_addr(), so use the runner's PostgreSQL 16 service.
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: simplyesg
-          POSTGRES_PASSWORD: simplyesg-ci
-          POSTGRES_DB: simplyesg_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U simplyesg -d simplyesg_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     env:
       CI: "1"
       DATABASE_URL: postgresql://simplyesg:simplyesg-ci@127.0.0.1:5432/simplyesg_ci
@@ -43,6 +32,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start loopback PostgreSQL 16
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql --set ON_ERROR_STOP=on --command "CREATE ROLE simplyesg LOGIN CREATEDB PASSWORD 'simplyesg-ci'"
+          sudo -u postgres createdb --owner=simplyesg simplyesg_ci
+          server_version="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SHOW server_version_num')"
+          case "${server_version}" in
+            16????) ;;
+            *) echo "::error::Expected PostgreSQL 16, received ${server_version}"; exit 1 ;;
+          esac
+          server_address="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SELECT inet_server_addr()::text')"
+          if [ "${server_address}" != "127.0.0.1" ]; then
+            echo "::error::Expected a true loopback PostgreSQL server, received ${server_address}"
+            exit 1
+          fi
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
