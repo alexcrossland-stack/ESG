@@ -528,6 +528,7 @@ async function run(tenants: SeededTenants): Promise<void> {
         }, tenantA.adminToken);
         const reloadRes = await apiRequest("GET", `/api/data-entry/${period}?siteId=null`, undefined, tenantA.adminToken);
         const exportRes = await apiRequest("GET", `/api/reports/export-data/esg_metrics_summary?period=${period}&siteId=null`, undefined, tenantA.adminToken);
+        const readinessRes = await apiRequest("GET", `/api/reports/readiness-detail?period=${period}&siteId=null`, undefined, tenantA.adminToken);
 
         if (initialEntryRes.status !== 200) fail(name, `initial data-entry status ${initialEntryRes.status}`);
         else if (entryMetric?.dataType !== "boolean") fail(name, `data-entry metric dataType not boolean: ${entryMetric?.dataType}`);
@@ -536,9 +537,11 @@ async function run(tenants: SeededTenants): Promise<void> {
         else if (invalidSave.status !== 400) fail(name, `invalid save status ${invalidSave.status}`);
         else if (reloadRes.status !== 200) fail(name, `reload status ${reloadRes.status}`);
         else if (exportRes.status !== 200) fail(name, `export-data status ${exportRes.status}`);
+        else if (readinessRes.status !== 200) fail(name, `report readiness status ${readinessRes.status}`);
         else {
           const reload = JSON.parse(reloadRes.body) as { values: Array<{ metricId: string; value: string | null; valueBoolean?: boolean | null; valueText?: string | null }> };
           const exported = JSON.parse(exportRes.body) as { values: Array<{ metricId: string; value: string | null; valueBoolean?: boolean | null; valueText?: string | null }> };
+          const readiness = JSON.parse(readinessRes.body) as { filledMetrics?: number; missingCategories?: { missingMetrics?: string[] } };
           const saved = reload.values.find((value) => value.metricId === yesNoMetric.id);
           const exportedValue = exported.values.find((value) => value.metricId === yesNoMetric.id);
           if (!saved) fail(name, "saved yes/no metric missing from data-entry reload");
@@ -546,6 +549,8 @@ async function run(tenants: SeededTenants): Promise<void> {
           else if (saved.valueBoolean !== false || saved.valueText !== "No") fail(name, `expected updated No value, got ${JSON.stringify(saved)}`);
           else if (!exportedValue) fail(name, "yes/no metric missing from export data");
           else if (exportedValue.valueBoolean !== false || exportedValue.valueText !== "No") fail(name, `export value not labelled as No: ${JSON.stringify(exportedValue)}`);
+          else if ((readiness.missingCategories?.missingMetrics ?? []).includes(yesNoMetric.name)) fail(name, "saved No value was treated as missing by report readiness");
+          else if (!readiness.filledMetrics || readiness.filledMetrics < 1) fail(name, `saved No value did not count toward report readiness: ${JSON.stringify(readiness)}`);
           else pass(name);
         }
       }

@@ -1,5 +1,6 @@
 import { Client } from "pg";
 import { apiRequest, seedTestTenants } from "../fixtures/seed.js";
+import { isActiveEditableDataEntryMetric } from "../../shared/data-entry-metrics.js";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -99,7 +100,7 @@ async function run() {
       return;
     }
 
-    const companyMetrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string; enabled: boolean; isDefault: boolean }>;
+    const companyMetrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string; enabled: boolean; isDefault: boolean; metricType?: string | null }>;
     const enabledDefaults = companyMetrics.filter((metric) => metric.enabled && metric.isDefault);
     const enabledCompanyMetrics = companyMetrics.filter((metric) => metric.enabled);
     if (enabledDefaults.length === 0) {
@@ -119,10 +120,11 @@ async function run() {
       fail("GET /api/data-entry/2024-01 returns 200 for enabled metric denominator", `status=${initialDataEntryRes.status}`);
     } else {
       const dataEntry = JSON.parse(initialDataEntryRes.body) as { metrics: Array<{ name: string }> };
-      if (dataEntry.metrics.length !== enabledDefinitionCount) {
-        fail("Enabled Metrics Library count matches Enter Data enabled metric denominator", `library=${enabledDefinitionCount} data-entry=${dataEntry.metrics.length}`);
+      const editableMetricCount = companyMetrics.filter(isActiveEditableDataEntryMetric).length;
+      if (dataEntry.metrics.length !== editableMetricCount) {
+        fail("Enter Data denominator matches enabled editable metrics", `editable=${editableMetricCount} data-entry=${dataEntry.metrics.length}`);
       } else {
-        pass("Enabled Metrics Library count matches Enter Data enabled metric denominator", `${dataEntry.metrics.length}`);
+        pass("Enter Data denominator matches enabled editable metrics", `${dataEntry.metrics.length}`);
       }
     }
 

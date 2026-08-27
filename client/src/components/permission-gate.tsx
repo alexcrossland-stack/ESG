@@ -17,11 +17,13 @@ export function PermissionBanner({
   action,
   customMessage,
   className,
+  testId,
 }: {
   module?: PermissionModule;
   action?: string;
   customMessage?: string;
   className?: string;
+  testId?: string;
 }) {
   const who = module ? whoCanDo(module) : undefined;
   const nextStep = module ? getNextStepForModule(module) : "Ask your Company Admin if you need access.";
@@ -33,7 +35,7 @@ export function PermissionBanner({
       : `You don't have permission to ${label} here.`);
 
   return (
-    <Alert className={cn("border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700", className)} data-testid="permission-banner">
+    <Alert className={cn("border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700", className)} data-testid={testId ?? "permission-banner"}>
       <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
       <AlertDescription className="text-sm">
         <span className="font-medium text-amber-800 dark:text-amber-300">{message}</span>

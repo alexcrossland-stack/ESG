@@ -12,11 +12,12 @@
  *
  * @group regression
  */
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import fs from "fs";
+import { loginAndGetToken } from "../fixtures/seed.js";
 
 const TEST_PASSWORD = "Test1234!";
 
@@ -32,7 +33,7 @@ interface PortfolioCtx {
 
 let portfolioCtx: PortfolioCtx | null = null;
 
-async function ensurePortfolioCtx(request: APIRequestContext): Promise<PortfolioCtx> {
+async function ensurePortfolioCtx(): Promise<PortfolioCtx> {
   if (portfolioCtx) return portfolioCtx;
 
   const dbUrl = process.env.DATABASE_URL;
@@ -102,20 +103,18 @@ async function ensurePortfolioCtx(request: APIRequestContext): Promise<Portfolio
     const nonMemberEmail = `pa-nonmember-${suffix}@test-esg.example`;
     await upsertUser(nonMemberEmail, `panonmember${suffix}`, "admin", companyCId);
 
-    const ownerLogin = await request.post("/api/auth/login", { data: { email: ownerEmail, password: TEST_PASSWORD } });
-    const ownerBody = await ownerLogin.json() as { token: string };
-
-    const viewerLogin = await request.post("/api/auth/login", { data: { email: viewerEmail, password: TEST_PASSWORD } });
-    const viewerBody = await viewerLogin.json() as { token: string };
-
-    const nonMemberLogin = await request.post("/api/auth/login", { data: { email: nonMemberEmail, password: TEST_PASSWORD } });
-    const nonMemberBody = await nonMemberLogin.json() as { token: string };
+    // Each user needs an independent login session. Reusing Playwright's request
+    // fixture here carries its cookie jar into the next login, which correctly
+    // revokes the preceding browser session and its associated bearer token.
+    const ownerToken = await loginAndGetToken(ownerEmail, TEST_PASSWORD);
+    const viewerToken = await loginAndGetToken(viewerEmail, TEST_PASSWORD);
+    const nonMemberToken = await loginAndGetToken(nonMemberEmail, TEST_PASSWORD);
 
     portfolioCtx = {
       groupId, companyAId, companyBId, companyCId,
-      ownerToken: ownerBody.token,
-      viewerToken: viewerBody.token,
-      nonMemberToken: nonMemberBody.token,
+      ownerToken,
+      viewerToken,
+      nonMemberToken,
     };
     return portfolioCtx;
   } finally {
@@ -131,7 +130,7 @@ function readSeedInfo() {
 
 test.describe("REGR-PA: Portfolio access via group membership", () => {
   test("portfolio_owner /api/auth/me returns portfolioGroups sourced from group membership", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get("/api/auth/me", {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
     });
@@ -150,7 +149,7 @@ test.describe("REGR-PA: Portfolio access via group membership", () => {
   });
 
   test("portfolio_viewer /api/auth/me returns portfolioGroups sourced from group membership", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get("/api/auth/me", {
       headers: { Authorization: `Bearer ${ctx.viewerToken}` },
     });
@@ -167,7 +166,7 @@ test.describe("REGR-PA: Portfolio access via group membership", () => {
   });
 
   test("portfolio companies list contains permitted companies A and B", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/companies`, {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
     });
@@ -186,7 +185,7 @@ test.describe("REGR-PA: Portfolio access via group membership", () => {
   });
 
   test("portfolio companies list does NOT contain non-member company C", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/companies`, {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
     });
@@ -200,7 +199,7 @@ test.describe("REGR-PA: Portfolio access via group membership", () => {
   });
 
   test("non-group-member cannot access group companies (403 or 404)", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/companies`, {
       headers: { Authorization: `Bearer ${ctx.nonMemberToken}` },
     });
@@ -210,7 +209,7 @@ test.describe("REGR-PA: Portfolio access via group membership", () => {
   });
 
   test("non-group-member cannot access group summary (403 or 404)", async ({ request }) => {
-    const ctx = await ensurePortfolioCtx(request);
+    const ctx = await ensurePortfolioCtx();
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/summary`, {
       headers: { Authorization: `Bearer ${ctx.nonMemberToken}` },
     });

@@ -41,7 +41,7 @@ export function getNextAction(readiness: any): NextAction {
       title: "Support one figure with evidence",
       description: "Attach a bill, invoice or HR record so your baseline has a clear source.",
       ctaLabel: "Add supporting evidence",
-      href: "/evidence",
+      href: "/data-entry?focus=evidence",
     };
   }
 
@@ -77,7 +77,7 @@ export function getNextAction(readiness: any): NextAction {
       title: "Add more supporting evidence",
       description: "Link documents to important figures to make future reports more credible.",
       ctaLabel: "Review evidence",
-      href: "/evidence",
+      href: "/data-entry?focus=evidence",
     };
   }
 

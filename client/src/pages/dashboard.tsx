@@ -37,6 +37,8 @@ import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
 import { getNextAction } from "@/lib/get-next-action";
+import { useBillingStatus } from "@/components/upgrade-prompt";
+import { buildDashboardScoreQuery, resolveDashboardScorePeriodScope } from "@/lib/dashboard-score-period";
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -946,14 +948,16 @@ function FirstReportMilestone({ onDismiss }: { onDismiss: () => void }) {
 }
 
 function BenchmarkSummaryCard() {
+  const { isPro, isLoading: billingLoading } = useBillingStatus();
   const { data: comparison, isLoading, isError, error } = useQuery<any[]>({
     queryKey: ["/api/benchmarks/comparison"],
+    enabled: isPro,
   });
 
-  if (isLoading) return <Skeleton className="h-48" />;
-  if (isError) {
+  if (billingLoading || (isPro && isLoading)) return <Skeleton className="h-48" />;
+  if (!isPro || isError) {
     const err = error as Error & { code?: string };
-    const isUpgradeBlocked = err?.code === "UPGRADE_REQUIRED" || /pro plan/i.test(err?.message || "");
+    const isUpgradeBlocked = !isPro || err?.code === "UPGRADE_REQUIRED" || /pro plan/i.test(err?.message || "");
 
     return (
       <Card data-testid="card-benchmark-summary-blocked">
@@ -1125,10 +1129,7 @@ export default function Dashboard() {
 
   const isLoading = enhancedLoading || oldLoading;
   const activePeriod = reportingPeriods.find((rp: any) => rp.id === selectedPeriodId);
-  // Derive a YYYY-MM period string from the selected reporting period for the scoring API
-  const scorePeriod = activePeriod?.startDate
-    ? (() => { const d = new Date(activePeriod.startDate); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })()
-    : undefined;
+  const scorePeriodScope = resolveDashboardScorePeriodScope(activePeriod);
 
   const showMilestone = !milestoneDismissed && !milestoneSeenAtLoad && Boolean(readiness?.hasGeneratedReport);
 
@@ -1399,7 +1400,13 @@ export default function Dashboard() {
         </Card>
       </div>}
 
-      {showProvisional && <MultiDimensionalScoreCards period={scorePeriod} siteId={activeSiteId} />}
+      {showProvisional && (
+        <MultiDimensionalScoreCards
+          period={scorePeriodScope.metricPeriod}
+          frameworkPeriod={scorePeriodScope.frameworkPeriod}
+          siteId={activeSiteId}
+        />
+      )}
 
       {showProvisional && <ProgrammeStatusCard />}
 
@@ -1850,16 +1857,21 @@ function ScoreDimensionCard({
   );
 }
 
-function MultiDimensionalScoreCards({ period, siteId }: { period?: string; siteId?: string | null }) {
+function MultiDimensionalScoreCards({
+  period,
+  frameworkPeriod,
+  siteId,
+}: {
+  period?: string;
+  frameworkPeriod?: string;
+  siteId?: string | null;
+}) {
   // siteId===null means "All Sites" (company-wide) — do NOT send siteId param so backend uses company-wide scope.
   // siteId===string means a specific site is selected — send that site UUID.
-  const params = new URLSearchParams();
-  if (period) params.set("period", period);
-  if (typeof siteId === "string") params.set("siteId", siteId);
-  const queryStr = params.toString() ? `?${params.toString()}` : "";
+  const queryStr = buildDashboardScoreQuery({ metricPeriod: period, frameworkPeriod, siteId });
 
   const { data: scores, isLoading } = useQuery<any>({
-    queryKey: ["/api/esg-scores/all", period ?? null, siteId ?? null],
+    queryKey: ["/api/esg-scores/all", period ?? null, frameworkPeriod ?? null, siteId ?? null],
     queryFn: () => authFetch(`/api/esg-scores/all${queryStr}`).then(r => r.json()),
   });
 
@@ -2014,7 +2026,7 @@ function MultiDimensionalScoreCards({ period, siteId }: { period?: string; siteI
           title="Framework Readiness"
           icon={Globe}
           score={frameworkReadiness?.score ?? 0}
-          description="Coverage across your selected reporting frameworks"
+          description="Fully covered requirements across the selected reporting period"
           explanation={frameworkReadiness?.explanation ?? "Loading..."}
           testId="card-score-framework-readiness"
           color="bg-orange-100 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { calculateEvidenceCoverage, resolveEsgState } from "../../server/esg-status";
+import { calculateEvidenceConfidence, calculateEvidenceCoverage, resolveEsgState } from "../../server/esg-status";
 
 const cases = [
   {
@@ -28,6 +28,11 @@ const cases = [
     input: { filledMetrics: 8, estimatedPercent: 10, completenessPercentage: 80, evidenceCoverage: 60 },
     expected: "CONFIRMED",
   },
+  {
+    name: "unapproved values cannot produce the strongest state",
+    input: { filledMetrics: 8, estimatedPercent: 0, completenessPercentage: 80, evidenceCoverage: 80, approvedCoverage: 20 },
+    expected: "PROVISIONAL",
+  },
 ] as const;
 
 for (const testCase of cases) {
@@ -39,9 +44,9 @@ assert.equal(
   calculateEvidenceCoverage(
     ["metric-a", "metric-b"],
     [
-      { metricId: "metric-a" },
-      { metricId: "metric-a" },
-      { metricId: "disabled-metric" },
+      { metricId: "metric-a", evidenceStatus: "approved" },
+      { metricId: "metric-a", evidenceStatus: "approved" },
+      { metricId: "disabled-metric", evidenceStatus: "approved" },
     ],
   ),
   50,
@@ -49,4 +54,32 @@ assert.equal(
 );
 console.log("  PASS  evidence coverage counts unique enabled metrics");
 
-console.log(`\n=== ESG status state: ${cases.length + 1}/${cases.length + 1} passed ===\n`);
+const evidenceConfidence = calculateEvidenceConfidence(
+  ["metric-a", "metric-b"],
+  [
+    { metricId: "metric-a", evidenceStatus: "uploaded", linkedPeriod: "2025", siteId: null },
+    { metricId: "metric-a", evidenceStatus: "reviewed", linkedPeriod: "2025", siteId: null },
+    { metricId: "metric-a", evidenceStatus: "approved", linkedPeriod: "2025", siteId: null },
+    { metricId: "metric-b", evidenceStatus: "approved", linkedPeriod: "2024", siteId: null },
+    { metricId: "metric-b", evidenceStatus: "approved", linkedPeriod: "2025", siteId: "site-2" },
+    { metricId: "metric-b", evidenceStatus: "approved", linkedPeriod: "2025", siteId: null, expiryDate: "2025-01-01" },
+  ],
+  { period: "2025", siteId: null, now: new Date("2026-08-26") },
+);
+
+assert.deepEqual(
+  evidenceConfidence,
+  {
+    sourceLinked: 1,
+    reviewed: 1,
+    evidenceBacked: 1,
+    independentlyAssured: 0,
+    sourceLinkedCoverage: 50,
+    reviewedCoverage: 50,
+    evidenceBackedCoverage: 50,
+  },
+  "evidence confidence must require current, approved, period- and scope-matched evidence",
+);
+console.log("  PASS  evidence confidence distinguishes linked, reviewed, approved and assured proof");
+
+console.log(`\n=== ESG status state: ${cases.length + 2}/${cases.length + 2} passed ===\n`);

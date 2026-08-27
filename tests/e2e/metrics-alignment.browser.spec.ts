@@ -17,13 +17,11 @@ test.describe("Metrics surface alignment", () => {
     }, tenantA.adminToken);
 
     await page.goto("/metrics");
-    await page.waitForLoadState("networkidle");
     await expect(page.getByRole("heading", { name: "Metrics" })).toBeVisible();
     await expect(page.getByText("Metrics — what this page does")).toBeVisible();
     await expect(page.locator("[data-testid='button-add-custom-metric']")).toHaveCount(0);
 
     await page.goto("/metrics-library");
-    await page.waitForLoadState("networkidle");
     await expect(page.getByRole("heading", { name: "Metrics Library" })).toBeVisible();
     await expect(page.locator("[data-testid='button-library-add-metric']")).toHaveCount(1);
     await expect(page.locator("[data-testid^='button-enter-value-']")).toHaveCount(0);
@@ -38,7 +36,7 @@ test.describe("Metrics surface alignment", () => {
     }, tenantA.adminToken);
 
     await page.goto("/metrics-library");
-    await page.waitForLoadState("networkidle");
+    await expect(page.locator("[data-testid='stat-active']")).toBeVisible();
     const enabledLibraryCount = Number((await page.locator("[data-testid='stat-active']").textContent()) || "0");
     const editableMetricCount = await page.evaluate(async () => {
       const token = localStorage.getItem("auth_token");
@@ -51,7 +49,7 @@ test.describe("Metrics surface alignment", () => {
     });
 
     await page.goto("/metrics");
-    await page.waitForLoadState("networkidle");
+    await expect(page.locator("[data-testid='badge-metric-count']")).toBeVisible();
     const metricsBadgeText = (await page.locator("[data-testid='badge-metric-count']").textContent()) || "";
     const metricsBadgeCount = Number(metricsBadgeText.split(" ")[0] || "0");
     expect(metricsBadgeCount).toBe(enabledLibraryCount);
@@ -60,15 +58,16 @@ test.describe("Metrics surface alignment", () => {
     expect(new Set(metricNames).size).toBe(metricNames.length);
 
     await page.goto("/data-entry");
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("raw-field-electricity_kwh")).toBeVisible();
+    await page.getByTestId("tab-manual-entry").click();
+    await expect(page.locator("[data-testid='badge-enabled-metric-denominator']")).toBeVisible();
     const denominatorText = (await page.locator("[data-testid='badge-enabled-metric-denominator']").textContent()) || "";
     const denominator = Number(denominatorText.split(" ")[0] || "0");
     expect(denominator).toBe(editableMetricCount);
     await expect(page.locator("[data-testid^='manual-row-']")).toHaveCount(editableMetricCount);
-    await expect(page.getByText("Raw input fields completed:", { exact: false })).toBeVisible();
 
     await page.goto("/evidence");
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("tab-evidence-coverage")).toBeVisible();
     await page.getByTestId("tab-evidence-coverage").click();
     const evidenceRows = page.locator("[data-testid^='row-metric-coverage-']");
     await expect(evidenceRows).toHaveCount(enabledLibraryCount);

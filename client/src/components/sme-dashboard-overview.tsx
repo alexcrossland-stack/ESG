@@ -60,9 +60,6 @@ function percentage(value: unknown, fallback = 0): number {
 }
 
 function categoryProgress(enhanced: any, key: CategoryKey): number {
-  const score = enhanced?.weightedScore?.categoryScores?.[key]?.score;
-  if (score !== undefined && score !== null) return percentage(score);
-
   const counts: CategoryCounts | undefined = enhanced?.categorySummary?.[key];
   const total = Number(counts?.total ?? 0);
   if (total <= 0) return 0;
@@ -90,6 +87,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
   const summary = readiness?.esgStatus?.plainMeaning || readiness?.plainEnglishSummary || status.fallback;
   const dataCompleteness = percentage(readiness?.dataCompletenessPercent, percentage(enhanced?.submissionRate));
   const evidenceCoverage = percentage(readiness?.evidenceCoveragePercent, percentage(enhanced?.evidenceCoverage));
+  const evidenceConfidence = readiness?.esgStatus?.evidenceConfidence;
   const estimatedPercent = percentage(readiness?.estimatedPercent);
   const nextAction = getNextAction(readiness);
 
@@ -152,6 +150,22 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
             </div>
             <Progress value={evidenceCoverage} aria-label="Supporting evidence coverage" className="h-2 [&>div]:bg-emerald-500" />
           </div>
+          {evidenceConfidence && (
+            <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-muted/30 p-2 text-center" data-testid="summary-sme-evidence-ladder">
+              <div>
+                <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.sourceLinkedCoverage)}%</p>
+                <p className="text-[11px] text-muted-foreground">Source linked</p>
+              </div>
+              <div>
+                <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.reviewedCoverage)}%</p>
+                <p className="text-[11px] text-muted-foreground">Reviewed</p>
+              </div>
+              <div>
+                <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.evidenceBackedCoverage)}%</p>
+                <p className="text-[11px] text-muted-foreground">Evidence-backed</p>
+              </div>
+            </div>
+          )}
           {estimatedPercent > 0 && (
             <p className="text-xs text-muted-foreground" data-testid="text-sme-estimated-data">
               {estimatedPercent}% of entered data is estimated. Replace estimates over time to strengthen confidence.
@@ -183,7 +197,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
               </div>
             );
           })}
-          <p className="text-xs text-muted-foreground">Progress uses the category score where available, with data coverage as a fallback.</p>
+          <p className="text-xs text-muted-foreground">Progress shows completion of active metrics. Performance is shown separately once enough reliable data is available.</p>
         </CardContent>
       </Card>
     </section>

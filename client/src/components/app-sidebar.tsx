@@ -305,7 +305,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <SidebarMenuSub>
+                    <SidebarMenuSub className="mx-2.5 px-2">
                       <div className="space-y-2 py-1" data-testid="nav-esg-advanced-items">
                         {advancedSections.map((section, sectionIndex) => (
                           <div key={section.label} data-testid={`nav-advanced-section-${sectionIndex}`}>

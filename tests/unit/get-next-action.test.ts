@@ -14,7 +14,7 @@ assert.equal(
     evidenceCoveragePercent: 0,
     esgStatus: { state: "PROVISIONAL", missingItems: Array.from({ length: 17 }, (_, index) => `Metric ${index}`) },
   }).href,
-  "/evidence",
+  "/data-entry?focus=evidence",
   "the full sector metric denominator must not prevent the first evidence step",
 );
 

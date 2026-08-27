@@ -23,6 +23,7 @@ export interface ReadinessDetail {
   completenessPercent: number;
   evidenceCoveragePercent: number;
   measuredCount: number;
+  derivedCount?: number;
   estimateCount: number;
   missingCount: number;
   totalMetrics: number;
@@ -110,15 +111,29 @@ function MissingItem({ text, href, linkLabel }: { text: string; href?: string; l
   );
 }
 
-export function ReportReadinessPanel({ siteId, period, scopeLabel }: { siteId?: string | null; period?: string; scopeLabel?: string }) {
+export function ReportReadinessPanel({
+  siteId,
+  period,
+  dateFrom,
+  dateTo,
+  scopeLabel,
+}: {
+  siteId?: string | null;
+  period?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  scopeLabel?: string;
+}) {
   const [showMissing, setShowMissing] = useState(false);
   const scopeKey = siteId === null ? "__org__" : siteId ?? "__all__";
 
   const { data, isLoading } = useQuery<ReadinessDetail>({
-    queryKey: ["/api/reports/readiness-detail", scopeKey, period ?? "__latest__"],
+    queryKey: ["/api/reports/readiness-detail", scopeKey, period ?? "__latest__", dateFrom ?? "", dateTo ?? ""],
     queryFn: () => {
       const params = new URLSearchParams();
       if (period) params.set("period", period);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
       if (siteId !== undefined) params.set("siteId", siteId ?? "null");
       const qs = params.toString();
       return authFetch(`/api/reports/readiness-detail${qs ? `?${qs}` : ""}`).then(r => r.json());
@@ -217,10 +232,14 @@ export function ReportReadinessPanel({ siteId, period, scopeLabel }: { siteId?: 
           </div>
         </div>
 
-        <div className="flex items-center gap-4 text-xs text-muted-foreground pt-0.5">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-0.5">
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-            <span data-testid="text-measured-count">{data.measuredCount} measured</span>
+            <span data-testid="text-measured-count">{data.measuredCount} actual</span>
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
+            <span data-testid="text-derived-count">{data.derivedCount ?? 0} derived</span>
           </span>
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />

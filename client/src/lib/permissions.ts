@@ -1,16 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { type UserRole, type PermissionModule, ROLE_PERMISSIONS } from "@shared/schema";
+import {
+  getUserPermissions as getCanonicalUserPermissions,
+  hasPermission as hasCanonicalPermission,
+  type UserRole,
+  type PermissionModule,
+} from "@shared/schema";
 
 export function hasPermission(role: string | undefined, module: PermissionModule): boolean {
-  if (!role) return false;
-  const permissions = ROLE_PERMISSIONS[role as UserRole];
-  if (!permissions) return false;
-  return permissions.includes(module);
+  return hasCanonicalPermission(role, module);
 }
 
 export function getUserPermissions(role: string | undefined): PermissionModule[] {
-  if (!role) return [];
-  return ROLE_PERMISSIONS[role as UserRole] || [];
+  return getCanonicalUserPermissions(role);
 }
 
 export function usePermissions() {
@@ -57,7 +58,7 @@ export function whoCanDo(module: PermissionModule): string {
     case "metrics_data_entry":
       return "Editors or Company Admins";
     case "policy_editing":
-      return "Editors or Company Admins";
+      return "Company Admins only";
     case "report_generation":
       return "Approvers or Company Admins";
     case "questionnaire_access":
@@ -81,7 +82,7 @@ export function getNextStepForModule(module: PermissionModule): string {
     case "metrics_data_entry":
       return "Ask your Company Admin to update your role to Editor if you need to enter data.";
     case "policy_editing":
-      return "Ask your Company Admin to update your role to Editor if you need to edit policies.";
+      return "Only Company Admins can edit policies. Contact your Company Admin.";
     case "report_generation":
       return "Ask your Company Admin to give you the Approver role if you need to generate or approve reports.";
     case "questionnaire_access":

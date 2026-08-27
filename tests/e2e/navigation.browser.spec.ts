@@ -5,7 +5,7 @@ async function openWithState(browser: import("@playwright/test").Browser, storag
   const context = await browser.newContext({ storageState });
   const page = await context.newPage();
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
   if (page.url().includes("/auth") || page.url().includes("/onboarding")) {
     test.skip(true, "Auth state not fully persisted — skip navigation browser check");
   }
@@ -49,7 +49,7 @@ async function openWithMockRole(
   });
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
   return { context, page };
 }
 
@@ -66,7 +66,7 @@ function breadcrumbTestId(label: string) {
 
 async function expectNavigation(page: Page, testId: string, expectedPath: RegExp, breadcrumbLabels: string[]) {
   await page.getByTestId(testId).click();
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
   await expect(page).toHaveURL(expectedPath);
   await expect(page.getByTestId(testId)).toHaveAttribute("aria-current", "page");
   for (const label of breadcrumbLabels) {
@@ -110,7 +110,7 @@ test.describe("Simplified SME navigation", () => {
     await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
 
     await page.getByTestId("nav-settings-console").click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await expect(page).toHaveURL(/\/settings$/);
 
     await context.close();
@@ -126,7 +126,7 @@ test.describe("Simplified SME navigation", () => {
     await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
 
     await page.getByTestId("nav-settings-console").click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await expect(page).toHaveURL(/\/settings$/);
 
     await context.close();

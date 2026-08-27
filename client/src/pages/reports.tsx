@@ -35,7 +35,9 @@ import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { ReportReadinessPanel } from "@/components/report-readiness-panel";
-import { buildReportPeriodSelection, reportPeriodYears, type ReportPeriodType } from "@shared/report-periods";
+import { buildReportPeriodSelection, reportPeriodYears, type ReportPeriodSelection, type ReportPeriodType } from "@shared/report-periods";
+import { CURRENT_UK_FACTOR_SOURCE, CURRENT_UK_FACTOR_YEAR } from "@shared/emission-factor-metadata";
+import type { ReportTemplateId } from "@shared/report-templates";
 
 type ReportHistoryEntry = {
   id: string;
@@ -57,6 +59,7 @@ type ReportHistoryEntry = {
   includeEvidence?: boolean | null;
   includeMethodology?: boolean | null;
   includeSignoff?: boolean | null;
+  includePeriodComparison?: boolean | null;
   generatedBy?: string | null;
   generatedByName?: string | null;
   companyName?: string | null;
@@ -87,6 +90,23 @@ type DownloadableHistoryEntry = ReportHistoryEntry & {
   latestFilename?: string | null;
   latestDownloadUrl: string;
 };
+
+type SavedReportingPeriod = {
+  id: string;
+  name: string;
+  periodType: ReportPeriodType;
+  startDate: string | Date;
+  endDate: string | Date;
+  status?: string | null;
+};
+
+function reportingPeriodDate(value: string | Date): string {
+  if (typeof value === "string") {
+    const calendarDate = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (calendarDate) return calendarDate[1];
+  }
+  return format(new Date(value), "yyyy-MM-dd");
+}
 
 type ReportLibraryResponse = {
   reports: ReportHistoryEntry[];
@@ -167,17 +187,46 @@ function EsgExportsSection() {
   const [exporting, setExporting] = useState(false);
 
   const { data: sitesData } = useQuery<any[]>({ queryKey: ["/api/sites"] });
+  const { data: savedReportingPeriods = [] } = useQuery<Array<{
+    id: string;
+    name: string;
+    periodType?: string | null;
+    status?: string | null;
+  }>>({ queryKey: ["/api/reporting-periods"] });
   const [selectedSite, setSelectedSite] = useState<string>("all-sites");
 
   const periods = generatePeriods();
+  const frameworkPeriodOptions = [
+    ...savedReportingPeriods.map((reportingPeriod) => ({
+      value: reportingPeriod.id,
+      label: reportingPeriod.name,
+    })),
+    ...periods
+      .filter((calendarPeriod) => !savedReportingPeriods.some((reportingPeriod) => reportingPeriod.name === calendarPeriod))
+      .map((calendarPeriod) => ({ value: calendarPeriod, label: calendarPeriod })),
+  ];
+  const selectedExportPeriodLabel = frameworkPeriodOptions.find((periodOption) => periodOption.value === selectedPeriod)?.label
+    ?? selectedPeriod;
 
   const handleExport = async () => {
+    if (selectedType === "framework_readiness_summary" && (!selectedPeriod || selectedPeriod === "all")) {
+      toast({
+        title: "Choose a reporting period",
+        description: "Framework readiness must be calculated for one reporting period.",
+        variant: "destructive",
+      });
+      return;
+    }
     setExporting(true);
     try {
       const body: any = {
         format: selectedFormat,
         period: (!useDateRange && selectedPeriod && selectedPeriod !== "all") ? selectedPeriod : undefined,
-        siteId: selectedSite && selectedSite !== "all-sites" ? selectedSite : undefined,
+        siteId: selectedSite === "organisation-only"
+          ? "__org__"
+          : selectedSite && selectedSite !== "all-sites"
+            ? selectedSite
+            : undefined,
         dateFrom: (useDateRange && dateFrom) ? dateFrom : undefined,
         dateTo: (useDateRange && dateTo) ? dateTo : undefined,
       };
@@ -207,7 +256,10 @@ function EsgExportsSection() {
   };
 
   const selectedTypeInfo = ESG_EXPORT_TYPES.find(t => t.id === selectedType);
-  const showSiteScope = selectedType === "esg_metrics_summary" || selectedType === "site_comparison_summary";
+  const showSiteScope = selectedType === "esg_metrics_summary"
+    || selectedType === "framework_readiness_summary"
+    || selectedType === "site_comparison_summary";
+  const frameworkPeriodOnly = selectedType === "framework_readiness_summary";
 
   return (
     <Card>
@@ -228,7 +280,17 @@ function EsgExportsSection() {
             return (
               <button
                 key={t.id}
-                onClick={() => setSelectedType(t.id)}
+                onClick={() => {
+                  setSelectedType(t.id);
+                  if (t.id === "framework_readiness_summary") {
+                    setUseDateRange(false);
+                    if (!selectedPeriod || selectedPeriod === "all") {
+                      setSelectedPeriod(frameworkPeriodOptions[0]?.value ?? format(new Date(), "yyyy-MM"));
+                    }
+                  } else if (savedReportingPeriods.some((reportingPeriod) => reportingPeriod.id === selectedPeriod)) {
+                    setSelectedPeriod("all");
+                  }
+                }}
                 data-testid={`button-export-type-${t.id}`}
                 className={`text-left p-3 rounded-md border transition-colors ${
                   isSelected
@@ -260,12 +322,19 @@ function EsgExportsSection() {
               </button>
               <button
                 onClick={() => setUseDateRange(true)}
+                disabled={frameworkPeriodOnly}
+                title={frameworkPeriodOnly ? "Framework readiness is evaluated against a reporting period, not an arbitrary date range." : undefined}
                 data-testid="button-scope-daterange"
-                className={`px-2.5 py-1 rounded-md border text-xs ${useDateRange ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"}`}
+                className={`px-2.5 py-1 rounded-md border text-xs disabled:cursor-not-allowed disabled:opacity-50 ${useDateRange ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"}`}
               >
                 Date Range
               </button>
             </div>
+            {frameworkPeriodOnly && (
+              <p className="text-xs text-muted-foreground">
+                Framework readiness is period-specific so evidence and responses cannot be credited outside their reporting period.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -274,12 +343,15 @@ function EsgExportsSection() {
                 <Label className="text-xs mb-1.5 block">Reporting Period</Label>
                 <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
                   <SelectTrigger data-testid="select-export-period" className="h-8 text-xs">
-                    <SelectValue placeholder="All periods" />
+                    <SelectValue placeholder={frameworkPeriodOnly ? "Choose period" : "All periods"} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All periods</SelectItem>
-                    {periods.map(p => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    {!frameworkPeriodOnly && <SelectItem value="all">All periods</SelectItem>}
+                    {(frameworkPeriodOnly
+                      ? frameworkPeriodOptions
+                      : periods.map((calendarPeriod) => ({ value: calendarPeriod, label: calendarPeriod }))
+                    ).map((periodOption) => (
+                      <SelectItem key={periodOption.value} value={periodOption.value}>{periodOption.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -317,7 +389,8 @@ function EsgExportsSection() {
                     <SelectValue placeholder="All sites (org-wide)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all-sites">All sites (org-wide)</SelectItem>
+                    <SelectItem value="all-sites">Whole organisation (org + active sites)</SelectItem>
+                    <SelectItem value="organisation-only">Organisation records only</SelectItem>
                     {(sitesData || []).map((s: any) => (
                       <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                     ))}
@@ -356,16 +429,17 @@ function EsgExportsSection() {
           <div className="flex items-center justify-between pt-2 border-t border-border">
             <div className="text-xs text-muted-foreground">
               <span className="font-medium text-foreground">{selectedTypeInfo.label}</span>
-              {!useDateRange && selectedPeriod && selectedPeriod !== "all" && ` · ${selectedPeriod}`}
+              {!useDateRange && selectedPeriod && selectedPeriod !== "all" && ` · ${selectedExportPeriodLabel}`}
               {useDateRange && dateFrom && ` · ${dateFrom}`}
               {useDateRange && dateTo && ` to ${dateTo}`}
-              {selectedSite && selectedSite !== "all-sites" && " · Single site"}
+              {selectedSite === "organisation-only" && " · Organisation records only"}
+              {selectedSite && selectedSite !== "all-sites" && selectedSite !== "organisation-only" && " · Single site"}
               {` · ${selectedFormat.toUpperCase()}`}
             </div>
             <Button
               size="sm"
               onClick={handleExport}
-              disabled={exporting || (useDateRange && (!dateFrom || !dateTo))}
+              disabled={exporting || (useDateRange && (!dateFrom || !dateTo)) || (frameworkPeriodOnly && (!selectedPeriod || selectedPeriod === "all"))}
               data-testid="button-export-esg-report"
               className="gap-1.5"
             >
@@ -383,7 +457,42 @@ function EsgExportsSection() {
   );
 }
 
-const REPORT_TEMPLATES = [
+const REPORT_TEMPLATES: Array<{
+  id: ReportTemplateId;
+  label: string;
+  description: string;
+  audience: string;
+  timeEstimate: string;
+  icon: string;
+  defaults: Record<string, boolean>;
+}> = [
+  {
+    id: "vsme",
+    label: "VSME Readiness & Draft Pack",
+    description: "A draft VSME-aligned pack with visible requirement gaps and evidence status; not a completed statutory disclosure",
+    audience: "Customers, banks, investors",
+    timeEstimate: "~3 min",
+    icon: "🌱",
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: true },
+  },
+  {
+    id: "ppn006",
+    label: "PPN 006 Readiness Pack",
+    description: "A UK procurement readiness pack for Carbon Reduction Plan inputs; it identifies missing requirements and is not a compliance certificate",
+    audience: "UK public procurement teams",
+    timeEstimate: "~3 min",
+    icon: "🇬🇧",
+    defaults: { includeSummary: true, includePolicy: false, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: true },
+  },
+  {
+    id: "annual",
+    label: "Annual ESG Report",
+    description: "A year-end report covering ESG performance, evidence, actions and data-quality limitations",
+    audience: "Management, customers, lenders",
+    timeEstimate: "~3 min",
+    icon: "📅",
+    defaults: { includeSummary: true, includePolicy: true, includeTopics: true, includeMetrics: true, includeCarbon: true, includeActions: true, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: true },
+  },
   {
     id: "board",
     label: "Board Summary",
@@ -404,9 +513,9 @@ const REPORT_TEMPLATES = [
   },
   {
     id: "compliance",
-    label: "Compliance Summary",
-    description: "A detailed report for auditors or anyone with legal or regulatory requirements",
-    audience: "Regulators, auditors, legal",
+    label: "Framework Readiness Summary",
+    description: "A transparent view of ready, in-progress, and missing framework requirements",
+    audience: "Advisers, auditors, management",
     timeEstimate: "~3 min",
     icon: "⚖️",
     defaults: { includeSummary: true, includePolicy: true, includeTopics: false, includeMetrics: true, includeCarbon: true, includeActions: false, includeEvidence: true, includeMethodology: true, includeSignoff: true, includeDataQualityAssessment: true, includeComplianceStatus: true, includePeriodComparison: false },
@@ -433,7 +542,7 @@ const SECTIONS = [
   { key: "includeMethodology", label: "Methodology Notes", icon: BookOpen },
   { key: "includeSignoff", label: "Approval Sign-off", icon: PenLine },
   { key: "includeDataQualityAssessment", label: "Data Quality Assessment", icon: Gauge },
-  { key: "includeComplianceStatus", label: "Compliance Status", icon: Scale },
+  { key: "includeComplianceStatus", label: "Framework Readiness", icon: Scale },
   { key: "includePeriodComparison", label: "Period Comparison", icon: ArrowUpDown },
 ];
 
@@ -517,6 +626,7 @@ function StatusBadge({ status }: { status: string }) {
 function SourceBadge({ label }: { label: string }) {
   if (label === "Evidenced") return <Badge className="text-[10px] bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-0">{label}</Badge>;
   if (label === "Estimated") return <Badge className="text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 border-0">{label}</Badge>;
+  if (label === "Derived") return <Badge className="text-[10px] bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-0">{label}</Badge>;
   return <Badge variant="secondary" className="text-[10px]">{label}</Badge>;
 }
 
@@ -679,7 +789,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         <p className="text-xs text-muted-foreground">Reporting Period: {period}</p>
         <p className="text-xs text-muted-foreground">Generated {generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy 'at' HH:mm") : ""} by {generatedBy}</p>
         <div className="flex items-center justify-center gap-2 mt-2">
-          <Badge variant="outline" className="text-[10px]">Factor Year: {factorMethodology?.factorYear || "2024"}</Badge>
+          <Badge variant="outline" className="text-[10px]">Factor Year: {factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR}</Badge>
           {factorMethodology?.source && <Badge variant="outline" className="text-[10px]">Source: {factorMethodology.source}</Badge>}
         </div>
       </div>
@@ -779,11 +889,20 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
                 </thead>
                 <tbody>
                   {catValues.map((v: any) => (
-                    <tr key={v.id} className={`border-b border-border/50 ${v.dataSourceLabel === "estimated" ? "bg-amber-50/50 dark:bg-amber-950/10" : ""}`} data-testid={`row-metric-${v.id}`}>
+                    <tr key={v.id} className={`border-b border-border/50 ${v.dataSourceLabel === "Estimated" ? "bg-amber-50/50 dark:bg-amber-950/10" : ""}`} data-testid={`row-metric-${v.id}`}>
                       <td className="py-1">
                         <span className="flex items-center gap-1.5">
                           {v.metricName}
-                          <ValueSourceBadge source={!v.value && v.value !== 0 ? "missing" : v.dataSourceLabel === "estimated" ? "estimated" : "actual"} explanation={v.dataSourceLabel === "estimated" && v.notes ? v.notes : undefined} />
+                          <ValueSourceBadge
+                            source={!v.value && v.value !== 0
+                              ? "missing"
+                              : v.sourceClassification === "derived" || v.dataSourceLabel === "Derived"
+                                ? "derived"
+                                : v.sourceClassification === "estimated" || v.dataSourceLabel === "Estimated"
+                                  ? "estimated"
+                                  : "actual"}
+                            explanation={(v.sourceClassification === "estimated" || v.dataSourceLabel === "Estimated") && v.notes ? v.notes : undefined}
+                          />
                         </span>
                       </td>
                       <td className="py-1 font-medium">{v.value} {v.unit || ""}</td>
@@ -1067,7 +1186,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
               <div className="bg-muted/50 rounded-md p-3">
                 <p className="font-medium mb-1">Carbon Methodology</p>
                 <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                  <li>Emission factors: {factorMethodology?.source || "UK DEFRA"} {factorMethodology?.factorYear || "2024"}</li>
+                  <li>Emission factors: {factorMethodology?.source || CURRENT_UK_FACTOR_SOURCE} {factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR}</li>
                   <li>Scope 1: Direct emissions (gas, fuel, refrigerants, vehicles)</li>
                   <li>Scope 2: Indirect energy (grid electricity, location-based)</li>
                   <li>Scope 3: Value chain (business travel, commuting, waste)</li>
@@ -1173,10 +1292,14 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
             <Info className="w-3.5 h-3.5 text-primary" />
             Data Quality & Methodology
           </h3>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="flex items-center gap-2">
               <ValueSourceBadge source="actual" />
               <span className="text-muted-foreground">{dataQualitySummary.actualPercent ?? 0}% of metrics</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <ValueSourceBadge source="derived" />
+              <span className="text-muted-foreground">{dataQualitySummary.derivedPercent ?? 0}% of metrics</span>
             </div>
             <div className="flex items-center gap-2">
               <ValueSourceBadge source="estimated" />
@@ -1193,7 +1316,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
           {dataQualitySummary.isDraftQuality && (
             <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md p-2 text-amber-700 dark:text-amber-300 mt-2">
               <AlertTriangle className="w-3 h-3 inline mr-1" />
-              This report contains estimated data. Replace estimates with actual values to improve report quality and confidence level.
+              This report has material estimates or gaps. Replace estimates with measured values or well-supported calculations to improve confidence.
             </div>
           )}
         </div>
@@ -1203,23 +1326,32 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
         <div data-testid="section-compliance-status">
           <h2 className="font-semibold text-base mb-3 flex items-center gap-2">
             <Scale className="w-4 h-4 text-primary" />
-            Compliance Status
+            Framework Readiness
           </h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            Readiness is based on saved data, review status, and linked evidence. It does not constitute certification, assurance, or legal compliance.
+          </p>
           <div className="space-y-3">
-            {complianceStatus.map((fw: any) => (
+            {complianceStatus.map((fw: any) => {
+              const readinessPercent = fw.readinessPercent ?? fw.compliancePercent ?? fw.completionPercent ?? 0;
+              const readyRequirements = fw.readyRequirements ?? fw.metRequirements ?? 0;
+              return (
               <div key={fw.id} className="bg-muted/50 rounded-md p-3 text-xs">
                 <div className="flex items-center justify-between mb-2">
                   <p className="font-medium">{fw.name} {fw.version && <span className="text-muted-foreground">(v{fw.version})</span>}</p>
-                  <Badge variant={fw.compliancePercent >= 70 ? "default" : "secondary"} className={`text-[10px] ${fw.compliancePercent >= 70 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : ""}`}>
-                    {fw.compliancePercent}% compliant
+                  <Badge variant={readinessPercent >= 70 ? "default" : "secondary"} className={`text-[10px] ${readinessPercent >= 70 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : ""}`}>
+                    {readinessPercent}% ready
                   </Badge>
                 </div>
                 <div className="w-full bg-muted rounded-full h-1.5 mb-2">
-                  <div className={`h-1.5 rounded-full ${fw.compliancePercent >= 70 ? "bg-emerald-500" : fw.compliancePercent >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${fw.compliancePercent}%` }} />
+                  <div className={`h-1.5 rounded-full ${readinessPercent >= 70 ? "bg-emerald-500" : readinessPercent >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${readinessPercent}%` }} />
                 </div>
-                <p className="text-muted-foreground">{fw.metRequirements}/{fw.totalRequirements} requirements met</p>
+                <p className="text-muted-foreground">
+                  {readyRequirements}/{fw.totalRequirements} ready · {fw.partialRequirements || 0} in progress · {fw.missingRequirements || 0} missing
+                </p>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -1272,7 +1404,7 @@ function ReportPreview({ data, sections }: { data: any; sections: Record<string,
 
       <div className="pt-4 border-t border-border text-center text-xs text-muted-foreground space-y-1" data-testid="text-disclaimer">
         <p>This report was generated using ESG Manager. Data is provided by {company?.name}.</p>
-        <p>Emission factors: {factorMethodology?.source || "UK DEFRA"} {factorMethodology?.factorYear || "2024"}. All data should be independently verified before external disclosure.</p>
+        <p>Emission factors: {factorMethodology?.source || CURRENT_UK_FACTOR_SOURCE} {factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR}. All data should be independently verified before external disclosure.</p>
       </div>
     </div>
   );
@@ -1310,7 +1442,7 @@ function buildTextExport(data: any, sections: Record<string, boolean>, esgMeta?:
   lines.push(`Report Status: ${statusLabel}`);
   lines.push(`Reporting Period: ${period}`);
   lines.push(`Generated: ${generatedAt ? format(new Date(generatedAt), "dd MMMM yyyy HH:mm") : ""} by ${generatedBy}`);
-  lines.push(`Factor Year: ${factorMethodology?.factorYear || "2024"} | Source: ${factorMethodology?.source || "UK DEFRA"}`);
+  lines.push(`Factor Year: ${factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR} | Source: ${factorMethodology?.source || CURRENT_UK_FACTOR_SOURCE}`);
   lines.push(hr);
   lines.push("");
 
@@ -1484,14 +1616,15 @@ function buildTextExport(data: any, sections: Record<string, boolean>, esgMeta?:
     lines.push("  - Missing metrics excluded from scoring (not penalised)");
     if (carbonSummary) {
       lines.push(`\nCarbon Methodology:`);
-      lines.push(`  - Factors: ${factorMethodology?.source || "UK DEFRA"} ${factorMethodology?.factorYear || "2024"}`);
+      lines.push(`  - Factors: ${factorMethodology?.source || CURRENT_UK_FACTOR_SOURCE} ${factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR}`);
       lines.push("  - Scope 1: Direct (gas, fuel, vehicles)");
       lines.push("  - Scope 2: Indirect energy (grid electricity)");
       lines.push("  - Scope 3: Value chain (travel, commuting, waste)");
     }
     lines.push("\nData Source Definitions:");
     lines.push("  - Evidenced: Backed by uploaded evidence file");
-    lines.push("  - Estimated: Derived from estimation or secondary data");
+    lines.push("  - Derived: Calculated from saved company inputs");
+    lines.push("  - Estimated: Approximated from partial or secondary data");
     lines.push("  - Manual: Directly entered without supporting evidence");
     lines.push("");
   }
@@ -1517,7 +1650,7 @@ function buildTextExport(data: any, sections: Record<string, boolean>, esgMeta?:
   }
 
   lines.push(hr);
-  lines.push(`Generated by ESG Manager | ${factorMethodology?.source || "UK DEFRA"} ${factorMethodology?.factorYear || "2024"}`);
+  lines.push(`Generated by ESG Manager | ${factorMethodology?.source || CURRENT_UK_FACTOR_SOURCE} ${factorMethodology?.factorYear || CURRENT_UK_FACTOR_YEAR}`);
   lines.push("All data should be independently verified before external disclosure.");
   lines.push(hr);
 
@@ -1537,14 +1670,32 @@ export default function Reports() {
   const hasMultipleSites = allSites.length >= 1;
   const [reportScopeId, setReportScopeId] = useState<string>(activeSiteId || "__org__");
   const periodYears = reportPeriodYears();
-  const [reportPeriodType, setReportPeriodType] = useState<ReportPeriodType>("quarterly");
+  const { data: savedReportPeriods = [] } = useQuery<SavedReportingPeriod[]>({ queryKey: ["/api/reporting-periods"] });
+  const [reportPeriodType, setReportPeriodType] = useState<ReportPeriodType | "saved">("quarterly");
+  const [savedReportPeriodId, setSavedReportPeriodId] = useState("");
   const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
   const [reportMonth, setReportMonth] = useState<number>(new Date().getMonth() + 1);
   const [reportQuarter, setReportQuarter] = useState<1 | 2 | 3 | 4>(
     (Math.floor(new Date().getMonth() / 3) + 1) as 1 | 2 | 3 | 4
   );
-  const selectedReportPeriod = buildReportPeriodSelection(reportPeriodType, reportYear, reportQuarter, reportMonth);
+  const selectedSavedReportPeriod = reportPeriodType === "saved"
+    ? savedReportPeriods.find((reportingPeriod) => reportingPeriod.id === savedReportPeriodId) ?? savedReportPeriods[0]
+    : undefined;
+  const calendarReportPeriodType = reportPeriodType === "saved" ? "quarterly" : reportPeriodType;
+  const selectedReportPeriod: ReportPeriodSelection = selectedSavedReportPeriod
+    ? {
+        periodType: selectedSavedReportPeriod.periodType,
+        year: new Date(selectedSavedReportPeriod.startDate).getUTCFullYear(),
+        period: selectedSavedReportPeriod.id,
+        label: selectedSavedReportPeriod.name,
+        dateFrom: reportingPeriodDate(selectedSavedReportPeriod.startDate),
+        dateTo: reportingPeriodDate(selectedSavedReportPeriod.endDate),
+      }
+    : buildReportPeriodSelection(calendarReportPeriodType, reportYear, reportQuarter, reportMonth);
   const selectedPeriod = selectedReportPeriod.period;
+  const selectedPeriodLabel = selectedReportPeriod.label;
+  const selectedPeriodFilename = selectedPeriodLabel.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "reporting-period";
+  const isSavedReportPeriod = Boolean(selectedSavedReportPeriod);
   const [reportType, setReportType] = useState("pdf");
   const [selectedTemplate, setSelectedTemplate] = useState("management");
   const [reportData, setReportData] = useState<any>(null);
@@ -1563,6 +1714,11 @@ export default function Reports() {
   const libraryLimit = 10;
   const effectiveSiteId = reportScopeId === "__org__" ? null : reportScopeId;
   const reportScopeSite = reportScopeId === "__org__" ? null : allSites.find((s: any) => s.id === reportScopeId) ?? null;
+
+  useEffect(() => {
+    if (reportPeriodType !== "saved" || savedReportPeriodId || savedReportPeriods.length === 0) return;
+    setSavedReportPeriodId(savedReportPeriods[0].id);
+  }, [reportPeriodType, savedReportPeriodId, savedReportPeriods]);
 
   const templateConfig = REPORT_TEMPLATES.find(t => t.id === selectedTemplate) || REPORT_TEMPLATES[0];
   const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
@@ -1636,7 +1792,19 @@ export default function Reports() {
   });
   const { data: companyData } = useQuery<any>({ queryKey: ["/api/company"] });
   const { data: metricsData = [] } = useQuery<any[]>({ queryKey: ["/api/metrics"] });
-  const { data: complianceStatus } = useQuery<any>({ queryKey: ["/api/compliance/status"] });
+  const { data: complianceStatus, isFetching: isComplianceLoading } = useQuery<any>({
+    queryKey: ["/api/compliance/status", selectedPeriod, effectiveSiteId ?? "__all__"],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        period: selectedPeriod,
+        siteId: effectiveSiteId ?? "__all__",
+      });
+      const res = await authFetch(`/api/compliance/status?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load period-specific framework readiness");
+      return res.json();
+    },
+    enabled: isPro,
+  });
   const { data: evidenceCoverageData } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
   const activation = useActivationState();
 
@@ -1651,7 +1819,7 @@ export default function Reports() {
     queryKey: ["/api/reports/preflight", selectedPeriod, selectedReportPeriod.dateFrom, selectedReportPeriod.dateTo, effectiveSiteId ?? "all"],
     queryFn: async () => {
       const params = new URLSearchParams({ period: selectedPeriod });
-      params.set("periodType", selectedReportPeriod.periodType);
+      if (!isSavedReportPeriod) params.set("periodType", selectedReportPeriod.periodType);
       params.set("dateFrom", selectedReportPeriod.dateFrom);
       params.set("dateTo", selectedReportPeriod.dateTo);
       params.set("siteId", reportScopeId === "__org__" ? "__all__" : effectiveSiteId!);
@@ -1675,10 +1843,18 @@ export default function Reports() {
       ? `Site: ${reportScopeSite.name}`
       : "Selected site";
   const { data: readinessDetail } = useQuery<any>({
-    queryKey: ["/api/reports/readiness-detail", reportReadinessScopeParam ?? "__all__", selectedPeriod],
+    queryKey: [
+      "/api/reports/readiness-detail",
+      reportReadinessScopeParam ?? "__all__",
+      selectedPeriod,
+      selectedReportPeriod.dateFrom,
+      selectedReportPeriod.dateTo,
+    ],
     queryFn: () => {
       const params = new URLSearchParams({ period: selectedPeriod });
       params.set("siteId", reportReadinessScopeParam ?? "__all__");
+      params.set("dateFrom", selectedReportPeriod.dateFrom);
+      params.set("dateTo", selectedReportPeriod.dateTo);
       return authFetch(`/api/reports/readiness-detail?${params.toString()}`).then((r) => r.json());
     },
     staleTime: 30_000,
@@ -1691,14 +1867,19 @@ export default function Reports() {
 
   const generateMutation = useMutation({
     mutationFn: async () => {
+      const periodPayload = isSavedReportPeriod
+        ? { period: selectedPeriod }
+        : {
+            period: selectedPeriod,
+            periodType: selectedReportPeriod.periodType,
+            year: selectedReportPeriod.year,
+            month: selectedReportPeriod.month,
+            quarter: selectedReportPeriod.quarter,
+            dateFrom: selectedReportPeriod.dateFrom,
+            dateTo: selectedReportPeriod.dateTo,
+          };
       const res = await apiRequest("POST", "/api/reports/generate", {
-        period: selectedPeriod,
-        periodType: selectedReportPeriod.periodType,
-        year: selectedReportPeriod.year,
-        month: selectedReportPeriod.month,
-        quarter: selectedReportPeriod.quarter,
-        dateFrom: selectedReportPeriod.dateFrom,
-        dateTo: selectedReportPeriod.dateTo,
+        ...periodPayload,
         reportType,
         reportTemplate: selectedTemplate,
         siteId: effectiveSiteId,
@@ -1732,7 +1913,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${selectedTemplate}-report-${selectedPeriod}.txt`;
+    a.download = `${selectedTemplate}-report-${selectedPeriodFilename}.txt`;
     a.click();
     URL.revokeObjectURL(url);
     toast({ title: "Report exported as plain text" });
@@ -1749,7 +1930,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `esg-metrics-${selectedPeriod}.csv`;
+    a.download = `esg-metrics-${selectedPeriodFilename}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast({ title: "CSV exported" });
@@ -1847,19 +2028,20 @@ export default function Reports() {
     const actions = actionsData || [];
     const topActions = actions.slice(0, 5);
     const frameworks = complianceStatus || [];
-    const overallCompliance = Array.isArray(frameworks) && frameworks.length > 0
-      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.compliancePercent || 0), 0) / frameworks.length)
+    const overallReadiness = Array.isArray(frameworks) && frameworks.length > 0
+      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.readinessPercent || 0), 0) / frameworks.length)
       : 0;
 
     const dataStatus = reportData ? "[APPROVED]" : companyData ? "[DRAFT]" : "[MISSING]";
 
     const pack = {
       companyName,
+      reportingPeriod: selectedPeriodLabel,
       esgScore,
       categoryScores,
       carbonSummary: carbon ? { scope1: carbon.scope1, scope2: carbon.scope2, scope3: carbon.scope3, total: carbon.total } : null,
       topActions: topActions.map((a: any) => ({ title: a.title, status: a.status, dueDate: a.dueDate })),
-      compliancePercent: overallCompliance,
+      readinessPercent: overallReadiness,
       dataStatus,
     };
 
@@ -1867,6 +2049,7 @@ export default function Reports() {
     lines.push(hr);
     lines.push(`BOARD PACK - ${pack.companyName}`);
     lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(`Reporting period: ${pack.reportingPeriod}`);
     lines.push(`Status: ${pack.dataStatus}`);
     lines.push(hr);
     lines.push("");
@@ -1898,13 +2081,14 @@ export default function Reports() {
       });
     }
     lines.push("");
-    lines.push("COMPLIANCE");
+    lines.push("FRAMEWORK READINESS");
     lines.push(sr);
-    lines.push(`Requirements Met: ${pack.compliancePercent}%`);
+    lines.push(`Strict readiness: ${pack.readinessPercent}%`);
+    lines.push("Readiness is not certification, assurance, or legal compliance.");
     lines.push("");
     lines.push(hr);
 
-    downloadTextFile(lines.join("\n"), `board-pack-${format(new Date(), "yyyy-MM-dd")}.txt`);
+    downloadTextFile(lines.join("\n"), `board-pack-${selectedPeriodFilename}.txt`);
     toast({ title: "Board Pack exported" });
   };
 
@@ -1915,15 +2099,16 @@ export default function Reports() {
     const policy = policyData;
     const evidCoverage = evidenceCoverageData;
     const frameworks = complianceStatus || [];
-    const overallCompliance = Array.isArray(frameworks) && frameworks.length > 0
-      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.compliancePercent || 0), 0) / frameworks.length)
+    const overallReadiness = Array.isArray(frameworks) && frameworks.length > 0
+      ? Math.round(frameworks.reduce((sum: number, fw: any) => sum + (fw.readinessPercent || 0), 0) / frameworks.length)
       : 0;
 
     const pack = {
+      reportingPeriod: selectedPeriodLabel,
       metrics: metrics.map((m: any) => ({ name: m.name, category: m.category, unit: m.unit, enabled: m.enabled })),
       policySummary: policy ? { status: policy.workflowStatus || "draft", purpose: policy.purpose } : null,
       evidenceCoverage: evidCoverage?.coveragePercent ?? 0,
-      compliancePercent: overallCompliance,
+      readinessPercent: overallReadiness,
       dataQuality: {
         evidenced: evidCoverage?.evidencedCount ?? 0,
         total: evidCoverage?.totalMetrics ?? 0,
@@ -1934,6 +2119,7 @@ export default function Reports() {
     lines.push(hr);
     lines.push(`CUSTOMER PACK - ${companyData?.name || "Company"}`);
     lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(`Reporting period: ${pack.reportingPeriod}`);
     lines.push(hr);
     lines.push("");
     lines.push("METRIC SUMMARY");
@@ -1961,12 +2147,13 @@ export default function Reports() {
     lines.push("DATA QUALITY INDICATORS");
     lines.push(sr);
     lines.push(`Evidence Coverage: ${pack.evidenceCoverage}%`);
-    lines.push(`Compliance: ${pack.compliancePercent}%`);
+    lines.push(`Framework readiness: ${pack.readinessPercent}%`);
+    lines.push("Readiness is not certification, assurance, or legal compliance.");
     lines.push(`Evidenced Metrics: ${pack.dataQuality.evidenced} of ${pack.dataQuality.total}`);
     lines.push("");
     lines.push(hr);
 
-    downloadTextFile(lines.join("\n"), `customer-pack-${format(new Date(), "yyyy-MM-dd")}.txt`);
+    downloadTextFile(lines.join("\n"), `customer-pack-${selectedPeriodFilename}.txt`);
     toast({ title: "Customer Pack exported" });
   };
 
@@ -1978,7 +2165,7 @@ export default function Reports() {
     const pack = Array.isArray(frameworks)
       ? frameworks.map((fw: any) => ({
           name: fw.name,
-          compliancePercent: fw.compliancePercent || 0,
+          readinessPercent: fw.readinessPercent || 0,
           requirements: (fw.requirements || []).map((r: any) => ({
             code: r.code, title: r.title, isMet: r.isMet,
           })),
@@ -1987,32 +2174,34 @@ export default function Reports() {
 
     const lines: string[] = [];
     lines.push(hr);
-    lines.push(`COMPLIANCE SUMMARY - ${companyData?.name || "Company"}`);
+    lines.push(`FRAMEWORK READINESS SUMMARY - ${companyData?.name || "Company"}`);
     lines.push(`Generated: ${format(new Date(), "dd MMMM yyyy 'at' HH:mm")}`);
+    lines.push(`Reporting period: ${selectedPeriodLabel}`);
     lines.push(hr);
     lines.push("");
 
     if (pack.length === 0) {
-      lines.push("No compliance frameworks configured.");
+      lines.push("No frameworks selected.");
     } else {
       pack.forEach((fw: any) => {
-        lines.push(`${fw.name} (${fw.compliancePercent}% met)`);
+        lines.push(`${fw.name} (${fw.readinessPercent}% ready)`);
         lines.push(sr);
         if (fw.requirements.length === 0) {
           lines.push("  No requirements defined.");
         } else {
           fw.requirements.forEach((r: any) => {
-            const status = r.isMet ? "[MET]" : "[UNMET]";
+            const status = r.isMet ? "[READY]" : "[NOT READY]";
             lines.push(`  ${status} ${r.code} - ${r.title}`);
           });
         }
         lines.push("");
       });
     }
+    lines.push("Readiness is not certification, assurance, or legal compliance.");
     lines.push(hr);
 
-    downloadTextFile(lines.join("\n"), `compliance-summary-${format(new Date(), "yyyy-MM-dd")}.txt`);
-    toast({ title: "Compliance Summary exported" });
+    downloadTextFile(lines.join("\n"), `framework-readiness-summary-${selectedPeriodFilename}.txt`);
+    toast({ title: "Framework Readiness Summary exported" });
   };
 
   const exportAssurancePack = async () => {
@@ -2164,6 +2353,8 @@ export default function Reports() {
       <ReportReadinessPanel
         siteId={reportReadinessScopeParam ?? "__all__"}
         period={selectedPeriod}
+        dateFrom={selectedReportPeriod.dateFrom}
+        dateTo={selectedReportPeriod.dateTo}
         scopeLabel={reportReadinessScopeLabel}
       />
 
@@ -2258,7 +2449,10 @@ export default function Reports() {
               <div className="space-y-1.5">
                 <Label className="text-xs">Reporting Period</Label>
                 <Select value={reportPeriodType} onValueChange={(value) => {
-                  setReportPeriodType(value as ReportPeriodType);
+                  setReportPeriodType(value as ReportPeriodType | "saved");
+                  if (value === "saved" && !savedReportPeriodId && savedReportPeriods[0]) {
+                    setSavedReportPeriodId(savedReportPeriods[0].id);
+                  }
                   setReportData(null);
                   setSelectedLibraryReportId(null);
                 }}>
@@ -2267,64 +2461,87 @@ export default function Reports() {
                     <SelectItem value="quarterly">Quarterly</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="annual">Annual</SelectItem>
+                    {savedReportPeriods.length > 0 && (
+                      <SelectItem value="saved">Saved / fiscal period</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              {reportPeriodType === "saved" ? (
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Year</Label>
-                  <Select value={String(reportYear)} onValueChange={(value) => {
-                    setReportYear(Number(value));
+                  <Label className="text-xs">Saved reporting period</Label>
+                  <Select value={selectedSavedReportPeriod?.id ?? ""} onValueChange={(value) => {
+                    setSavedReportPeriodId(value);
                     setReportData(null);
                     setSelectedLibraryReportId(null);
                   }}>
-                    <SelectTrigger data-testid="select-report-year"><SelectValue /></SelectTrigger>
+                    <SelectTrigger data-testid="select-saved-report-period"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {periodYears.map(yearOption => (
-                        <SelectItem key={yearOption} value={String(yearOption)}>{yearOption}</SelectItem>
+                      {savedReportPeriods.map((reportingPeriod) => (
+                        <SelectItem key={reportingPeriod.id} value={reportingPeriod.id}>
+                          {reportingPeriod.name}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-
-                {reportPeriodType === "monthly" && (
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Month</Label>
-                    <Select value={String(reportMonth)} onValueChange={(value) => {
-                      setReportMonth(Number(value));
+                    <Label className="text-xs">Year</Label>
+                    <Select value={String(reportYear)} onValueChange={(value) => {
+                      setReportYear(Number(value));
                       setReportData(null);
                       setSelectedLibraryReportId(null);
                     }}>
-                      <SelectTrigger data-testid="select-report-month"><SelectValue /></SelectTrigger>
+                      <SelectTrigger data-testid="select-report-year"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {REPORT_MONTHS.map(monthOption => (
-                          <SelectItem key={monthOption.value} value={String(monthOption.value)}>{monthOption.label}</SelectItem>
+                        {periodYears.map(yearOption => (
+                          <SelectItem key={yearOption} value={String(yearOption)}>{yearOption}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                )}
 
-                {reportPeriodType === "quarterly" && (
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Quarter</Label>
-                    <Select value={String(reportQuarter)} onValueChange={(value) => {
-                      setReportQuarter(Number(value) as 1 | 2 | 3 | 4);
-                      setReportData(null);
-                      setSelectedLibraryReportId(null);
-                    }}>
-                      <SelectTrigger data-testid="select-report-quarter"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1">Q1 Jan-Mar</SelectItem>
-                        <SelectItem value="2">Q2 Apr-Jun</SelectItem>
-                        <SelectItem value="3">Q3 Jul-Sep</SelectItem>
-                        <SelectItem value="4">Q4 Oct-Dec</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
+                  {reportPeriodType === "monthly" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Month</Label>
+                      <Select value={String(reportMonth)} onValueChange={(value) => {
+                        setReportMonth(Number(value));
+                        setReportData(null);
+                        setSelectedLibraryReportId(null);
+                      }}>
+                        <SelectTrigger data-testid="select-report-month"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {REPORT_MONTHS.map(monthOption => (
+                            <SelectItem key={monthOption.value} value={String(monthOption.value)}>{monthOption.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {reportPeriodType === "quarterly" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Quarter</Label>
+                      <Select value={String(reportQuarter)} onValueChange={(value) => {
+                        setReportQuarter(Number(value) as 1 | 2 | 3 | 4);
+                        setReportData(null);
+                        setSelectedLibraryReportId(null);
+                      }}>
+                        <SelectTrigger data-testid="select-report-quarter"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Q1 Jan-Mar</SelectItem>
+                          <SelectItem value="2">Q2 Apr-Jun</SelectItem>
+                          <SelectItem value="3">Q3 Jul-Sep</SelectItem>
+                          <SelectItem value="4">Q4 Oct-Dec</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-testid="text-report-period-range">
                 {selectedReportPeriod.label} · {selectedReportPeriod.dateFrom} to {selectedReportPeriod.dateTo}
@@ -3030,7 +3247,7 @@ export default function Reports() {
             <Button
               variant="outline"
               onClick={exportBoardPack}
-              disabled={isLoading}
+              disabled={isLoading || (isPro && isComplianceLoading)}
               data-testid="button-export-board-pack"
             >
               <Download className="w-3.5 h-3.5 mr-1.5" />
@@ -3039,7 +3256,7 @@ export default function Reports() {
             <Button
               variant="outline"
               onClick={exportCustomerPack}
-              disabled={isLoading}
+              disabled={isLoading || (isPro && isComplianceLoading)}
               data-testid="button-export-customer-pack"
             >
               <Users className="w-3.5 h-3.5 mr-1.5" />
@@ -3048,11 +3265,11 @@ export default function Reports() {
             <Button
               variant="outline"
               onClick={exportComplianceSummary}
-              disabled={isLoading}
+              disabled={isLoading || (isPro && isComplianceLoading)}
               data-testid="button-export-compliance"
             >
               <Shield className="w-3.5 h-3.5 mr-1.5" />
-              Compliance Summary
+              Framework Readiness
             </Button>
             <Button
               variant="outline"

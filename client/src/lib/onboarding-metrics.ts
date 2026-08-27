@@ -19,6 +19,7 @@ export type OnboardingMetricSubmission = {
   period: string;
   value: number;
   notes: string;
+  dataSourceType: "manual" | "estimated";
 };
 
 export function isEditableStarterMetric(metric: OnboardingMetric): boolean {
@@ -38,11 +39,13 @@ export function buildOnboardingMetricSubmission(
   metricId: string,
   value: string,
   period: string,
+  dataSourceType: "manual" | "estimated" = "estimated",
 ): OnboardingMetricSubmission {
   return {
     metricId,
     period,
     value: Number(value.replace(/,/g, "")),
-    notes: "Entered during setup wizard",
+    notes: `Entered during setup wizard (${dataSourceType === "estimated" ? "estimate" : "actual figure"})`,
+    dataSourceType,
   };
 }

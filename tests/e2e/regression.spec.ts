@@ -29,11 +29,12 @@
  * @group regression
  */
 
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import fs from "fs";
+import { loginAndGetToken } from "../fixtures/seed.js";
 
 const BASE_URL = "http://localhost:5000";
 const TEST_PASSWORD = "Test1234!";
@@ -100,7 +101,7 @@ interface PortfolioContext {
 
 let portfolioCtx: PortfolioContext | null = null;
 
-async function ensurePortfolioContext(request: APIRequestContext): Promise<PortfolioContext> {
+async function ensurePortfolioContext(): Promise<PortfolioContext> {
   if (portfolioCtx) return portfolioCtx;
 
   const suffix = randomUUID().slice(0, 8);
@@ -159,25 +160,18 @@ async function ensurePortfolioContext(request: APIRequestContext): Promise<Portf
       [viewerId, groupId]
     );
 
-    // Obtain bearer tokens by logging in
-    const ownerLoginRes = await request.post("/api/auth/login", {
-      data: { email: ownerEmail, password: TEST_PASSWORD },
-    });
-    if (!ownerLoginRes.ok()) throw new Error(`Portfolio owner login failed: ${ownerLoginRes.status()}`);
-    const ownerBody = await ownerLoginRes.json() as { token: string };
-
-    const viewerLoginRes = await request.post("/api/auth/login", {
-      data: { email: viewerEmail, password: TEST_PASSWORD },
-    });
-    if (!viewerLoginRes.ok()) throw new Error(`Portfolio viewer login failed: ${viewerLoginRes.status()}`);
-    const viewerBody = await viewerLoginRes.json() as { token: string };
+    // Use independent, cookie-free login requests. A shared Playwright request
+    // context carries the owner's cookie into the viewer login, so normal session
+    // regeneration revokes the owner's otherwise valid bearer session.
+    const ownerToken = await loginAndGetToken(ownerEmail, TEST_PASSWORD);
+    const viewerToken = await loginAndGetToken(viewerEmail, TEST_PASSWORD);
 
     portfolioCtx = {
       groupId,
       companyAId,
       companyBId,
-      ownerToken: ownerBody.token,
-      viewerToken: viewerBody.token,
+      ownerToken,
+      viewerToken,
     };
 
     return portfolioCtx;
@@ -227,7 +221,7 @@ test.describe("REGR-02: Login by role — Contributor", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 test.describe("REGR-03: Login by role — Portfolio Owner", () => {
   test("portfolio_owner login returns 200 with correct role", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
     expect(ctx.ownerToken).toBeTruthy();
 
     // Verify the /api/auth/me endpoint confirms the role
@@ -240,7 +234,7 @@ test.describe("REGR-03: Login by role — Portfolio Owner", () => {
   });
 
   test("portfolio_owner /api/auth/me includes portfolioGroups from group membership (not direct company)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const meRes = await request.get("/api/auth/me", {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
@@ -262,7 +256,7 @@ test.describe("REGR-03: Login by role — Portfolio Owner", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 test.describe("REGR-04: Login by role — Portfolio Viewer", () => {
   test("portfolio_viewer login returns 200 with correct role", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
     expect(ctx.viewerToken).toBeTruthy();
 
     const meRes = await request.get("/api/auth/me", {
@@ -592,7 +586,7 @@ test.describe("REGR-09: Report generation", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 test.describe("REGR-10a: Portfolio dashboard access via group membership", () => {
   test("portfolio_owner GET /api/portfolio/groups returns their group (200)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get("/api/portfolio/groups", {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
@@ -608,7 +602,7 @@ test.describe("REGR-10a: Portfolio dashboard access via group membership", () =>
   });
 
   test("portfolio_viewer GET /api/portfolio/groups returns their group (200)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get("/api/portfolio/groups", {
       headers: { Authorization: `Bearer ${ctx.viewerToken}` },
@@ -637,7 +631,7 @@ test.describe("REGR-10a: Portfolio dashboard access via group membership", () =>
   });
 
   test("portfolio_owner can view group summary (200)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/summary`, {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
@@ -649,7 +643,7 @@ test.describe("REGR-10a: Portfolio dashboard access via group membership", () =>
   });
 
   test("portfolio_viewer can view group summary (200)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/summary`, {
       headers: { Authorization: `Bearer ${ctx.viewerToken}` },
@@ -664,7 +658,7 @@ test.describe("REGR-10a: Portfolio dashboard access via group membership", () =>
 // ═══════════════════════════════════════════════════════════════════════════
 test.describe("REGR-10b: Portfolio company switching", () => {
   test("portfolio_owner GET /api/portfolio/groups/:id/companies returns all group companies", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/companies`, {
       headers: { Authorization: `Bearer ${ctx.ownerToken}` },
@@ -682,7 +676,7 @@ test.describe("REGR-10b: Portfolio company switching", () => {
   });
 
   test("portfolio_viewer can also list group companies", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
 
     const res = await request.get(`/api/portfolio/groups/${ctx.groupId}/companies`, {
       headers: { Authorization: `Bearer ${ctx.viewerToken}` },
@@ -696,7 +690,7 @@ test.describe("REGR-10b: Portfolio company switching", () => {
   });
 
   test("user without group membership cannot access another group's companies (403)", async ({ request }) => {
-    const ctx = await ensurePortfolioContext(request);
+    const ctx = await ensurePortfolioContext();
     const { tenantA } = readSeedInfo();
 
     // Tenant A admin has no access to portfolio group

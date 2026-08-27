@@ -22,7 +22,8 @@ const PAGE_LABELS: Record<string, string> = {
   "/evidence": "Evidence",
   "/topics": "Priority Topics",
   "/reports": "Reports",
-  "/compliance": "Compliance",
+  "/compliance": "Framework Readiness",
+  "/framework-readiness": "Framework Readiness",
   "/onboarding": "Setup Wizard",
   "/settings": "Settings",
 };

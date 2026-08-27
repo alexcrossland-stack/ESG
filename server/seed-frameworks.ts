@@ -2,7 +2,7 @@ import { db } from "./storage";
 import { frameworks, frameworkRequirements, metricFrameworkMappings, metricDefinitions } from "@shared/schema";
 import { eq, inArray } from "drizzle-orm";
 
-const FRAMEWORK_SEEDS = [
+export const FRAMEWORK_SEEDS = [
   {
     code: "GRI",
     name: "GRI",
@@ -45,9 +45,23 @@ const FRAMEWORK_SEEDS = [
     description: "A voluntary initiative for businesses committed to ten principles in human rights, labour, environment, and anti-corruption.",
     version: "CoP",
   },
+  {
+    code: "VSME",
+    name: "VSME",
+    fullName: "EU Voluntary Sustainability Reporting Standard for Smaller Undertakings",
+    description: "Proportionate voluntary sustainability reporting for smaller undertakings and value-chain information requests.",
+    version: "2026 Voluntary Standard (C(2026) 5011)",
+  },
+  {
+    code: "PPN006",
+    name: "PPN 006",
+    fullName: "UK Procurement Policy Note 006 Carbon Reduction Plan",
+    description: "UK central-government supplier Carbon Reduction Plan requirements for relevant major procurements.",
+    version: "February 2025 technical standard",
+  },
 ];
 
-const REQUIREMENT_SEEDS: Array<{
+export const REQUIREMENT_SEEDS: Array<{
   frameworkCode: string;
   code: string;
   title: string;
@@ -128,9 +142,45 @@ const REQUIREMENT_SEEDS: Array<{
   { frameworkCode: "UNGC", code: "UNGC-ENV3", title: "Environmentally friendly technologies", description: "Encourage the development and diffusion of environmentally friendly technologies", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 32 },
   { frameworkCode: "UNGC", code: "UNGC-ANTI1", title: "Anti-corruption policy", description: "Work against corruption in all its forms including extortion and bribery", requirementType: "policy", pillar: "governance", mandatoryLevel: "core", sortOrder: 40 },
   { frameworkCode: "UNGC", code: "UNGC-ANTI2", title: "Anti-corruption narrative", description: "Narrative on anti-corruption programs and initiatives", requirementType: "narrative", pillar: "governance", mandatoryLevel: "core", sortOrder: 41 },
+
+  // EU Voluntary Standard for smaller undertakings (VSME lineage)
+  { frameworkCode: "VSME", code: "VSME-B1", title: "Basis for preparation and undertaking facts", description: "Selected module, reporting basis and boundary, legal form, sector, assets, turnover, workforce, country and significant sites", requirementType: "narrative", pillar: "governance", mandatoryLevel: "core", sortOrder: 10 },
+  { frameworkCode: "VSME", code: "VSME-B2", title: "Sustainability practices, policies, initiatives and targets", description: "Plain description of the practices, policies, future initiatives and targets already in place", requirementType: "policy", pillar: "governance", mandatoryLevel: "core", sortOrder: 20 },
+  { frameworkCode: "VSME", code: "VSME-B3-ENERGY", title: "Energy consumption and renewable mix", description: "Total energy use in MWh with renewable and non-renewable electricity and fuel breakdown where available", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 30 },
+  { frameworkCode: "VSME", code: "VSME-B3-SCOPE1", title: "Gross Scope 1 GHG emissions", description: "Estimated gross Scope 1 emissions in tCO2e", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 31 },
+  { frameworkCode: "VSME", code: "VSME-B3-SCOPE2", title: "Location-based Scope 2 GHG emissions", description: "Estimated location-based Scope 2 emissions in tCO2e", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 32 },
+  { frameworkCode: "VSME", code: "VSME-B3-INTENSITY", title: "GHG intensity by turnover", description: "Gross Scope 1 and 2 emissions divided by turnover", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 33 },
+  { frameworkCode: "VSME", code: "VSME-B4", title: "Pollution of air, water and soil", description: "Applicable pollutant emissions already reported to authorities or voluntarily under an environmental management system", requirementType: "narrative", pillar: "environmental", mandatoryLevel: "conditional", sortOrder: 40 },
+  { frameworkCode: "VSME", code: "VSME-B5", title: "Biodiversity-sensitive sites and land use", description: "Number and area of owned, leased or managed sites in or near biodiversity-sensitive areas", requirementType: "risk", pillar: "environmental", mandatoryLevel: "conditional", sortOrder: 50 },
+  { frameworkCode: "VSME", code: "VSME-B6", title: "Water withdrawal and consumption", description: "Total water withdrawal and, for water-intensive production, water consumption", requirementType: "metric", pillar: "environmental", mandatoryLevel: "conditional", sortOrder: 60 },
+  { frameworkCode: "VSME", code: "VSME-B7", title: "Resource use, circular economy and waste", description: "Circular-economy application, waste generated, waste diverted and material flows where significant", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 70 },
+  { frameworkCode: "VSME", code: "VSME-B8", title: "Workforce characteristics and turnover", description: "Employees by contract, gender and country, plus turnover when the workforce threshold applies", requirementType: "metric", pillar: "social", mandatoryLevel: "core", sortOrder: 80 },
+  { frameworkCode: "VSME", code: "VSME-B9", title: "Workforce health and safety", description: "Recordable work-related accidents, accident rate and fatalities", requirementType: "metric", pillar: "social", mandatoryLevel: "core", sortOrder: 90 },
+  { frameworkCode: "VSME", code: "VSME-B10", title: "Pay, collective bargaining and training", description: "Minimum-wage coverage, applicable pay gap, collective bargaining and training hours by gender", requirementType: "metric", pillar: "social", mandatoryLevel: "core", sortOrder: 100 },
+  { frameworkCode: "VSME", code: "VSME-B11", title: "Corruption and bribery convictions and fines", description: "Number of convictions and amount of fines during the reporting period", requirementType: "metric", pillar: "governance", mandatoryLevel: "core", sortOrder: 110 },
+  { frameworkCode: "VSME", code: "VSME-C1", title: "Business model, markets and sustainability strategy", description: "Products and services, markets, main business relationships and sustainability-related strategy", requirementType: "narrative", pillar: "governance", mandatoryLevel: "advanced", sortOrder: 120 },
+  { frameworkCode: "VSME", code: "VSME-C2", title: "Detailed practices, policies and initiatives", description: "Description, actions, targets and senior accountability for sustainability practices and policies", requirementType: "policy", pillar: "governance", mandatoryLevel: "advanced", sortOrder: 130 },
+  { frameworkCode: "VSME", code: "VSME-C3", title: "GHG reduction targets and transition", description: "Scope 1, 2 and relevant Scope 3 target values, base year, target year, units and transition actions", requirementType: "target", pillar: "environmental", mandatoryLevel: "advanced", sortOrder: 140 },
+  { frameworkCode: "VSME", code: "VSME-C4", title: "Climate risks", description: "Physical and transition hazards, exposure assessment, time horizons and adaptation actions", requirementType: "risk", pillar: "environmental", mandatoryLevel: "advanced", sortOrder: 150 },
+  { frameworkCode: "VSME", code: "VSME-C5-C7", title: "Additional workforce and human-rights information", description: "Additional workforce characteristics, human-rights policies and severe incidents", requirementType: "policy", pillar: "social", mandatoryLevel: "advanced", sortOrder: 160 },
+  { frameworkCode: "VSME", code: "VSME-C8", title: "Revenues from sensitive activities", description: "Applicable revenues from specified weapons, tobacco, fossil-fuel and chemicals activities", requirementType: "narrative", pillar: "governance", mandatoryLevel: "conditional", sortOrder: 170 },
+  { frameworkCode: "VSME", code: "VSME-C9", title: "Gender diversity in governance body", description: "Female-to-male diversity ratio in the governance body", requirementType: "metric", pillar: "governance", mandatoryLevel: "advanced", sortOrder: 180 },
+
+  // UK PPN 006 Carbon Reduction Plan technical standard (February 2025)
+  { frameworkCode: "PPN006", code: "PPN006-ENTITY", title: "Bidding entity and reporting boundary", description: "The Carbon Reduction Plan covers the bidding entity, or clearly meets the permitted parent-organisation criteria", requirementType: "narrative", pillar: "governance", mandatoryLevel: "core", sortOrder: 10 },
+  { frameworkCode: "PPN006", code: "PPN006-NETZERO", title: "Commitment to UK Net Zero by 2050", description: "A clear commitment to achieving Net Zero for UK operations by 2050", requirementType: "target", pillar: "environmental", mandatoryLevel: "core", sortOrder: 20 },
+  { frameworkCode: "PPN006", code: "PPN006-BASELINE", title: "Baseline emissions footprint", description: "Baseline year, additional details and Scope 1, Scope 2 and required Scope 3 baseline emissions", requirementType: "evidence", pillar: "environmental", mandatoryLevel: "core", sortOrder: 30 },
+  { frameworkCode: "PPN006", code: "PPN006-CURRENT-S1", title: "Current Scope 1 emissions", description: "Current reporting-year Scope 1 emissions in tCO2e", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 40 },
+  { frameworkCode: "PPN006", code: "PPN006-CURRENT-S2", title: "Current Scope 2 emissions", description: "Current reporting-year Scope 2 emissions in tCO2e", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 41 },
+  { frameworkCode: "PPN006", code: "PPN006-CURRENT-S3", title: "Current required Scope 3 emissions", description: "Current reporting-year emissions for the five required Scope 3 categories", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 42 },
+  { frameworkCode: "PPN006", code: "PPN006-CURRENT-TOTAL", title: "Current total emissions", description: "Total current reporting-year emissions in tCO2e", requirementType: "metric", pillar: "environmental", mandatoryLevel: "core", sortOrder: 43 },
+  { frameworkCode: "PPN006", code: "PPN006-SCOPE3", title: "Required Scope 3 category breakdown", description: "Upstream transportation and distribution, waste, business travel, employee commuting and downstream transportation and distribution", requirementType: "evidence", pillar: "environmental", mandatoryLevel: "core", sortOrder: 50 },
+  { frameworkCode: "PPN006", code: "PPN006-MEASURES", title: "Completed and planned carbon reduction measures", description: "Environmental management measures completed and measures intended for the contract", requirementType: "narrative", pillar: "environmental", mandatoryLevel: "core", sortOrder: 60 },
+  { frameworkCode: "PPN006", code: "PPN006-PUBLICATION", title: "Publication and annual update", description: "Plan published on the supplier website, clearly signposted, dated and updated within the required cycle", requirementType: "evidence", pillar: "governance", mandatoryLevel: "core", sortOrder: 70 },
+  { frameworkCode: "PPN006", code: "PPN006-SIGNOFF", title: "Board or director approval and sign-off", description: "Plan approved by the board or a director and signed using the required declaration", requirementType: "evidence", pillar: "governance", mandatoryLevel: "core", sortOrder: 80 },
 ];
 
-const METRIC_MAPPINGS: Array<{
+export const METRIC_MAPPINGS: Array<{
   metricCode: string;
   requirementCode: string;
   strength: "direct" | "partial" | "supporting";
@@ -261,29 +311,65 @@ const METRIC_MAPPINGS: Array<{
   // G007 — Policy Review Completion
   { metricCode: "G007", requirementCode: "GRI-2-23", strength: "partial" },
   { metricCode: "G007", requirementCode: "ESRS-G1-GOV", strength: "supporting" },
+
+  // VSME Basic environmental metrics. Multi-datapoint disclosures remain
+  // partial until a requirement-specific disclosure/evidence completes them.
+  { metricCode: "E001", requirementCode: "VSME-B3-ENERGY", strength: "partial" },
+  { metricCode: "E002", requirementCode: "VSME-B3-ENERGY", strength: "partial" },
+  { metricCode: "E011", requirementCode: "VSME-B3-ENERGY", strength: "partial" },
+  { metricCode: "E012", requirementCode: "VSME-B3-ENERGY", strength: "partial" },
+  { metricCode: "E004", requirementCode: "VSME-B3-SCOPE1", strength: "direct" },
+  { metricCode: "E005", requirementCode: "VSME-B3-SCOPE2", strength: "direct" },
+  { metricCode: "G008", requirementCode: "VSME-B3-INTENSITY", strength: "direct" },
+  { metricCode: "E010", requirementCode: "VSME-B6", strength: "direct" },
+  { metricCode: "E007", requirementCode: "VSME-B7", strength: "partial" },
+  { metricCode: "E008", requirementCode: "VSME-B7", strength: "partial" },
+  { metricCode: "E009", requirementCode: "VSME-B7", strength: "partial" },
+  { metricCode: "S001", requirementCode: "VSME-B8", strength: "partial" },
+  { metricCode: "S003", requirementCode: "VSME-B8", strength: "partial" },
+  { metricCode: "S008", requirementCode: "VSME-B8", strength: "partial" },
+  { metricCode: "S009", requirementCode: "VSME-B9", strength: "partial" },
+  { metricCode: "S007", requirementCode: "VSME-B10", strength: "partial" },
+  { metricCode: "S010", requirementCode: "VSME-B10", strength: "partial" },
+  { metricCode: "S011", requirementCode: "VSME-B10", strength: "partial" },
+  { metricCode: "G011", requirementCode: "VSME-B11", strength: "partial" },
+  { metricCode: "G001", requirementCode: "VSME-C9", strength: "partial" },
+  { metricCode: "G002", requirementCode: "VSME-C9", strength: "partial" },
+
+  // PPN 006 current footprint. Baseline, category breakdown, publication and
+  // sign-off intentionally require requirement-linked records/evidence.
+  { metricCode: "E004", requirementCode: "PPN006-CURRENT-S1", strength: "direct" },
+  { metricCode: "E005", requirementCode: "PPN006-CURRENT-S2", strength: "direct" },
+  { metricCode: "E013", requirementCode: "PPN006-CURRENT-S3", strength: "direct" },
+  { metricCode: "E006", requirementCode: "PPN006-CURRENT-TOTAL", strength: "direct" },
 ];
 
 export async function seedFrameworks() {
   console.log("[seed-frameworks] Starting framework seed...");
 
   const existingFrameworks = await db.select().from(frameworks);
-  if (existingFrameworks.length > 0) {
-    console.log(`[seed-frameworks] Frameworks already seeded (${existingFrameworks.length} found), skipping.`);
-    return;
-  }
+  const existingFrameworkByCode = new Map(existingFrameworks.map((framework) => [framework.code, framework]));
 
   const fwMap: Record<string, string> = {};
   for (const fw of FRAMEWORK_SEEDS) {
+    const existing = existingFrameworkByCode.get(fw.code);
+    if (existing) {
+      await db.update(frameworks).set(fw).where(eq(frameworks.id, existing.id));
+      fwMap[fw.code] = existing.id;
+      continue;
+    }
     const [inserted] = await db.insert(frameworks).values(fw).returning();
     fwMap[fw.code] = inserted.id;
     console.log(`[seed-frameworks] Created framework: ${fw.code}`);
   }
 
+  const existingRequirements = await db.select().from(frameworkRequirements);
+  const existingRequirementByCode = new Map(existingRequirements.map((requirement) => [requirement.code, requirement]));
   const reqMap: Record<string, string> = {};
   for (const req of REQUIREMENT_SEEDS) {
     const frameworkId = fwMap[req.frameworkCode];
     if (!frameworkId) continue;
-    const [inserted] = await db.insert(frameworkRequirements).values({
+    const values = {
       frameworkId,
       code: req.code,
       title: req.title,
@@ -292,10 +378,17 @@ export async function seedFrameworks() {
       pillar: req.pillar,
       mandatoryLevel: req.mandatoryLevel,
       sortOrder: req.sortOrder,
-    }).returning();
+    };
+    const existing = existingRequirementByCode.get(req.code);
+    if (existing) {
+      await db.update(frameworkRequirements).set(values).where(eq(frameworkRequirements.id, existing.id));
+      reqMap[req.code] = existing.id;
+      continue;
+    }
+    const [inserted] = await db.insert(frameworkRequirements).values(values).returning();
     reqMap[req.code] = inserted.id;
   }
-  console.log(`[seed-frameworks] Created ${Object.keys(reqMap).length} framework requirements`);
+  console.log(`[seed-frameworks] Reconciled ${Object.keys(reqMap).length} framework requirements`);
 
   const metricDefs = await db.select().from(metricDefinitions);
   const metricCodeMap: Record<string, string> = {};

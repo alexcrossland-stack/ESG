@@ -60,7 +60,7 @@ async function openMockedEsgProfile(page: import("@playwright/test").Page) {
 
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
   await page.goto("/esg-profile");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
 }
 
 test.describe("ESG Profile reporting period", () => {
@@ -75,7 +75,7 @@ test.describe("ESG Profile reporting period", () => {
 
     await page.getByTestId("select-profile-reporting-period").click();
     await page.getByRole("option", { name: "2025-02" }).click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await expect(page.getByTestId("text-profile-reporting-period")).toHaveText("Reporting Period: 2025-02");
     await expect(page.getByText("Values shown for 2025-02")).toBeVisible();

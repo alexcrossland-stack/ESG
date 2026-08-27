@@ -20,6 +20,11 @@ import bcrypt from "bcryptjs";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 const TEST_PASSWORD = "Test1234!";
+// Each standalone regression file runs in its own Node process. Give that
+// process a stable, reserved-range client address so one suite cannot consume
+// another suite's in-memory rate-limit allowance. Requests inside a suite keep
+// the same address, so the dedicated abuse tests still exercise real limits.
+const TEST_CLIENT_IP = process.env.TEST_CLIENT_IP || `198.18.${Math.floor(process.pid / 254) % 254 + 1}.${process.pid % 254 + 1}`;
 
 export interface TenantA {
   adminToken: string;
@@ -58,6 +63,8 @@ export function apiRequest(
     const bodyStr = body ? JSON.stringify(body) : undefined;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      "X-Forwarded-For": TEST_CLIENT_IP,
+      "X-Forwarded-Proto": "https",
     };
     if (bodyStr) headers["Content-Length"] = String(Buffer.byteLength(bodyStr));
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -89,6 +96,8 @@ export async function apiRequestRaw(
 ): Promise<{ status: number; headers: Headers; body: Buffer }> {
   const bodyStr = body ? JSON.stringify(body) : undefined;
   const headers: Record<string, string> = {};
+  headers["X-Forwarded-For"] = TEST_CLIENT_IP;
+  headers["X-Forwarded-Proto"] = "https";
   if (bodyStr) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(new URL(path, BASE_URL), {
@@ -110,6 +119,8 @@ export async function apiMultipartRequest(
   token?: string
 ): Promise<{ status: number; body: string }> {
   const headers: Record<string, string> = {};
+  headers["X-Forwarded-For"] = TEST_CLIENT_IP;
+  headers["X-Forwarded-Proto"] = "https";
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(new URL(path, BASE_URL), {
     method,

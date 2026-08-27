@@ -14,6 +14,15 @@ export interface EsgStatusData {
   completenessPercentage: number;
   missingItems?: string[];
   evidenceCoverage?: number;
+  evidenceConfidence?: {
+    sourceLinked: number;
+    reviewed: number;
+    evidenceBacked: number;
+    independentlyAssured: number;
+    sourceLinkedCoverage: number;
+    reviewedCoverage: number;
+    evidenceBackedCoverage: number;
+  };
   estimateCount?: number;
   measuredCount?: number;
   totalMetrics?: number;

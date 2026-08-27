@@ -41,6 +41,11 @@ import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
 import { formatMetricDisplayValue, isBooleanMetricDataType, isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
+import {
+  INLINE_METRIC_EVIDENCE_LABELS,
+  getInlineMetricEvidenceState,
+  type InlineMetricEvidenceState,
+} from "@/lib/metric-evidence-state";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -147,6 +152,33 @@ function QualityBadge({ score, metricId }: { score: number; metricId: string }) 
   );
 }
 
+function InlineMetricEvidenceBadge({ state, metricKey }: { state: InlineMetricEvidenceState; metricKey: string }) {
+  const styles: Record<InlineMetricEvidenceState, string> = {
+    missing: "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300",
+    source_linked: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300",
+    reviewed: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
+    evidence_backed: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
+  };
+  const Icon = state === "evidence_backed"
+    ? CheckCircle2
+    : state === "reviewed"
+      ? Eye
+      : state === "source_linked"
+        ? FileCheck
+        : Paperclip;
+
+  return (
+    <Badge
+      variant="outline"
+      className={`h-5 gap-1 px-1.5 py-0 text-[10px] ${styles[state]}`}
+      data-testid={`badge-inline-evidence-${metricKey}`}
+    >
+      <Icon className="h-3 w-3" />
+      {INLINE_METRIC_EVIDENCE_LABELS[state]}
+    </Badge>
+  );
+}
+
 export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -161,13 +193,15 @@ export default function DataEntry() {
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const highlightEstimated = searchParams.get("highlight") === "estimated";
+  const focusEvidence = searchParams.get("focus") === "evidence";
+  const focusedMetricId = searchParams.get("metricId");
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState("raw");
+  const [activeTab, setActiveTab] = useState(focusEvidence ? "manual" : "raw");
   const [showAllInputs, setShowAllInputs] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
@@ -266,6 +300,10 @@ export default function DataEntry() {
       setManualDataSourceTypes(dsTypes);
     }
   }, [entryData]);
+
+  useEffect(() => {
+    if (focusEvidence) setActiveTab("manual");
+  }, [focusEvidence]);
 
   const activation = useActivationState();
 
@@ -402,7 +440,7 @@ export default function DataEntry() {
   });
 
   useEffect(() => {
-    if (autoEstimateTriggered || estimateBannerDismissed) return;
+    if (focusEvidence || autoEstimateTriggered || estimateBannerDismissed) return;
     if (!entryData || entryLoading) return;
     const prefillKey = `estimate_prefill_shown_${selectedPeriod}_${selectedScopeKey}`;
     if (localStorage.getItem(prefillKey) === "true") return;
@@ -416,7 +454,7 @@ export default function DataEntry() {
       localStorage.setItem(prefillKey, "true");
       fetchEstimatesMutation.mutate({});
     }
-  }, [entryData, entryLoading, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod, selectedScopeKey]);
+  }, [entryData, entryLoading, focusEvidence, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod, selectedScopeKey]);
 
   const lockMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/data-entry/${selectedPeriod}/lock`, {}),
@@ -549,6 +587,15 @@ export default function DataEntry() {
       [metricKey]: (prev[metricKey] || []).filter((_, fileIndex) => fileIndex !== index),
     }));
   };
+  const evidenceFocusStates = visibleManualMetrics.flatMap((metric: any) => {
+    const metricId = metric.id || metric.metricId || null;
+    if (!metricId) return [];
+    const metricValue = existingValues.find((value: any) => value.metricId === metricId && isSelectedScopeValue(value));
+    if (!metricValue || formatMetricDisplayValue(metricValue) === "") return [];
+    return [getInlineMetricEvidenceState(getMetricEvidence(metricValue.id, metricId))];
+  });
+  const evidenceFocusGapCount = evidenceFocusStates.filter(state => state === "missing").length;
+  const evidenceFocusLinkedCount = evidenceFocusStates.length - evidenceFocusGapCount;
 
   const isLoading = rawLoading || entryLoading || definitionsLoading || sitesLoading;
   if (isLoading) {
@@ -635,6 +682,42 @@ export default function DataEntry() {
             </Select>
           </div>
         </div>
+      )}
+
+      {focusEvidence && (
+        <Alert
+          className="border-blue-300 bg-blue-50 ring-1 ring-blue-200 dark:border-blue-800 dark:bg-blue-950/30 dark:ring-blue-900"
+          data-testid="panel-measure-evidence-focus"
+        >
+          <FileCheck className="h-4 w-4 text-blue-600 dark:text-blue-300" />
+          <AlertDescription className="space-y-2 text-blue-950 dark:text-blue-100">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold">Add evidence where the value lives</p>
+                <p className="mt-0.5 text-xs text-blue-800 dark:text-blue-200">
+                  {canEdit
+                    ? evidenceFocusStates.length === 0
+                      ? "Enter or confirm a tracked value below, attach its bill, payroll report, certificate or other source, then save once."
+                      : evidenceFocusGapCount > 0
+                        ? `${evidenceFocusGapCount} saved metric value${evidenceFocusGapCount === 1 ? "" : "s"} still need a source. Use Attach evidence in a highlighted row; the file stays linked to this metric, period and scope.`
+                        : "Every saved tracked value in this view has a linked source. You can still add another file or review its status below."
+                    : "You can review linked evidence and its status here. Upload controls remain read-only because your role cannot edit metric data."}
+                </p>
+              </div>
+              <Badge variant="outline" className="w-fit shrink-0 border-blue-300 bg-background/70 text-blue-800 dark:border-blue-700 dark:text-blue-200" data-testid="badge-evidence-focus-summary">
+                {evidenceFocusStates.length > 0
+                  ? `${evidenceFocusLinkedCount}/${evidenceFocusStates.length} linked`
+                  : "Choose a metric"}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5" aria-label="Evidence status guide">
+              <span className="text-[11px] font-medium text-blue-800 dark:text-blue-200">Status:</span>
+              <Badge variant="outline" className="h-5 border-blue-200 bg-background/70 px-1.5 py-0 text-[10px]">Source linked</Badge>
+              <Badge variant="outline" className="h-5 border-amber-200 bg-amber-50 px-1.5 py-0 text-[10px] text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">Reviewed</Badge>
+              <Badge variant="outline" className="h-5 border-emerald-200 bg-emerald-50 px-1.5 py-0 text-[10px] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">Evidence-backed</Badge>
+            </div>
+          </AlertDescription>
+        </Alert>
       )}
 
       <details className="group rounded-md border border-border bg-card" data-testid="disclosure-period-review-controls">
@@ -984,7 +1067,7 @@ export default function DataEntry() {
         <PermissionBanner
           module="metrics_data_entry"
           action="enter or edit data"
-          data-testid="banner-data-entry-permission"
+          testId="banner-data-entry-permission"
         />
       )}
 
@@ -1281,12 +1364,18 @@ export default function DataEntry() {
                     const isCurrentlyEstimated = currentSourceType === "estimated";
                     const attachedEvidence = getMetricEvidence(metricValue?.id, metricId);
                     const queuedAttachments = pendingAttachments[metricKey] || [];
+                    const evidenceState = getInlineMetricEvidenceState(attachedEvidence);
+                    const isFocusedEvidenceRow = focusEvidence
+                      && Boolean(hasValue)
+                      && evidenceState === "missing"
+                      && (!focusedMetricId || focusedMetricId === metricId);
 
                     return (
                       <div
                         key={metricKey}
-                        className={`grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 p-3 rounded-md border ${highlightEstimated && metricValue?.dataSourceType === "estimated" ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20 ring-1 ring-amber-300" : hasValue ? "border-primary/20 bg-primary/5" : "border-border"}`}
+                        className={`grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 p-3 rounded-md border ${isFocusedEvidenceRow ? "border-blue-400 bg-blue-50/60 ring-1 ring-blue-300 dark:border-blue-700 dark:bg-blue-950/20 dark:ring-blue-800" : highlightEstimated && metricValue?.dataSourceType === "estimated" ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20 ring-1 ring-amber-300" : hasValue ? "border-primary/20 bg-primary/5" : "border-border"}`}
                         data-testid={`manual-row-${metricKey}`}
+                        data-evidence-focus={isFocusedEvidenceRow ? "true" : undefined}
                       >
                         <div className="space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1300,6 +1389,9 @@ export default function DataEntry() {
                             )}
                             <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
                             <DataSourceBadge type={metricValue?.dataSourceType} />
+                            {(hasValue || attachedEvidence.length > 0) && (
+                              <InlineMetricEvidenceBadge state={evidenceState} metricKey={metricKey} />
+                            )}
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && isEligible && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
                             {metricId && dataQuality?.perMetric?.find((q: any) => q.metricId === metricId) && (
@@ -1316,7 +1408,7 @@ export default function DataEntry() {
                                 owner={metricValue?.owner || metricValue?.submittedBy}
                                 reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
                                 dataSourceType={metricValue?.dataSourceType}
-                                hasEvidence={metricValue?.dataSourceType === "evidenced"}
+                                hasEvidence={attachedEvidence.length > 0}
                               />
                             )}
                           </div>
@@ -1417,14 +1509,14 @@ export default function DataEntry() {
                                 <Button
                                   type="button"
                                   size="sm"
-                                  variant="outline"
+                                  variant={focusEvidence && evidenceState === "missing" ? "default" : "outline"}
                                   className="h-8 text-xs"
                                   disabled={editDisabled || !isEligible}
                                   onClick={() => fileInputRefs.current[metricKey]?.click()}
                                   data-testid={`button-attach-evidence-${metricKey}`}
                                 >
                                   <Paperclip className="w-3.5 h-3.5 mr-1.5" />
-                                  Attach evidence
+                                  {focusEvidence ? "Attach source" : "Attach evidence"}
                                   {(attachedEvidence.length > 0 || queuedAttachments.length > 0) && (
                                     <span className="ml-1 text-[10px] text-muted-foreground">
                                       {attachedEvidence.length + queuedAttachments.length}
@@ -1529,6 +1621,7 @@ export default function DataEntry() {
                               data-testid={`button-save-manual-${metricKey}`}
                             >
                               <Save className="w-3.5 h-3.5" />
+                              <span className="ml-1">{queuedAttachments.length > 0 ? "Save & upload" : "Save"}</span>
                             </Button>
                           </div>
                         )}

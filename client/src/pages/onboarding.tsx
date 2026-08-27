@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
-import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -260,7 +259,9 @@ export default function Onboarding() {
   });
 
   const [dataEntries, setDataEntries] = useState<Record<string, string>>({});
+  const [dataSourceTypes, setDataSourceTypes] = useState<Record<string, "manual" | "estimated">>({});
   const [savedMetricIds, setSavedMetricIds] = useState<Set<string>>(new Set());
+  const [failedMetrics, setFailedMetrics] = useState<Record<string, string>>({});
 
   const { data: companyData, isLoading: companyLoading } = useQuery({ queryKey: ["/api/company"] });
   const company = (companyData as any)?.company;
@@ -270,7 +271,7 @@ export default function Onboarding() {
     enabled: currentStep >= 2,
   });
 
-  const defaultPeriod = format(new Date(), "yyyy-MM");
+  const defaultPeriod = step1.reportingYearStart;
 
   const {
     data: preflight,
@@ -379,18 +380,41 @@ export default function Onboarding() {
   async function handleSaveDataEntries() {
     setIsSaving(true);
     try {
-      const entries = Object.entries(dataEntries).filter(([, v]) => v.trim() !== "");
+      const entries = Object.entries(dataEntries).filter(([metricId, value]) => (
+        value.trim() !== "" && !savedMetricIds.has(metricId)
+      ));
       const results = await Promise.allSettled(
         entries.map(([metricId, value]) =>
-          dataMutation.mutateAsync(buildOnboardingMetricSubmission(metricId, value, defaultPeriod))
+          dataMutation.mutateAsync(buildOnboardingMetricSubmission(
+            metricId,
+            value,
+            defaultPeriod,
+            dataSourceTypes[metricId] ?? "estimated",
+          ))
         )
       );
       const saved = entries
         .filter((_, i) => results[i].status === "fulfilled")
         .map(([id]) => id);
       setSavedMetricIds(prev => new Set([...Array.from(prev), ...saved]));
+      const failures = entries.reduce<Record<string, string>>((acc, [metricId], index) => {
+        const result = results[index];
+        if (result.status === "rejected") {
+          acc[metricId] = resolveApiError(result.reason).description || "This figure could not be saved. Please try again.";
+        }
+        return acc;
+      }, {});
+      setFailedMetrics(failures);
       if (saved.length > 0) {
         trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { source: "wizard", count: saved.length });
+      }
+      if (Object.keys(failures).length > 0) {
+        toast({
+          title: "Some figures were not saved",
+          description: `${Object.keys(failures).length} figure${Object.keys(failures).length === 1 ? "" : "s"} still need attention. Your successful saves are preserved; retry the highlighted rows.`,
+          variant: "destructive",
+        });
+        return;
       }
       await saveStep(4);
       setCurrentStep(4);
@@ -497,8 +521,22 @@ export default function Onboarding() {
               isLoading={metricsLoading}
               period={defaultPeriod}
               entries={dataEntries}
+              sourceTypes={dataSourceTypes}
               savedIds={savedMetricIds}
-              onChange={setDataEntries}
+              failedMetrics={failedMetrics}
+              onChange={(metricId, value) => {
+                setDataEntries(current => ({ ...current, [metricId]: value }));
+                setFailedMetrics(current => {
+                  if (!(metricId in current)) return current;
+                  const next = { ...current };
+                  delete next[metricId];
+                  return next;
+                });
+              }}
+              onSourceTypeChange={(metricId, sourceType) => setDataSourceTypes(current => ({
+                ...current,
+                [metricId]: sourceType,
+              }))}
             />
           )}
           {currentStep === 4 && (
@@ -561,7 +599,7 @@ function WizardHeader({
             <StepIcon className="w-4 h-4 text-primary" />
           </div>
           <div>
-            <h1 className="text-base font-semibold text-foreground">{stepInfo.label}</h1>
+            <h1 className="text-base font-semibold text-foreground" data-testid="text-onboarding-title">{stepInfo.label}</h1>
             <p className="text-sm text-muted-foreground mt-0.5">{stepInfo.desc}</p>
           </div>
         </div>
@@ -963,15 +1001,21 @@ function Step4DataEntry({
   isLoading,
   period,
   entries,
+  sourceTypes,
   savedIds,
+  failedMetrics,
   onChange,
+  onSourceTypeChange,
 }: {
   metrics: LabelledOnboardingMetric[];
   isLoading: boolean;
   period: string;
   entries: Record<string, string>;
+  sourceTypes: Record<string, "manual" | "estimated">;
   savedIds: Set<string>;
-  onChange: (entries: Record<string, string>) => void;
+  failedMetrics: Record<string, string>;
+  onChange: (metricId: string, value: string) => void;
+  onSourceTypeChange: (metricId: string, sourceType: "manual" | "estimated") => void;
 }) {
   if (isLoading) {
     return (
@@ -997,22 +1041,28 @@ function Step4DataEntry({
       <div className="rounded-lg bg-muted/50 border border-border p-3 flex gap-2">
         <FileText className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
         <p className="text-xs text-muted-foreground">
-          Reporting period: <strong>{period}</strong> · Enter figures from your records — an invoice, bill, or spreadsheet.
-          Estimates are fine for now. You can correct them any time.
+          Reporting year: <strong>{period}</strong> · Enter figures from an invoice, bill, payroll record, account or spreadsheet.
+          Mark each figure as actual or estimated so its confidence is preserved.
         </p>
       </div>
 
       <div className="space-y-4">
         {metrics.map((m) => {
           const isSaved = savedIds.has(m.id);
+          const failure = failedMetrics[m.id];
           const val = entries[m.id] || "";
+          const sourceType = sourceTypes[m.id] ?? "estimated";
 
           return (
             <div
               key={m.id}
               className={cn(
                 "p-4 rounded-lg border transition-colors",
-                isSaved ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700" : "border-border bg-card"
+                isSaved
+                  ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 dark:border-emerald-700"
+                  : failure
+                    ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20"
+                    : "border-border bg-card"
               )}
               data-testid={`data-entry-metric-${m.id}`}
             >
@@ -1026,6 +1076,9 @@ function Step4DataEntry({
                 {isSaved && (
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 )}
+                {!isSaved && failure && (
+                  <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Input
@@ -1033,13 +1086,18 @@ function Step4DataEntry({
                   inputMode="numeric"
                   placeholder={getExample(m.name)}
                   value={val}
-                  onChange={e => onChange({ ...entries, [m.id]: e.target.value })}
+                  onChange={e => onChange(m.id, e.target.value)}
                   className="flex-1"
                   disabled={isSaved}
                   data-testid={`input-metric-value-${m.id}`}
                 />
                 <span className="text-xs text-muted-foreground whitespace-nowrap">{m.unit}</span>
               </div>
+              {failure && !isSaved && (
+                <p className="mt-1.5 text-xs text-red-700 dark:text-red-300" role="alert" data-testid={`error-metric-save-${m.id}`}>
+                  Not saved: {failure}
+                </p>
+              )}
               {!m.helpText && (
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {getExample(m.name) !== "Enter a number"
@@ -1047,6 +1105,33 @@ function Step4DataEntry({
                     : "Enter the figure for this period."}
                 </p>
               )}
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="text-xs text-muted-foreground">This figure is</span>
+                <div className="inline-flex rounded-md border border-border p-0.5" role="group" aria-label={`${m.name} data quality`}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={sourceType === "manual" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    disabled={isSaved}
+                    onClick={() => onSourceTypeChange(m.id, "manual")}
+                    data-testid={`source-actual-${m.id}`}
+                  >
+                    Actual
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={sourceType === "estimated" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    disabled={isSaved}
+                    onClick={() => onSourceTypeChange(m.id, "estimated")}
+                    data-testid={`source-estimated-${m.id}`}
+                  >
+                    Estimated
+                  </Button>
+                </div>
+              </div>
             </div>
           );
         })}

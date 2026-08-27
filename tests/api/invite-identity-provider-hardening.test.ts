@@ -175,6 +175,19 @@ async function run(tenants: SeededTenants): Promise<void> {
       "Tenant A admin POST Tenant B /api/companies/:id/invites",
     );
 
+    const targetedEmail = `targeted-company-invite-${suffix}@test-esg.example`;
+    const targetedCreate = await apiRequest("POST", `/api/companies/${tenantA.companyId}/invites`, {
+      email: targetedEmail,
+      role: "contributor",
+      inviteeName: "Targeted Company Invite",
+    }, tenantA.adminToken);
+    expectStatus(targetedCreate, [200, 503], "Tenant A admin POST own /api/companies/:id/invites");
+    assertNoRawSecrets(targetedCreate.body, ["token_hash", "plaintext", "invite-token"], "targeted company invite response");
+    const targetedInvite = await getLatestInviteMetadata(targetedEmail);
+    assert(targetedInvite, "expected auth token row for targeted company invite");
+    assert(targetedInvite.metadata?.companyId === tenantA.companyId, "targeted invite recorded the wrong company");
+    assert(typeof targetedInvite.metadata?.companyName === "string" && targetedInvite.metadata.companyName.length > 0, "targeted invite omitted company name");
+
     const scopedEmail = `scoped-invite-${suffix}@test-esg.example`;
     const scopedCreate = await apiRequest("POST", "/api/users/invite", {
       companyId: tenantB.companyId,

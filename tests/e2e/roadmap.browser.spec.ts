@@ -84,7 +84,7 @@ async function openMockedApp(page: Page, path = "/roadmap") {
 
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
   await page.goto(path);
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("domcontentloaded");
 }
 
 test.describe("ESG Roadmap page", () => {

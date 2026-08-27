@@ -103,9 +103,14 @@ const SECTOR_BENCHMARKS: Record<string, SectorBenchmark> = {
 
 const UK_ELECTRICITY_PRICE_PER_KWH = 0.28;
 const UK_GAS_PRICE_PER_KWH = 0.07;
-const ELECTRICITY_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.207;
-const GAS_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.183;
-const AVERAGE_FLIGHT_EMISSION_KG_CO2_PER_KM = 0.255;
+// UK Government GHG Conversion Factors 2026 (v1.2, corrected July 2026).
+const CURRENT_FACTOR_SOURCE = "UK Government GHG Conversion Factors 2026 (v1.2)";
+const ELECTRICITY_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.13096;
+const GAS_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.18231;
+// Simple average of domestic, short-haul and long-haul average-passenger
+// factors with radiative forcing. This is explicitly an SME proxy, not actual
+// route-level flight accounting.
+const AVERAGE_FLIGHT_EMISSION_KG_CO2_PER_KM = 0.16999;
 
 const SANITY_RANGES: Record<string, { min: number; max: number }> = {
   electricity_kwh: { min: 0, max: 5_000_000 },
@@ -285,9 +290,9 @@ export function estimateElectricityEmissions(
     estimateBasisJson: {
       ...(kwhResult.estimateBasisJson ?? {}),
       emissionFactorKgCo2ePerKwh: ELECTRICITY_EMISSION_FACTOR_KG_CO2_PER_KWH,
-      source: "UK DEFRA 2024",
+      source: CURRENT_FACTOR_SOURCE,
     },
-    methodologyNote: `${kwhResult.methodologyNote} Emissions calculated using UK DEFRA 2024 grid emission factor (${ELECTRICITY_EMISSION_FACTOR_KG_CO2_PER_KWH} kgCO2e/kWh).`,
+    methodologyNote: `${kwhResult.methodologyNote} Emissions calculated using the UK Government 2026 location-based grid factor (${ELECTRICITY_EMISSION_FACTOR_KG_CO2_PER_KWH} kgCO2e/kWh).`,
     isClamped,
     sanityFlag,
     lastEstimatedAt: nowIso(),
@@ -413,9 +418,9 @@ export function estimateGasEmissions(
     estimateBasisJson: {
       ...(kwhResult.estimateBasisJson ?? {}),
       emissionFactorKgCo2ePerKwh: GAS_EMISSION_FACTOR_KG_CO2_PER_KWH,
-      source: "UK DEFRA 2024",
+      source: CURRENT_FACTOR_SOURCE,
     },
-    methodologyNote: `${kwhResult.methodologyNote} Emissions calculated using UK DEFRA 2024 natural gas factor (${GAS_EMISSION_FACTOR_KG_CO2_PER_KWH} kgCO2e/kWh).`,
+    methodologyNote: `${kwhResult.methodologyNote} Emissions calculated using the UK Government 2026 natural-gas gross-CV factor (${GAS_EMISSION_FACTOR_KG_CO2_PER_KWH} kgCO2e/kWh).`,
     isClamped,
     sanityFlag,
     lastEstimatedAt: nowIso(),
@@ -665,9 +670,9 @@ export function estimateBusinessTravelEmissions(
     estimateBasisJson: {
       ...(kmResult.estimateBasisJson ?? {}),
       emissionFactorKgCo2ePerKm: AVERAGE_FLIGHT_EMISSION_KG_CO2_PER_KM,
-      source: "UK DEFRA 2024 (average passenger flight)",
+      source: `${CURRENT_FACTOR_SOURCE} (blended average passenger flight with radiative forcing)`,
     },
-    methodologyNote: `${kmResult.methodologyNote} Emissions calculated using a blended UK DEFRA 2024 average travel factor (${AVERAGE_FLIGHT_EMISSION_KG_CO2_PER_KM} kgCO2e/km).`,
+    methodologyNote: `${kmResult.methodologyNote} Emissions calculated using a blended UK Government 2026 average-passenger flight proxy with radiative forcing (${AVERAGE_FLIGHT_EMISSION_KG_CO2_PER_KM} kgCO2e/km).`,
     isClamped,
     sanityFlag,
     lastEstimatedAt: nowIso(),

@@ -154,13 +154,24 @@ async function run(): Promise<void> {
     await client.query("UPDATE users SET role = 'viewer' WHERE id IN ($1, $2)", [seeded.superBId, seeded.superCId]);
 
     {
+      const activeSuperAdmins = await client.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM users WHERE anonymised_at IS NULL AND role = 'super_admin'",
+      );
+      const isGlobalLastSuperAdmin = Number(activeSuperAdmins.rows[0]?.count ?? 0) === 1;
       const res = await apiRequest("DELETE", `/api/admin/users/${seeded.superAId}`, undefined, superToken);
       if (res.status !== 400) {
-        fail("Deleting the last remaining super-admin is blocked", `status=${res.status} body=${res.body.slice(0, 200)}`);
-      } else if (!/last remaining super admin/i.test(res.body)) {
+        fail("Deleting a protected super-admin is blocked", `status=${res.status} body=${res.body.slice(0, 200)}`);
+      } else if (isGlobalLastSuperAdmin && !/last remaining super admin/i.test(res.body)) {
         fail("Deleting the last remaining super-admin returns clear error", `body=${res.body.slice(0, 200)}`);
+      } else if (!isGlobalLastSuperAdmin && !/your own super admin account/i.test(res.body)) {
+        fail("Deleting the acting super-admin returns clear error", `body=${res.body.slice(0, 200)}`);
       } else {
-        pass("Deleting the last remaining super-admin is blocked", `status=${res.status}`);
+        pass(
+          isGlobalLastSuperAdmin
+            ? "Deleting the last remaining super-admin is blocked"
+            : "Deleting the acting super-admin remains blocked in a shared test database",
+          `status=${res.status}`,
+        );
       }
     }
   } finally {

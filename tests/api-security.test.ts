@@ -592,7 +592,7 @@ async function testRBACEnforcement(tenants: SeededTenants) {
     }
   }
 
-  // ── Contributor checks (has metrics_data_entry, policy_editing, questionnaire_access; lacks settings_admin, template_admin, report_generation, user_management) ──
+  // ── Contributor checks (has metrics_data_entry and questionnaire_access; lacks policy editing and admin/report permissions) ──
 
   // Contributor cannot PUT /api/company/settings (settings_admin required)
   {

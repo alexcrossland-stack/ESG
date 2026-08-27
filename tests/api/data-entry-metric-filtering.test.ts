@@ -83,12 +83,12 @@ await check("yes/no metric inputs parse safely", () => {
   assert.equal(parseBooleanMetricInput("maybe"), null);
 });
 
-await check("yes/no metric values display as Yes/No without numeric coercion", () => {
+await check("yes/no values display as words and numeric database padding is removed", () => {
   assert.equal(formatBooleanMetricValue(true), "Yes");
   assert.equal(formatBooleanMetricValue(false), "No");
   assert.equal(formatMetricDisplayValue({ value: null, valueBoolean: true, valueText: "Yes" }), "Yes");
   assert.equal(formatMetricDisplayValue({ value: null, valueBoolean: false, valueText: "No" }), "No");
-  assert.equal(formatMetricDisplayValue({ value: "0.0000" }), "0.0000");
+  assert.equal(formatMetricDisplayValue({ value: "0.0000" }), "0");
 });
 
 const failed = results.filter((result) => !result.passed);

@@ -60,11 +60,12 @@ import {
   type MetricDefinitionValue, type InsertMetricDefinitionValue,
   type MetricEvidence, type InsertMetricEvidence,
   type MetricCalculationRun, type InsertMetricCalculationRun,
-  frameworks, frameworkRequirements, metricFrameworkMappings, businessFrameworkSelections,
+  frameworks, frameworkRequirements, metricFrameworkMappings, businessFrameworkSelections, frameworkRequirementResponses,
   type Framework, type InsertFramework,
   type FrameworkRequirement, type InsertFrameworkRequirement,
   type MetricFrameworkMapping, type InsertMetricFrameworkMapping,
   type BusinessFrameworkSelection, type InsertBusinessFrameworkSelection,
+  type FrameworkRequirementResponse,
   type BusinessMaterialityAssessment, type InsertBusinessMaterialityAssessment,
   type PolicyRecord, type InsertPolicyRecord,
   type GovernanceAssignment, type InsertGovernanceAssignment,
@@ -82,6 +83,17 @@ import {
   type AccessGrant, type InsertAccessGrant,
 } from "@shared/schema";
 import { isPlatformSuperAdmin } from "./permissions";
+import {
+  evaluateFrameworkRequirement,
+  frameworkResponseSourceIsEligible,
+  isUsableEvidenceStatus,
+  normalizeFrameworkMetricName,
+  parseFrameworkReadinessPeriod,
+  type FrameworkMetricFact,
+  type FrameworkRequirementEvidenceFact,
+  type FrameworkRequirementResponseFact,
+  type FrameworkReadinessScope,
+} from "./framework-readiness";
 
 export type MetricValueScope =
   | { scope: "all" }
@@ -114,6 +126,27 @@ function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
 
 function storageError(status: number, message: string) {
   return Object.assign(new Error(message), { status });
+}
+
+function localCalendarDateKey(value: Date | string): string {
+  if (typeof value === "string") {
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function utcCalendarDateKey(value: Date): string {
+  return [
+    value.getUTCFullYear(),
+    String(value.getUTCMonth() + 1).padStart(2, "0"),
+    String(value.getUTCDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 async function anonymiseUserRecord(tx: any, userId: string): Promise<void> {
@@ -220,6 +253,7 @@ export interface IStorage {
   getFrameworks(activeOnly?: boolean): Promise<Framework[]>;
   getFramework(id: string): Promise<Framework | undefined>;
   getFrameworkByCode(code: string): Promise<Framework | undefined>;
+  getFrameworkRequirement(id: string): Promise<FrameworkRequirement | undefined>;
   getFrameworkRequirements(frameworkId: string): Promise<FrameworkRequirement[]>;
   getAllFrameworkRequirements(): Promise<FrameworkRequirement[]>;
   getMetricFrameworkMappings(metricDefinitionId: string): Promise<MetricFrameworkMapping[]>;
@@ -227,7 +261,25 @@ export interface IStorage {
   getAllMappings(): Promise<MetricFrameworkMapping[]>;
   getBusinessFrameworkSelections(businessId: string): Promise<BusinessFrameworkSelection[]>;
   upsertBusinessFrameworkSelection(businessId: string, frameworkId: string, isEnabled: boolean): Promise<BusinessFrameworkSelection>;
-  getFrameworkReadiness(businessId: string): Promise<any>;
+  getFrameworkRequirementResponses(companyId: string, filters?: { frameworkRequirementId?: string; period?: string; siteId?: string | null }): Promise<FrameworkRequirementResponse[]>;
+  getFrameworkRequirementResponse(id: string, companyId: string): Promise<FrameworkRequirementResponse | undefined>;
+  upsertFrameworkRequirementResponse(input: {
+    companyId: string;
+    frameworkRequirementId: string;
+    period: string;
+    siteId: string | null;
+    responseText: string | null;
+    linkedEntityType: "policy" | "target" | "risk" | null;
+    linkedEntityId: string | null;
+    workflowStatus: "draft" | "submitted";
+    actorUserId: string;
+  }): Promise<FrameworkRequirementResponse>;
+  reviewFrameworkRequirementResponse(id: string, companyId: string, input: {
+    workflowStatus: "approved" | "rejected";
+    reviewComment?: string | null;
+    reviewerUserId: string;
+  }): Promise<FrameworkRequirementResponse | undefined>;
+  getFrameworkReadiness(businessId: string, filters?: { period?: string; siteId?: string | null; frameworkCodes?: string[] }): Promise<any>;
   getMetricDefinitionFrameworkAlignment(metricDefinitionId: string): Promise<any>;
 
   // Audit Logs
@@ -253,7 +305,7 @@ export interface IStorage {
   updatePolicyGenerationInput(id: string, data: Partial<PolicyGenerationInput>): Promise<PolicyGenerationInput | undefined>;
 
   // Emission Factors
-  getEmissionFactors(country?: string): Promise<EmissionFactor[]>;
+  getEmissionFactors(country?: string, factorYear?: number): Promise<EmissionFactor[]>;
   createEmissionFactor(factor: InsertEmissionFactor): Promise<EmissionFactor>;
   updateEmissionFactor(id: string, data: Partial<EmissionFactor>): Promise<EmissionFactor | undefined>;
 
@@ -1433,11 +1485,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Emission Factors
-  async getEmissionFactors(country?: string) {
-    if (country) {
-      return db.select().from(emissionFactors).where(eq(emissionFactors.country, country));
-    }
-    return db.select().from(emissionFactors);
+  async getEmissionFactors(country?: string, factorYear?: number) {
+    const conditions = [];
+    if (country) conditions.push(eq(emissionFactors.country, country));
+    if (factorYear) conditions.push(eq(emissionFactors.factorYear, factorYear));
+
+    const rows = await db.select()
+      .from(emissionFactors)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(emissionFactors.factorYear), asc(emissionFactors.category), asc(emissionFactors.name));
+
+    // A factor set must never mix publication years. Callers that do not ask
+    // for a specific year receive the newest complete set available.
+    if (factorYear || rows.length === 0) return rows;
+    const latestYear = rows[0].factorYear;
+    return rows.filter((factor) => factor.factorYear === latestYear);
   }
 
   async createEmissionFactor(factor: InsertEmissionFactor) {
@@ -2395,8 +2457,8 @@ export class DatabaseStorage implements IStorage {
 
   async createSuperAdminAction(data: Omit<InsertSuperAdminAction, "id" | "createdAt">) {
     const result = await db.execute(sql`
-      INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata)
-      VALUES (${data.adminUserId ?? null}, ${data.action}, ${data.targetCompanyId ?? null}, ${data.targetUserId ?? null}, ${data.metadata ? JSON.stringify(data.metadata) : null})
+      INSERT INTO super_admin_actions (admin_user_id, action, target_company_id, target_user_id, metadata, ip_address, user_agent)
+      VALUES (${data.adminUserId ?? null}, ${data.action}, ${data.targetCompanyId ?? null}, ${data.targetUserId ?? null}, ${data.metadata ? JSON.stringify(data.metadata) : null}, ${data.ipAddress ?? null}, ${data.userAgent ?? null})
       RETURNING *
     `);
     const rows = (result as any).rows ?? [];
@@ -3108,6 +3170,13 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
+  async getFrameworkRequirement(id: string): Promise<FrameworkRequirement | undefined> {
+    const [row] = await db.select().from(frameworkRequirements)
+      .where(eq(frameworkRequirements.id, id))
+      .limit(1);
+    return row;
+  }
+
   async getFrameworkRequirements(frameworkId: string): Promise<FrameworkRequirement[]> {
     return db.select().from(frameworkRequirements)
       .where(eq(frameworkRequirements.frameworkId, frameworkId))
@@ -3156,19 +3225,431 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getFrameworkReadiness(businessId: string): Promise<any> {
+  async getFrameworkRequirementResponses(
+    companyId: string,
+    filters: { frameworkRequirementId?: string; period?: string; siteId?: string | null } = {},
+  ): Promise<FrameworkRequirementResponse[]> {
+    const conditions: any[] = [eq(frameworkRequirementResponses.companyId, companyId)];
+    if (filters.frameworkRequirementId) {
+      conditions.push(eq(frameworkRequirementResponses.frameworkRequirementId, filters.frameworkRequirementId));
+    }
+    if (filters.period) conditions.push(eq(frameworkRequirementResponses.period, filters.period));
+    if (filters.siteId !== undefined) {
+      conditions.push(filters.siteId === null
+        ? isNull(frameworkRequirementResponses.siteId)
+        : eq(frameworkRequirementResponses.siteId, filters.siteId));
+    }
+    return db.select().from(frameworkRequirementResponses)
+      .where(and(...conditions))
+      .orderBy(desc(frameworkRequirementResponses.updatedAt));
+  }
+
+  async getFrameworkRequirementResponse(id: string, companyId: string): Promise<FrameworkRequirementResponse | undefined> {
+    const [response] = await db.select().from(frameworkRequirementResponses)
+      .where(and(
+        eq(frameworkRequirementResponses.id, id),
+        eq(frameworkRequirementResponses.companyId, companyId),
+      ))
+      .limit(1);
+    return response;
+  }
+
+  async upsertFrameworkRequirementResponse(input: {
+    companyId: string;
+    frameworkRequirementId: string;
+    period: string;
+    siteId: string | null;
+    responseText: string | null;
+    linkedEntityType: "policy" | "target" | "risk" | null;
+    linkedEntityId: string | null;
+    workflowStatus: "draft" | "submitted";
+    actorUserId: string;
+  }): Promise<FrameworkRequirementResponse> {
+    const lockKey = `framework_requirement_response:${input.companyId}:${input.frameworkRequirementId}:${input.period}:${input.siteId ?? "__org__"}`;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
+
+      const existingResult = input.siteId === null
+        ? await client.query(
+            `SELECT id FROM framework_requirement_responses
+             WHERE company_id = $1 AND framework_requirement_id = $2 AND period = $3 AND site_id IS NULL
+             LIMIT 1 FOR UPDATE`,
+            [input.companyId, input.frameworkRequirementId, input.period],
+          )
+        : await client.query(
+            `SELECT id FROM framework_requirement_responses
+             WHERE company_id = $1 AND framework_requirement_id = $2 AND period = $3 AND site_id = $4
+             LIMIT 1 FOR UPDATE`,
+            [input.companyId, input.frameworkRequirementId, input.period, input.siteId],
+          );
+
+      const existingId = existingResult.rows[0]?.id as string | undefined;
+      const submittedAt = input.workflowStatus === "submitted" ? new Date() : null;
+      const submittedByUserId = input.workflowStatus === "submitted" ? input.actorUserId : null;
+      const result = existingId
+        ? await client.query(
+            `UPDATE framework_requirement_responses
+             SET response_text = $2,
+                 linked_entity_type = $3,
+                 linked_entity_id = $4,
+                 workflow_status = $5,
+                 updated_by_user_id = $6,
+                 submitted_by_user_id = $7,
+                 submitted_at = $8,
+                 reviewed_by_user_id = NULL,
+                 reviewed_at = NULL,
+                 review_comment = NULL,
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING *`,
+            [
+              existingId,
+              input.responseText,
+              input.linkedEntityType,
+              input.linkedEntityId,
+              input.workflowStatus,
+              input.actorUserId,
+              submittedByUserId,
+              submittedAt,
+            ],
+          )
+        : await client.query(
+            `INSERT INTO framework_requirement_responses (
+               company_id, framework_requirement_id, period, site_id, response_text,
+               linked_entity_type, linked_entity_id, workflow_status,
+               created_by_user_id, updated_by_user_id, submitted_by_user_id, submitted_at,
+               created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, NOW(), NOW())
+             RETURNING *`,
+            [
+              input.companyId,
+              input.frameworkRequirementId,
+              input.period,
+              input.siteId,
+              input.responseText,
+              input.linkedEntityType,
+              input.linkedEntityId,
+              input.workflowStatus,
+              input.actorUserId,
+              submittedByUserId,
+              submittedAt,
+            ],
+          );
+
+      await client.query("COMMIT");
+      return pgRowToCamelCase<FrameworkRequirementResponse>(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async reviewFrameworkRequirementResponse(
+    id: string,
+    companyId: string,
+    input: {
+      workflowStatus: "approved" | "rejected";
+      reviewComment?: string | null;
+      reviewerUserId: string;
+    },
+  ): Promise<FrameworkRequirementResponse | undefined> {
+    const [response] = await db.update(frameworkRequirementResponses)
+      .set({
+        workflowStatus: input.workflowStatus,
+        reviewedByUserId: input.reviewerUserId,
+        reviewedAt: new Date(),
+        reviewComment: input.reviewComment ?? null,
+        updatedByUserId: input.reviewerUserId,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(frameworkRequirementResponses.id, id),
+        eq(frameworkRequirementResponses.companyId, companyId),
+        eq(frameworkRequirementResponses.workflowStatus, "submitted"),
+      ))
+      .returning();
+    return response;
+  }
+
+  async getFrameworkReadiness(
+    businessId: string,
+    filters: { period?: string; siteId?: string | null; frameworkCodes?: string[] } = {},
+  ): Promise<any> {
     const selections = await this.getBusinessFrameworkSelections(businessId);
     const enabledFrameworkIds = selections.filter(s => s.isEnabled).map(s => s.frameworkId);
-    if (enabledFrameworkIds.length === 0) return [];
-
     const allFrameworks = await this.getFrameworks(true);
-    const selectedFrameworks = allFrameworks.filter(f => enabledFrameworkIds.includes(f.id));
+    const requestedFrameworkCodes = new Set(
+      (filters.frameworkCodes ?? []).map((code) => code.trim().toUpperCase()).filter(Boolean),
+    );
+    const selectedFrameworks = requestedFrameworkCodes.size > 0
+      ? allFrameworks.filter((framework) => requestedFrameworkCodes.has(framework.code.toUpperCase()))
+      : allFrameworks.filter((framework) => enabledFrameworkIds.includes(framework.id));
+    if (selectedFrameworks.length === 0) return [];
 
     const allReqs = await this.getAllFrameworkRequirements();
     const allMappings = await this.getAllMappings();
 
     const metricDefs = await this.getMetricDefinitions({ isActive: true });
     const activeMetricDefIds = new Set(metricDefs.map(m => m.id));
+    const metricDefinitionIdByName = new Map(
+      metricDefs.map((definition) => [normalizeFrameworkMetricName(definition.name), definition.id]),
+    );
+
+    // Whole-organisation readiness includes organisation-level facts and facts
+    // from the organisation's current operating boundary. Historical records
+    // attached only to archived (or otherwise unknown) sites must not keep a
+    // current readiness requirement covered. Explicit organisation/site scopes
+    // retain their existing exact-match semantics.
+    const activeSiteIds = filters.siteId === undefined
+      ? new Set((await this.getSites(businessId, false)).map((site) => site.id))
+      : null;
+    const siteIsWithinReadinessBoundary = (siteId: string | null | undefined): boolean => {
+      if (filters.siteId === null) return siteId === null || siteId === undefined;
+      if (typeof filters.siteId === "string") return siteId === filters.siteId;
+      return siteId === null || siteId === undefined || activeSiteIds!.has(siteId);
+    };
+
+    const requestedPeriod = filters.period?.trim() || undefined;
+    let resolvedPeriod = requestedPeriod;
+    let periodBounds: { start: Date; end: Date } | null = null;
+    let requestedPeriodDateKeys: { start: string; end: string } | null = null;
+    if (requestedPeriod) {
+      const reportingPeriod = (await this.getReportingPeriods(businessId)).find((period) =>
+        period.id === requestedPeriod || period.name === requestedPeriod,
+      );
+      if (reportingPeriod) {
+        resolvedPeriod = reportingPeriod.name;
+        periodBounds = {
+          start: new Date(reportingPeriod.startDate),
+          end: new Date(reportingPeriod.endDate),
+        };
+        requestedPeriodDateKeys = {
+          start: localCalendarDateKey(reportingPeriod.startDate),
+          end: localCalendarDateKey(reportingPeriod.endDate),
+        };
+      } else {
+        periodBounds = parseFrameworkReadinessPeriod(requestedPeriod);
+        if (periodBounds) {
+          requestedPeriodDateKeys = {
+            start: utcCalendarDateKey(periodBounds.start),
+            end: utcCalendarDateKey(periodBounds.end),
+          };
+        }
+      }
+    }
+
+    const canonicalValues = (requestedPeriod && !periodBounds
+      ? []
+      : await this.getMetricDefinitionValues(businessId, {
+          siteId: filters.siteId,
+          periodStart: periodBounds?.start,
+          periodEnd: periodBounds?.end,
+        })).filter((value) => siteIsWithinReadinessBoundary(value.siteId));
+
+    const legacyPeriodCoverage = (valuePeriod: string): "full" | "subperiod" | null => {
+      if (!requestedPeriod) return "full";
+      if (valuePeriod === requestedPeriod || valuePeriod === resolvedPeriod) return "full";
+      if (!requestedPeriodDateKeys) return null;
+
+      const valueBounds = parseFrameworkReadinessPeriod(valuePeriod);
+      if (!valueBounds) return null;
+      const valueDateKeys = {
+        start: utcCalendarDateKey(valueBounds.start),
+        end: utcCalendarDateKey(valueBounds.end),
+      };
+      if (
+        valueDateKeys.start < requestedPeriodDateKeys.start
+        || valueDateKeys.end > requestedPeriodDateKeys.end
+      ) {
+        return null;
+      }
+      return valueDateKeys.start === requestedPeriodDateKeys.start
+        && valueDateKeys.end === requestedPeriodDateKeys.end
+        ? "full"
+        : "subperiod";
+    };
+
+    const legacyConditions: any[] = [eq(metrics.companyId, businessId)];
+    // Known annual/quarterly/monthly bounds need all contained legacy rows so
+    // that, for example, a monthly Data Entry fact is visible as partial annual
+    // coverage. Unparseable custom periods retain exact-match behaviour.
+    if (resolvedPeriod && !requestedPeriodDateKeys) legacyConditions.push(eq(metricValues.period, resolvedPeriod));
+    if (filters.siteId !== undefined) {
+      legacyConditions.push(filters.siteId === null ? isNull(metricValues.siteId) : eq(metricValues.siteId, filters.siteId));
+    }
+    const legacyValues = (await db.select({
+      valueId: metricValues.id,
+      metricId: metricValues.metricId,
+      metricDefinitionId: metricValues.metricDefinitionId,
+      metricName: metrics.name,
+      period: metricValues.period,
+      siteId: metricValues.siteId,
+      value: metricValues.value,
+      valueNumeric: metricValues.valueNumeric,
+      valueText: metricValues.valueText,
+      valueBoolean: metricValues.valueBoolean,
+      valueJson: metricValues.valueJson,
+      workflowStatus: metricValues.workflowStatus,
+    }).from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(and(...legacyConditions)))
+      .flatMap((value) => {
+        if (!siteIsWithinReadinessBoundary(value.siteId)) return [];
+        const periodCoverage = legacyPeriodCoverage(value.period);
+        return periodCoverage ? [{ ...value, periodCoverage }] : [];
+      });
+
+    const canonicalEvidenceCounts = new Map<string, number>();
+    if (canonicalValues.length > 0) {
+      const canonicalEvidenceRows = await db.select({
+        metricValueId: metricEvidence.metricValueId,
+      }).from(metricEvidence)
+        .innerJoin(metricDefinitionValues, eq(metricEvidence.metricValueId, metricDefinitionValues.id))
+        .where(and(
+          eq(metricDefinitionValues.businessId, businessId),
+          inArray(metricDefinitionValues.id, canonicalValues.map((value) => value.id)),
+        ));
+      for (const evidence of canonicalEvidenceRows) {
+        canonicalEvidenceCounts.set(
+          evidence.metricValueId,
+          (canonicalEvidenceCounts.get(evidence.metricValueId) ?? 0) + 1,
+        );
+      }
+    }
+
+    const companyEvidence = (await this.getEvidenceFiles(businessId, filters.siteId))
+      .filter((evidence) => siteIsWithinReadinessBoundary(evidence.siteId));
+    const metricFacts: FrameworkMetricFact[] = canonicalValues.map((value) => {
+      const coversFullRequestedPeriod = !requestedPeriodDateKeys || (
+        localCalendarDateKey(value.reportingPeriodStart) === requestedPeriodDateKeys.start
+        && localCalendarDateKey(value.reportingPeriodEnd) === requestedPeriodDateKeys.end
+      );
+      return {
+        businessId,
+        valueId: value.id,
+        metricDefinitionId: value.metricDefinitionId,
+        siteId: value.siteId,
+        period: resolvedPeriod ?? `${value.reportingPeriodStart.toISOString()}/${value.reportingPeriodEnd.toISOString()}`,
+        periodCoverage: coversFullRequestedPeriod ? "full" : "subperiod",
+        valueNumeric: value.valueNumeric,
+        valueText: value.valueText,
+        valueBoolean: value.valueBoolean,
+        valueJson: value.valueJson,
+        approvalStatus: value.status,
+        evidenceCount: canonicalEvidenceCounts.get(value.id) ?? 0,
+        approvedEvidenceCount: 0,
+      };
+    });
+
+    for (const value of legacyValues) {
+      const metricDefinitionId = value.metricDefinitionId && activeMetricDefIds.has(value.metricDefinitionId)
+        ? value.metricDefinitionId
+        : metricDefinitionIdByName.get(normalizeFrameworkMetricName(value.metricName));
+      if (!metricDefinitionId) continue;
+
+      const linkedEvidence = companyEvidence.filter((evidence) => {
+        if (!isUsableEvidenceStatus(evidence.evidenceStatus)) return false;
+        const linkedToValue = evidence.linkedModule === "metric_value" && evidence.linkedEntityId === value.valueId;
+        const linkedToMetric = evidence.metricId === value.metricId ||
+          (evidence.linkedModule === "metric" && evidence.linkedEntityId === value.metricId);
+        if (!linkedToValue && !linkedToMetric) return false;
+        if (!resolvedPeriod || linkedToValue) return true;
+        return evidence.linkedPeriod === resolvedPeriod;
+      });
+
+      metricFacts.push({
+        businessId,
+        valueId: value.valueId,
+        metricDefinitionId,
+        siteId: value.siteId,
+        // Contained legacy rows participate in the requested readiness scope;
+        // periodCoverage retains whether the row itself spans the whole scope.
+        period: resolvedPeriod ?? value.period,
+        valueNumeric: value.valueNumeric ?? value.value,
+        valueText: value.valueText,
+        valueBoolean: value.valueBoolean,
+        valueJson: value.valueJson,
+        approvalStatus: value.workflowStatus,
+        periodCoverage: value.periodCoverage,
+        evidenceCount: linkedEvidence.length,
+        approvedEvidenceCount: linkedEvidence.filter((evidence) =>
+          evidence.evidenceStatus === "approved" || evidence.evidenceStatus === "reviewed",
+        ).length,
+      });
+    }
+
+    const requirementEvidenceFacts: FrameworkRequirementEvidenceFact[] = companyEvidence
+      .filter((evidence) => {
+        const linkedModule = (evidence.linkedModule ?? "").replace(/[-_]/g, "").toLowerCase();
+        return linkedModule === "frameworkrequirement" && Boolean(evidence.linkedEntityId);
+      })
+      .map((evidence) => ({
+        businessId,
+        requirementId: evidence.linkedEntityId!,
+        siteId: evidence.siteId,
+        period: evidence.linkedPeriod,
+        evidenceStatus: evidence.evidenceStatus,
+      }));
+
+    const responseRows = (await this.getFrameworkRequirementResponses(businessId, {
+      period: resolvedPeriod,
+      siteId: filters.siteId,
+    })).filter((response) => siteIsWithinReadinessBoundary(response.siteId));
+    const [companyPolicies, companyTargets, companyRisks] = await Promise.all([
+      this.getPolicyRecords(businessId),
+      this.getEsgTargets(businessId),
+      this.getEsgRisks(businessId),
+    ]);
+    const policyById = new Map(companyPolicies.map((policy) => [policy.id, policy]));
+    const targetById = new Map(companyTargets.map((target) => [target.id, target]));
+    const riskById = new Map(companyRisks.map((risk) => [risk.id, risk]));
+    const requirementResponseFacts: FrameworkRequirementResponseFact[] = responseRows.map((response) => {
+      let sourceIsEligible = response.linkedEntityType === null;
+      if (response.linkedEntityType === "policy") {
+        const source = response.linkedEntityId ? policyById.get(response.linkedEntityId) : undefined;
+        sourceIsEligible = Boolean(source && frameworkResponseSourceIsEligible({
+          linkedEntityType: "policy",
+          status: source.status,
+        }));
+      } else if (response.linkedEntityType === "target") {
+        const source = response.linkedEntityId ? targetById.get(response.linkedEntityId) : undefined;
+        sourceIsEligible = Boolean(source && frameworkResponseSourceIsEligible({
+          linkedEntityType: "target",
+          status: source.status,
+          targetValue: source.targetValue,
+          targetYear: source.targetYear,
+        }));
+      } else if (response.linkedEntityType === "risk") {
+        const source = response.linkedEntityId ? riskById.get(response.linkedEntityId) : undefined;
+        sourceIsEligible = Boolean(source && frameworkResponseSourceIsEligible({
+          linkedEntityType: "risk",
+          status: source.status,
+          riskScore: source.riskScore,
+        }));
+      }
+
+      return {
+        businessId,
+        requirementId: response.frameworkRequirementId,
+        siteId: response.siteId,
+        period: response.period,
+        responseText: response.responseText,
+        linkedEntityType: response.linkedEntityType,
+        linkedEntityId: response.linkedEntityId,
+        responseStatus: response.workflowStatus,
+        sourceIsEligible,
+      };
+    });
+
+    const scope: FrameworkReadinessScope = {
+      businessId,
+      period: resolvedPeriod,
+      siteId: filters.siteId,
+    };
 
     const result = [];
 
@@ -3176,43 +3657,18 @@ export class DatabaseStorage implements IStorage {
       const reqs = allReqs.filter(r => r.frameworkId === framework.id);
 
       const reqReadiness = reqs.map(req => {
-        const mappings = allMappings.filter(m => m.frameworkRequirementId === req.id);
-        const activeMappings = mappings.filter(m => activeMetricDefIds.has(m.metricDefinitionId));
-
-        let status: "covered" | "partial" | "missing";
-        let mappedMetrics: string[] = [];
-
-        if (activeMappings.length === 0) {
-          status = "missing";
-        } else {
-          const hasDirect = activeMappings.some(m => m.mappingStrength === "direct");
-          const hasPartial = activeMappings.some(m => m.mappingStrength === "partial");
-          if (hasDirect) {
-            status = req.requirementType === "metric" ? "covered" : "partial";
-          } else if (hasPartial) {
-            status = "partial";
-          } else {
-            status = "partial";
-          }
-          mappedMetrics = activeMappings.map(m => m.metricDefinitionId);
-        }
-
-        const additionalNeeded: string[] = [];
-        if (req.requirementType !== "metric" && status === "partial") {
-          additionalNeeded.push(`${req.requirementType} documentation required`);
-        }
-        if (req.requirementType === "narrative") additionalNeeded.push("narrative statement needed");
-        if (req.requirementType === "policy") additionalNeeded.push("formal policy document needed");
-        if (req.requirementType === "evidence") additionalNeeded.push("supporting evidence needed");
-        if (req.requirementType === "target") additionalNeeded.push("quantified target needed");
-        if (req.requirementType === "risk") additionalNeeded.push("risk assessment needed");
-
+        const evaluation = evaluateFrameworkRequirement({
+          requirement: req,
+          mappings: allMappings,
+          metricDefinitions: metricDefs,
+          metricFacts,
+          requirementEvidenceFacts,
+          requirementResponseFacts,
+          scope,
+        });
         return {
           ...req,
-          status,
-          mappedMetricIds: mappedMetrics,
-          mappedMetricCount: mappedMetrics.length,
-          additionalNeeded,
+          ...evaluation,
         };
       });
 
@@ -3220,29 +3676,30 @@ export class DatabaseStorage implements IStorage {
       const partial = reqReadiness.filter(r => r.status === "partial").length;
       const missing = reqReadiness.filter(r => r.status === "missing").length;
       const total = reqs.length;
+      const responseFacts = reqReadiness.reduce((sum, requirement) => sum + requirement.factSummary.requirementResponses, 0);
+      const approvedResponseFacts = reqReadiness.reduce((sum, requirement) => sum + requirement.factSummary.approvedRequirementResponses, 0);
+      const evidenceFacts = reqReadiness.reduce((sum, requirement) => sum + requirement.factSummary.requirementLinkedEvidence, 0);
+      const approvedEvidenceFacts = reqReadiness.reduce((sum, requirement) => sum + requirement.factSummary.approvedRequirementLinkedEvidence, 0);
 
-      const missingCoreReqs = reqReadiness.filter(r => r.status === "missing" && r.mandatoryLevel === "core");
-      const nextBestActions = missingCoreReqs.slice(0, 3).map(r => ({
+      const priorityCoreReqs = reqReadiness
+        .filter(r => r.status !== "covered" && r.mandatoryLevel === "core")
+        .sort((a, b) => (a.status === "missing" ? 0 : 1) - (b.status === "missing" ? 0 : 1));
+      const nextBestActions = priorityCoreReqs.slice(0, 3).map(r => ({
         requirementCode: r.code,
         title: r.title,
-        action: r.requirementType === "metric"
-          ? "Add and enter data for this metric in the Metrics Library"
-          : r.requirementType === "policy"
-          ? "Create a formal policy document for this area"
-          : r.requirementType === "narrative"
-          ? "Add a narrative statement for this disclosure"
-          : r.requirementType === "target"
-          ? "Set a quantified target for this area"
-          : r.requirementType === "evidence"
-          ? "Upload supporting evidence documentation"
-          : "Complete this requirement",
+        action: r.additionalNeeded[0] ?? "Complete this requirement",
       }));
 
       result.push({
         framework,
         requirements: reqReadiness,
-        summary: { covered, partial, missing, total },
+        summary: { covered, partial, missing, total, responseFacts, approvedResponseFacts, evidenceFacts, approvedEvidenceFacts },
         nextBestActions,
+        scope: {
+          period: resolvedPeriod ?? null,
+          siteMode: filters.siteId === undefined ? "all" : filters.siteId === null ? "organisation" : "site",
+          siteId: typeof filters.siteId === "string" ? filters.siteId : null,
+        },
       });
     }
 

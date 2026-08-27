@@ -10,6 +10,12 @@ const submission = buildOnboardingMetricSubmission(uuid, "1,250", "2026-08");
 
 assert.equal(submission.metricId, uuid, "onboarding must submit the metric UUID unchanged");
 assert.equal(submission.value, 1250, "onboarding must normalize comma-separated values");
+assert.equal(submission.dataSourceType, "estimated", "uncertain onboarding figures must default to estimated");
+
+const actualSubmission = buildOnboardingMetricSubmission(uuid, "1,250", "2025", "manual");
+assert.equal(actualSubmission.period, "2025", "onboarding must preserve the selected reporting-year boundary");
+assert.equal(actualSubmission.dataSourceType, "manual", "confirmed actual figures must retain their source quality");
+assert.match(actualSubmission.notes, /actual figure/, "actual source quality should be visible in the audit note");
 
 const metrics: LabelledOnboardingMetric[] = [
   {

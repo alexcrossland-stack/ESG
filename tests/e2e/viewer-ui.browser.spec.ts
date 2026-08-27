@@ -13,7 +13,7 @@ test.describe("Viewer UI restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/data-entry");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
     if (url.includes("/auth") || url.includes("/onboarding")) {
@@ -43,7 +43,7 @@ test.describe("Viewer UI restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/data-entry");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
     if (url.includes("/auth") || url.includes("/onboarding")) {
@@ -70,7 +70,7 @@ test.describe("Viewer UI restrictions", () => {
     const page = await context.newPage();
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.waitForURL((url) => !url.pathname.startsWith("/auth"), { timeout: 10000 });
 

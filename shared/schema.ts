@@ -179,7 +179,7 @@ export const companySettings = pgTable("company_settings", {
   reportBrandingTagline: text("report_branding_tagline"),
   reportBrandingColor: text("report_branding_color"),
   reportBrandingFooter: text("report_branding_footer"),
-  emissionFactorSet: text("emission_factor_set").default("UK_DEFRA_2024"),
+  emissionFactorSet: text("emission_factor_set").default("UK_GOVERNMENT_2026"),
   reminderEnabled: boolean("reminder_enabled").default(true),
   reminderFrequency: text("reminder_frequency").default("daily"),
 });
@@ -638,7 +638,7 @@ export const emissionFactors = pgTable("emission_factors", {
   unit: text("unit").notNull(),
   factor: decimal("factor", { precision: 15, scale: 6 }).notNull(),
   sourceLabel: text("source_label"),
-  factorYear: integer("factor_year").default(2024),
+  factorYear: integer("factor_year").default(2026),
   version: integer("version").default(1),
   fuelType: text("fuel_type"),
   methodology: text("methodology"),
@@ -657,7 +657,7 @@ export const carbonCalculations = pgTable("carbon_calculations", {
   scope3Total: decimal("scope3_total", { precision: 15, scale: 4 }),
   totalEmissions: decimal("total_emissions", { precision: 15, scale: 4 }),
   employeeCount: integer("employee_count"),
-  factorYear: integer("factor_year").default(2024),
+  factorYear: integer("factor_year").default(2026),
   dataQuality: jsonb("data_quality"),
   methodologyNotes: jsonb("methodology_notes"),
   assumptions: jsonb("assumptions"),
@@ -1006,73 +1006,26 @@ export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "
 
 export const superAdminActions = pgTable("super_admin_actions", {
   id: serial("id").primaryKey(),
-  adminUserId: integer("admin_user_id"),
+  adminUserId: varchar("admin_user_id"),
   action: text("action").notNull(),
-  targetCompanyId: integer("target_company_id"),
-  targetUserId: integer("target_user_id"),
+  targetCompanyId: varchar("target_company_id"),
+  targetUserId: varchar("target_user_id"),
   metadata: jsonb("metadata"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export type SuperAdminAction = typeof superAdminActions.$inferSelect;
 export type InsertSuperAdminAction = typeof superAdminActions.$inferInsert;
 
-export type UserRole = "admin" | "contributor" | "approver" | "viewer" | "super_admin";
-export type PermissionModule =
-  | "metrics_data_entry"
-  | "policy_editing"
-  | "report_generation"
-  | "questionnaire_access"
-  | "settings_admin"
-  | "template_admin"
-  | "user_management";
-
-export const ROLE_PERMISSIONS: Record<UserRole, PermissionModule[]> = {
-  admin: [
-    "metrics_data_entry",
-    "policy_editing",
-    "report_generation",
-    "questionnaire_access",
-    "settings_admin",
-    "template_admin",
-    "user_management",
-  ],
-  super_admin: [
-    "metrics_data_entry",
-    "policy_editing",
-    "report_generation",
-    "questionnaire_access",
-    "settings_admin",
-    "template_admin",
-    "user_management",
-  ],
-  contributor: [
-    "metrics_data_entry",
-    "policy_editing",
-    "questionnaire_access",
-  ],
-  approver: [
-    "report_generation",
-  ],
-  viewer: [],
-};
-
-function normalizeRole(role: string): UserRole {
-  if (role === "editor") return "contributor";
-  return role as UserRole;
-}
-
-export function hasPermission(role: string | undefined, module: PermissionModule): boolean {
-  if (!role) return false;
-  const permissions = ROLE_PERMISSIONS[normalizeRole(role)];
-  if (!permissions) return false;
-  return permissions.includes(module);
-}
-
-export function getUserPermissions(role: string | undefined): PermissionModule[] {
-  if (!role) return [];
-  return ROLE_PERMISSIONS[normalizeRole(role)] || [];
-}
+export {
+  ROLE_PERMISSIONS,
+  getUserPermissions,
+  hasPermission,
+  normalizeUserRole,
+} from "./role-permissions";
+export type { PermissionModule, UserRole } from "./role-permissions";
 
 // ============================================================
 // AI AGENT INTEGRATION LAYER
@@ -1320,6 +1273,9 @@ export type MetricCalculationRun = typeof metricCalculationRuns.$inferSelect;
 export const frameworkRequirementTypeEnum = pgEnum("framework_requirement_type", [
   "metric", "narrative", "policy", "target", "risk", "evidence",
 ]);
+export const frameworkResponseSourceTypeEnum = pgEnum("framework_response_source_type", [
+  "policy", "target", "risk",
+]);
 export const mandatoryLevelEnum = pgEnum("mandatory_level", ["core", "conditional", "advanced"]);
 export const mappingStrengthEnum = pgEnum("mapping_strength", ["direct", "partial", "supporting"]);
 
@@ -1377,6 +1333,37 @@ export const businessFrameworkSelections = pgTable("business_framework_selection
   uniqueSelection: uniqueIndex("idx_bfs_unique").on(table.businessId, table.frameworkId),
 }));
 
+export const frameworkRequirementResponses = pgTable("framework_requirement_responses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  frameworkRequirementId: varchar("framework_requirement_id").notNull(),
+  period: text("period").notNull(),
+  siteId: varchar("site_id"),
+  responseText: text("response_text"),
+  linkedEntityType: frameworkResponseSourceTypeEnum("linked_entity_type"),
+  linkedEntityId: varchar("linked_entity_id"),
+  workflowStatus: workflowStatusEnum("workflow_status").notNull().default("draft"),
+  createdByUserId: varchar("created_by_user_id"),
+  updatedByUserId: varchar("updated_by_user_id"),
+  submittedByUserId: varchar("submitted_by_user_id"),
+  submittedAt: timestamp("submitted_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  companyIdx: index("idx_frr_company").on(table.companyId),
+  requirementIdx: index("idx_frr_requirement").on(table.frameworkRequirementId),
+  linkedEntityIdx: index("idx_frr_linked_entity").on(table.companyId, table.linkedEntityType, table.linkedEntityId),
+  orgNaturalKeyIdx: uniqueIndex("idx_frr_company_requirement_period_org_unique")
+    .on(table.companyId, table.frameworkRequirementId, table.period)
+    .where(sql`${table.siteId} IS NULL`),
+  siteNaturalKeyIdx: uniqueIndex("idx_frr_company_requirement_period_site_unique")
+    .on(table.companyId, table.frameworkRequirementId, table.period, table.siteId)
+    .where(sql`${table.siteId} IS NOT NULL`),
+}));
+
 export const insertFrameworkSchema = createInsertSchema(frameworks).omit({ id: true, createdAt: true });
 export type Framework = typeof frameworks.$inferSelect;
 export type InsertFramework = z.infer<typeof insertFrameworkSchema>;
@@ -1392,6 +1379,10 @@ export type InsertMetricFrameworkMapping = z.infer<typeof insertMetricFrameworkM
 export const insertBusinessFrameworkSelectionSchema = createInsertSchema(businessFrameworkSelections).omit({ id: true, createdAt: true, updatedAt: true });
 export type BusinessFrameworkSelection = typeof businessFrameworkSelections.$inferSelect;
 export type InsertBusinessFrameworkSelection = z.infer<typeof insertBusinessFrameworkSelectionSchema>;
+
+export const insertFrameworkRequirementResponseSchema = createInsertSchema(frameworkRequirementResponses).omit({ id: true, createdAt: true, updatedAt: true });
+export type FrameworkRequirementResponse = typeof frameworkRequirementResponses.$inferSelect;
+export type InsertFrameworkRequirementResponse = z.infer<typeof insertFrameworkRequirementResponseSchema>;
 
 export const insertIdentityProviderSchema = createInsertSchema(identityProviders).omit({ id: true, createdAt: true, updatedAt: true });
 export type IdentityProvider = typeof identityProviders.$inferSelect;

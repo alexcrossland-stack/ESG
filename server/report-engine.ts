@@ -7,6 +7,7 @@ import {
   type GeneratedInlineRun,
 } from "@shared/generated-document-markdown";
 import { formatMetricDisplayValue } from "@shared/data-entry-metrics";
+import { classifyValueSource, valueSourceLabel } from "@shared/value-source";
 
 export interface ReportSection {
   title: string;
@@ -124,14 +125,24 @@ export function buildSavedReportSnapshotSections(reportData: any): ReportSection
 
   const carbon = reportData?.carbonSummary || reportData?.carbon;
   if (carbon && !sections.some(section => section.title === "Carbon Summary")) {
+    const sourceUnit = String(carbon.unit || carbon.sourceUnit || "kgCO2e").toLowerCase();
+    const toTonnes = (value: unknown): number => {
+      const numericValue = Number(value ?? 0);
+      if (!Number.isFinite(numericValue)) return 0;
+      return sourceUnit.includes("kg") ? numericValue / 1_000 : numericValue;
+    };
+    const formatTonnes = (value: unknown): string => {
+      const tonnes = toTonnes(value);
+      return `${tonnes.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 3 })} tCO2e`;
+    };
     sections.push({
       title: "Carbon Summary",
       type: "metrics",
       rows: [
-        { label: "Scope 1", value: `${carbon.scope1 ?? 0} tCO2e` },
-        { label: "Scope 2", value: `${carbon.scope2 ?? 0} tCO2e` },
-        { label: "Scope 3", value: `${carbon.scope3 ?? 0} tCO2e` },
-        { label: "Total", value: `${carbon.total ?? carbon.totalEmissions ?? 0} tCO2e` },
+        { label: "Scope 1", value: formatTonnes(carbon.scope1) },
+        { label: "Scope 2", value: formatTonnes(carbon.scope2) },
+        { label: "Scope 3", value: formatTonnes(carbon.scope3) },
+        { label: "Total", value: formatTonnes(carbon.total ?? carbon.totalEmissions) },
       ],
     });
   }
@@ -200,17 +211,34 @@ export function buildSavedReportSnapshotSections(reportData: any): ReportSection
     });
   }
 
-  if (reportData?.complianceStatus && !sections.some(section => section.title === "Compliance Status")) {
+  if (reportData?.complianceStatus && !sections.some(section => section.title === "Framework Readiness")) {
     const frameworks = Array.isArray(reportData.complianceStatus) ? reportData.complianceStatus : Object.values(reportData.complianceStatus);
     sections.push({
-      title: "Compliance Status",
+      title: "Framework Readiness",
       type: "table",
-      tableHeaders: ["Framework", "Status", "Completion"],
-      tableRows: frameworks.slice(0, 50).map((framework: any) => [
-        framework?.name || framework?.frameworkName || "Framework",
-        framework?.status || framework?.state || "-",
-        `${framework?.compliancePercent ?? framework?.completionPercent ?? 0}%`,
-      ]),
+      tableHeaders: ["Framework", "Ready", "In progress", "Missing"],
+      tableRows: frameworks.slice(0, 50).map((framework: any) => {
+        // Historical snapshots used compliancePercent/metRequirements. Keep them
+        // readable while presenting the result with the current readiness language.
+        const readinessPercent = framework?.readinessPercent
+          ?? framework?.compliancePercent
+          ?? framework?.completionPercent
+          ?? 0;
+        const readyRequirements = framework?.readyRequirements
+          ?? framework?.metRequirements
+          ?? 0;
+        return [
+          framework?.name || framework?.frameworkName || "Framework",
+          `${readinessPercent}% (${readyRequirements}/${framework?.totalRequirements ?? 0})`,
+          String(framework?.partialRequirements ?? 0),
+          String(framework?.missingRequirements ?? 0),
+        ];
+      }),
+    });
+    sections.push({
+      title: "Framework Readiness Notice",
+      type: "text",
+      content: "Readiness is calculated from saved data, workflow approval, and linked evidence. It does not constitute certification, independent assurance, or confirmation of legal compliance.",
     });
   }
 
@@ -634,19 +662,12 @@ export function buildStandaloneMetaSections(opts: {
  *   "manual"     → Measured   (manually entered measured value, no derived/estimation involved)
  *   absent/null  → Missing
  */
-function labelDataSource(v: { dataSourceType?: string | null; isDerived?: boolean }): "Measured" | "Derived" | "Estimated" | "Missing" {
-  if (v.isDerived) return "Derived";
-  switch (v.dataSourceType) {
-    case "evidenced":
-    case "manual":
-      return "Measured";
-    case "calculated":
-      return "Derived";
-    case "estimated":
-      return "Estimated";
-    default:
-      return "Missing";
-  }
+function labelDataSource(v: {
+  dataSourceType?: string | null;
+  sourceType?: string | null;
+  isDerived?: boolean;
+}): "Measured" | "Derived" | "Estimated" | "Missing" {
+  return valueSourceLabel({ ...v, value: "reported" });
 }
 
 function formatMetricValue(value: unknown): string {
@@ -684,6 +705,17 @@ function aggregateValuesByMetric(values: any[]): any[] {
 
   const aggregated = Array.from(grouped.entries()).map(([metricId, rows]) => {
     if (rows.length === 1) return rows[0];
+    const dataSourceTypes = new Set(rows.map((row) => row.dataSourceType).filter(Boolean));
+    const dataSourceType = dataSourceTypes.has("estimated")
+      ? "estimated"
+      : dataSourceTypes.has("calculated")
+        ? "calculated"
+        : dataSourceTypes.has("evidenced")
+          ? "evidenced"
+          : rows[0].dataSourceType;
+    const workflowLabel = rows.every((row) => row.workflowLabel === rows[0].workflowLabel)
+      ? rows[0].workflowLabel
+      : "Mixed";
     const booleanRows = rows.filter((row) => row.valueBoolean !== null && row.valueBoolean !== undefined);
     if (booleanRows.length === rows.length) {
       const uniqueValues = new Set(booleanRows.map((row) => row.valueBoolean));
@@ -694,6 +726,8 @@ function aggregateValuesByMetric(values: any[]): any[] {
         valueBoolean: uniqueValues.size === 1 ? booleanRows[0].valueBoolean : null,
         valueText: uniqueValues.size === 1 ? null : "Mixed",
         siteId: undefined,
+        dataSourceType,
+        workflowLabel,
       };
     }
     const numericRows = rows
@@ -701,23 +735,17 @@ function aggregateValuesByMetric(values: any[]): any[] {
       .filter((value) => Number.isFinite(value));
     if (numericRows.length !== rows.length) return rows[0];
     const total = numericRows.reduce((sum, value) => sum + value, 0);
-    const dataSourceTypes = new Set(rows.map((row) => row.dataSourceType).filter(Boolean));
-    const dataSourceType = dataSourceTypes.has("estimated")
-      ? "estimated"
-      : dataSourceTypes.has("calculated")
-        ? "calculated"
-        : dataSourceTypes.has("evidenced")
-          ? "evidenced"
-          : rows[0].dataSourceType;
     return {
       ...rows[0],
       metricId,
       value: total.toFixed(4),
+      valueNumeric: total.toFixed(4),
+      valueText: null,
+      valueBoolean: null,
+      valueJson: null,
       siteId: undefined,
       dataSourceType,
-      workflowLabel: rows.every((row) => row.workflowLabel === rows[0].workflowLabel)
-        ? rows[0].workflowLabel
-        : "Mixed",
+      workflowLabel,
     };
   });
 
@@ -755,12 +783,17 @@ export function buildEsgMetricsSummaryReport(data: {
 
   // Summary stats — use pre-computed counts (unique metric IDs) if provided
   const totalMetrics = metrics.length;
-  const reportedMetricIds = new Set(values.map((v: any) => v.metricId || v.id).filter(Boolean));
+  const reportedMetricIds = new Set(displayValues.map((v: any) => v.metricId || v.id).filter(Boolean));
   const reportedCount = data.reportedCount !== undefined ? data.reportedCount : reportedMetricIds.size;
   const missingCount = data.missingCount !== undefined ? data.missingCount : Math.max(0, totalMetrics - reportedCount);
-  const measuredCount = values.filter((v: any) => v.dataSourceType === "evidenced" || v.dataSourceLabel === "Evidenced").length;
-  const estimatedCount = values.filter((v: any) => v.dataSourceType === "estimated" || v.dataSourceLabel === "Estimated").length;
-  const derivedCount = values.filter((v: any) => v.dataSourceType === "calculated" || (v.metric?.metricType === "derived" || v.metric?.metricType === "calculated")).length;
+  const metricTypeById = new Map(metrics.map((metric: any) => [metric.id, metric.metricType]));
+  const sourceClasses = displayValues.map((value: any) => classifyValueSource({
+    ...value,
+    metricType: metricTypeById.get(value.metricId),
+  }));
+  const measuredCount = sourceClasses.filter((source) => source === "measured").length;
+  const derivedCount = sourceClasses.filter((source) => source === "derived").length;
+  const estimatedCount = sourceClasses.filter((source) => source === "estimated").length;
 
   sections.push({
     title: "Data Quality Overview",
@@ -768,7 +801,7 @@ export function buildEsgMetricsSummaryReport(data: {
     rows: [
       { label: "Total Metrics Tracked", value: String(totalMetrics) },
       { label: "Reported / Populated", value: String(reportedCount), status: reportedCount > 0 ? "green" : "red" },
-      { label: "Measured (evidence-backed)", value: String(measuredCount), status: measuredCount > 0 ? "green" : "amber" },
+      { label: "Measured (entered or evidenced)", value: String(measuredCount), status: measuredCount > 0 ? "green" : "amber" },
       { label: "Derived (calculated from inputs)", value: String(derivedCount) },
       { label: "Estimated (no evidence)", value: String(estimatedCount), status: estimatedCount > 0 ? "amber" : "green" },
       { label: "Missing (no data)", value: String(missingCount), status: missingCount > 0 ? "red" : "green" },
@@ -784,7 +817,10 @@ export function buildEsgMetricsSummaryReport(data: {
         metric.name,
         value ? formatMetricRowValue(value) : "—",
         metric.unit || "—",
-        value ? labelDataSource(value) : "Missing",
+        value ? labelDataSource({
+          ...value,
+          isDerived: metric.metricType === "derived" || metric.metricType === "calculated",
+        }) : "Missing",
         value?.workflowLabel || (value ? "Draft" : "Not reported"),
       ]),
     });
@@ -804,20 +840,33 @@ export function buildEsgMetricsSummaryReport(data: {
  */
 export function buildFrameworkReadinessSummaryReport(data: {
   company: any;
-  frameworkReadiness: any;
+  frameworkReadiness: any[];
   selectedFrameworks: any[];
   period?: string;
+  siteId?: string | null;
+  siteName?: string | null;
   dateFrom?: string | null;
   dateTo?: string | null;
 }): ReportData {
-  const { company, frameworkReadiness, selectedFrameworks, period } = data;
+  const { company, selectedFrameworks, period } = data;
+  const frameworkReadiness = Array.isArray(data.frameworkReadiness) ? data.frameworkReadiness : [];
 
   const sections: ReportSection[] = [];
+
+  const firstScope = frameworkReadiness[0]?.scope;
+  const siteMode = firstScope?.siteMode
+    ?? (data.siteId === undefined ? "all" : data.siteId === null ? "organisation" : "site");
+  const scopeLabel = siteMode === "site"
+    ? `Site: ${data.siteName || firstScope?.siteId || "selected site"}`
+    : siteMode === "organisation"
+      ? "Organisation-wide records only"
+      : "All scopes in the organisation";
+  const periodLabel = firstScope?.period || period || "All periods";
 
   sections.push({
     title: "Framework Readiness Overview",
     type: "text",
-    content: `This section summarises the organisation's current readiness alignment against selected ESG frameworks. Readiness indicates the degree to which available data and policies align with framework requirements. It does not constitute certification, assurance, or regulatory compliance confirmation.`,
+    content: `This section summarises the organisation's current readiness alignment against selected ESG frameworks for ${periodLabel}, scoped to ${scopeLabel}. Readiness indicates the degree to which saved, workflow-reviewed facts align with framework requirements. It does not constitute certification, assurance, or regulatory compliance confirmation.`,
   });
 
   if (selectedFrameworks.length === 0) {
@@ -827,34 +876,58 @@ export function buildFrameworkReadinessSummaryReport(data: {
       content: "No frameworks have been selected for alignment tracking. Visit Framework Settings to enable frameworks.",
     });
   } else {
-    const overallReadiness = frameworkReadiness?.overallReadiness ?? {};
+    const readinessByFrameworkId = new Map(
+      frameworkReadiness.map((group: any) => [group?.framework?.id, group]),
+    );
+    const readinessByFrameworkCode = new Map(
+      frameworkReadiness.map((group: any) => [group?.framework?.code, group]),
+    );
     const frameworkRows = selectedFrameworks.map((fw: any) => {
-      const readiness = overallReadiness[fw.code] ?? frameworkReadiness?.[fw.code] ?? {};
-      const score = readiness.readinessScore ?? readiness.score ?? "—";
-      const met = readiness.metRequirements ?? readiness.met ?? "—";
-      const total = readiness.totalRequirements ?? readiness.total ?? "—";
+      const readiness = readinessByFrameworkId.get(fw.id) ?? readinessByFrameworkCode.get(fw.code) ?? {};
+      const requirements = Array.isArray(readiness.requirements) ? readiness.requirements : [];
+      const summary = readiness.summary ?? {};
+      const total = Number(summary.total ?? requirements.length ?? 0);
+      const covered = Number(summary.covered ?? requirements.filter((requirement: any) => requirement.status === "covered").length);
+      const partial = Number(summary.partial ?? requirements.filter((requirement: any) => requirement.status === "partial").length);
+      const missing = Number(summary.missing ?? requirements.filter((requirement: any) => requirement.status === "missing").length);
+      const score = total > 0 ? Math.round((covered / total) * 100) : 0;
+      const status = total > 0 && covered === total
+        ? "Covered"
+        : covered > 0 || partial > 0
+          ? "Partial"
+          : "Missing";
       return [
         fw.name || fw.code,
-        typeof score === "number" ? `${score}%` : String(score),
-        `${met} / ${total}`,
-        readiness.status || (typeof score === "number" && score >= 80 ? "Strong alignment" : score >= 50 ? "Partial alignment" : "Early stage"),
+        `${score}%`,
+        String(covered),
+        String(partial),
+        String(missing),
+        status,
       ];
     });
 
     sections.push({
       title: "Framework Alignment Status",
       type: "table",
-      tableHeaders: ["Framework", "Readiness Score", "Requirements Met", "Alignment Status"],
+      tableHeaders: ["Framework", "Strict Readiness", "Covered", "Partial", "Missing", "Status"],
       tableRows: frameworkRows,
     });
   }
 
-  if (frameworkReadiness?.requirementGaps?.length > 0) {
+  const requirementGaps = frameworkReadiness.flatMap((group: any) =>
+    (Array.isArray(group?.requirements) ? group.requirements : [])
+      .filter((requirement: any) => requirement.status !== "covered")
+      .map((requirement: any) => ({
+        frameworkCode: group?.framework?.code,
+        ...requirement,
+      })),
+  );
+  if (requirementGaps.length > 0) {
     sections.push({
       title: "Readiness Gaps",
       type: "list",
-      items: frameworkReadiness.requirementGaps.slice(0, 20).map((g: any) =>
-        `${g.frameworkCode || ""} ${g.code || ""}: ${g.title || g.description || "Requirement not yet met"}`
+      items: requirementGaps.slice(0, 20).map((gap: any) =>
+        `${gap.frameworkCode || ""} ${gap.code || ""}: ${gap.title || gap.description || "Requirement not yet met"} (${gap.status || "missing"})${gap.additionalNeeded?.[0] ? ` — ${gap.additionalNeeded[0]}` : ""}`.trim()
       ),
     });
   }
@@ -862,7 +935,7 @@ export function buildFrameworkReadinessSummaryReport(data: {
   sections.push({
     title: "Methodology Note",
     type: "text",
-    content: `Readiness alignment is assessed by mapping available metric data and policy records to framework requirement categories. A requirement is considered "aligned" when the corresponding metric has reported data for the period or when a relevant policy is in active status. This is an indicative assessment only and does not constitute formal certification or regulatory confirmation.`,
+    content: `Readiness is assessed per requirement within the stated company, reporting period, and site boundary. A metric requirement is Covered only when an approved value uses a direct framework mapping and, where the metric definition requires evidence, a usable evidence file is attached. Narrative, policy, target, and risk requirements are Covered only by an approved requirement response; linked policies must remain active, targets quantified and not cancelled, and risks scored. Evidence requirements are Covered only by reviewed or approved requirement-linked evidence. Usable but unapproved metric values, draft or submitted responses, invalid linked sources, and unreviewed evidence are Partial. Rejected facts never make a requirement Covered; absent facts remain Missing. This is an indicative assessment only and does not constitute formal certification, assurance, or regulatory confirmation.`,
   });
 
   return {
@@ -1320,7 +1393,11 @@ function formatReportType(type: string): string {
     register: "ESG Register",
     management: "Internal Management Report",
     customer: "Customer / Supplier Response Pack",
-    annual: "Annual ESG Summary",
+    annual: "Annual ESG Report",
+    board: "Board Summary",
+    compliance: "Framework Readiness Summary",
+    vsme: "VSME Readiness & Draft Pack",
+    ppn006: "PPN 006 Readiness Pack",
     esg_metrics_summary: "ESG Metrics Summary",
     framework_readiness_summary: "Framework Readiness Summary",
     target_progress_summary: "Target Progress Summary",

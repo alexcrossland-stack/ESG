@@ -617,7 +617,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         type: "callout",
         tone: "tip",
-        content: "Different report types include different sections. The Framework Readiness report focuses on your alignment to GRI, TCFD, or CSRD. The Board Pack report is formatted as a summary for senior leadership. Choose the report type that matches your audience.",
+        content: "Different report types include different sections. The VSME report is the practical SME default, the PPN 006 readiness pack is for relevant UK public procurement, and the Board Summary is formatted for senior leadership. Choose the report type that matches the request you have received.",
       },
       {
         type: "text",
@@ -658,7 +658,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         type: "text",
         heading: "Sharing via the public profile",
-        content: "If you want to share your ESG data with a supplier or investor without sending a PDF, you can use your Public ESG Profile. This is a live link that shows your current ESG Position score and key data. Go to ESG Setup > ESG Profile to find your shareable link.",
+        content: "If you want to share ESG facts with a supplier or investor without sending a PDF, use your SME ESG Passport. The live link states the reporting boundary and period, data completion, evidence confidence, emissions by scope, policies, actions, targets, and any approved report you choose to share. It does not present a single composite score as the outcome. Go to ESG Setup > ESG Profile to create the link.",
       },
     ],
   },
@@ -696,7 +696,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         type: "callout",
         tone: "tip",
-        content: "If you are not sure which framework to choose, start with GRI (Global Reporting Initiative) — it is the most widely used and accepted framework for businesses of all sizes.",
+        content: "If no stakeholder has specified a standard, start with VSME: it was designed for SMEs and supports common requests from larger customers, lenders, and investors. Use PPN 006 when a relevant UK public contract asks for a Carbon Reduction Plan.",
       },
       {
         type: "text",
@@ -723,7 +723,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "list",
         heading: "The main frameworks explained",
         items: [
-          "GRI (Global Reporting Initiative): The most widely used framework worldwide. Covers all three pillars — Environment, Social, Governance. Good starting point for any business.",
+          "VSME (Voluntary Sustainability Reporting Standard for SMEs): The practical default for SMEs that need a proportionate, structured sustainability disclosure for customers, lenders, or investors.",
+          "PPN 006: Relevant to specified UK public procurement exercises requiring a Carbon Reduction Plan. It needs a defined organisational boundary, current and baseline emissions, a net-zero commitment, reduction measures, publication, and director-level sign-off.",
+          "GRI (Global Reporting Initiative): A broad impact-reporting framework used worldwide. Select it when a stakeholder asks for it or when your reporting needs extend beyond the proportionate VSME baseline.",
           "TCFD (Task Force on Climate-related Financial Disclosures): Focuses on climate-related risks and how they affect your business financially. Becoming a common requirement from investors and lenders.",
           "CSRD / ESRS (EU Corporate Sustainability Reporting Directive): Required for larger EU companies. Increasingly relevant if you supply to EU businesses, as they may ask their supply chain to report similarly.",
           "ISSB (International Sustainability Standards Board / IFRS S1 and S2): A newer global standard focused on sustainability and climate reporting for investors.",
@@ -734,12 +736,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         type: "callout",
         tone: "tip",
-        content: "Start with GRI if you are unsure. It is the most practical framework for SMEs and widely recognised. Add TCFD if an investor or lender has asked you about climate risks.",
+        content: "Start with VSME if nobody has prescribed a framework. Add only the standard named by your customer, lender, investor, or tender so the workspace remains focused.",
       },
       {
         type: "text",
         heading: "How to decide",
-        content: "Ask yourself: who is asking for this information? If it is an investor, TCFD is likely most relevant. If it is a large corporate customer, they may specify a particular framework in their supply chain questionnaire. If no one has specified a framework, GRI is a solid default.",
+        content: "Ask who is requesting the information and what decision they are making. Follow an explicitly requested standard; use PPN 006 for an applicable UK Carbon Reduction Plan request; otherwise use VSME as the proportionate SME baseline. Framework readiness is guidance, not certification or legal advice.",
       },
     ],
   },
