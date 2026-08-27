@@ -1,6 +1,6 @@
 import { db } from "./storage";
 import { frameworks, frameworkRequirements, metricFrameworkMappings, metricDefinitions } from "@shared/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export const FRAMEWORK_SEEDS = [
   {
@@ -344,71 +344,181 @@ export const METRIC_MAPPINGS: Array<{
   { metricCode: "E006", requirementCode: "PPN006-CURRENT-TOTAL", strength: "direct" },
 ];
 
+type FrameworkCatalogueSnapshot = {
+  frameworks: Array<{ id: string; code: string }>;
+  requirements: Array<{ id: string; frameworkId: string; code: string }>;
+  metricDefinitions: Array<{ id: string; code: string }>;
+  mappings: Array<{
+    metricDefinitionId: string;
+    frameworkRequirementId: string;
+    mappingStrength: string;
+    notes?: string | null;
+  }>;
+};
+
+const FRAMEWORK_SEED_LOCK = "simplyesg:seed:framework-catalogue";
+
+export function frameworkCatalogueErrors(snapshot: FrameworkCatalogueSnapshot): string[] {
+  const errors: string[] = [];
+  const frameworksByCode = new Map(snapshot.frameworks.map((framework) => [framework.code, framework]));
+  const requirementsByCode = new Map(snapshot.requirements.map((requirement) => [requirement.code, requirement]));
+  const metricsByCode = new Map(snapshot.metricDefinitions.map((metric) => [metric.code, metric]));
+
+  for (const seed of FRAMEWORK_SEEDS) {
+    if (!frameworksByCode.has(seed.code)) {
+      errors.push(`missing framework ${seed.code}`);
+    }
+  }
+
+  for (const seed of REQUIREMENT_SEEDS) {
+    const requirement = requirementsByCode.get(seed.code);
+    const framework = frameworksByCode.get(seed.frameworkCode);
+    if (!requirement) {
+      errors.push(`missing requirement ${seed.code}`);
+    } else if (!framework || requirement.frameworkId !== framework.id) {
+      errors.push(`requirement ${seed.code} is not linked to ${seed.frameworkCode}`);
+    }
+  }
+
+  for (const seed of METRIC_MAPPINGS) {
+    const metric = metricsByCode.get(seed.metricCode);
+    const requirement = requirementsByCode.get(seed.requirementCode);
+    if (!metric) {
+      errors.push(`mapping ${seed.metricCode}->${seed.requirementCode} is missing metric ${seed.metricCode}`);
+      continue;
+    }
+    if (!requirement) {
+      errors.push(`mapping ${seed.metricCode}->${seed.requirementCode} is missing requirement ${seed.requirementCode}`);
+      continue;
+    }
+    const matchingMappings = snapshot.mappings.filter((mapping) =>
+      mapping.metricDefinitionId === metric.id
+      && mapping.frameworkRequirementId === requirement.id,
+    );
+    if (matchingMappings.length !== 1) {
+      errors.push(
+        `mapping ${seed.metricCode}->${seed.requirementCode}: expected exactly one row, found ${matchingMappings.length}`,
+      );
+      continue;
+    }
+    const [actualMapping] = matchingMappings;
+    if (
+      actualMapping.mappingStrength !== seed.strength
+      || (actualMapping.notes ?? null) !== (seed.notes ?? null)
+    ) {
+      errors.push(`mapping ${seed.metricCode}->${seed.requirementCode}: stale strength or notes`);
+    }
+  }
+
+  return errors;
+}
+
+export function assertFrameworkCatalogue(snapshot: FrameworkCatalogueSnapshot): void {
+  const errors = frameworkCatalogueErrors(snapshot);
+  if (errors.length > 0) {
+    throw new Error(`Required framework catalogue is invalid: ${errors.join("; ")}`);
+  }
+}
+
 export async function seedFrameworks() {
   console.log("[seed-frameworks] Starting framework seed...");
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${FRAMEWORK_SEED_LOCK}, 0))`);
 
-  const existingFrameworks = await db.select().from(frameworks);
-  const existingFrameworkByCode = new Map(existingFrameworks.map((framework) => [framework.code, framework]));
-
-  const fwMap: Record<string, string> = {};
-  for (const fw of FRAMEWORK_SEEDS) {
-    const existing = existingFrameworkByCode.get(fw.code);
-    if (existing) {
-      await db.update(frameworks).set(fw).where(eq(frameworks.id, existing.id));
-      fwMap[fw.code] = existing.id;
-      continue;
+    const existingFrameworks = await tx.select().from(frameworks);
+    const existingFrameworkByCode = new Map(existingFrameworks.map((framework) => [framework.code, framework]));
+    const fwMap: Record<string, string> = {};
+    let frameworksCreated = 0;
+    for (const fw of FRAMEWORK_SEEDS) {
+      const existing = existingFrameworkByCode.get(fw.code);
+      if (existing) {
+        await tx.update(frameworks).set(fw).where(eq(frameworks.id, existing.id));
+        fwMap[fw.code] = existing.id;
+        continue;
+      }
+      const [inserted] = await tx.insert(frameworks).values(fw).returning();
+      fwMap[fw.code] = inserted.id;
+      frameworksCreated++;
     }
-    const [inserted] = await db.insert(frameworks).values(fw).returning();
-    fwMap[fw.code] = inserted.id;
-    console.log(`[seed-frameworks] Created framework: ${fw.code}`);
-  }
 
-  const existingRequirements = await db.select().from(frameworkRequirements);
-  const existingRequirementByCode = new Map(existingRequirements.map((requirement) => [requirement.code, requirement]));
-  const reqMap: Record<string, string> = {};
-  for (const req of REQUIREMENT_SEEDS) {
-    const frameworkId = fwMap[req.frameworkCode];
-    if (!frameworkId) continue;
-    const values = {
-      frameworkId,
-      code: req.code,
-      title: req.title,
-      description: req.description,
-      requirementType: req.requirementType,
-      pillar: req.pillar,
-      mandatoryLevel: req.mandatoryLevel,
-      sortOrder: req.sortOrder,
-    };
-    const existing = existingRequirementByCode.get(req.code);
-    if (existing) {
-      await db.update(frameworkRequirements).set(values).where(eq(frameworkRequirements.id, existing.id));
-      reqMap[req.code] = existing.id;
-      continue;
+    const existingRequirements = await tx.select().from(frameworkRequirements);
+    const existingRequirementByCode = new Map(existingRequirements.map((requirement) => [requirement.code, requirement]));
+    const reqMap: Record<string, string> = {};
+    for (const req of REQUIREMENT_SEEDS) {
+      const frameworkId = fwMap[req.frameworkCode];
+      if (!frameworkId) {
+        throw new Error(`Cannot seed requirement ${req.code}: framework ${req.frameworkCode} is missing`);
+      }
+      const values = {
+        frameworkId,
+        code: req.code,
+        title: req.title,
+        description: req.description,
+        requirementType: req.requirementType,
+        pillar: req.pillar,
+        mandatoryLevel: req.mandatoryLevel,
+        sortOrder: req.sortOrder,
+      };
+      const existing = existingRequirementByCode.get(req.code);
+      if (existing) {
+        await tx.update(frameworkRequirements).set(values).where(eq(frameworkRequirements.id, existing.id));
+        reqMap[req.code] = existing.id;
+        continue;
+      }
+      const [inserted] = await tx.insert(frameworkRequirements).values(values).returning();
+      reqMap[req.code] = inserted.id;
     }
-    const [inserted] = await db.insert(frameworkRequirements).values(values).returning();
-    reqMap[req.code] = inserted.id;
-  }
-  console.log(`[seed-frameworks] Reconciled ${Object.keys(reqMap).length} framework requirements`);
 
-  const metricDefs = await db.select().from(metricDefinitions);
-  const metricCodeMap: Record<string, string> = {};
-  for (const md of metricDefs) {
-    metricCodeMap[md.code] = md.id;
-  }
+    const metricDefs = await tx.select().from(metricDefinitions);
+    const metricCodeMap: Record<string, string> = {};
+    for (const md of metricDefs) metricCodeMap[md.code] = md.id;
 
-  let mappingsCreated = 0;
-  for (const mapping of METRIC_MAPPINGS) {
-    const metricDefinitionId = metricCodeMap[mapping.metricCode];
-    const frameworkRequirementId = reqMap[mapping.requirementCode];
-    if (!metricDefinitionId || !frameworkRequirementId) continue;
-    await db.insert(metricFrameworkMappings).values({
-      metricDefinitionId,
-      frameworkRequirementId,
-      mappingStrength: mapping.strength,
-      notes: mapping.notes ?? null,
-    }).onConflictDoNothing();
-    mappingsCreated++;
-  }
-  console.log(`[seed-frameworks] Created ${mappingsCreated} metric-framework mappings`);
+    for (const mapping of METRIC_MAPPINGS) {
+      const metricDefinitionId = metricCodeMap[mapping.metricCode];
+      const frameworkRequirementId = reqMap[mapping.requirementCode];
+      if (!metricDefinitionId || !frameworkRequirementId) {
+        throw new Error(
+          `Cannot seed mapping ${mapping.metricCode}->${mapping.requirementCode}: required catalogue entry is missing`,
+        );
+      }
+      await tx.insert(metricFrameworkMappings).values({
+        metricDefinitionId,
+        frameworkRequirementId,
+        mappingStrength: mapping.strength,
+        notes: mapping.notes ?? null,
+      }).onConflictDoUpdate({
+        target: [metricFrameworkMappings.metricDefinitionId, metricFrameworkMappings.frameworkRequirementId],
+        set: {
+          mappingStrength: mapping.strength,
+          notes: mapping.notes ?? null,
+        },
+      });
+    }
+
+    const reconciledFrameworks = await tx.select({ id: frameworks.id, code: frameworks.code }).from(frameworks);
+    const reconciledRequirements = await tx.select({
+      id: frameworkRequirements.id,
+      frameworkId: frameworkRequirements.frameworkId,
+      code: frameworkRequirements.code,
+    }).from(frameworkRequirements);
+    const reconciledMappings = await tx.select({
+      metricDefinitionId: metricFrameworkMappings.metricDefinitionId,
+      frameworkRequirementId: metricFrameworkMappings.frameworkRequirementId,
+      mappingStrength: metricFrameworkMappings.mappingStrength,
+      notes: metricFrameworkMappings.notes,
+    }).from(metricFrameworkMappings);
+    assertFrameworkCatalogue({
+      frameworks: reconciledFrameworks,
+      requirements: reconciledRequirements,
+      metricDefinitions: metricDefs.map(({ id, code }) => ({ id, code })),
+      mappings: reconciledMappings,
+    });
+
+    return { frameworksCreated };
+  });
+
+  console.log(`[seed-frameworks] Reconciled ${FRAMEWORK_SEEDS.length} frameworks (${result.frameworksCreated} created)`);
+  console.log(`[seed-frameworks] Reconciled ${REQUIREMENT_SEEDS.length} framework requirements`);
+  console.log(`[seed-frameworks] Reconciled ${METRIC_MAPPINGS.length} metric-framework mappings`);
   console.log("[seed-frameworks] Framework seeding complete.");
 }

@@ -19,6 +19,7 @@ The workflow rejects these unsafe targets:
 - `STAGING_APP_DIR=/root/ESG`
 - `STAGING_PM2_PROCESS=esg`
 - `STAGING_SERVER_HOST` matching `SERVER_HOST`
+- `STAGING_DATABASE_URL` matching the protected production database target fingerprint
 - missing or incorrect `confirm_target`
 
 ## 2. Required GitHub Environment
@@ -38,8 +39,10 @@ Deployment target secrets:
 - `STAGING_SERVER_HOST`
 - `STAGING_SERVER_USER`
 - `STAGING_SERVER_SSH_KEY`
+- `STAGING_SSH_HOST_KEY_FINGERPRINT` (the independently verified SHA-256 fingerprint of the host's Ed25519 key)
 - `STAGING_APP_DIR`
 - `STAGING_PM2_PROCESS`
+- `PRODUCTION_DATABASE_TARGET_FINGERPRINT` (SHA-256 of the production database host, port and database name; it contains no password)
 
 Application secrets:
 
@@ -58,7 +61,9 @@ Application secrets:
 - `STAGING_STRIPE_WEBHOOK_SECRET`
 - `STAGING_STRIPE_PRO_PRICE_ID`
 
-The workflow maps staging secrets to the application’s runtime environment variable names on the staging host. The generated `.env` file is copied to `STAGING_APP_DIR/.env` on the staging host and is not committed to the repository.
+The workflow maps staging secrets to the application’s runtime environment variable names on the staging host. The generated `.env` file is copied to the canonicalised staging directory and is not committed to the repository. It is parsed as data by the PM2 ecosystem file and is never sourced by a shell. The workflow verifies the scanned SSH key against the protected fingerprint before uploading the environment file.
+
+Generate `PRODUCTION_DATABASE_TARGET_FINGERPRINT` from a captured effective production runtime with `node scripts/deployment/runtime-env.cjs database-target-fingerprint <effective-production-env-file>`. The output identifies only the host, port and database name through a one-way hash. Keep staging disabled until this guard is configured; the workflow fails closed when it is absent, malformed or matches `STAGING_DATABASE_URL`.
 
 ## 4. Staging Host Preparation
 

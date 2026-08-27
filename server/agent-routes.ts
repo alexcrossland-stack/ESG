@@ -173,7 +173,7 @@ export function registerAgentRoutes(app: Express) {
     } catch {}
 
     const schedulerInfo = getSchedulerStatus();
-    const schedulerRunning = !!schedulerInfo.workerId && schedulerInfo.uptime >= 0;
+    const schedulerRunning = schedulerInfo.running;
     const schedulerStatus = schedulerRunning ? "running" : "stopped";
     const ok = dbStatus === "connected" && schedulerRunning;
 

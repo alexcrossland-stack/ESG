@@ -45,6 +45,43 @@ find /backups -name "esg_*.dump" -mtime +30 -delete
 
 ## Restore Procedure
 
+### Hetzner per-release recovery point
+
+The production deployment workflow writes a matched database/evidence recovery point under `/root/esg-deploy-backups/<run>-<attempt>-<previous-sha>`. `/root/esg-deploy-backups/latest` contains the exact directory from the most recent attempted cutover.
+
+Each directory contains:
+
+- `database.dump` — custom-format PostgreSQL dump;
+- `evidence.tar.gz` and `evidence-manifest.json` — the resolved evidence bytes and expected file/byte inventory;
+- `production.env` — previous runtime configuration, mode `0600`;
+- `release.json` — previous/target SHAs, previous PM2 path/script, evidence path and backup timestamp;
+- `SHA256SUMS` — checksums for every recovery input;
+- `runtime-env.cjs`, `recovery-point.cjs` and `rollback.ecosystem.cjs` — the exact non-shell-evaluating recovery tools captured with the release.
+
+The deployment workflow automatically exercises a full restore into a disposable database before it pauses production writes. Its final recovery point is captured after PM2 stops the previous app, so the database and evidence archive share one write-paused window.
+
+For a manual incident restore, first record the backup timestamp and approve loss of every write after that timestamp. Then run on the Hetzner host:
+
+```bash
+set -Eeuo pipefail
+backup_dir="$(tr -d '\r\n' < /root/esg-deploy-backups/latest)"
+test -d "$backup_dir"
+test -s "$backup_dir/database.dump"
+test -s "$backup_dir/evidence.tar.gz"
+test -s "$backup_dir/production.env"
+
+pm2 stop esg
+node "$backup_dir/recovery-point.cjs" restore "$backup_dir/production.env" "$backup_dir"
+pm2 delete esg || true
+pm2 start "$backup_dir/rollback.ecosystem.cjs" --only esg --update-env
+pm2 save
+curl --fail --silent --show-error --retry 15 --retry-delay 2 http://127.0.0.1:5000/health
+```
+
+The recovery helper verifies all SHA-256 checksums, terminates remaining application-role sessions, restores PostgreSQL in one transaction with `--clean --if-exists --exit-on-error`, extracts evidence to a temporary directory, validates its manifest, and replaces the evidence directory only after validation. It retains the failed evidence directory with a `.failed-<timestamp>` suffix for forensic comparison.
+
+If database restore fails, keep the application stopped. Do not start the previous release against a partially restored or August-2026-upgraded database. Escalate with the recovery directory, PostgreSQL output and the exact last accepted-write time.
+
 ### From a pg_dump custom-format backup
 
 ```bash

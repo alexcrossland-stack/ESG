@@ -12173,7 +12173,13 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   // Regression suites seed many disposable tenants and invoke reminder
   // generation directly. Running the background worker as well creates noisy,
   // non-deterministic side effects that are unrelated to request acceptance.
-  if (process.env.REGRESSION_TEST !== "1") startScheduler();
+  // A deployment-validation process runs migrations and health checks against
+  // production before it is promoted. Keep its background worker dormant so
+  // it cannot process queued jobs or emit external side effects while the
+  // release is still eligible for rollback.
+  if (process.env.REGRESSION_TEST !== "1" && process.env.DEPLOYMENT_VALIDATION !== "1") {
+    startScheduler();
+  }
 
   // ============================================================
   // SUPER ADMIN ROUTES

@@ -17,6 +17,7 @@ import {
   runStartupMigrationStatements,
 } from "./startup-schema-migrations";
 import { redactResponseForLog } from "./log-redaction";
+import { existsSync } from "node:fs";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -69,6 +70,22 @@ app.use((req, res, next) => {
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
   if (req.path.startsWith("/api/")) {
     res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+});
+
+const deploymentWriteLockFile = process.env.DEPLOYMENT_WRITE_LOCK_FILE;
+app.use((req, res, next) => {
+  if (
+    deploymentWriteLockFile
+    && !["GET", "HEAD", "OPTIONS"].includes(req.method)
+    && existsSync(deploymentWriteLockFile)
+  ) {
+    res.setHeader("Retry-After", "60");
+    return res.status(503).json({
+      error: "SimplyESG is completing a release. No changes were accepted; please retry shortly.",
+      code: "DEPLOYMENT_WRITE_PAUSE",
+    });
   }
   next();
 });
@@ -239,24 +256,7 @@ app.use((req, res, next) => {
 
   try {
     await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS esg_roadmap jsonb`);
-    const superAdminActionColumns = await db.execute(sql`
-      SELECT column_name, data_type
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'super_admin_actions'
-        AND column_name IN ('admin_user_id', 'target_company_id', 'target_user_id')
-    `);
-    const invalidColumns = invalidSuperAdminActionIdentifierColumns(
-      (superAdminActionColumns as any).rows ?? [],
-    );
-    if (invalidColumns.length > 0) {
-      throw new Error(`super_admin_actions has invalid identifier column types: ${invalidColumns.join(", ")}`);
-    }
-  } catch (e: any) {
-    console.error("[Startup] FATAL: Could not create or validate super_admin_actions");
-    console.error("[Startup] FATAL:", e.message ?? e);
-    process.exit(1);
-  }
+  } catch {}
   try {
     await db.execute(sql`ALTER TYPE role ADD VALUE IF NOT EXISTS 'super_admin'`);
   } catch {}
@@ -324,7 +324,24 @@ app.use((req, res, next) => {
     `);
     await db.execute(sql`ALTER TABLE super_admin_actions ADD COLUMN IF NOT EXISTS ip_address text`);
     await db.execute(sql`ALTER TABLE super_admin_actions ADD COLUMN IF NOT EXISTS user_agent text`);
-  } catch {}
+    const superAdminActionColumns = await db.execute(sql`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'super_admin_actions'
+        AND column_name IN ('admin_user_id', 'target_company_id', 'target_user_id')
+    `);
+    const invalidColumns = invalidSuperAdminActionIdentifierColumns(
+      (superAdminActionColumns as any).rows ?? [],
+    );
+    if (invalidColumns.length > 0) {
+      throw new Error(`super_admin_actions has invalid identifier column types: ${invalidColumns.join(", ")}`);
+    }
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not create or validate super_admin_actions");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS user_sessions_ext (
@@ -502,12 +519,16 @@ app.use((req, res, next) => {
   try {
     await seedFrameworks();
   } catch (e: any) {
-    console.warn("[Startup] WARN: Framework seeding failed:", e.message ?? e);
+    console.error("[Startup] FATAL: Framework catalogue reconciliation failed");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
   }
   try {
     await seedCurrentEmissionFactors();
   } catch (e: any) {
-    console.warn("[Startup] WARN: Emission factor seeding failed:", e.message ?? e);
+    console.error("[Startup] FATAL: Emission factor catalogue reconciliation failed");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
   }
 
   // MFA & GDPR schema migrations

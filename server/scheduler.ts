@@ -1,6 +1,7 @@
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { existsSync } from "fs";
 
 type JobHandler = (payload: any, companyId: string | null) => Promise<any>;
 
@@ -13,7 +14,14 @@ const JOB_CLEANUP_DAYS = 30;
 const HEALTH_CLEANUP_DAYS = 90;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let queueTimer: ReturnType<typeof setInterval> | null = null;
-const startTime = Date.now();
+let recurringKickoffTimer: ReturnType<typeof setTimeout> | null = null;
+let queueKickoffTimer: ReturnType<typeof setTimeout> | null = null;
+let startedAt: number | null = null;
+
+function deploymentWritesPaused(): boolean {
+  const lockFile = process.env.DEPLOYMENT_WRITE_LOCK_FILE;
+  return Boolean(lockFile && existsSync(lockFile));
+}
 
 interface RecurringJobDef {
   jobType: string;
@@ -187,6 +195,7 @@ async function logHealthEvent(eventType: string, severity: string, message: stri
 }
 
 async function runRecurringTick() {
+  if (deploymentWritesPaused()) return;
   const now = Date.now();
   for (const def of recurringJobs) {
     if (now - def.lastRun >= def.intervalMs) {
@@ -207,6 +216,7 @@ async function runRecurringTick() {
 }
 
 async function processQueue() {
+  if (deploymentWritesPaused()) return;
   try {
     let processed = 0;
     const maxBatch = 5;
@@ -473,9 +483,13 @@ async function gdprDeletionProcessorHandler() {
 }
 
 export function getSchedulerStatus() {
+  const currentStartedAt = tickTimer !== null && queueTimer !== null ? startedAt : null;
+  const running = currentStartedAt !== null;
   return {
-    workerId: WORKER_ID,
-    uptime: Date.now() - startTime,
+    running,
+    workerId: running ? WORKER_ID : null,
+    startedAt: currentStartedAt === null ? null : new Date(currentStartedAt).toISOString(),
+    uptime: currentStartedAt === null ? 0 : Date.now() - currentStartedAt,
     recurringJobs: recurringJobs.map(j => ({
       jobType: j.jobType,
       intervalMs: j.intervalMs,
@@ -522,7 +536,11 @@ async function dataIntegrityCheckHandler(_payload: any, _companyId: string | nul
   }
 }
 
-export function startScheduler() {
+export function startScheduler(): boolean {
+  if (tickTimer !== null || queueTimer !== null || startedAt !== null) {
+    return false;
+  }
+
   registerJobHandler("reminder_check", reminderCheckHandler);
   registerJobHandler("evidence_expiry", evidenceExpiryHandler);
   registerJobHandler("procurement_revalidation", procurementRevalidationHandler);
@@ -537,16 +555,31 @@ export function startScheduler() {
 
   tickTimer = setInterval(runRecurringTick, TICK_INTERVAL);
   queueTimer = setInterval(processQueue, QUEUE_POLL_INTERVAL);
+  startedAt = Date.now();
 
-  setTimeout(runRecurringTick, 30_000);
-  setTimeout(processQueue, 10_000);
+  recurringKickoffTimer = setTimeout(() => {
+    recurringKickoffTimer = null;
+    void runRecurringTick();
+  }, 30_000);
+  queueKickoffTimer = setTimeout(() => {
+    queueKickoffTimer = null;
+    void processQueue();
+  }, 10_000);
 
   console.log(`[Scheduler] Started with worker ID: ${WORKER_ID}`);
+  return true;
 }
 
-export function stopScheduler() {
+export function stopScheduler(): boolean {
+  const wasRunning = tickTimer !== null || queueTimer !== null || startedAt !== null;
   if (tickTimer) clearInterval(tickTimer);
   if (queueTimer) clearInterval(queueTimer);
+  if (recurringKickoffTimer) clearTimeout(recurringKickoffTimer);
+  if (queueKickoffTimer) clearTimeout(queueKickoffTimer);
   tickTimer = null;
   queueTimer = null;
+  recurringKickoffTimer = null;
+  queueKickoffTimer = null;
+  startedAt = null;
+  return wasRunning;
 }

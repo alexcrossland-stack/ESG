@@ -2,15 +2,25 @@
 
 Use this runbook for production deployments after production readiness has been confirmed green. It is intentionally operational: complete each check, deploy from `main`, smoke the release, and keep rollback ready.
 
-Do not use this runbook to introduce migrations, schema changes, or production data changes. If a release includes a migration, attach a migration-specific plan and rollback decision before starting.
+If a release includes migrations or catalogue reconciliation, attach a migration-specific plan and rollback decision before starting. The August 2026 SME release uses [2026-08-27-sme-release-migration.md](./2026-08-27-sme-release-migration.md).
 
 Production deployment is manual-gated. Pushing or merging to `main` must not deploy production automatically. Use the `Deploy to Hetzner` GitHub Actions workflow, provide `confirm_target=production`, and complete any configured `production` environment approval before deployment starts.
 
 Do not use the production deployment workflow for staging/pre-production validation. Use `docs/runbooks/staging-deployment.md` and the `Deploy to Staging` workflow when validating a release before production.
 
-For the August 2026 SME release, also follow [2026-08-27-sme-release-migration.md](./2026-08-27-sme-release-migration.md). The deployment workflow creates a server-side database/evidence recovery point before changing the checkout or runtime configuration.
+For the August 2026 SME release, the deployment workflow keeps the live checkout intact, builds the candidate in a versioned Git worktree, checks that the target database identity is unchanged, validates disk headroom, creates a database/evidence recovery point, and proves that the dump restores into a disposable database before pausing writes.
 
-The production workflow writes the GitHub `production` environment secrets into `/root/ESG/.env` on the Hetzner host before restart, sources that file in the remote shell, and then runs `pm2 restart esg --update-env`. Secret values must never be printed in workflow logs. The workflow validates required secret presence by name only, uploads the runtime env file with `0600` permissions, and verifies selected PM2 runtime env keys as present/configured without printing values.
+Runtime configuration is parsed as dotenv data by Node and passed to PM2 through `ecosystem.config.cjs`; `.env` is never sourced or executed by a shell. The workflow preserves allowlisted settings that are already live when an optional GitHub environment secret is absent. Secret values must never be printed in workflow logs.
+
+At cutover the workflow:
+
+1. creates a deployment write-lock file and stops the previous PM2 process;
+2. captures a coordinated custom-format database dump and the resolved evidence directory with checksums and a byte/file manifest;
+3. boots the candidate on private port 5001 with its scheduler deliberately dormant and requires database, app-shell and exact-SHA health;
+4. switches PM2 to port 5000 while all non-read requests return a retryable 503; the scheduler reports running but does not poll or enqueue work while the lock exists;
+5. verifies the local process and local HTTPS reverse proxy, records `/root/esg-current`, saves PM2 state, then removes the write lock.
+
+Before the write lock is removed, any candidate failure automatically restores the coordinated database/evidence point and restarts the previous release. If the restore itself fails, the workflow deliberately leaves the old application stopped instead of running it against a partially upgraded database.
 
 ## 1. Pre-Deploy Checks
 
@@ -32,7 +42,13 @@ Required environment and dependency checks:
 - [ ] Production database connectivity has been verified by the platform operator.
 - [ ] Generated report files are backed by database storage and included in database backups.
 - [ ] Evidence upload storage under `uploads/evidence` is persistent across deploys/restarts if evidence uploads are enabled.
+- [ ] The production database role can create/drop a disposable rehearsal database and restore a custom dump.
+- [ ] There are no duplicate `(country, factor_year, name)` emission-factor rows; the workflow also checks this before taking downtime.
+- [ ] The workflow's early and post-build capacity checks pass: the release/backup filesystem reserves a candidate release, two database-size allowances, same-volume evidence allowance and 1 GiB; a separate evidence volume reserves a full restored copy plus 1 GiB.
+- [ ] PostgreSQL storage has room for the disposable restored clone. The restore rehearsal proves this immediately before cutover, but application-host `df` cannot measure a separately hosted database volume.
+- [ ] The platform/operator backup outside the application disk is current; the per-release recovery point is not a substitute for off-host disaster recovery.
 - [ ] No production secrets are present in the repository, build logs, or deployment notes.
+- [ ] The pinned production Ed25519 host-key fingerprint still matches the independently verified server key; rotate it only through a reviewed workflow change.
 
 Required backup and storage checks:
 
@@ -58,11 +74,11 @@ Do not proceed if any command fails unless the release owner records an explicit
 These are high-level steps only. Use the existing production deployment mechanism for the environment.
 
 1. Confirm the release commit on `main`.
-2. Confirm no pending migration or destructive data action is attached to the release.
+2. Confirm every migration/data reconciliation is documented and covered by the exact-commit release gate.
 3. Confirm the latest production backup timestamp and rollback owner.
 4. Trigger the manual `Deploy to Hetzner` GitHub Actions workflow from `main` with `confirm_target=production`.
 5. Wait for the deployment to finish.
-6. Confirm the workflow updated the production runtime env file and verified PM2 runtime env keys without printing secret values.
+6. Confirm the workflow reported a successful disposable restore rehearsal, coordinated recovery point, private candidate boot and reverse-proxy health check.
 7. Confirm the deployed commit matches the intended `main` commit.
 8. Confirm the application health endpoint and logs show the app booted successfully.
 9. Keep the previous release identifier available until smoke checks pass.
@@ -109,8 +125,8 @@ If smoke checks fail or production health degrades:
 
 1. Stop further production changes.
 2. Record the failing endpoint, user action, deployed commit, timestamp, and log correlation details.
-3. Redeploy the previous known-good release using the standard deployment process.
-4. Verify database compatibility with the previous release before rollback if the failed release included data-shape changes.
+3. If failure occurred before the workflow removed its write lock, inspect the workflow result: it should already have restored the coordinated recovery point and restarted the previous release.
+4. If failure occurred after a completed cutover, stop writes and use the exact recovery procedure in `docs/backup-restore.md`. Do not run the previous app against the upgraded August 2026 factor catalogue.
 5. Confirm generated report files remain accessible after rollback.
 6. Confirm evidence files remain accessible after rollback.
 7. Verify login/logout and session behavior after rollback.
@@ -118,7 +134,7 @@ If smoke checks fail or production health degrades:
 9. Review audit logs for failed export/download/auth actions during the incident window.
 10. Document whether any follow-up cleanup is required.
 
-Do not automatically restore the pre-release database for an application-only rollback. The August 2026 migrations are additive and the previous application must first be checked against the upgraded schema. Restore the database only as an incident-recovery decision with an explicit data-loss assessment.
+An application-only rollback to `a178ae2` is not safe after the August 2026 catalogue reconciliation: that version can select across factor years nondeterministically. Before the release becomes writable, automatic rollback restores the matched database and evidence point. After the release becomes writable, any restore is an incident decision because it discards later writes; record the cutoff time, affected users and data-loss assessment first.
 
 ## 5. Post-Deploy Monitoring
 

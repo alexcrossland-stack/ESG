@@ -42,9 +42,9 @@ jobs:
       REGRESSION_TEST: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -55,8 +55,20 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Create clean database schema
-        run: npm run db:push
+      - name: Rehearse full database and evidence recovery
+        env:
+          RECOVERY_REHEARSAL_DATABASE_URL: postgresql://simplyesg:simplyesg-ci@127.0.0.1:5432/simplyesg_ci
+        run: npm run test:recovery-rehearsal
+
+      - name: Rehearse production a178 upgrade twice
+        env:
+          UPGRADE_REHEARSAL_DB_NAME: simplyesg_ci
+        run: npm run test:upgrade-rehearsal
+
+      - name: Recreate clean acceptance database schema
+        run: |
+          psql "${DATABASE_URL}" --set ON_ERROR_STOP=on --command 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+          npm run db:push
 
       - name: Start application
         run: |
@@ -64,7 +76,11 @@ jobs:
           app_pid=$!
           echo "${app_pid}" > /tmp/simplyesg-ci-server.pid
           for _ in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:5000/health > /dev/null; then
+            # REGRESSION_TEST intentionally leaves the scheduler stopped, so
+            # /health correctly remains degraded. The app shell is the CI
+            # readiness signal; production deployment separately requires a
+            # running scheduler and an exact release SHA.
+            if curl --fail --silent http://127.0.0.1:5000/ > /dev/null; then
               exit 0
             fi
             if ! kill -0 "${app_pid}" 2>/dev/null; then
@@ -84,7 +100,7 @@ jobs:
 
       - name: Upload acceptance artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sme-release-acceptance
           if-no-files-found: ignore

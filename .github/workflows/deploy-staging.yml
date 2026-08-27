@@ -32,24 +32,12 @@ jobs:
       STAGING_SERVER_USER: ${{ secrets.STAGING_SERVER_USER }}
       STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
       STAGING_PM2_PROCESS: ${{ secrets.STAGING_PM2_PROCESS }}
-      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-      STAGING_SESSION_SECRET: ${{ secrets.STAGING_SESSION_SECRET }}
-      STAGING_MFA_ENCRYPTION_KEY: ${{ secrets.STAGING_MFA_ENCRYPTION_KEY }}
-      STAGING_APP_BASE_URL: ${{ secrets.STAGING_APP_BASE_URL }}
-      STAGING_CSRF_TRUSTED_ORIGINS: ${{ secrets.STAGING_CSRF_TRUSTED_ORIGINS }}
-      STAGING_REPLIT_DOMAINS: ${{ secrets.STAGING_REPLIT_DOMAINS }}
-      STAGING_RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
-      STAGING_EMAIL_FROM: ${{ secrets.STAGING_EMAIL_FROM }}
-      STAGING_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY }}
-      STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL }}
-      STAGING_AI_INTEGRATIONS_OPENAI_MODEL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_MODEL }}
-      STAGING_STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
-      STAGING_STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
-      STAGING_STRIPE_PRO_PRICE_ID: ${{ secrets.STAGING_STRIPE_PRO_PRICE_ID }}
+      STAGING_SSH_HOST_KEY_FINGERPRINT: ${{ secrets.STAGING_SSH_HOST_KEY_FINGERPRINT }}
       PRODUCTION_SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      PRODUCTION_DATABASE_TARGET_FINGERPRINT: ${{ secrets.PRODUCTION_DATABASE_TARGET_FINGERPRINT }}
 
     steps:
-      - name: Validate staging inputs and secrets
+      - name: Validate staging target inputs
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -64,20 +52,9 @@ jobs:
             STAGING_SERVER_USER
             STAGING_APP_DIR
             STAGING_PM2_PROCESS
-            STAGING_DATABASE_URL
-            STAGING_SESSION_SECRET
-            STAGING_MFA_ENCRYPTION_KEY
-            STAGING_APP_BASE_URL
-            STAGING_CSRF_TRUSTED_ORIGINS
-            STAGING_REPLIT_DOMAINS
-            STAGING_RESEND_API_KEY
-            STAGING_EMAIL_FROM
-            STAGING_AI_INTEGRATIONS_OPENAI_API_KEY
-            STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL
-            STAGING_AI_INTEGRATIONS_OPENAI_MODEL
-            STAGING_STRIPE_SECRET_KEY
-            STAGING_STRIPE_WEBHOOK_SECRET
-            STAGING_STRIPE_PRO_PRICE_ID
+            STAGING_SSH_HOST_KEY_FINGERPRINT
+            PRODUCTION_SERVER_HOST
+            PRODUCTION_DATABASE_TARGET_FINGERPRINT
           )
 
           missing=()
@@ -107,23 +84,18 @@ jobs:
             exit 1
           fi
 
-          if [ "${STAGING_APP_DIR}" = "/root/ESG" ]; then
-            echo "::error::STAGING_APP_DIR must not be the production app directory"
-            exit 1
-          fi
-
           if [ "${STAGING_PM2_PROCESS}" = "esg" ]; then
             echo "::error::STAGING_PM2_PROCESS must not be the production PM2 process"
             exit 1
           fi
 
-          if [ -n "${PRODUCTION_SERVER_HOST:-}" ] && [ "${STAGING_SERVER_HOST}" = "${PRODUCTION_SERVER_HOST}" ]; then
+          if [ "${STAGING_SERVER_HOST}" = "${PRODUCTION_SERVER_HOST}" ]; then
             echo "::error::STAGING_SERVER_HOST must not match SERVER_HOST"
             exit 1
           fi
 
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref }}
 
@@ -141,58 +113,110 @@ jobs:
           echo "DEPLOY_SHA=${deploy_sha}" >> "${GITHUB_ENV}"
           echo "Verified successful SME release acceptance for ${deploy_sha}"
 
-      - name: Start ssh-agent and add staging deploy key
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: ${{ secrets.STAGING_SERVER_SSH_KEY }}
+      - name: Start isolated ssh-agent and add staging deploy key
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SERVER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "${GITHUB_ENV}"
+          ssh-add - <<< "${DEPLOY_SSH_PRIVATE_KEY}"
 
       - name: Add staging server to known_hosts
         shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p ~/.ssh
-          ssh-keyscan -H "${STAGING_SERVER_HOST}" >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          scan_file="$(mktemp)"
+          trap 'rm -f "${scan_file}"' EXIT
+          ssh-keyscan -t ed25519 -H "${STAGING_SERVER_HOST}" > "${scan_file}"
+          actual_fingerprint="$(ssh-keygen -lf "${scan_file}" -E sha256 | awk 'NR == 1 { print $2 }')"
+          if [ "${actual_fingerprint}" != "${STAGING_SSH_HOST_KEY_FINGERPRINT}" ]; then
+            echo "::error::Staging SSH host key fingerprint mismatch"
+            exit 1
+          fi
+          cat "${scan_file}" >> ~/.ssh/known_hosts
+
+      - name: Resolve and verify isolated staging checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # STAGING_APP_DIR passed the strict path allowlist above.
+          # shellcheck disable=SC2029
+          canonical_app_dir="$(ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" "realpath -- '${STAGING_APP_DIR}'")"
+          if [[ ! "${canonical_app_dir}" =~ ^/[A-Za-z0-9._/@:-]+$ ]]; then
+            echo "::error::Canonical staging path contains unsupported characters"
+            exit 1
+          fi
+          if [ "${canonical_app_dir}" = "/root/ESG" ]; then
+            echo "::error::Canonical staging path resolves to the production checkout"
+            exit 1
+          fi
+          # shellcheck disable=SC2029
+          ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" "test -d '${canonical_app_dir}/.git'"
+          echo "STAGING_APP_DIR_CANONICAL=${canonical_app_dir}" >> "${GITHUB_ENV}"
 
       - name: Build staging environment file
+        env:
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          STAGING_SESSION_SECRET: ${{ secrets.STAGING_SESSION_SECRET }}
+          STAGING_MFA_ENCRYPTION_KEY: ${{ secrets.STAGING_MFA_ENCRYPTION_KEY }}
+          STAGING_APP_BASE_URL: ${{ secrets.STAGING_APP_BASE_URL }}
+          STAGING_CSRF_TRUSTED_ORIGINS: ${{ secrets.STAGING_CSRF_TRUSTED_ORIGINS }}
+          STAGING_REPLIT_DOMAINS: ${{ secrets.STAGING_REPLIT_DOMAINS }}
+          STAGING_RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
+          STAGING_EMAIL_FROM: ${{ secrets.STAGING_EMAIL_FROM }}
+          STAGING_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY }}
+          STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL }}
+          STAGING_AI_INTEGRATIONS_OPENAI_MODEL: ${{ secrets.STAGING_AI_INTEGRATIONS_OPENAI_MODEL }}
+          STAGING_STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
+          STAGING_STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
+          STAGING_STRIPE_PRO_PRICE_ID: ${{ secrets.STAGING_STRIPE_PRO_PRICE_ID }}
         shell: bash
         run: |
           set -Eeuo pipefail
           umask 077
-          node <<'NODE'
-          const fs = require("node:fs");
-          const entries = [
-            ["NODE_ENV", "production"],
-            ["DATABASE_URL", process.env.STAGING_DATABASE_URL],
-            ["SESSION_SECRET", process.env.STAGING_SESSION_SECRET],
-            ["MFA_ENCRYPTION_KEY", process.env.STAGING_MFA_ENCRYPTION_KEY],
-            ["APP_BASE_URL", process.env.STAGING_APP_BASE_URL],
-            ["CSRF_TRUSTED_ORIGINS", process.env.STAGING_CSRF_TRUSTED_ORIGINS],
-            ["REPLIT_DOMAINS", process.env.STAGING_REPLIT_DOMAINS],
-            ["RESEND_API_KEY", process.env.STAGING_RESEND_API_KEY],
-            ["EMAIL_FROM", process.env.STAGING_EMAIL_FROM],
-            ["AI_INTEGRATIONS_OPENAI_API_KEY", process.env.STAGING_AI_INTEGRATIONS_OPENAI_API_KEY],
-            ["AI_INTEGRATIONS_OPENAI_BASE_URL", process.env.STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL],
-            ["AI_INTEGRATIONS_OPENAI_MODEL", process.env.STAGING_AI_INTEGRATIONS_OPENAI_MODEL],
-            ["STRIPE_SECRET_KEY", process.env.STAGING_STRIPE_SECRET_KEY],
-            ["STRIPE_WEBHOOK_SECRET", process.env.STAGING_STRIPE_WEBHOOK_SECRET],
-            ["STRIPE_PRO_PRICE_ID", process.env.STAGING_STRIPE_PRO_PRICE_ID],
-            ["RELEASE_SHA", process.env.DEPLOY_SHA],
-          ];
-          const lines = entries.map(([key, value]) => `${key}=${JSON.stringify(String(value ?? ""))}`);
-          fs.writeFileSync("staging.env", `${lines.join("\n")}\n`, { mode: 0o600 });
-          NODE
+          required=(
+            STAGING_DATABASE_URL STAGING_SESSION_SECRET STAGING_MFA_ENCRYPTION_KEY
+            STAGING_APP_BASE_URL STAGING_CSRF_TRUSTED_ORIGINS STAGING_REPLIT_DOMAINS
+            STAGING_RESEND_API_KEY STAGING_EMAIL_FROM
+            STAGING_AI_INTEGRATIONS_OPENAI_API_KEY STAGING_AI_INTEGRATIONS_OPENAI_BASE_URL
+            STAGING_AI_INTEGRATIONS_OPENAI_MODEL STAGING_STRIPE_SECRET_KEY
+            STAGING_STRIPE_WEBHOOK_SECRET STAGING_STRIPE_PRO_PRICE_ID
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("${name}"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Missing required staging runtime secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+          node scripts/deployment/runtime-env.cjs render staging.env STAGING_ "${DEPLOY_SHA}"
+          if [[ ! "${PRODUCTION_DATABASE_TARGET_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::PRODUCTION_DATABASE_TARGET_FINGERPRINT must be a SHA-256 fingerprint"
+            exit 1
+          fi
+          staging_database_fingerprint="$(node scripts/deployment/runtime-env.cjs database-target-fingerprint staging.env)"
+          if [ "${staging_database_fingerprint}" = "${PRODUCTION_DATABASE_TARGET_FINGERPRINT}" ]; then
+            echo "::error::STAGING_DATABASE_URL resolves to the protected production database target"
+            exit 1
+          fi
 
       - name: Deploy to staging host
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          scp staging.env "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}:${STAGING_APP_DIR}/.env"
+          scp staging.env "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}:${STAGING_APP_DIR_CANONICAL}/.env"
           rm -f staging.env
 
           # shellcheck disable=SC2029
           ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" \
-            "DEPLOY_SHA='${DEPLOY_SHA}' STAGING_APP_DIR='${STAGING_APP_DIR}' STAGING_PM2_PROCESS='${STAGING_PM2_PROCESS}' bash -s" << 'EOF'
+            "DEPLOY_SHA='${DEPLOY_SHA}' STAGING_APP_DIR='${STAGING_APP_DIR_CANONICAL}' STAGING_PM2_PROCESS='${STAGING_PM2_PROCESS}' bash -s" << 'EOF'
               set -Eeuo pipefail
 
               if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -269,14 +293,11 @@ jobs:
 
               DEPLOY_STAGE="restarting staging pm2 process"
               log "$DEPLOY_STAGE"
-              set -a
-              . ./.env
-              set +a
               if pm2 describe "${STAGING_PM2_PROCESS}" >/dev/null 2>&1; then
-                pm2 restart "${STAGING_PM2_PROCESS}" --update-env
-              else
-                pm2 start dist/index.cjs --name "${STAGING_PM2_PROCESS}" --update-env
+                pm2 delete "${STAGING_PM2_PROCESS}"
               fi
+              DEPLOY_PROCESS_NAME="${STAGING_PM2_PROCESS}" \
+                pm2 start ecosystem.config.cjs --only "${STAGING_PM2_PROCESS}" --update-env
 
               DEPLOY_STAGE="checking pm2 status"
               log "$DEPLOY_STAGE"
@@ -284,7 +305,9 @@ jobs:
 
               DEPLOY_STAGE="checking staging health endpoint"
               log "$DEPLOY_STAGE"
-              app_base="${APP_BASE_URL%/}"
+              app_base="$(node -e 'const fs=require("node:fs"); const {parseRuntimeEnv}=require("./scripts/deployment/runtime-env.cjs"); process.stdout.write(parseRuntimeEnv(fs.readFileSync(".env", "utf8")).APP_BASE_URL || "")')"
+              test -n "${app_base}"
+              app_base="${app_base%/}"
               wait_for_url "staging health endpoint" "${app_base}/health"
               wait_for_url "staging app shell" "${app_base}/"
 
@@ -292,6 +315,8 @@ jobs:
           EOF
 
       - name: Verify public staging release
+        env:
+          STAGING_APP_BASE_URL: ${{ secrets.STAGING_APP_BASE_URL }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -311,4 +336,6 @@ jobs:
       - name: Remove local staging env file on failure
         if: always()
         shell: bash
-        run: rm -f staging.env
+        run: |
+          rm -f staging.env
+          if [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k >/dev/null 2>&1 || true; fi

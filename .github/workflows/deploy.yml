@@ -19,36 +19,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 75
 
     env:
       CONFIRM_TARGET: ${{ inputs.confirm_target }}
-      PRODUCTION_DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      PRODUCTION_SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-      PRODUCTION_MFA_ENCRYPTION_KEY: ${{ secrets.MFA_ENCRYPTION_KEY }}
       PRODUCTION_APP_BASE_URL: https://www.simplyesg.co.uk
       PRODUCTION_CSRF_TRUSTED_ORIGINS: https://www.simplyesg.co.uk
       PRODUCTION_REPLIT_DOMAINS: www.simplyesg.co.uk,simplyesg.co.uk
-      PRODUCTION_RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-      PRODUCTION_EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-      PRODUCTION_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.AI_INTEGRATIONS_OPENAI_API_KEY }}
-      PRODUCTION_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.AI_INTEGRATIONS_OPENAI_BASE_URL }}
-      PRODUCTION_AI_INTEGRATIONS_OPENAI_MODEL: ${{ secrets.AI_INTEGRATIONS_OPENAI_MODEL }}
-      PRODUCTION_STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      PRODUCTION_STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-      PRODUCTION_STRIPE_PRO_PRICE_ID: ${{ secrets.STRIPE_PRO_PRICE_ID }}
-      PRODUCTION_FEATURE_ESTIMATION_ENABLED: ${{ secrets.FEATURE_ESTIMATION_ENABLED }}
-      PRODUCTION_FEATURE_PORTFOLIO_ENABLED: ${{ secrets.FEATURE_PORTFOLIO_ENABLED }}
-      PRODUCTION_FEATURE_REPORT_GENERATION_ENABLED: ${{ secrets.FEATURE_REPORT_GENERATION_ENABLED }}
-      PRODUCTION_SESSION_ABSOLUTE_LIFETIME_MS: ${{ secrets.SESSION_ABSOLUTE_LIFETIME_MS }}
-      PRODUCTION_SESSION_COOKIE_SECURE: ${{ secrets.SESSION_COOKIE_SECURE }}
-      PRODUCTION_SESSION_IDLE_TIMEOUT_MS: ${{ secrets.SESSION_IDLE_TIMEOUT_MS }}
-      PRODUCTION_STEP_UP_VALIDITY_MS: ${{ secrets.STEP_UP_VALIDITY_MS }}
-      PRODUCTION_SLACK_SECURITY_WEBHOOK_URL: ${{ secrets.SLACK_SECURITY_WEBHOOK_URL }}
-      PRODUCTION_AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
-      PRODUCTION_AGENT_WEBHOOK_URL: ${{ secrets.AGENT_WEBHOOK_URL }}
+      PRODUCTION_SSH_HOST_KEY_FINGERPRINT: SHA256:AzWNDakbRpAOwbFO9LJgo7ZBcS5OPFVjBzFCHFioIvo
 
     steps:
       - name: Validate production deploy confirmation
+        shell: bash
         run: |
           set -Eeuo pipefail
           if [ "${CONFIRM_TARGET}" != "production" ]; then
@@ -60,29 +42,25 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout repo
-        uses: actions/checkout@v6
+      - name: Checkout remote main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Verify checkout is the remote main tip
+      - name: Verify checkout and release gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -Eeuo pipefail
           git fetch --no-tags origin refs/heads/main
-          local_sha="$(git rev-parse HEAD)"
+          deploy_sha="$(git rev-parse HEAD)"
           remote_sha="$(git rev-parse FETCH_HEAD)"
-          if [ "${local_sha}" != "${remote_sha}" ]; then
-            echo "::error::Checked-out SHA ${local_sha} is not remote main ${remote_sha}"
+          if [ "${deploy_sha}" != "${remote_sha}" ]; then
+            echo "::error::Checked-out SHA ${deploy_sha} is not remote main ${remote_sha}"
             exit 1
           fi
-
-      - name: Verify SME release gate for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -Eeuo pipefail
-          deploy_sha="$(git rev-parse HEAD)"
           conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${deploy_sha}/check-runs" --jq '[.check_runs[] | select(.name == "SME release acceptance")] | sort_by(.completed_at) | last | .conclusion // "missing"')"
           if [ "${conclusion}" != "success" ]; then
             echo "::error::SME release acceptance for ${deploy_sha} is ${conclusion}; production deploy is blocked"
@@ -91,81 +69,33 @@ jobs:
           echo "DEPLOY_SHA=${deploy_sha}" >> "${GITHUB_ENV}"
           echo "Verified successful SME release acceptance for ${deploy_sha}"
 
-      - name: Start ssh-agent and add deploy key
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
-
-      - name: Add server to known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Test SSH connection
-        run: |
-          ssh -o StrictHostKeyChecking=yes ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'echo SSH OK'
-
-      - name: Create production recovery point
-        run: |
-          set -Eeuo pipefail
-          previous_sha="$(ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'git -C /root/ESG rev-parse HEAD')"
-          if [[ ! "${previous_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not determine the previous production SHA"
-            exit 1
-          fi
-          echo "PRODUCTION_PREVIOUS_SHA=${previous_sha}" >> "${GITHUB_ENV}"
-
-          # shellcheck disable=SC2029
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "BACKUP_RUN_ID='${GITHUB_RUN_ID}' PREVIOUS_SHA='${previous_sha}' DEPLOY_SHA='${DEPLOY_SHA}' bash -s" <<'EOF'
-            set -Eeuo pipefail
-            umask 077
-
-            backup_dir="/root/esg-deploy-backups/${BACKUP_RUN_ID}-${PREVIOUS_SHA:0:12}"
-            mkdir -p "${backup_dir}"
-            chmod 700 "${backup_dir}"
-
-            cd /root/ESG
-            curl --fail --silent --show-error --max-time 15 http://127.0.0.1:5000/health >/dev/null
-            test -f .env
-            cp .env "${backup_dir}/production.env"
-            chmod 600 "${backup_dir}/production.env"
-
-            set -a
-            . ./.env
-            set +a
-            if [ -z "${DATABASE_URL:-}" ]; then
-              echo "::error::DATABASE_URL is unavailable for the recovery backup" >&2
-              exit 1
-            fi
-            command -v pg_dump >/dev/null
-            command -v pg_restore >/dev/null
-            pg_dump --format=custom --no-owner --no-privileges \
-              --file="${backup_dir}/database.dump" "${DATABASE_URL}"
-            test -s "${backup_dir}/database.dump"
-            pg_restore --list "${backup_dir}/database.dump" >/dev/null
-
-            if [ -d uploads/evidence ]; then
-              tar -C /root/ESG -czf "${backup_dir}/evidence.tar.gz" uploads/evidence
-            else
-              tar -czf "${backup_dir}/evidence.tar.gz" --files-from /dev/null
-            fi
-
-            {
-              printf 'previous_sha=%s\n' "${PREVIOUS_SHA}"
-              printf 'target_sha=%s\n' "${DEPLOY_SHA}"
-              printf 'created_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            } > "${backup_dir}/release.txt"
-            sha256sum "${backup_dir}/database.dump" "${backup_dir}/evidence.tar.gz" > "${backup_dir}/SHA256SUMS"
-            chmod 600 "${backup_dir}"/*
-            printf '%s\n' "${backup_dir}" > /root/esg-deploy-backups/latest
-            echo "Production recovery point created: ${backup_dir}"
-          EOF
-
-      - name: Validate production runtime secrets
+      - name: Validate and render production runtime configuration
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PRODUCTION_SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          PRODUCTION_MFA_ENCRYPTION_KEY: ${{ secrets.MFA_ENCRYPTION_KEY }}
+          PRODUCTION_RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          PRODUCTION_EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          PRODUCTION_AI_INTEGRATIONS_OPENAI_API_KEY: ${{ secrets.AI_INTEGRATIONS_OPENAI_API_KEY }}
+          PRODUCTION_AI_INTEGRATIONS_OPENAI_BASE_URL: ${{ secrets.AI_INTEGRATIONS_OPENAI_BASE_URL }}
+          PRODUCTION_AI_INTEGRATIONS_OPENAI_MODEL: ${{ secrets.AI_INTEGRATIONS_OPENAI_MODEL }}
+          PRODUCTION_STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          PRODUCTION_STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          PRODUCTION_STRIPE_PRO_PRICE_ID: ${{ secrets.STRIPE_PRO_PRICE_ID }}
+          PRODUCTION_FEATURE_ESTIMATION_ENABLED: ${{ secrets.FEATURE_ESTIMATION_ENABLED }}
+          PRODUCTION_FEATURE_PORTFOLIO_ENABLED: ${{ secrets.FEATURE_PORTFOLIO_ENABLED }}
+          PRODUCTION_FEATURE_REPORT_GENERATION_ENABLED: ${{ secrets.FEATURE_REPORT_GENERATION_ENABLED }}
+          PRODUCTION_SESSION_ABSOLUTE_LIFETIME_MS: ${{ secrets.SESSION_ABSOLUTE_LIFETIME_MS }}
+          PRODUCTION_SESSION_COOKIE_SECURE: ${{ secrets.SESSION_COOKIE_SECURE }}
+          PRODUCTION_SESSION_IDLE_TIMEOUT_MS: ${{ secrets.SESSION_IDLE_TIMEOUT_MS }}
+          PRODUCTION_STEP_UP_VALIDITY_MS: ${{ secrets.STEP_UP_VALIDITY_MS }}
+          PRODUCTION_SLACK_SECURITY_WEBHOOK_URL: ${{ secrets.SLACK_SECURITY_WEBHOOK_URL }}
+          PRODUCTION_AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          PRODUCTION_AGENT_WEBHOOK_URL: ${{ secrets.AGENT_WEBHOOK_URL }}
+        shell: bash
         run: |
           set -Eeuo pipefail
-
+          umask 077
           missing=()
           required=(
             PRODUCTION_SESSION_SECRET
@@ -175,401 +105,164 @@ jobs:
             PRODUCTION_AI_INTEGRATIONS_OPENAI_BASE_URL
             PRODUCTION_AI_INTEGRATIONS_OPENAI_MODEL
           )
-
           for name in "${required[@]}"; do
             if [ -z "${!name:-}" ]; then
               missing+=("${name#PRODUCTION_}")
             fi
           done
-
           if [ -z "${PRODUCTION_CSRF_TRUSTED_ORIGINS:-}" ] && [ -z "${PRODUCTION_REPLIT_DOMAINS:-}" ]; then
             missing+=("CSRF_TRUSTED_ORIGINS or REPLIT_DOMAINS")
           fi
-
-          if [ -z "${PRODUCTION_DATABASE_URL:-}" ]; then
-            # DATABASE_URL may already exist in the live runtime; do not print it.
-            if ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "test -f /root/ESG/.env && grep -Eq '^[[:space:]]*DATABASE_URL=.+$' /root/ESG/.env || node -e 'const { execFileSync } = require(\"node:child_process\"); const processes = JSON.parse(execFileSync(\"pm2\", [\"jlist\"], { encoding: \"utf8\" })); const app = processes.find((entry) => entry.name === \"esg\"); process.exit(app?.pm2_env?.env?.DATABASE_URL ? 0 : 1);'"; then
-              echo "DATABASE_URL: using existing production runtime configuration"
-            else
-              missing+=("DATABASE_URL")
-            fi
-          fi
-
           if [ "${PRODUCTION_AI_INTEGRATIONS_OPENAI_BASE_URL}" != "https://api.openai.com/v1" ]; then
             echo "::error::AI_INTEGRATIONS_OPENAI_BASE_URL must be https://api.openai.com/v1"
             exit 1
           fi
-
           if [ "${#missing[@]}" -gt 0 ]; then
             printf '::error::Missing required production runtime secrets: %s\n' "$(IFS=', '; echo "${missing[*]}")"
             exit 1
           fi
+          node scripts/deployment/runtime-env.cjs render production.env PRODUCTION_ "${DEPLOY_SHA}"
 
-          echo "Required production runtime secrets are present"
-
-      - name: Build production runtime env file
+      - name: Start isolated ssh-agent and add deploy key
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        shell: bash
         run: |
           set -Eeuo pipefail
-          umask 077
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "${GITHUB_ENV}"
+          ssh-add - <<< "${DEPLOY_SSH_PRIVATE_KEY}"
 
-          node <<'NODE'
-          const fs = require("node:fs");
-
-          const keys = [
-            ["NODE_ENV", "production"],
-            ["DATABASE_URL", process.env.PRODUCTION_DATABASE_URL],
-            ["SESSION_SECRET", process.env.PRODUCTION_SESSION_SECRET],
-            ["MFA_ENCRYPTION_KEY", process.env.PRODUCTION_MFA_ENCRYPTION_KEY],
-            ["APP_BASE_URL", process.env.PRODUCTION_APP_BASE_URL],
-            ["CSRF_TRUSTED_ORIGINS", process.env.PRODUCTION_CSRF_TRUSTED_ORIGINS],
-            ["REPLIT_DOMAINS", process.env.PRODUCTION_REPLIT_DOMAINS],
-            ["RESEND_API_KEY", process.env.PRODUCTION_RESEND_API_KEY],
-            ["EMAIL_FROM", process.env.PRODUCTION_EMAIL_FROM],
-            ["AI_INTEGRATIONS_OPENAI_API_KEY", process.env.PRODUCTION_AI_INTEGRATIONS_OPENAI_API_KEY],
-            ["AI_INTEGRATIONS_OPENAI_BASE_URL", process.env.PRODUCTION_AI_INTEGRATIONS_OPENAI_BASE_URL],
-            ["AI_INTEGRATIONS_OPENAI_MODEL", process.env.PRODUCTION_AI_INTEGRATIONS_OPENAI_MODEL],
-            ["STRIPE_SECRET_KEY", process.env.PRODUCTION_STRIPE_SECRET_KEY],
-            ["STRIPE_WEBHOOK_SECRET", process.env.PRODUCTION_STRIPE_WEBHOOK_SECRET],
-            ["STRIPE_PRO_PRICE_ID", process.env.PRODUCTION_STRIPE_PRO_PRICE_ID],
-            ["FEATURE_ESTIMATION_ENABLED", process.env.PRODUCTION_FEATURE_ESTIMATION_ENABLED],
-            ["FEATURE_PORTFOLIO_ENABLED", process.env.PRODUCTION_FEATURE_PORTFOLIO_ENABLED],
-            ["FEATURE_REPORT_GENERATION_ENABLED", process.env.PRODUCTION_FEATURE_REPORT_GENERATION_ENABLED],
-            ["SESSION_ABSOLUTE_LIFETIME_MS", process.env.PRODUCTION_SESSION_ABSOLUTE_LIFETIME_MS],
-            ["SESSION_COOKIE_SECURE", process.env.PRODUCTION_SESSION_COOKIE_SECURE],
-            ["SESSION_IDLE_TIMEOUT_MS", process.env.PRODUCTION_SESSION_IDLE_TIMEOUT_MS],
-            ["STEP_UP_VALIDITY_MS", process.env.PRODUCTION_STEP_UP_VALIDITY_MS],
-            ["SLACK_SECURITY_WEBHOOK_URL", process.env.PRODUCTION_SLACK_SECURITY_WEBHOOK_URL],
-            ["AGENT_SERVICE_URL", process.env.PRODUCTION_AGENT_SERVICE_URL],
-            ["AGENT_WEBHOOK_URL", process.env.PRODUCTION_AGENT_WEBHOOK_URL],
-            ["RELEASE_SHA", process.env.DEPLOY_SHA],
-          ];
-
-          const quote = (value) => JSON.stringify(String(value ?? ""));
-          const lines = [
-            "# Generated by GitHub Actions Deploy to Hetzner. Do not edit manually.",
-            "# Secret values are intentionally not printed in workflow logs.",
-          ];
-
-          for (const [key, value] of keys) {
-            if (value === undefined || value === "") continue;
-            lines.push(`${key}=${quote(value)}`);
-          }
-
-          fs.writeFileSync("production.env", `${lines.join("\n")}\n`, { mode: 0o600 });
-          NODE
-
-      - name: Upload production runtime env file
+      - name: Establish verified SSH host identity
+        shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="/tmp/esg.production.env.${GITHUB_RUN_ID}"
-          candidate_env="/tmp/esg.production.env.candidate.${GITHUB_RUN_ID}"
-          scp production.env ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:"${remote_env}"
-          # shellcheck disable=SC2029
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "set -Eeuo pipefail; REMOTE_ENV='${remote_env}' CANDIDATE_ENV='${candidate_env}' node" <<'NODE'
-          const fs = require("node:fs");
-          const { execFileSync } = require("node:child_process");
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          scan_file="$(mktemp)"
+          trap 'rm -f "${scan_file}"' EXIT
+          ssh-keyscan -t ed25519 -H "${{ secrets.SERVER_HOST }}" > "${scan_file}"
+          actual_fingerprint="$(ssh-keygen -lf "${scan_file}" -E sha256 | awk 'NR == 1 { print $2 }')"
+          if [ "${actual_fingerprint}" != "${PRODUCTION_SSH_HOST_KEY_FINGERPRINT}" ]; then
+            echo "::error::Production SSH host key fingerprint mismatch"
+            exit 1
+          fi
+          cat "${scan_file}" >> ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" 'echo SSH OK'
 
-          const target = "/root/ESG/.env";
-          const remoteEnv = process.env.REMOTE_ENV;
-          const candidateEnv = process.env.CANDIDATE_ENV;
-
-          const parseEnv = (content) => {
-            const env = {};
-            for (const line of content.split(/\r?\n/)) {
-              const trimmed = line.trim();
-              if (!trimmed || trimmed.startsWith("#")) continue;
-              const index = trimmed.indexOf("=");
-              if (index === -1) continue;
-              const key = trimmed.slice(0, index).trim();
-              let value = trimmed.slice(index + 1).trim();
-              if (value.startsWith("\"") && value.endsWith("\"")) {
-                try { value = JSON.parse(value); } catch { value = value.slice(1, -1); }
-              } else if (value.startsWith("'") && value.endsWith("'")) {
-                value = value.slice(1, -1);
-              }
-              env[key] = value;
-            }
-            return env;
-          };
-
-          const quote = (value) => JSON.stringify(String(value ?? ""));
-          const uploaded = parseEnv(fs.readFileSync(remoteEnv, "utf8"));
-          const existing = fs.existsSync(target) ? parseEnv(fs.readFileSync(target, "utf8")) : {};
-
-          let pm2Env = {};
-          try {
-            const processes = JSON.parse(execFileSync("pm2", ["jlist"], { encoding: "utf8" }));
-            const app = processes.find((entry) => entry.name === "esg");
-            pm2Env = app?.pm2_env?.env || {};
-          } catch {
-            pm2Env = {};
-          }
-
-          const allowedKeys = [
-            "NODE_ENV", "DATABASE_URL", "SESSION_SECRET", "MFA_ENCRYPTION_KEY", "APP_BASE_URL",
-            "CSRF_TRUSTED_ORIGINS", "REPLIT_DOMAINS", "RESEND_API_KEY", "EMAIL_FROM",
-            "AI_INTEGRATIONS_OPENAI_API_KEY", "AI_INTEGRATIONS_OPENAI_BASE_URL", "AI_INTEGRATIONS_OPENAI_MODEL",
-            "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID",
-            "FEATURE_ESTIMATION_ENABLED", "FEATURE_PORTFOLIO_ENABLED", "FEATURE_REPORT_GENERATION_ENABLED",
-            "SESSION_ABSOLUTE_LIFETIME_MS", "SESSION_COOKIE_SECURE", "SESSION_IDLE_TIMEOUT_MS",
-            "STEP_UP_VALIDITY_MS", "SLACK_SECURITY_WEBHOOK_URL", "AGENT_SERVICE_URL", "AGENT_WEBHOOK_URL",
-            "RELEASE_SHA", "PORT",
-          ];
-          const merged = {};
-          for (const key of allowedKeys) {
-            const value = uploaded[key] || existing[key];
-            if (value !== undefined && value !== "") merged[key] = value;
-          }
-
-          const databaseUrl = merged.DATABASE_URL || pm2Env.DATABASE_URL;
-          if (!databaseUrl) {
-            console.error("::error::DATABASE_URL is missing from GitHub secrets and existing production runtime configuration");
-            process.exit(1);
-          }
-          merged.NODE_ENV = "production";
-          merged.DATABASE_URL = databaseUrl;
-
-          const fail = (message) => {
-            console.error(`::error::${message}`);
-            process.exit(1);
-          };
-          if (!merged.SESSION_SECRET || merged.SESSION_SECRET.length < 32) fail("SESSION_SECRET must be at least 32 characters");
-          let appUrl;
-          try { appUrl = new URL(merged.APP_BASE_URL); } catch { fail("APP_BASE_URL must be a valid URL"); }
-          if (appUrl.protocol !== "https:") fail("APP_BASE_URL must use HTTPS");
-          const trustedOrigins = String(merged.CSRF_TRUSTED_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean);
-          const trustedDomains = String(merged.REPLIT_DOMAINS || "").split(",").map((value) => value.trim()).filter(Boolean);
-          if (!trustedOrigins.includes(appUrl.origin) && !trustedDomains.includes(appUrl.hostname)) {
-            fail("The production APP_BASE_URL origin must be present in CSRF_TRUSTED_ORIGINS or REPLIT_DOMAINS");
-          }
-          if (merged.AI_INTEGRATIONS_OPENAI_BASE_URL !== "https://api.openai.com/v1") fail("OpenAI base URL is invalid");
-          if (!merged.AI_INTEGRATIONS_OPENAI_API_KEY || !merged.AI_INTEGRATIONS_OPENAI_MODEL) fail("OpenAI configuration is incomplete");
-          if (Boolean(merged.RESEND_API_KEY) !== Boolean(merged.EMAIL_FROM)) fail("RESEND_API_KEY and EMAIL_FROM must be configured together");
-          const stripe = [merged.STRIPE_SECRET_KEY, merged.STRIPE_WEBHOOK_SECRET, merged.STRIPE_PRO_PRICE_ID];
-          if (stripe.some(Boolean) && !stripe.every(Boolean)) fail("Stripe configuration must be complete or disabled");
-
-          const lines = [
-            "# Generated by GitHub Actions Deploy to Hetzner. Do not edit manually.",
-            "# Secret values are intentionally not printed in workflow logs.",
-          ];
-
-          for (const [key, value] of Object.entries(merged)) {
-            if (value === undefined || value === "") continue;
-            lines.push(`${key}=${quote(value)}`);
-          }
-
-          fs.writeFileSync(candidateEnv, `${lines.join('\n')}\n`, { mode: 0o600 });
-          fs.rmSync(remoteEnv, { force: true });
-          console.log("DATABASE_URL: configured");
-          console.log(`Email: ${merged.RESEND_API_KEY ? "configured" : "disabled"}`);
-          console.log(`Billing: ${merged.STRIPE_SECRET_KEY ? "configured" : "disabled"}`);
-          console.log("Production runtime candidate validated");
-          NODE
-
-      - name: Deploy
+      - name: Upload isolated deployment inputs
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          tools_dir="/tmp/esg-deploy-tools.${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_env="/tmp/esg.production.env.${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # tools_dir is a fixed prefix plus numeric GitHub IDs.
           # shellcheck disable=SC2029
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "DEPLOY_SHA='${DEPLOY_SHA}' GITHUB_RUN_ID='${GITHUB_RUN_ID}' REMOTE_ENV_PATH='/tmp/esg.production.env.candidate.${GITHUB_RUN_ID}' bash -s" << 'EOF'
-            set -Eeuo pipefail
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "install -d -m 700 '${tools_dir}'"
+          scp \
+            scripts/deployment/runtime-env.cjs \
+            scripts/deployment/recovery-point.cjs \
+            scripts/deployment/remote-production.sh \
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${tools_dir}/"
+          scp production.env "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${remote_env}"
+          echo "REMOTE_TOOLS_DIR=${tools_dir}" >> "${GITHUB_ENV}"
+          echo "REMOTE_ENV_PATH=${remote_env}" >> "${GITHUB_ENV}"
 
-            if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::DEPLOY_SHA is not a full Git commit SHA" >&2
+      - name: Build, recoverability-check and atomically deploy
+        id: atomic_deploy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          unit_name="simplyesg-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # The server-side systemd unit survives an Actions cancellation or
+          # SSH channel loss and therefore always reaches success or rollback.
+          # Interpolated values are generated numeric IDs, a validated SHA, or fixed paths.
+          # shellcheck disable=SC2029
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "command -v systemd-run >/dev/null && systemd-run --unit='${unit_name}' --property=Type=exec --property=RemainAfterExit=yes --setenv=DEPLOY_SHA='${DEPLOY_SHA}' --setenv=GITHUB_RUN_ID='${GITHUB_RUN_ID}' --setenv=GITHUB_RUN_ATTEMPT='${GITHUB_RUN_ATTEMPT}' --setenv=REMOTE_ENV_PATH='${REMOTE_ENV_PATH}' --setenv=TOOLS_DIR='${REMOTE_TOOLS_DIR}' /usr/bin/bash '${REMOTE_TOOLS_DIR}/remote-production.sh'"
+
+          for attempt in $(seq 1 360); do
+            # shellcheck disable=SC2029
+            unit_state="$(ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "systemctl show '${unit_name}' --property=ActiveState --property=SubState --property=ExecMainStatus")"
+            active_state="$(awk -F= '$1 == "ActiveState" { print $2 }' <<< "${unit_state}")"
+            sub_state="$(awk -F= '$1 == "SubState" { print $2 }' <<< "${unit_state}")"
+            exit_status="$(awk -F= '$1 == "ExecMainStatus" { print $2 }' <<< "${unit_state}")"
+            if { [ "${active_state}" = "active" ] && [ "${sub_state}" = "exited" ]; } || [ "${active_state}" = "failed" ]; then
+              if [ "${active_state}" = "active" ] && [ "${sub_state}" = "exited" ] && [ "${exit_status}" = "0" ]; then
+                echo "Detached production deployment completed successfully"
+                # shellcheck disable=SC2029
+                ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "systemctl stop '${unit_name}'" || true
+                exit 0
+              fi
+              echo "::error::Detached deployment ended state=${active_state}/${sub_state} status=${exit_status}"
+              # The deployment log contains stage names and command output, not runtime secret values.
+              # shellcheck disable=SC2029
+              ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "journalctl --unit='${unit_name}' --no-pager --lines=200" || true
               exit 1
             fi
+            echo "Detached deployment state=${active_state}/${sub_state} (${attempt}/360)"
+            sleep 10
+          done
 
-            log() {
-              echo
-              echo "==> $1"
-            }
+          echo "::error::Timed out waiting for the detached deployment; the server-side unit remains responsible for completing or rolling back"
+          exit 1
 
-            wait_for_url() {
-              local name="$1"
-              local url="$2"
-              local attempts="${3:-30}"
-              local delay_seconds="${4:-2}"
-
-              for attempt in $(seq 1 "$attempts"); do
-                if curl --fail --silent --show-error --max-time 15 "$url"; then
-                  echo
-                  echo "$name is responding"
-                  return 0
-                fi
-                echo "$name not ready yet (${attempt}/${attempts}); retrying in ${delay_seconds}s"
-                sleep "$delay_seconds"
-              done
-
-              echo "::error::$name did not respond after ${attempts} attempts" >&2
-              return 1
-            }
-
-            verify_dependency_resolution() {
-              sync
-              node -e '
-                const packages = [
-                  "@vitejs/plugin-react",
-                  "class-variance-authority",
-                  "lodash/max",
-                  "recharts",
-                ];
-
-                for (const packageName of packages) {
-                  const resolved = require.resolve(packageName);
-                  console.log(`${packageName} -> ${resolved}`);
-                }
-              '
-            }
-
-            DEPLOY_STAGE="initialising"
-            cleanup_candidate() {
-              rm -f "${REMOTE_ENV_PATH:-}"
-            }
-            trap 'echo "::error::Deployment failed during: ${DEPLOY_STAGE}" >&2; cleanup_candidate' ERR
-            trap cleanup_candidate EXIT
-
-            cd /root/ESG
-
-            DEPLOY_STAGE="fetching verified commit"
-            log "$DEPLOY_STAGE"
-            git fetch origin "${DEPLOY_SHA}"
-
-            DEPLOY_STAGE="resetting checkout to verified commit"
-            log "$DEPLOY_STAGE"
-            git reset --hard "${DEPLOY_SHA}"
-            if [ "$(git rev-parse HEAD)" != "${DEPLOY_SHA}" ]; then
-              echo "::error::Remote checkout does not match the release-gated commit" >&2
-              exit 1
-            fi
-
-            DEPLOY_STAGE="removing stale dependencies"
-            log "$DEPLOY_STAGE"
-            rm -rf node_modules
-
-            DEPLOY_STAGE="verifying npm cache"
-            log "$DEPLOY_STAGE"
-            npm cache verify
-
-            DEPLOY_STAGE="installing dependencies"
-            log "$DEPLOY_STAGE"
-            if ! npm ci --include=dev; then
-              echo "::error::npm ci failed; removing partial node_modules before exiting" >&2
-              rm -rf node_modules
-              exit 1
-            fi
-
-            DEPLOY_STAGE="verifying dependency resolution"
-            log "$DEPLOY_STAGE"
-            verify_dependency_resolution
-
-            DEPLOY_STAGE="building application"
-            log "$DEPLOY_STAGE"
-            if ! npm run build; then
-              echo "::warning::Initial build failed after clean install; rechecking dependency resolution and retrying once" >&2
-              verify_dependency_resolution
-              npm run build
-            fi
-
-            DEPLOY_STAGE="copying runtime assets"
-            log "$DEPLOY_STAGE"
-            cp node_modules/connect-pg-simple/table.sql dist/table.sql
-
-            DEPLOY_STAGE="installing validated runtime configuration"
-            log "$DEPLOY_STAGE"
-            test -s "${REMOTE_ENV_PATH}"
-            if [ -f .env ]; then
-              cp .env ".env.previous.${GITHUB_RUN_ID}"
-              chmod 600 ".env.previous.${GITHUB_RUN_ID}"
-            fi
-            mv "${REMOTE_ENV_PATH}" .env
-            chmod 600 .env
-
-            DEPLOY_STAGE="restarting pm2 process"
-            log "$DEPLOY_STAGE"
-            set -a
-            . /root/ESG/.env
-            set +a
-            pm2 restart esg --update-env
-
-            DEPLOY_STAGE="checking pm2 status"
-            log "$DEPLOY_STAGE"
-            pm2 status
-
-            DEPLOY_STAGE="checking pm2 runtime environment"
-            log "$DEPLOY_STAGE"
-            node -e '
-              const { execFileSync } = require("node:child_process");
-              const processes = JSON.parse(execFileSync("pm2", ["jlist"], { encoding: "utf8" }));
-              const app = processes.find((entry) => entry.name === "esg");
-              if (!app) {
-                console.error("::error::PM2 process esg was not found");
-                process.exit(1);
-              }
-
-              const env = app.pm2_env?.env || {};
-              const checks = [
-                ["DATABASE_URL", Boolean(env.DATABASE_URL)],
-                ["AI_INTEGRATIONS_OPENAI_API_KEY", Boolean(env.AI_INTEGRATIONS_OPENAI_API_KEY)],
-                ["AI_INTEGRATIONS_OPENAI_BASE_URL", env.AI_INTEGRATIONS_OPENAI_BASE_URL === "https://api.openai.com/v1"],
-                ["AI_INTEGRATIONS_OPENAI_MODEL", Boolean(env.AI_INTEGRATIONS_OPENAI_MODEL)],
-              ];
-
-              const missing = checks.filter(([, ok]) => !ok).map(([name]) => name);
-              for (const [name, ok] of checks) {
-                console.log(`${name}: ${ok ? "configured" : "missing-or-invalid"}`);
-              }
-
-              if (missing.length > 0) {
-                console.error(`::error::PM2 runtime environment missing or invalid: ${missing.join(", ")}`);
-                process.exit(1);
-              }
-            '
-
-            DEPLOY_STAGE="checking health endpoint"
-            log "$DEPLOY_STAGE"
-            wait_for_url "health endpoint" "http://127.0.0.1:5000/health"
-
-            DEPLOY_STAGE="checking app shell"
-            log "$DEPLOY_STAGE"
-            wait_for_url "app shell" "http://127.0.0.1:5000/"
-
-            log "deployment completed"
-          EOF
-
-      - name: Verify public production release
+      - name: Verify public production release and safe anonymous contracts
         env:
           PUBLIC_BASE_URL: https://www.simplyesg.co.uk
+        shell: bash
         run: |
           set -Eeuo pipefail
           base_url="${PUBLIC_BASE_URL%/}"
-          if [[ "${base_url}" != https://* ]]; then
-            echo "::error::APP_BASE_URL must be an HTTPS URL"
-            exit 1
-          fi
-          health_json="$(curl --fail --silent --show-error --max-time 30 "${base_url}/health")"
+          health_json="$(curl --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 -H 'Cache-Control: no-cache' "${base_url}/health")"
           HEALTH_JSON="${health_json}" EXPECTED_SHA="${DEPLOY_SHA}" node <<'NODE'
           const health = JSON.parse(process.env.HEALTH_JSON);
           const expected = process.env.EXPECTED_SHA;
+          const age = Math.abs(Date.now() - Date.parse(health.timestamp));
           if (health.status !== "ok" || health.db !== "connected" || health.scheduler !== "running") {
             throw new Error(`Public health is degraded: ${JSON.stringify(health)}`);
           }
-          if (health.releaseSha !== expected) {
-            throw new Error(`Public release SHA ${health.releaseSha} does not match ${expected}`);
-          }
+          if (health.releaseSha !== expected) throw new Error(`Public release SHA ${health.releaseSha} does not match ${expected}`);
+          if (!Number.isFinite(age) || age > 300000) throw new Error(`Public health timestamp is stale: ${health.timestamp}`);
           console.log(`Public health confirms release ${expected}`);
           NODE
-          curl --fail --silent --show-error --max-time 30 --output /dev/null "${base_url}/"
+
+          for route in / /auth /terms /privacy /cookies /dpa; do
+            status="$(curl --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 --output /dev/null --write-out '%{http_code}' "${base_url}${route}")"
+            test "${status}" = "200" || { echo "::error::${route} expected 200, got ${status}"; exit 1; }
+          done
+          for route in /api/auth/me /api/company /api/metrics /api/reports /api/evidence /api/framework-readiness; do
+            status="$(curl --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 --output /dev/null --write-out '%{http_code}' "${base_url}${route}")"
+            test "${status}" = "401" || { echo "::error::${route} expected 401, got ${status}"; exit 1; }
+          done
+          status="$(curl --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 --output /dev/null --write-out '%{http_code}' "${base_url}/api/company/esg-profile/public/codex-nonexistent-smoke-token")"
+          test "${status}" = "404" || { echo "::error::invalid public token expected 404, got ${status}"; exit 1; }
+
+          headers="$(curl --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 --dump-header - --output /dev/null "${base_url}/")"
+          for header in content-security-policy strict-transport-security x-content-type-options x-frame-options referrer-policy permissions-policy; do
+            printf '%s' "${headers}" | tr -d '\r' | grep -qi "^${header}:" || { echo "::error::Missing ${header}"; exit 1; }
+          done
 
       - name: Record production release summary
         if: always()
+        shell: bash
         run: |
           {
             echo "### Production release"
-            echo "- Previous SHA: \`${PRODUCTION_PREVIOUS_SHA:-unavailable}\`"
             echo "- Target SHA: \`${DEPLOY_SHA:-unavailable}\`"
-            echo "- Recovery point: \`/root/esg-deploy-backups/${GITHUB_RUN_ID}-${PRODUCTION_PREVIOUS_SHA:0:12}\`"
+            echo "- Release directory: \`/root/esg-releases/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${DEPLOY_SHA:0:12}\`"
+            echo "- Recovery point root: \`/root/esg-deploy-backups/\`"
+            if [ "${{ steps.atomic_deploy.outcome }}" = "success" ]; then
+              echo "- Database and evidence restore rehearsal: passed before write pause"
+            else
+              echo "- Database and evidence restore rehearsal: not completed or deployment failed; inspect the failed step"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Remove local production env file
+      - name: Remove runner-side production configuration
         if: always()
-        run: rm -f production.env
+        shell: bash
+        run: |
+          rm -f production.env
+          if [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k >/dev/null 2>&1 || true; fi

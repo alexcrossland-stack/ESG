@@ -27,14 +27,10 @@ Run these first:
 
 ```bash
 cd /root/ESG
-set -a
-source .env
-set +a
 
 node -v
 npm -v
-
-test -n "$DATABASE_URL"
+node scripts/deployment/runtime-env.cjs exec .env node -e 'if (!process.env.DATABASE_URL) process.exit(1)'
 curl -fsS http://127.0.0.1:5000/health
 ```
 
@@ -46,28 +42,16 @@ Run the full standalone-company preflight:
 
 ```bash
 cd /root/ESG
-set -a
-source .env
-set +a
-
-export BASE_URL=http://127.0.0.1:5000
-
-npm run test:security-db
-npm run test:metric-upsert
-npm run test:e2e:release
+BASE_URL=http://127.0.0.1:5000 node scripts/deployment/runtime-env.cjs exec .env npm run test:security-db
+BASE_URL=http://127.0.0.1:5000 node scripts/deployment/runtime-env.cjs exec .env npm run test:metric-upsert
+BASE_URL=http://127.0.0.1:5000 node scripts/deployment/runtime-env.cjs exec .env npm run test:e2e:release
 ```
 
 Or run the same gate through the combined script:
 
 ```bash
 cd /root/ESG
-set -a
-source .env
-set +a
-
-export BASE_URL=http://127.0.0.1:5000
-
-npm run test:preflight:standalone
+BASE_URL=http://127.0.0.1:5000 node scripts/deployment/runtime-env.cjs exec .env npm run test:preflight:standalone
 ```
 
 ## What Must Pass

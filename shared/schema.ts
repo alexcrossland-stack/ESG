@@ -643,7 +643,10 @@ export const emissionFactors = pgTable("emission_factors", {
   fuelType: text("fuel_type"),
   methodology: text("methodology"),
   effectiveDate: timestamp("effective_date").defaultNow(),
-});
+}, (table) => ({
+  catalogueKeyIdx: uniqueIndex("idx_emission_factors_country_year_name_unique")
+    .on(table.country, table.factorYear, table.name),
+}));
 
 export const carbonCalculations = pgTable("carbon_calculations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -10,26 +10,30 @@ Application startup applies idempotent schema operations before accepting traffi
 - creates and validates `framework_requirement_responses` and its indexes;
 - converts `super_admin_actions.admin_user_id`, `target_company_id`, and `target_user_id` to `varchar` and validates their resulting types;
 - adds evidence attachment metadata where absent;
-- changes defaults for company, factor and calculation records to the UK Government 2026 factor set/year without rewriting explicit historical selections.
+- changes defaults for company, factor and calculation records to the UK Government 2026 factor set/year without rewriting explicit historical selections;
+- transactionally reconciles and validates the required metric-definition, framework, requirement and mapping catalogues;
+- transactionally upserts and validates exactly 11 canonical UK 2026 emission factors;
+- adds a unique natural key on emission factors `(country, factor_year, name)`.
 
-The `super_admin_actions` conversion and framework-response schema now fail startup closed. Do not bypass a failure or manually edit production data during the deployment window.
+Schema conversion and all required catalogue validation now fail startup closed. Seeding uses transaction-scoped advisory locks and rolls back its own catalogue changes on failure. Do not bypass a failure or manually edit production data during the deployment window.
 
 ## Mandatory recovery point
 
-The production workflow must complete `Create production recovery point` before it uploads a candidate runtime environment or changes the checkout. It stores, on the production server only:
+The production workflow builds the candidate without changing the live checkout. While the previous app remains online, it takes a preliminary backup and fully restores that dump into a disposable database. It then pauses HTTP and scheduler writes and captures the final coordinated recovery point before candidate startup can migrate data. The private validation process keeps its scheduler dormant; the promoted process does not poll or enqueue jobs until the write lock is removed. It stores, on the production server only:
 
-- a custom-format `pg_dump`, validated with `pg_restore --list`;
-- a compressed archive of `uploads/evidence`;
+- a custom-format `pg_dump`, checksum validation and a successful disposable-database restore rehearsal using the same tooling;
+- a compressed archive of the resolved evidence storage directory (not merely a symlink);
+- a deterministic evidence file/byte manifest;
 - the previous runtime `.env`;
-- previous and target SHAs plus SHA-256 checksums.
+- a PM2 rollback configuration, previous path/script, previous and target SHAs, and SHA-256 checksums.
 
-The workflow records the directory in its job summary and `/root/esg-deploy-backups/latest`. Secret values and database contents must not be copied into workflow logs or repository artifacts.
+The workflow records the directory under `/root/esg-deploy-backups` and in `/root/esg-deploy-backups/latest`. Secret values and database contents must not be copied into workflow logs or repository artifacts. The server-side release point is for rapid release recovery; a separate current off-host backup remains required for host/disk loss.
 
 ## Rollback decision
 
-Preferred rollback is application-only: create a revert on `main`, pass the exact-commit release gate, confirm the previous code can run against the additive upgraded schema, then deploy normally. The new table, enum and defaults may remain.
+Application-only rollback to `a178ae2` is prohibited after catalogue reconciliation. That application reads multiple emission-factor years without a deterministic year filter and can therefore calculate with the wrong factor set after the 2026 rows are added.
 
-Restore the database/evidence recovery point only if the migration corrupts or removes production data. A database restore discards all writes made after the backup timestamp and therefore requires an explicit incident owner and data-loss assessment.
+Before the deployment write lock is removed, the workflow may automatically restore the final database/evidence recovery point and restart the previous app because no user writes were accepted in that window. After the lock is removed, restoration discards all writes made after the backup timestamp and therefore requires an explicit incident owner and data-loss assessment. Follow [backup-restore.md](../backup-restore.md) and never start the previous app until the matching restore succeeds.
 
 ## Post-deploy validation
 
@@ -38,5 +42,6 @@ Require all of the following before closing the deployment:
 - public `/health` reports `status=ok`, `db=connected`, `scheduler=running`, and the exact approved release SHA;
 - the public HTTPS app shell responds;
 - startup logs show the framework schema validation and 2026 default reconciliation succeeded;
+- startup logs show metric, framework and emission-factor catalogues reconciled and validated;
 - an approved internal user can log in and access existing evidence and historical reports;
 - email, AI and billing are checked only when their complete provider configuration is present.

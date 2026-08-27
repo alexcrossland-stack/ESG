@@ -2,16 +2,17 @@ import { db } from "./storage";
 import { metricDefinitions } from "@shared/schema";
 import { DEFAULT_METRICS } from "./default-metrics";
 import { resolveMetricDataType } from "@shared/data-entry-metrics";
+import { sql } from "drizzle-orm";
 
 interface MetricSeed {
   code: string;
   name: string;
-  pillar: string;
+  pillar: "environmental" | "social" | "governance";
   category: string;
   description: string;
-  dataType: string;
+  dataType: "numeric" | "text" | "boolean" | "json";
   unit?: string;
-  inputFrequency: string;
+  inputFrequency: "monthly" | "quarterly" | "annual";
   isCore: boolean;
   isActive: boolean;
   isDerived: boolean;
@@ -20,7 +21,7 @@ interface MetricSeed {
   scoringWeight?: string;
   sortOrder: number;
   evidenceRequired?: boolean;
-  rollupMethod: string;
+  rollupMethod: "sum" | "weighted_average" | "latest" | "none";
 }
 
 const METRIC_DEFINITIONS: MetricSeed[] = [
@@ -1122,44 +1123,122 @@ const SME_DEFAULT_DEFINITIONS: MetricSeed[] = DEFAULT_METRICS.map((metric, index
   rollupMethod: metric.unit === "%" || metric.unit === "yes/no" ? "none" : "sum",
 }));
 
-export async function seedMetricDefinitions() {
-  let seeded = 0;
-  let skipped = 0;
-  const existing = await db.select({ code: metricDefinitions.code, name: metricDefinitions.name })
-    .from(metricDefinitions);
-  const existingCodes = new Set(existing.map((definition) => definition.code));
-  const existingNames = new Set(existing.map((definition) => normalizeSeedMetricName(definition.name)));
+const METRIC_DEFINITION_SEED_LOCK = "simplyesg:seed:metric-definitions";
 
-  for (const m of [...METRIC_DEFINITIONS, ...SME_DEFAULT_DEFINITIONS]) {
-    const normalizedName = normalizeSeedMetricName(m.name);
-    if (existingCodes.has(m.code) || existingNames.has(normalizedName)) {
-      skipped++;
-      continue;
+export const REQUIRED_METRIC_DEFINITION_CODES = METRIC_DEFINITIONS.map((metric) => metric.code);
+export const REQUIRED_SME_METRIC_NAMES = SME_DEFAULT_DEFINITIONS.map((metric) => metric.name);
+
+export function metricDefinitionCatalogueErrors(
+  rows: Array<{ code: string; name: string }>,
+): string[] {
+  const presentCodes = new Set(rows.map((row) => row.code));
+  const presentNames = new Set(rows.map((row) => normalizeSeedMetricName(row.name)));
+  const missingCodes = REQUIRED_METRIC_DEFINITION_CODES.filter((code) => !presentCodes.has(code));
+  const missingSmeNames = REQUIRED_SME_METRIC_NAMES.filter(
+    (name) => !presentNames.has(normalizeSeedMetricName(name)),
+  );
+  const errors: string[] = [];
+  if (missingCodes.length > 0) {
+    errors.push(`missing canonical metric codes: ${missingCodes.join(", ")}`);
+  }
+  if (missingSmeNames.length > 0) {
+    errors.push(`missing SME starter metrics: ${missingSmeNames.join(", ")}`);
+  }
+  return errors;
+}
+
+export function assertMetricDefinitionCatalogue(rows: Array<{ code: string; name: string }>): void {
+  const errors = metricDefinitionCatalogueErrors(rows);
+  if (errors.length > 0) {
+    throw new Error(`Required metric-definition catalogue is invalid: ${errors.join("; ")}`);
+  }
+}
+
+export async function seedMetricDefinitions() {
+  const { seeded, skipped } = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${METRIC_DEFINITION_SEED_LOCK}, 0))`);
+    let seeded = 0;
+    let skipped = 0;
+    const existing = await tx.select({ code: metricDefinitions.code, name: metricDefinitions.name })
+      .from(metricDefinitions);
+    const existingCodes = new Set(existing.map((definition) => definition.code));
+    const existingNames = new Set(existing.map((definition) => normalizeSeedMetricName(definition.name)));
+
+    const seedValues = (m: MetricSeed) => ({
+        code: m.code,
+        name: m.name,
+        pillar: m.pillar,
+        category: m.category,
+        description: m.description,
+        dataType: m.dataType,
+        unit: m.unit,
+        inputFrequency: m.inputFrequency,
+        isCore: m.isCore,
+        isActive: m.isActive,
+        isDerived: m.isDerived,
+        formulaJson: m.formulaJson || null,
+        frameworkTags: m.frameworkTags || null,
+        scoringWeight: m.scoringWeight || "1",
+        sortOrder: m.sortOrder,
+        evidenceRequired: m.evidenceRequired || false,
+        rollupMethod: m.rollupMethod,
+    });
+
+    const insertSeed = async (m: MetricSeed) => {
+      await tx.insert(metricDefinitions).values(seedValues(m)).onConflictDoNothing({ target: metricDefinitions.code });
+      existingCodes.add(m.code);
+      existingNames.add(normalizeSeedMetricName(m.name));
+      seeded++;
+    };
+
+    // Canonical definitions are addressed by code because framework mappings
+    // depend on those stable identifiers. A coincidentally matching custom
+    // display name must not suppress a required canonical code.
+    for (const m of METRIC_DEFINITIONS) {
+      const existed = existingCodes.has(m.code);
+      const values = seedValues(m);
+      await tx.insert(metricDefinitions).values(values).onConflictDoUpdate({
+        target: metricDefinitions.code,
+        set: {
+          name: values.name,
+          pillar: values.pillar,
+          category: values.category,
+          description: values.description,
+          dataType: values.dataType,
+          unit: values.unit,
+          inputFrequency: values.inputFrequency,
+          isCore: values.isCore,
+          isActive: values.isActive,
+          isDerived: values.isDerived,
+          formulaJson: values.formulaJson,
+          frameworkTags: values.frameworkTags,
+          scoringWeight: values.scoringWeight,
+          sortOrder: values.sortOrder,
+          evidenceRequired: values.evidenceRequired,
+          rollupMethod: values.rollupMethod,
+        },
+      });
+      existingCodes.add(m.code);
+      existingNames.add(normalizeSeedMetricName(m.name));
+      if (existed) skipped++;
+      else seeded++;
     }
 
-    await db.insert(metricDefinitions).values({
-      code: m.code,
-      name: m.name,
-      pillar: m.pillar,
-      category: m.category,
-      description: m.description,
-      dataType: m.dataType,
-      unit: m.unit,
-      inputFrequency: m.inputFrequency,
-      isCore: m.isCore,
-      isActive: m.isActive,
-      isDerived: m.isDerived,
-      formulaJson: m.formulaJson || null,
-      frameworkTags: m.frameworkTags || null,
-      scoringWeight: m.scoringWeight || "1",
-      sortOrder: m.sortOrder,
-      evidenceRequired: m.evidenceRequired || false,
-      rollupMethod: m.rollupMethod,
-    });
-    existingCodes.add(m.code);
-    existingNames.add(normalizedName);
-    seeded++;
-  }
+    // SME starter definitions can reuse a canonical catalogue entry when the
+    // user-facing metric name (including the gas/fuel alias) is already there.
+    for (const m of SME_DEFAULT_DEFINITIONS) {
+      if (existingCodes.has(m.code) || existingNames.has(normalizeSeedMetricName(m.name))) {
+        skipped++;
+        continue;
+      }
+      await insertSeed(m);
+    }
+
+    const reconciled = await tx.select({ code: metricDefinitions.code, name: metricDefinitions.name })
+      .from(metricDefinitions);
+    assertMetricDefinitionCatalogue(reconciled);
+    return { seeded, skipped };
+  });
 
   if (seeded > 0 || skipped === 0) {
     console.log(`[MetricDefs] Seeded ${seeded} metric definitions (${skipped} already existed)`);

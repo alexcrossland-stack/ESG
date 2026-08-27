@@ -1,5 +1,6 @@
-import { storage } from "./storage";
-import type { InsertEmissionFactor } from "@shared/schema";
+import { db } from "./storage";
+import { emissionFactors, type InsertEmissionFactor } from "@shared/schema";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   CURRENT_UK_FACTOR_SOURCE,
   CURRENT_UK_FACTOR_SOURCE_URL,
@@ -140,34 +141,104 @@ export const UK_2026_EMISSION_FACTORS: InsertEmissionFactor[] = [
   },
 ];
 
-export async function seedCurrentEmissionFactors(): Promise<void> {
-  const existing = await storage.getEmissionFactors("UK", CURRENT_UK_FACTOR_YEAR);
-  const byName = new Map(existing.map((factor) => [factor.name, factor]));
+type EmissionFactorCatalogueRow = {
+  name: string;
+  category: string;
+  country: string;
+  unit: string;
+  factor: string | number;
+  sourceLabel?: string | null;
+  factorYear?: number | null;
+  version?: number | null;
+  fuelType?: string | null;
+  methodology?: string | null;
+};
 
-  let created = 0;
-  let updated = 0;
-  for (const factor of UK_2026_EMISSION_FACTORS) {
-    const current = byName.get(factor.name);
-    if (!current) {
-      await storage.createEmissionFactor(factor);
-      created += 1;
+const EMISSION_FACTOR_SEED_LOCK = "simplyesg:seed:emission-factors";
+
+function optionalValue(value: unknown): unknown {
+  return value ?? null;
+}
+
+/**
+ * Return deterministic, human-readable reasons that the calculator's current
+ * UK catalogue is not safe to use. Extra non-canonical factors are allowed,
+ * but every canonical factor must exist exactly once and match its provenance.
+ */
+export function emissionFactorCatalogueErrors(rows: EmissionFactorCatalogueRow[]): string[] {
+  const errors: string[] = [];
+
+  for (const expected of UK_2026_EMISSION_FACTORS) {
+    const matches = rows.filter((row) =>
+      row.country === expected.country
+      && row.factorYear === expected.factorYear
+      && row.name === expected.name,
+    );
+    if (matches.length !== 1) {
+      errors.push(`${expected.name}: expected exactly one row, found ${matches.length}`);
       continue;
     }
 
-    const needsUpdate =
-      current.factor !== factor.factor
-      || current.unit !== factor.unit
-      || current.category !== factor.category
-      || current.fuelType !== (factor.fuelType ?? null)
-      || current.sourceLabel !== factor.sourceLabel
-      || current.methodology !== factor.methodology;
-    if (needsUpdate) {
-      await storage.updateEmissionFactor(current.id, factor);
-      updated += 1;
+    const actual = matches[0];
+    const mismatchedFields = [
+      ["category", actual.category, expected.category],
+      ["unit", actual.unit, expected.unit],
+      ["sourceLabel", optionalValue(actual.sourceLabel), optionalValue(expected.sourceLabel)],
+      ["version", optionalValue(actual.version), optionalValue(expected.version)],
+      ["fuelType", optionalValue(actual.fuelType), optionalValue(expected.fuelType)],
+      ["methodology", optionalValue(actual.methodology), optionalValue(expected.methodology)],
+    ].filter(([, actualValue, expectedValue]) => actualValue !== expectedValue)
+      .map(([field]) => field);
+    if (Number(actual.factor) !== Number(expected.factor)) {
+      mismatchedFields.push("factor");
+    }
+    if (mismatchedFields.length > 0) {
+      errors.push(`${expected.name}: mismatched ${mismatchedFields.join(", ")}`);
     }
   }
 
+  return errors;
+}
+
+export function assertCurrentEmissionFactorCatalogue(rows: EmissionFactorCatalogueRow[]): void {
+  const errors = emissionFactorCatalogueErrors(rows);
+  if (errors.length > 0) {
+    throw new Error(
+      `Required ${CURRENT_UK_FACTOR_YEAR} UK emission-factor catalogue is invalid: ${errors.join("; ")}`,
+    );
+  }
+}
+
+export async function seedCurrentEmissionFactors(): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${EMISSION_FACTOR_SEED_LOCK}, 0))`);
+
+    for (const factor of UK_2026_EMISSION_FACTORS) {
+      await tx.insert(emissionFactors)
+        .values(factor)
+        .onConflictDoUpdate({
+          target: [emissionFactors.country, emissionFactors.factorYear, emissionFactors.name],
+          set: {
+            category: factor.category,
+            unit: factor.unit,
+            factor: factor.factor,
+            sourceLabel: factor.sourceLabel ?? null,
+            version: factor.version ?? 1,
+            fuelType: factor.fuelType ?? null,
+            methodology: factor.methodology ?? null,
+          },
+        });
+    }
+
+    const rows = await tx.select().from(emissionFactors).where(and(
+      eq(emissionFactors.country, "UK"),
+      eq(emissionFactors.factorYear, CURRENT_UK_FACTOR_YEAR),
+      inArray(emissionFactors.name, UK_2026_EMISSION_FACTORS.map((factor) => factor.name)),
+    ));
+    assertCurrentEmissionFactorCatalogue(rows);
+  });
+
   console.log(
-    `[seed-emission-factors] ${CURRENT_UK_FACTOR_SOURCE}: ${created} created, ${updated} updated`,
+    `[seed-emission-factors] ${CURRENT_UK_FACTOR_SOURCE}: ${UK_2026_EMISSION_FACTORS.length} canonical factors reconciled and validated`,
   );
 }
