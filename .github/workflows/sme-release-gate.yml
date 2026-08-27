@@ -43,7 +43,7 @@ jobs:
             16????) ;;
             *) echo "::error::Expected PostgreSQL 16, received ${server_version}"; exit 1 ;;
           esac
-          server_address="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SELECT inet_server_addr()::text')"
+          server_address="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SELECT host(inet_server_addr())')"
           if [ "${server_address}" != "127.0.0.1" ]; then
             echo "::error::Expected a true loopback PostgreSQL server, received ${server_address}"
             exit 1

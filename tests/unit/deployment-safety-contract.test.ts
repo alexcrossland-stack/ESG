@@ -39,7 +39,7 @@ assert.doesNotMatch(production, /git reset --hard/);
 assert.match(releaseGate, /runs-on: ubuntu-24\.04/);
 assert.match(releaseGate, /sudo systemctl start postgresql\.service/);
 assert.match(releaseGate, /CREATE ROLE simplyesg LOGIN CREATEDB/);
-assert.match(releaseGate, /SELECT inet_server_addr\(\)::text/);
+assert.match(releaseGate, /SELECT host\(inet_server_addr\(\)\)/);
 assert.doesNotMatch(releaseGate, /services:\s+postgres:/);
 
 assert.match(staging, /group: deploy-staging\s+cancel-in-progress: false/);
