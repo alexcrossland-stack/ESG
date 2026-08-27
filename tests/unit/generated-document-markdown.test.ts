@@ -67,6 +67,26 @@ function expectNotContains(name: string, actual: string, unexpected: string) {
   expectNotContains("no raw bold markdown markers remain", renderedHtml, "**bold**");
   expectNotContains("no raw table pipes remain", renderedHtml, "| Control | Status |");
 
+  const adversarialHtml = renderGeneratedMarkdownToHtml([
+    "<xmp><img src=x onerror=alert(1)></xmp>",
+    "<textarea>safe</textarea/><img src=x onerror=alert(2)>",
+    "<svg><a href=\"javascript:alert(3)\"><animate attributeName=\"href\" values=\"javascript:alert(4)\" /></a></svg>",
+    "<math><mtext><img src=x onerror=alert(5)></mtext></math>",
+    "<a href=\"javascript:alert(6)\" onclick=\"alert(7)\">unsafe link</a>",
+  ].join("\n\n"));
+  for (const [name, marker] of [
+    ["strips xmp raw-text payloads", "<xmp"],
+    ["strips textarea solidus-close payloads", "<textarea"],
+    ["strips svg payloads", "<svg"],
+    ["strips MathML payloads", "<math"],
+    ["strips SMIL animation payloads", "<animate"],
+    ["strips event-handler attributes", "onerror="],
+    ["strips onclick attributes", "onclick="],
+    ["strips javascript link schemes", "href=\"javascript:"],
+  ] as const) {
+    expectNotContains(name, adversarialHtml.toLowerCase(), marker);
+  }
+
   const parsedBlocks = parseGeneratedMarkdownBlocks(mixedMarkdown);
   const blockTypes = parsedBlocks.map((block) => block.type);
   if (blockTypes.includes("heading") && blockTypes.includes("list") && blockTypes.includes("table") && blockTypes.includes("paragraph")) {

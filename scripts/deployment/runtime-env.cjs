@@ -125,6 +125,12 @@ function assertStableEncryptionKey(current, candidate) {
   }
 }
 
+function assertStableDatabaseUrl(current, candidate) {
+  if (current && candidate && current !== candidate) {
+    throw new Error("Routine deployment cannot rotate DATABASE_URL credentials; use the dedicated credential-rotation runbook");
+  }
+}
+
 function validateRuntimeEnv(env) {
   const fail = (message) => {
     throw new Error(message);
@@ -213,6 +219,7 @@ function mergeRuntimeEnv({ uploadedFile, existingFile, outputFile, pm2Process })
   if (currentDatabaseUrl && databaseIdentity(currentDatabaseUrl) !== databaseIdentity(merged.DATABASE_URL)) {
     throw new Error("Routine deployment cannot change the production database identity");
   }
+  assertStableDatabaseUrl(currentDatabaseUrl, merged.DATABASE_URL);
   assertStableEncryptionKey(existing.MFA_ENCRYPTION_KEY || pm2.MFA_ENCRYPTION_KEY, merged.MFA_ENCRYPTION_KEY);
 
   writeRuntimeEnv(outputFile, merged, "Validated SimplyESG production runtime configuration.");
@@ -303,6 +310,7 @@ if (require.main === module) {
 
 module.exports = {
   RUNTIME_KEYS,
+  assertStableDatabaseUrl,
   assertStableEncryptionKey,
   captureEffectiveRuntimeEnv,
   databaseIdentity,

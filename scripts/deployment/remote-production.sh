@@ -5,10 +5,18 @@ BASE_REPO="/root/ESG"
 RELEASES_ROOT="/root/esg-releases"
 BACKUPS_ROOT="/root/esg-deploy-backups"
 PREFLIGHT_ROOT="/root/esg-deploy-preflight"
+RUNTIMES_ROOT="/root/esg-runtimes"
 PROCESS_NAME="esg"
 PRIVATE_PROCESS_NAME="esg-candidate"
 PUBLIC_ORIGIN="https://www.simplyesg.co.uk"
+NODE_RUNTIME_VERSION="24.20.0"
+NODE_RUNTIME_ARCHIVE="node-v24.20.0-linux-x64.tar.xz"
+NODE_RUNTIME_SHA256="2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2"
+NODE_RUNTIME_ROOT="${RUNTIMES_ROOT}/node-v${NODE_RUNTIME_VERSION}-linux-x64"
+NODE_BIN="${NODE_RUNTIME_ROOT}/bin/node"
+NODE_NPM_CLI="${NODE_RUNTIME_ROOT}/lib/node_modules/npm/bin/npm-cli.js"
 export PM2_HOME="/root/.pm2"
+export RECOVERY_AUTHORITY="local-postgres-os"
 
 DEPLOY_STAGE="initialising"
 OLD_STOPPED=0
@@ -43,7 +51,7 @@ wait_for_release() {
     if [ -n "${resolve_arg}" ]; then
       curl_args+=(--resolve "${resolve_arg}")
     fi
-    if curl "${curl_args[@]}" "${url}" && HEALTH_FILE="${response_file}" EXPECTED_SHA="${expected_sha}" EXPECTED_SCHEDULER="${expected_scheduler}" node - <<'NODE'
+    if curl "${curl_args[@]}" "${url}" && HEALTH_FILE="${response_file}" EXPECTED_SHA="${expected_sha}" EXPECTED_SCHEDULER="${expected_scheduler}" "${NODE_BIN}" - <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.env.HEALTH_FILE, "utf8"));
 if (health.db !== "connected") process.exit(1);
@@ -67,21 +75,37 @@ NODE
   return 1
 }
 
+assert_process_interpreter() {
+  local name="$1"
+  local expected="$2"
+  local process_pid
+  process_pid="$(pm2 jlist | PROCESS_NAME_TO_CHECK="${name}" "${NODE_BIN}" -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk).on("end", () => {
+  const app = JSON.parse(input).find(entry => entry.name === process.env.PROCESS_NAME_TO_CHECK);
+  if (!app || !Number.isInteger(app.pid) || app.pid < 2) process.exit(1);
+  process.stdout.write(String(app.pid));
+});
+')"
+  [[ "${process_pid}" =~ ^[0-9]+$ ]]
+  local actual
+  actual="$(readlink -f "/proc/${process_pid}/exe")"
+  test -x "${actual}"
+  test "${actual}" = "${expected}" || {
+    echo "::error::${name} is running under ${actual}, expected ${expected}" >&2
+    return 1
+  }
+  echo "${name} uses pinned interpreter ${expected}"
+}
+
 start_previous_release() {
   if pm2 describe "${PROCESS_NAME}" >/dev/null 2>&1; then
     pm2 restart "${PROCESS_NAME}"
   else
     DEPLOY_PROCESS_NAME="${PROCESS_NAME}" pm2 start "${BACKUP_DIR}/rollback.ecosystem.cjs" --only "${PROCESS_NAME}" --update-env
   fi
-  for _ in $(seq 1 30); do
-    if curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:5000/health" >/dev/null; then
-      echo "Previous production release restarted"
-      return 0
-    fi
-    sleep 2
-  done
-  echo "::error::Previous production release did not recover" >&2
-  return 1
+  assert_process_interpreter "${PROCESS_NAME}" "${PREVIOUS_INTERPRETER}"
+  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running"
 }
 
 handle_failure() {
@@ -110,7 +134,7 @@ handle_failure() {
     if [ "${MIGRATION_STARTED}" -eq 1 ] && [ "${BACKUP_READY}" -eq 1 ]; then
       pm2 delete "${PROCESS_NAME}" >/dev/null 2>&1
       DEPLOY_STAGE="restoring coordinated production recovery point"
-      if ! node "${RECOVERY_HELPER}" restore "${CANDIDATE_DIR}/.env" "${BACKUP_DIR}"; then
+      if ! "${NODE_BIN}" "${RECOVERY_HELPER}" restore "${CANDIDATE_DIR}/.env" "${BACKUP_DIR}"; then
         echo "::error::CRITICAL: automatic database/evidence restore failed; the previous application will remain stopped" >&2
         exit 70
       fi
@@ -145,8 +169,21 @@ cleanup() {
   if [ -n "${PREVIOUS_EFFECTIVE_ENV:-}" ]; then
     rm -f "${PREVIOUS_EFFECTIVE_ENV}"
   fi
-  if [ "${DEPLOY_SUCCEEDED}" -eq 1 ]; then
+  if [ -n "${PREFLIGHT_DIR:-}" ] && [ "${PREFLIGHT_DIR}" = "${PREFLIGHT_ROOT}/${RUN_INSTANCE:-}/restore-rehearsal" ] && [ -d "${PREFLIGHT_DIR}" ]; then
+    if [ -x "${NODE_BIN}" ]; then
+      "${NODE_BIN}" "${RECOVERY_HELPER}" cleanup-preflight "${PREFLIGHT_DIR}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [ "${DEPLOY_SUCCEEDED}" -ne 1 ] && [ "${CUTOVER_COMMITTED}" -eq 0 ] && [ -n "${CANDIDATE_DIR:-}" ]; then
+    case "${CANDIDATE_DIR}" in
+      "${RELEASES_ROOT}"/*) rm -f "${CANDIDATE_DIR}/.env" ;;
+    esac
+  fi
+  if [ -n "${TOOLS_DIR:-}" ] && [ "${TOOLS_DIR}" = "/tmp/esg-deploy-tools.${RUN_INSTANCE:-}" ]; then
     rm -rf "${TOOLS_DIR}"
+  fi
+  if [ -n "${NODE_RUNTIME_TMP:-}" ] && [ -d "${NODE_RUNTIME_TMP}" ]; then
+    rm -rf "${NODE_RUNTIME_TMP}"
   fi
 }
 
@@ -176,7 +213,7 @@ test -s "${RUNTIME_HELPER}"
 test -s "${RECOVERY_HELPER}"
 test -s "${REMOTE_ENV_PATH}"
 
-for command in curl df flock git node npm pg_dump pg_restore psql createdb dropdb pm2 sha256sum tar; do
+for command in curl df flock git node pg_dump pg_restore psql createdb dropdb pm2 sha256sum tar; do
   command -v "${command}" >/dev/null || { echo "::error::Missing required command: ${command}" >&2; exit 1; }
 done
 test -d "${PM2_HOME}"
@@ -187,20 +224,51 @@ if ! flock -n 9; then
   exit 1
 fi
 
-mapfile -t previous_process < <(pm2 jlist | node -e '
+DEPLOY_STAGE="installing verified side-by-side Node runtime"
+log "${DEPLOY_STAGE}"
+test "$(uname -m)" = "x86_64" || { echo "::error::Pinned Node runtime requires x86_64" >&2; exit 1; }
+NODE_RUNTIME_SOURCE="${TOOLS_DIR}/${NODE_RUNTIME_ARCHIVE}"
+test -s "${NODE_RUNTIME_SOURCE}"
+printf '%s  %s\n' "${NODE_RUNTIME_SHA256}" "${NODE_RUNTIME_SOURCE}" | sha256sum --check --strict
+mkdir -p "${RUNTIMES_ROOT}"
+chmod 700 "${RUNTIMES_ROOT}"
+if [ ! -e "${NODE_RUNTIME_ROOT}" ]; then
+  NODE_RUNTIME_TMP="${RUNTIMES_ROOT}/.node-v${NODE_RUNTIME_VERSION}.${RUN_INSTANCE}"
+  test ! -e "${NODE_RUNTIME_TMP}"
+  mkdir "${NODE_RUNTIME_TMP}"
+  tar -xJf "${NODE_RUNTIME_SOURCE}" -C "${NODE_RUNTIME_TMP}" --strip-components=1
+  test "$("${NODE_RUNTIME_TMP}/bin/node" --version)" = "v${NODE_RUNTIME_VERSION}"
+  test -s "${NODE_RUNTIME_TMP}/lib/node_modules/npm/bin/npm-cli.js"
+  mv "${NODE_RUNTIME_TMP}" "${NODE_RUNTIME_ROOT}"
+  NODE_RUNTIME_TMP=""
+fi
+test -x "${NODE_BIN}"
+test -s "${NODE_NPM_CLI}"
+test "$("${NODE_BIN}" --version)" = "v${NODE_RUNTIME_VERSION}"
+test "$("${NODE_BIN}" -p 'process.arch')" = "x64"
+"${NODE_BIN}" "${NODE_NPM_CLI}" --version
+"${NODE_BIN}" "${RECOVERY_HELPER}" cleanup-stale-preflight "${PREFLIGHT_ROOT}" "${RUN_INSTANCE}"
+
+mapfile -t previous_process < <(pm2 jlist | "${NODE_BIN}" -e '
 let input = "";
 process.stdin.on("data", chunk => input += chunk).on("end", () => {
   const app = JSON.parse(input).find(entry => entry.name === "esg");
   if (!app || app.pm2_env?.status !== "online") process.exit(1);
   console.log(app.pm2_env.pm_cwd || "");
   console.log(app.pm2_env.pm_exec_path || "");
+  console.log(app.pid || "");
 });
 ')
 PREVIOUS_CWD="${previous_process[0]:-}"
 PREVIOUS_SCRIPT="${previous_process[1]:-}"
+PREVIOUS_PID="${previous_process[2]:-}"
 test -d "${PREVIOUS_CWD}"
 test -f "${PREVIOUS_SCRIPT}"
 test -s "${PREVIOUS_CWD}/.env"
+[[ "${PREVIOUS_PID}" =~ ^[0-9]+$ ]]
+PREVIOUS_INTERPRETER="$(readlink -f "/proc/${PREVIOUS_PID}/exe")"
+test "${PREVIOUS_INTERPRETER#/}" != "${PREVIOUS_INTERPRETER}"
+test -x "${PREVIOUS_INTERPRETER}"
 PREVIOUS_SHA="$(git -C "${PREVIOUS_CWD}" rev-parse HEAD)"
 require_full_sha "${PREVIOUS_SHA}" "previous production SHA"
 
@@ -221,10 +289,10 @@ fi
 
 DEPLOY_STAGE="validating runtime configuration without shell evaluation"
 log "${DEPLOY_STAGE}"
-node "${RUNTIME_HELPER}" capture "${PREVIOUS_CWD}/.env" "${PREVIOUS_EFFECTIVE_ENV}" "${PROCESS_NAME}"
-node "${RUNTIME_HELPER}" merge "${REMOTE_ENV_PATH}" "${PREVIOUS_EFFECTIVE_ENV}" "${CANDIDATE_ENV}" "${PROCESS_NAME}"
-node "${RECOVERY_HELPER}" capacity "${CANDIDATE_ENV}" "${EVIDENCE_LINK}" "${RELEASES_ROOT}" "${PREVIOUS_CWD}"
-node "${RECOVERY_HELPER}" preflight "${CANDIDATE_ENV}"
+"${NODE_BIN}" "${RUNTIME_HELPER}" capture "${PREVIOUS_CWD}/.env" "${PREVIOUS_EFFECTIVE_ENV}" "${PROCESS_NAME}"
+"${NODE_BIN}" "${RUNTIME_HELPER}" merge "${REMOTE_ENV_PATH}" "${PREVIOUS_EFFECTIVE_ENV}" "${CANDIDATE_ENV}" "${PROCESS_NAME}"
+"${NODE_BIN}" "${RECOVERY_HELPER}" capacity "${CANDIDATE_ENV}" "${EVIDENCE_LINK}" "${RELEASES_ROOT}" "${PREVIOUS_CWD}"
+"${NODE_BIN}" "${RECOVERY_HELPER}" preflight "${CANDIDATE_ENV}"
 
 DEPLOY_STAGE="building isolated release candidate"
 log "${DEPLOY_STAGE}"
@@ -236,12 +304,14 @@ chmod 600 "${CANDIDATE_DIR}/.env"
 
 (
   cd "${CANDIDATE_DIR}"
-  npm cache verify
-  npm ci --include=dev
+  export PATH="${NODE_RUNTIME_ROOT}/bin:${PATH}"
+  test "$(node --version)" = "v${NODE_RUNTIME_VERSION}"
+  "${NODE_BIN}" "${NODE_NPM_CLI}" cache verify
+  "${NODE_BIN}" "${NODE_NPM_CLI}" ci --include=dev
   # JavaScript template literals must remain literal to Bash.
   # shellcheck disable=SC2016
-  node -e '["@vitejs/plugin-react", "class-variance-authority", "lodash/max", "recharts"].forEach(name => console.log(`${name} -> ${require.resolve(name)}`))'
-  npm run build
+  "${NODE_BIN}" -e '["@vitejs/plugin-react", "class-variance-authority", "lodash/max", "recharts"].forEach(name => console.log(`${name} -> ${require.resolve(name)}`))'
+  "${NODE_BIN}" "${NODE_NPM_CLI}" run build
   cp node_modules/connect-pg-simple/table.sql dist/table.sql
   mkdir -p uploads
   ln -s "$(realpath "${EVIDENCE_LINK}")" uploads/evidence
@@ -249,11 +319,11 @@ chmod 600 "${CANDIDATE_DIR}/.env"
 
 DEPLOY_STAGE="rehearsing database recovery while production remains online"
 log "${DEPLOY_STAGE}"
-node "${RECOVERY_HELPER}" create \
+"${NODE_BIN}" "${RECOVERY_HELPER}" create \
   "${CANDIDATE_DIR}/.env" "${PREVIOUS_EFFECTIVE_ENV}" "${PREFLIGHT_DIR}" "${EVIDENCE_LINK}" \
   "${PREVIOUS_SHA}" "${DEPLOY_SHA}" "${PREVIOUS_CWD}" "${PREVIOUS_SCRIPT}"
-node "${RECOVERY_HELPER}" rehearse "${CANDIDATE_DIR}/.env" "${PREFLIGHT_DIR}" "${RUN_INSTANCE}"
-node "${RECOVERY_HELPER}" cleanup-preflight "${PREFLIGHT_DIR}"
+"${NODE_BIN}" "${RECOVERY_HELPER}" rehearse "${CANDIDATE_DIR}/.env" "${PREFLIGHT_DIR}" "${RUN_INSTANCE}"
+"${NODE_BIN}" "${RECOVERY_HELPER}" cleanup-preflight "${PREFLIGHT_DIR}"
 
 DEPLOY_STAGE="pausing production writes"
 log "${DEPLOY_STAGE}"
@@ -264,13 +334,13 @@ pm2 stop "${PROCESS_NAME}"
 
 DEPLOY_STAGE="creating coordinated database and evidence recovery point"
 log "${DEPLOY_STAGE}"
-node "${RECOVERY_HELPER}" create \
+"${NODE_BIN}" "${RECOVERY_HELPER}" create \
   "${CANDIDATE_DIR}/.env" "${PREVIOUS_EFFECTIVE_ENV}" "${BACKUP_DIR}" "${EVIDENCE_LINK}" \
   "${PREVIOUS_SHA}" "${DEPLOY_SHA}" "${PREVIOUS_CWD}" "${PREVIOUS_SCRIPT}"
 cp "${RUNTIME_HELPER}" "${BACKUP_DIR}/runtime-env.cjs"
 cp "${RECOVERY_HELPER}" "${BACKUP_DIR}/recovery-point.cjs"
 chmod 600 "${BACKUP_DIR}/runtime-env.cjs" "${BACKUP_DIR}/recovery-point.cjs"
-ROLLBACK_DIR="${BACKUP_DIR}" PREVIOUS_CWD="${PREVIOUS_CWD}" PREVIOUS_SCRIPT="${PREVIOUS_SCRIPT}" node - <<'NODE'
+ROLLBACK_DIR="${BACKUP_DIR}" PREVIOUS_CWD="${PREVIOUS_CWD}" PREVIOUS_SCRIPT="${PREVIOUS_SCRIPT}" PREVIOUS_INTERPRETER="${PREVIOUS_INTERPRETER}" PREVIOUS_SHA="${PREVIOUS_SHA}" "${NODE_BIN}" - <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const backup = process.env.ROLLBACK_DIR;
@@ -278,7 +348,7 @@ const content = `"use strict";
 const fs = require("node:fs");
 const { parseRuntimeEnv } = require("./runtime-env.cjs");
 const env = parseRuntimeEnv(fs.readFileSync(__dirname + "/production.env", "utf8"));
-module.exports = { apps: [{ name: "esg", script: ${JSON.stringify(process.env.PREVIOUS_SCRIPT)}, cwd: ${JSON.stringify(process.env.PREVIOUS_CWD)}, env: { ...env, NODE_ENV: "production" } }] };
+module.exports = { apps: [{ name: "esg", script: ${JSON.stringify(process.env.PREVIOUS_SCRIPT)}, cwd: ${JSON.stringify(process.env.PREVIOUS_CWD)}, interpreter: ${JSON.stringify(process.env.PREVIOUS_INTERPRETER)}, env: { ...env, NODE_ENV: "production", RELEASE_SHA: ${JSON.stringify(process.env.PREVIOUS_SHA)} } }] };
 `;
 fs.writeFileSync(path.join(backup, "rollback.ecosystem.cjs"), content, { mode: 0o600 });
 NODE
@@ -294,7 +364,8 @@ DEPLOY_STAGE="booting release candidate on private port"
 log "${DEPLOY_STAGE}"
 MIGRATION_STARTED=1
 DEPLOY_PROCESS_NAME="${PRIVATE_PROCESS_NAME}" DEPLOY_PORT_OVERRIDE="5001" DEPLOYMENT_WRITE_LOCK_FILE="${WRITE_LOCK_FILE}" DEPLOYMENT_VALIDATION="1" \
-  pm2 start "${CANDIDATE_DIR}/ecosystem.config.cjs" --only "${PRIVATE_PROCESS_NAME}" --update-env
+  DEPLOY_NODE_INTERPRETER="${NODE_BIN}" pm2 start "${CANDIDATE_DIR}/ecosystem.config.cjs" --only "${PRIVATE_PROCESS_NAME}" --update-env
+assert_process_interpreter "${PRIVATE_PROCESS_NAME}" "${NODE_BIN}"
 wait_for_release "private candidate health" "http://127.0.0.1:5001/health" "${DEPLOY_SHA}" "stopped"
 curl --fail --silent --show-error --max-time 15 --output /dev/null "http://127.0.0.1:5001/"
 
@@ -302,8 +373,9 @@ DEPLOY_STAGE="switching production process to verified candidate"
 log "${DEPLOY_STAGE}"
 pm2 delete "${PRIVATE_PROCESS_NAME}"
 pm2 delete "${PROCESS_NAME}"
-DEPLOY_PROCESS_NAME="${PROCESS_NAME}" DEPLOY_PORT_OVERRIDE="5000" DEPLOYMENT_WRITE_LOCK_FILE="${WRITE_LOCK_FILE}" \
+DEPLOY_PROCESS_NAME="${PROCESS_NAME}" DEPLOY_PORT_OVERRIDE="5000" DEPLOYMENT_WRITE_LOCK_FILE="${WRITE_LOCK_FILE}" DEPLOY_NODE_INTERPRETER="${NODE_BIN}" \
   pm2 start "${CANDIDATE_DIR}/ecosystem.config.cjs" --only "${PROCESS_NAME}" --update-env
+assert_process_interpreter "${PROCESS_NAME}" "${NODE_BIN}"
 wait_for_release "production process health" "http://127.0.0.1:5000/health" "${DEPLOY_SHA}" "running"
 curl --fail --silent --show-error --max-time 15 --output /dev/null "http://127.0.0.1:5000/"
 wait_for_release \

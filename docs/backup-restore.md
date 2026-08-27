@@ -60,27 +60,32 @@ Each directory contains:
 
 The deployment workflow automatically exercises a full restore into a disposable database before it pauses production writes. Its final recovery point is captured after PM2 stops the previous app, so the database and evidence archive share one write-paused window.
 
+When a restore begins, the helper writes a root-private `restore-state.json` bound to that backup's checksum manifest and PostgreSQL system identity. It atomically advances the marker from `in_progress` to `completed` and retains it, allowing the same checked recovery point to be reapplied if the process is interrupted or the previous application fails to restart after restoration.
+
 For a manual incident restore, first record the backup timestamp and approve loss of every write after that timestamp. Then run on the Hetzner host:
 
 ```bash
 set -Eeuo pipefail
 backup_dir="$(tr -d '\r\n' < /root/esg-deploy-backups/latest)"
+node_bin="/root/esg-runtimes/node-v24.20.0-linux-x64/bin/node"
 test -d "$backup_dir"
 test -s "$backup_dir/database.dump"
 test -s "$backup_dir/evidence.tar.gz"
 test -s "$backup_dir/production.env"
+test -x "$node_bin"
 
 pm2 stop esg
-node "$backup_dir/recovery-point.cjs" restore "$backup_dir/production.env" "$backup_dir"
+RECOVERY_AUTHORITY=local-postgres-os "$node_bin" \
+  "$backup_dir/recovery-point.cjs" restore "$backup_dir/production.env" "$backup_dir"
 pm2 delete esg || true
 pm2 start "$backup_dir/rollback.ecosystem.cjs" --only esg --update-env
 pm2 save
 curl --fail --silent --show-error --retry 15 --retry-delay 2 http://127.0.0.1:5000/health
 ```
 
-The recovery helper verifies all SHA-256 checksums, terminates remaining application-role sessions, restores PostgreSQL in one transaction with `--clean --if-exists --exit-on-error`, extracts evidence to a temporary directory, validates its manifest, and replaces the evidence directory only after validation. It retains the failed evidence directory with a `.failed-<timestamp>` suffix for forensic comparison.
+The recovery helper verifies all SHA-256 checksums and the local PostgreSQL cluster identity, closes the database to the application, terminates remaining sessions, then drops and recreates the database from the create-capable archive. Recreating the database ensures objects introduced only by a failed migration cannot survive rollback and preserves database-level owner, locale, ACL, comment and configuration statements from the archive. It extracts evidence to a temporary directory, validates its manifest, and atomically restores the evidence root even if that root was removed. When a mismatched evidence root existed, it is retained with a `.failed-<timestamp>` suffix for forensic comparison.
 
-If database restore fails, keep the application stopped. Do not start the previous release against a partially restored or August-2026-upgraded database. Escalate with the recovery directory, PostgreSQL output and the exact last accepted-write time.
+If database or evidence restore fails, the helper leaves the database connection limit at zero and the application must remain stopped. Do not start the previous release against a missing, partial, or August-2026-upgraded database. Escalate with the recovery directory, PostgreSQL output and the exact last accepted-write time.
 
 ### From a pg_dump custom-format backup
 

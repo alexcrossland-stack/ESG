@@ -26,6 +26,7 @@ jobs:
     environment: staging
 
     env:
+      NODE_RUNTIME_VERSION: 24.20.0
       DEPLOY_REF: ${{ inputs.ref }}
       CONFIRM_TARGET: ${{ inputs.confirm_target }}
       STAGING_SERVER_HOST: ${{ secrets.STAGING_SERVER_HOST }}
@@ -99,6 +100,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: npm
+
       - name: Verify SME release gate for this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,6 +163,13 @@ jobs:
           fi
           # shellcheck disable=SC2029
           ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" "test -d '${canonical_app_dir}/.git'"
+          # Staging is intentionally fail-closed until its host has the same
+          # exact runtime already verified by the release gate and production.
+          remote_node_version="$(ssh "${STAGING_SERVER_USER}@${STAGING_SERVER_HOST}" 'node --version')"
+          if [ "${remote_node_version}" != "v${NODE_RUNTIME_VERSION}" ]; then
+            echo "::error::Staging requires Node v${NODE_RUNTIME_VERSION}, got ${remote_node_version}" >&2
+            exit 1
+          fi
           echo "STAGING_APP_DIR_CANONICAL=${canonical_app_dir}" >> "${GITHUB_ENV}"
 
       - name: Build staging environment file
@@ -224,6 +237,11 @@ jobs:
                 exit 1
               fi
 
+              NODE_BIN="$(command -v node)"
+              NODE_BIN="$(realpath "${NODE_BIN}")"
+              test -x "${NODE_BIN}"
+              test "$("${NODE_BIN}" --version)" = "v24.20.0"
+
               log() {
                 echo
                 echo "==> $1"
@@ -277,15 +295,15 @@ jobs:
 
               DEPLOY_STAGE="verifying npm cache"
               log "$DEPLOY_STAGE"
-              npm cache verify
+              "${NODE_BIN}" "$(command -v npm)" cache verify
 
               DEPLOY_STAGE="installing dependencies"
               log "$DEPLOY_STAGE"
-              npm ci --include=dev
+              "${NODE_BIN}" "$(command -v npm)" ci --include=dev
 
               DEPLOY_STAGE="building application"
               log "$DEPLOY_STAGE"
-              npm run build
+              "${NODE_BIN}" "$(command -v npm)" run build
 
               DEPLOY_STAGE="copying runtime assets"
               log "$DEPLOY_STAGE"
@@ -296,8 +314,22 @@ jobs:
               if pm2 describe "${STAGING_PM2_PROCESS}" >/dev/null 2>&1; then
                 pm2 delete "${STAGING_PM2_PROCESS}"
               fi
-              DEPLOY_PROCESS_NAME="${STAGING_PM2_PROCESS}" \
+              DEPLOY_PROCESS_NAME="${STAGING_PM2_PROCESS}" DEPLOY_NODE_INTERPRETER="${NODE_BIN}" \
                 pm2 start ecosystem.config.cjs --only "${STAGING_PM2_PROCESS}" --update-env
+
+              process_pid="$(pm2 jlist | PROCESS_NAME_TO_CHECK="${STAGING_PM2_PROCESS}" "${NODE_BIN}" -e '
+                let input = "";
+                process.stdin.on("data", chunk => input += chunk).on("end", () => {
+                  const app = JSON.parse(input).find(entry => entry.name === process.env.PROCESS_NAME_TO_CHECK);
+                  if (!app || !Number.isInteger(app.pid) || app.pid < 2) process.exit(1);
+                  process.stdout.write(String(app.pid));
+                });
+              ')"
+              actual_interpreter="$(readlink -f "/proc/${process_pid}/exe")"
+              test "${actual_interpreter}" = "${NODE_BIN}" || {
+                echo "::error::Staging process is running under ${actual_interpreter}, expected ${NODE_BIN}" >&2
+                exit 1
+              }
 
               DEPLOY_STAGE="checking pm2 status"
               log "$DEPLOY_STAGE"
@@ -305,7 +337,7 @@ jobs:
 
               DEPLOY_STAGE="checking staging health endpoint"
               log "$DEPLOY_STAGE"
-              app_base="$(node -e 'const fs=require("node:fs"); const {parseRuntimeEnv}=require("./scripts/deployment/runtime-env.cjs"); process.stdout.write(parseRuntimeEnv(fs.readFileSync(".env", "utf8")).APP_BASE_URL || "")')"
+              app_base="$("${NODE_BIN}" -e 'const fs=require("node:fs"); const {parseRuntimeEnv}=require("./scripts/deployment/runtime-env.cjs"); process.stdout.write(parseRuntimeEnv(fs.readFileSync(".env", "utf8")).APP_BASE_URL || "")')"
               test -n "${app_base}"
               app_base="${app_base%/}"
               wait_for_url "staging health endpoint" "${app_base}/health"

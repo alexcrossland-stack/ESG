@@ -7,6 +7,7 @@ import path from "node:path";
 
 const require = createRequire(import.meta.url);
 const {
+  assertStableDatabaseUrl,
   assertStableEncryptionKey,
   databaseIdentity,
   databaseTargetFingerprint,
@@ -60,6 +61,17 @@ assert.doesNotThrow(() => assertStableEncryptionKey("stable-key", "stable-key"))
 assert.throws(
   () => assertStableEncryptionKey("old-key", "new-key"),
   /cannot rotate MFA_ENCRYPTION_KEY/,
+);
+assert.doesNotThrow(() => assertStableDatabaseUrl(
+  "postgresql://app:stable@127.0.0.1/simplyesg",
+  "postgresql://app:stable@127.0.0.1/simplyesg",
+));
+assert.throws(
+  () => assertStableDatabaseUrl(
+    "postgresql://app:old@127.0.0.1/simplyesg",
+    "postgresql://app:new@127.0.0.1/simplyesg",
+  ),
+  /cannot rotate DATABASE_URL credentials/,
 );
 
 console.log("runtime environment safety tests passed");

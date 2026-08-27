@@ -22,6 +22,9 @@ jobs:
     timeout-minutes: 75
 
     env:
+      NODE_RUNTIME_VERSION: 24.20.0
+      NODE_RUNTIME_ARCHIVE: node-v24.20.0-linux-x64.tar.xz
+      NODE_RUNTIME_SHA256: 2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2
       CONFIRM_TARGET: ${{ inputs.confirm_target }}
       PRODUCTION_APP_BASE_URL: https://www.simplyesg.co.uk
       PRODUCTION_CSRF_TRUSTED_ORIGINS: https://www.simplyesg.co.uk
@@ -68,6 +71,21 @@ jobs:
           fi
           echo "DEPLOY_SHA=${deploy_sha}" >> "${GITHUB_ENV}"
           echo "Verified successful SME release acceptance for ${deploy_sha}"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: npm
+
+      - name: Download and verify pinned production Node runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${NODE_RUNTIME_ARCHIVE}" \
+            "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${NODE_RUNTIME_ARCHIVE}"
+          printf '%s  %s\n' "${NODE_RUNTIME_SHA256}" "${NODE_RUNTIME_ARCHIVE}" | sha256sum --check --strict
+          test "$(node --version)" = "v${NODE_RUNTIME_VERSION}"
 
       - name: Validate and render production runtime configuration
         env:
@@ -150,6 +168,8 @@ jobs:
           fi
           cat "${scan_file}" >> ~/.ssh/known_hosts
           ssh -o StrictHostKeyChecking=yes "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" 'echo SSH OK'
+          server_arch="$(ssh -o StrictHostKeyChecking=yes "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" 'uname -m')"
+          test "${server_arch}" = "x86_64" || { echo "::error::Pinned production Node runtime requires x86_64, got ${server_arch}"; exit 1; }
 
       - name: Upload isolated deployment inputs
         shell: bash
@@ -165,6 +185,7 @@ jobs:
             scripts/deployment/recovery-point.cjs \
             scripts/deployment/remote-production.sh \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${tools_dir}/"
+          scp "${NODE_RUNTIME_ARCHIVE}" "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${tools_dir}/"
           scp production.env "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${remote_env}"
           echo "REMOTE_TOOLS_DIR=${tools_dir}" >> "${GITHUB_ENV}"
           echo "REMOTE_ENV_PATH=${remote_env}" >> "${GITHUB_ENV}"

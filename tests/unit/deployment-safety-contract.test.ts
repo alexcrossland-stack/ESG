@@ -10,6 +10,9 @@ const scheduler = await readFile(new URL("../../server/scheduler.ts", import.met
 const preflight = await readFile(new URL("../../docs/runbooks/hetzner-preflight.md", import.meta.url), "utf8");
 const remoteDeploy = await readFile(new URL("../../scripts/deployment/remote-production.sh", import.meta.url), "utf8");
 const recovery = await readFile(new URL("../../scripts/deployment/recovery-point.cjs", import.meta.url), "utf8");
+const ecosystem = await readFile(new URL("../../ecosystem.config.cjs", import.meta.url), "utf8");
+const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+const npmrc = await readFile(new URL("../../.npmrc", import.meta.url), "utf8");
 
 assert.match(production, /group: deploy-production\s+cancel-in-progress: false/);
 assert.match(production, /GITHUB_REF[^\n]+refs\/heads\/main/);
@@ -17,6 +20,9 @@ assert.match(production, /PRODUCTION_APP_BASE_URL: https:\/\/www\.simplyesg\.co\
 assert.match(production, /PRODUCTION_CSRF_TRUSTED_ORIGINS: https:\/\/www\.simplyesg\.co\.uk/);
 assert.match(production, /ref: main\s+fetch-depth: 0/);
 assert.match(production, /Verify checkout and release gate/);
+assert.match(production, /node-version: 24\.20\.0/);
+assert.match(production, /NODE_RUNTIME_SHA256: 2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2/);
+assert.match(production, /Download and verify pinned production Node runtime/);
 assert.match(production, /Validate and render production runtime configuration/);
 assert.match(production, /Start isolated ssh-agent and add deploy key/);
 assert.doesNotMatch(production, /webfactory\/ssh-agent@/);
@@ -30,6 +36,8 @@ assert.doesNotMatch(production, /\. \.\/\.env|source .*\.env/);
 assert.doesNotMatch(production, /git reset --hard/);
 
 assert.match(staging, /group: deploy-staging\s+cancel-in-progress: false/);
+assert.match(staging, /node-version: 24\.20\.0/);
+assert.match(staging, /Staging requires Node v\$\{NODE_RUNTIME_VERSION\}/);
 assert.match(staging, /STAGING_EMAIL_FROM/);
 assert.match(staging, /STAGING_AI_INTEGRATIONS_OPENAI_MODEL/);
 assert.match(staging, /runtime-env\.cjs render staging\.env/);
@@ -42,9 +50,20 @@ assert.match(staging, /Start isolated ssh-agent and add staging deploy key/);
 assert.doesNotMatch(staging, /webfactory\/ssh-agent@/);
 assert.doesNotMatch(staging, /\. \.\/\.env|source .*\.env/);
 assert.match(staging, /Verify public staging release/);
+assert.match(staging, /DEPLOY_NODE_INTERPRETER="\$\{NODE_BIN\}"/);
+assert.match(staging, /readlink -f "\/proc\/\$\{process_pid\}\/exe"/);
 
 assert.match(remoteDeploy, /git -C "\$\{BASE_REPO\}" worktree add --detach/);
 assert.match(remoteDeploy, /export PM2_HOME="\/root\/\.pm2"/);
+assert.match(remoteDeploy, /NODE_RUNTIME_VERSION="24\.20\.0"/);
+assert.match(remoteDeploy, /sha256sum --check --strict/);
+assert.match(remoteDeploy, /export RECOVERY_AUTHORITY="local-postgres-os"/);
+assert.match(remoteDeploy, /cleanup-stale-preflight "\$\{PREFLIGHT_ROOT\}" "\$\{RUN_INSTANCE\}"/);
+assert.match(remoteDeploy, /DEPLOY_NODE_INTERPRETER="\$\{NODE_BIN\}"/);
+assert.match(remoteDeploy, /PREVIOUS_INTERPRETER/);
+assert.match(remoteDeploy, /readlink -f "\/proc\/\$\{PREVIOUS_PID\}\/exe"/);
+assert.match(remoteDeploy, /assert_process_interpreter "\$\{PROCESS_NAME\}" "\$\{NODE_BIN\}"/);
+assert.match(remoteDeploy, /previous production recovery/);
 assert.match(remoteDeploy, /booting release candidate on private port/);
 assert.match(remoteDeploy, /DEPLOY_PORT_OVERRIDE="5001"/);
 assert.match(remoteDeploy, /DEPLOYMENT_VALIDATION="1"/);
@@ -79,10 +98,45 @@ assert.ok(
 );
 assert.doesNotMatch(remoteDeploy, /\. \/[^\n]*\.env|source [^\n]*\.env/);
 assert.match(recovery, /pg_restore/);
+assert.match(recovery, /"--create", "--format=custom"/);
+assert.match(recovery, /"--clean",\s+"--if-exists",\s+"--create",\s+"--exit-on-error"/);
 assert.match(recovery, /createdb/);
+assert.match(recovery, /SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user/);
+assert.match(recovery, /DATABASE_URL is not loopback; refusing local PostgreSQL recovery authority/);
+assert.match(recovery, /process\.getuid\(\) !== 0/);
+assert.match(recovery, /\/usr\/sbin\/runuser/);
+assert.match(recovery, /"\/usr\/bin\/env",\s+"-i"/);
+assert.match(recovery, /Local PostgreSQL admin socket does not identify the DATABASE_URL cluster/);
+assert.match(recovery, /"--owner", descriptor\.username/);
+assert.match(recovery, /pg_control_system\(\)/);
+assert.match(recovery, /inet_server_addr\(\)/);
+assert.match(recovery, /setDatabaseConnectionLimit\(databaseUrl, database, 0, authority\)/);
+assert.match(recovery, /Could not terminate all database sessions before recovery/);
+assert.match(recovery, /Post-backup database objects survived recovery/);
+assert.match(recovery, /restore-state\.json/);
+assert.match(recovery, /state: "completed"/);
+assert.match(recovery, /markRestoreCompleted\(backupDir, metadata, authority\)/);
+assert.match(recovery, /Recovery restore marker does not match this checked recovery point/);
+assert.match(recovery, /Recovery resume PostgreSQL system identifier changed/);
+assert.match(recovery, /resolveRestoreIdentity\(runtime\.DATABASE_URL, backupDir, metadata, authority\)/);
+assert.match(recovery, /recovery directory is outside its fixed root/);
+assert.match(recovery, /Refusing to remove a symlinked preflight directory/);
+assert.match(recovery, /Refusing to clean unsafe stale preflight entry/);
+assert.doesNotMatch(recovery, /"--no-owner"|"--no-privileges"/);
 assert.match(recovery, /evidence-manifest\.json/);
 assert.match(recovery, /Insufficient disk headroom/);
 assert.match(recovery, /duplicate emission-factor natural key/);
+
+assert.match(ecosystem, /interpreter: nodeInterpreter/);
+assert.equal(packageJson.engines.node, ">=24.12.0 <25");
+assert.equal(packageJson.engines.npm, ">=11 <12");
+assert.deepEqual(packageJson.allowScripts, {
+  "bufferutil@4.1.0": true,
+  "esbuild@0.25.12": true,
+  "esbuild@0.27.2": true,
+  fsevents: false,
+});
+assert.match(npmrc, /^engine-strict=true\s+strict-allow-scripts=true\s*$/);
 
 assert.match(healthRoute, /releaseSha: process\.env\.RELEASE_SHA \|\| "unknown"/);
 assert.match(startup, /DEPLOYMENT_WRITE_PAUSE/);
