@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { getIncompletePlaywrightSummary } from "./release-gate-policy";
+import {
+  formatReleaseStepFailure,
+  getIncompletePlaywrightSummary,
+  RELEASE_STEP_MAX_BUFFER_BYTES,
+} from "./release-gate-policy";
 
 type Result = {
   name: string;
@@ -35,25 +39,32 @@ function runStep(
     env,
     encoding: "utf8",
     stdio: "pipe",
+    maxBuffer: RELEASE_STEP_MAX_BUFFER_BYTES,
   });
 
-  const combinedOutput = [res.stdout, res.stderr].filter(Boolean).join("\n");
+  const stdout = res.stdout || "";
+  const stderr = res.stderr || "";
+  const combinedOutput = [stdout, stderr].filter(Boolean).join("\n");
   const skippedSummary = getIncompletePlaywrightSummary(combinedOutput);
 
   if (res.status === 0 && options.failOnSkippedTests && skippedSummary) {
     record(name, "failed", `Playwright reported ${skippedSummary}; release acceptance requires every selected journey to run`);
-    if (res.stdout.trim()) console.log(res.stdout.trim());
+    if (stdout.trim()) console.log(stdout.trim());
     return false;
   }
 
   if (res.status === 0) {
     record(name, "passed");
-    if (res.stdout.trim()) console.log(res.stdout.trim());
+    if (stdout.trim()) console.log(stdout.trim());
     return true;
   }
 
-  const detail = [res.stdout, res.stderr].filter(Boolean).join("\n").trim().slice(0, 1200);
-  record(name, "failed", detail || `exit=${res.status}`);
+  record(name, "failed", formatReleaseStepFailure({
+    output: combinedOutput,
+    status: res.status,
+    signal: res.signal,
+    errorMessage: res.error?.message,
+  }));
   return false;
 }
 
