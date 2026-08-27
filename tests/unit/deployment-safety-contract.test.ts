@@ -38,9 +38,12 @@ assert.doesNotMatch(production, /git reset --hard/);
 
 assert.match(releaseGate, /runs-on: ubuntu-24\.04/);
 assert.match(releaseGate, /sudo systemctl start postgresql\.service/);
-assert.match(releaseGate, /CREATE ROLE simplyesg LOGIN CREATEDB/);
+assert.match(releaseGate, /CREATE ROLE simplyesg LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS/);
 assert.match(releaseGate, /SELECT host\(inet_server_addr\(\)\)/);
 assert.doesNotMatch(releaseGate, /services:\s+postgres:/);
+assert.match(releaseGate, /Rehearse privileged production recovery authority/);
+assert.match(releaseGate, /RECOVERY_AUTHORITY: local-postgres-os/);
+assert.match(releaseGate, /recovery-point-local-authority-rehearsal\.test\.ts/);
 
 assert.match(staging, /group: deploy-staging\s+cancel-in-progress: false/);
 assert.match(staging, /node-version: 24\.20\.0/);
@@ -107,6 +110,9 @@ assert.doesNotMatch(remoteDeploy, /\. \/[^\n]*\.env|source [^\n]*\.env/);
 assert.match(recovery, /pg_restore/);
 assert.match(recovery, /"--create", "--format=custom"/);
 assert.match(recovery, /"--clean",\s+"--if-exists",\s+"--create",\s+"--exit-on-error"/);
+assert.match(recovery, /O_RDONLY \| fs\.constants\.O_NOFOLLOW/);
+assert.match(recovery, /stdio\[0\] = inputFd/);
+assert.match(recovery, /stdinFile: dump/);
 assert.match(recovery, /createdb/);
 assert.match(recovery, /SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user/);
 assert.match(recovery, /DATABASE_URL is not loopback; refusing local PostgreSQL recovery authority/);

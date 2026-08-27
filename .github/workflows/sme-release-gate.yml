@@ -36,14 +36,14 @@ jobs:
       - name: Start loopback PostgreSQL 16
         run: |
           sudo systemctl start postgresql.service
-          sudo -u postgres psql --set ON_ERROR_STOP=on --command "CREATE ROLE simplyesg LOGIN CREATEDB PASSWORD 'simplyesg-ci'"
-          sudo -u postgres createdb --owner=simplyesg simplyesg_ci
-          server_version="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SHOW server_version_num')"
+          sudo -u postgres psql --no-psqlrc --set ON_ERROR_STOP=on --command "CREATE ROLE simplyesg LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'simplyesg-ci'"
+          sudo -u postgres createdb --maintenance-db=postgres --owner=simplyesg simplyesg_ci
+          server_version="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --no-psqlrc --tuples-only --no-align --command 'SHOW server_version_num')"
           case "${server_version}" in
             16????) ;;
             *) echo "::error::Expected PostgreSQL 16, received ${server_version}"; exit 1 ;;
           esac
-          server_address="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --tuples-only --no-align --command 'SELECT host(inet_server_addr())')"
+          server_address="$(PGPASSWORD=simplyesg-ci psql "${DATABASE_URL}" --no-psqlrc --tuples-only --no-align --command 'SELECT host(inet_server_addr())')"
           if [ "${server_address}" != "127.0.0.1" ]; then
             echo "::error::Expected a true loopback PostgreSQL server, received ${server_address}"
             exit 1
@@ -64,6 +64,19 @@ jobs:
         env:
           RECOVERY_REHEARSAL_DATABASE_URL: postgresql://simplyesg:simplyesg-ci@127.0.0.1:5432/simplyesg_ci
         run: npm run test:recovery-rehearsal
+
+      - name: Rehearse privileged production recovery authority
+        env:
+          RECOVERY_AUTHORITY: local-postgres-os
+          RECOVERY_REHEARSAL_DATABASE_URL: postgresql://simplyesg:simplyesg-ci@127.0.0.1:5432/simplyesg_ci
+          RECOVERY_REHEARSAL_RUN_ID: ${{ github.run_id }}
+          RECOVERY_REHEARSAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: >-
+          sudo
+          --preserve-env=RECOVERY_AUTHORITY,RECOVERY_REHEARSAL_DATABASE_URL,RECOVERY_REHEARSAL_RUN_ID,RECOVERY_REHEARSAL_RUN_ATTEMPT
+          "$(command -v node)"
+          --import tsx
+          tests/integration/recovery-point-local-authority-rehearsal.test.ts
 
       - name: Rehearse production a178 upgrade twice
         env:

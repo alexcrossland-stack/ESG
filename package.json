@@ -21,6 +21,7 @@
     "test:site-scoped-data": "node --import tsx tests/api/site-scoped-data.test.ts",
     "test:upgrade-rehearsal": "node --import tsx tests/integration/a178-upgrade-rehearsal.test.ts",
     "test:recovery-rehearsal": "node --import tsx tests/integration/recovery-point-rehearsal.test.ts",
+    "test:recovery-root-rehearsal": "node --import tsx tests/integration/recovery-point-local-authority-rehearsal.test.ts",
     "test:e2e:release": "playwright test tests/e2e/activation-journey.browser.spec.ts tests/e2e/metric-entry.spec.ts tests/e2e/reports.spec.ts tests/e2e/admin-journeys.browser.spec.ts tests/e2e/viewer-restrictions.spec.ts",
     "test:preflight:standalone": "npm run test:security-db && npm run test:metric-upsert && npm run test:e2e:release",
     "test:api": "tsx tests/api-security.test.ts",

@@ -26,12 +26,29 @@ function fail(message) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    stdio: options.capture ? "pipe" : "inherit",
-    env: options.env || process.env,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  let inputFd;
+  let result;
+  try {
+    const stdio = options.capture
+      ? ["pipe", "pipe", "pipe"]
+      : ["inherit", "inherit", "inherit"];
+    if (options.stdinFile) {
+      inputFd = fs.openSync(options.stdinFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      if (!fs.fstatSync(inputFd).isFile()) fail(`Command input is not a regular file: ${options.stdinFile}`);
+      // The root process opens the protected dump and passes only its file
+      // descriptor to pg_restore after runuser drops to the postgres account.
+      // This keeps the recovery point root-owned and mode 0600.
+      stdio[0] = inputFd;
+    }
+    result = spawnSync(command, args, {
+      encoding: "utf8",
+      stdio,
+      env: options.env || process.env,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } finally {
+    if (inputFd !== undefined) fs.closeSync(inputFd);
+  }
   if (result.error || result.status !== 0) {
     const detail = [result.error?.message, result.stderr].filter(Boolean).join("; ").trim();
     fail(`${command} failed${detail ? `: ${detail}` : ""}`);
@@ -191,7 +208,7 @@ function localPostgresAdmin(databaseUrl, command, args, options = {}) {
       binary,
       ...args,
     ],
-    { capture: options.capture, env: parentEnv },
+    { capture: options.capture, env: parentEnv, stdinFile: options.stdinFile },
   );
 }
 
@@ -737,16 +754,16 @@ function restoreOriginalDatabase(databaseUrl, database, backupDir, authority) {
       "--exit-on-error",
       "--dbname",
       "postgres",
-      dump,
     ];
     if (authority === LOCAL_RECOVERY_AUTHORITY) {
       localPostgresAdmin(
         databaseUrl,
         "pg_restore",
         args,
+        { stdinFile: dump },
       );
     } else {
-      run("pg_restore", args, { env: databaseConnection(databaseUrl, "postgres").env });
+      run("pg_restore", args, { env: databaseConnection(databaseUrl, "postgres").env, stdinFile: dump });
     }
   } finally {
     // A failed restore must leave the recreated database closed to the app.
@@ -761,13 +778,15 @@ function restoreOriginalDatabase(databaseUrl, database, backupDir, authority) {
 
 function recreateRehearsalDatabase(databaseUrl, database, owner, backupDir, authority, connectionLimit) {
   const maintenance = databaseConnection(databaseUrl, "postgres");
+  const dump = path.join(backupDir, "database.dump");
   if (authority === LOCAL_RECOVERY_AUTHORITY) {
     localPostgresAdmin(databaseUrl, "dropdb", ["--force", "--if-exists", "--maintenance-db", "postgres", database]);
     localPostgresAdmin(databaseUrl, "createdb", ["--maintenance-db", "postgres", "--template", "template0", "--owner", owner, database]);
     localPostgresAdmin(
       databaseUrl,
       "pg_restore",
-      ["--exit-on-error", "--single-transaction", "--dbname", database, path.join(backupDir, "database.dump")],
+      ["--exit-on-error", "--single-transaction", "--dbname", database],
+      { stdinFile: dump },
     );
     setLocalDatabaseConnectionLimit(databaseUrl, database, connectionLimit);
     return;
@@ -776,8 +795,8 @@ function recreateRehearsalDatabase(databaseUrl, database, owner, backupDir, auth
   run("createdb", ["--template", "template0", "--owner", owner, database], { env: maintenance.env });
   run(
     "pg_restore",
-    ["--exit-on-error", "--single-transaction", "--dbname", database, path.join(backupDir, "database.dump")],
-    { env: databaseConnection(databaseUrl, database).env },
+    ["--exit-on-error", "--single-transaction", "--dbname", database],
+    { env: databaseConnection(databaseUrl, database).env, stdinFile: dump },
   );
   setDatabaseConnectionLimit(databaseUrl, database, connectionLimit, authority);
 }
@@ -847,12 +866,16 @@ function rehearseDatabaseRestore(envFile, backupDir, suffix) {
       run("createdb", ["--template", "template0", "--owner", descriptor.username, rehearsalDatabase], { env: maintenance.env });
     }
     created = true;
-    const initialRestoreArgs = ["--exit-on-error", "--dbname", rehearsalDatabase, path.join(backupDir, "database.dump")];
+    const dump = path.join(backupDir, "database.dump");
+    const initialRestoreArgs = ["--exit-on-error", "--dbname", rehearsalDatabase];
     if (authority === LOCAL_RECOVERY_AUTHORITY) {
-      localPostgresAdmin(runtime.DATABASE_URL, "pg_restore", initialRestoreArgs);
+      localPostgresAdmin(runtime.DATABASE_URL, "pg_restore", initialRestoreArgs, { stdinFile: dump });
       setLocalDatabaseConnectionLimit(runtime.DATABASE_URL, rehearsalDatabase, metadata.databaseIdentity.connectionLimit);
     } else {
-      run("pg_restore", initialRestoreArgs, { env: databaseConnection(runtime.DATABASE_URL, rehearsalDatabase).env });
+      run("pg_restore", initialRestoreArgs, {
+        env: databaseConnection(runtime.DATABASE_URL, rehearsalDatabase).env,
+        stdinFile: dump,
+      });
     }
     validateRestoredDatabase(runtime.DATABASE_URL, rehearsalDatabase);
     createRestoreSentinel(runtime.DATABASE_URL, rehearsalDatabase);
