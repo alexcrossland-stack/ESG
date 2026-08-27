@@ -8,6 +8,7 @@ PREFLIGHT_ROOT="/root/esg-deploy-preflight"
 PROCESS_NAME="esg"
 PRIVATE_PROCESS_NAME="esg-candidate"
 PUBLIC_ORIGIN="https://www.simplyesg.co.uk"
+export PM2_HOME="/root/.pm2"
 
 DEPLOY_STAGE="initialising"
 OLD_STOPPED=0
@@ -178,6 +179,7 @@ test -s "${REMOTE_ENV_PATH}"
 for command in curl df flock git node npm pg_dump pg_restore psql createdb dropdb pm2 sha256sum tar; do
   command -v "${command}" >/dev/null || { echo "::error::Missing required command: ${command}" >&2; exit 1; }
 done
+test -d "${PM2_HOME}"
 test -d "${BASE_REPO}/.git"
 exec 9>/root/esg-production-deploy.lock
 if ! flock -n 9; then

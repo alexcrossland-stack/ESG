@@ -180,7 +180,7 @@ jobs:
           # Interpolated values are generated numeric IDs, a validated SHA, or fixed paths.
           # shellcheck disable=SC2029
           ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "command -v systemd-run >/dev/null && systemd-run --unit='${unit_name}' --property=Type=exec --property=RemainAfterExit=yes --setenv=DEPLOY_SHA='${DEPLOY_SHA}' --setenv=GITHUB_RUN_ID='${GITHUB_RUN_ID}' --setenv=GITHUB_RUN_ATTEMPT='${GITHUB_RUN_ATTEMPT}' --setenv=REMOTE_ENV_PATH='${REMOTE_ENV_PATH}' --setenv=TOOLS_DIR='${REMOTE_TOOLS_DIR}' /usr/bin/bash '${REMOTE_TOOLS_DIR}/remote-production.sh'"
+            "command -v systemd-run >/dev/null && systemd-run --unit='${unit_name}' --property=Type=exec --property=RemainAfterExit=yes --setenv=PM2_HOME='/root/.pm2' --setenv=DEPLOY_SHA='${DEPLOY_SHA}' --setenv=GITHUB_RUN_ID='${GITHUB_RUN_ID}' --setenv=GITHUB_RUN_ATTEMPT='${GITHUB_RUN_ATTEMPT}' --setenv=REMOTE_ENV_PATH='${REMOTE_ENV_PATH}' --setenv=TOOLS_DIR='${REMOTE_TOOLS_DIR}' /usr/bin/bash '${REMOTE_TOOLS_DIR}/remote-production.sh'"
 
           for attempt in $(seq 1 360); do
             # shellcheck disable=SC2029

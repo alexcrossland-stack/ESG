@@ -23,6 +23,7 @@ assert.doesNotMatch(production, /webfactory\/ssh-agent@/);
 assert.match(production, /Build, recoverability-check and atomically deploy/);
 assert.match(production, /remote-production\.sh/);
 assert.match(production, /systemd-run --unit=/);
+assert.match(production, /--setenv=PM2_HOME='\/root\/\.pm2'/);
 assert.match(production, /systemctl show/);
 assert.match(production, /Verify public production release and safe anonymous contracts/);
 assert.doesNotMatch(production, /\. \.\/\.env|source .*\.env/);
@@ -43,6 +44,7 @@ assert.doesNotMatch(staging, /\. \.\/\.env|source .*\.env/);
 assert.match(staging, /Verify public staging release/);
 
 assert.match(remoteDeploy, /git -C "\$\{BASE_REPO\}" worktree add --detach/);
+assert.match(remoteDeploy, /export PM2_HOME="\/root\/\.pm2"/);
 assert.match(remoteDeploy, /booting release candidate on private port/);
 assert.match(remoteDeploy, /DEPLOY_PORT_OVERRIDE="5001"/);
 assert.match(remoteDeploy, /DEPLOYMENT_VALIDATION="1"/);
