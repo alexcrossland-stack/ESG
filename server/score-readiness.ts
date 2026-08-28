@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { isGuidedRawInputName } from "@shared/guided-raw-inputs";
 
 export interface ScoreReadiness {
   isScoreReady: boolean;
@@ -39,11 +40,12 @@ export async function getScoreReadiness(companyId: string): Promise<ScoreReadine
 
   const missingCriticalItems: string[] = [];
 
-  const totalEntries = rawData.length;
-  const estimatedEntries = rawData.filter(r => r.dataSourceType === "estimated").length;
-  const actualEntries = rawData.filter(r => r.dataSourceType !== "estimated").length;
+  const supportedRawData = rawData.filter((row) => isGuidedRawInputName(row.inputName));
+  const totalEntries = supportedRawData.length;
+  const estimatedEntries = supportedRawData.filter(r => r.dataSourceType === "estimated").length;
+  const actualEntries = supportedRawData.filter(r => r.dataSourceType !== "estimated").length;
 
-  const esgEntries = rawData.filter(r => isEsgCategory(r.inputCategory));
+  const esgEntries = supportedRawData.filter(r => isEsgCategory(r.inputCategory));
   const envEntries = esgEntries.filter(r => {
     const lower = normaliseCategory(r.inputCategory);
     return ENV_CATEGORIES.some(k => lower.includes(k));

@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 import { usePermissions } from "@/lib/permissions";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { EmptyState } from "@/components/empty-state";
@@ -26,6 +27,7 @@ import { OwnerAssignment } from "@/components/owner-assignment";
 import { authFetch } from "@/lib/queryClient";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 import { Link } from "wouter";
+import { resolveApiError } from "@/lib/errorResolver";
 
 type MetricDefinitionActivation = {
   id: string;
@@ -153,6 +155,7 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
       queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics", metricId, "evidence"] });
+      invalidateEsgReadinessQueries(queryClient);
       reset();
       setOpen(false);
     },
@@ -458,7 +461,7 @@ function EvidenceManagementView({
   setViewSiteId: (v: string) => void;
 }) {
   const { sites } = useSiteContext();
-  const { can } = usePermissions();
+  const { isAdmin, isApprover } = usePermissions();
   const { toast } = useToast();
   const hasMultipleSites = sites.length >= 1;
   const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId === "__org__" ? null : viewSiteId;
@@ -518,7 +521,16 @@ function EvidenceManagementView({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      invalidateEsgReadinessQueries(queryClient);
       toast({ title: "Evidence updated" });
+    },
+    onError: (error: unknown) => {
+      const resolved = resolveApiError(error);
+      toast({
+        title: resolved.title || "Could not update evidence",
+        description: [resolved.description, resolved.nextStep].filter(Boolean).join(" "),
+        variant: "destructive",
+      });
     },
   });
 
@@ -529,7 +541,16 @@ function EvidenceManagementView({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      invalidateEsgReadinessQueries(queryClient);
       toast({ title: "Evidence deleted" });
+    },
+    onError: (error: unknown) => {
+      const resolved = resolveApiError(error);
+      toast({
+        title: resolved.title || "Could not delete evidence",
+        description: [resolved.description, resolved.nextStep].filter(Boolean).join(" "),
+        variant: "destructive",
+      });
     },
   });
 
@@ -551,6 +572,10 @@ function EvidenceManagementView({
   }
 
   const isExpired = (f: EvidenceListItem) => f.expiryDate && new Date(f.expiryDate) < new Date();
+  const canReviewEvidence = (f: EvidenceListItem) => {
+    const linkedModule = (f.linkedModule ?? "").replace(/[-_]/g, "").toLowerCase();
+    return isAdmin || (isApprover && linkedModule === "frameworkrequirement");
+  };
 
   return (
     <div className="space-y-4">
@@ -750,23 +775,25 @@ function EvidenceManagementView({
                       Open
                     </Button>
                   </a>
-                  {can("metrics_data_entry") && (
+                  {(canReviewEvidence(f) || isAdmin) && (
                     <>
-                    {f.evidenceStatus === "uploaded" && (
+                    {canReviewEvidence(f) && f.evidenceStatus === "uploaded" && (
                       <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "reviewed" } })} data-testid={`button-review-evidence-${f.id}`}>
                         <Eye className="w-3 h-3 mr-1" />
                         Review
                       </Button>
                     )}
-                    {(f.evidenceStatus === "uploaded" || f.evidenceStatus === "reviewed") && (
+                    {canReviewEvidence(f) && (f.evidenceStatus === "uploaded" || f.evidenceStatus === "reviewed") && (
                       <Button size="sm" variant="outline" className="text-green-600" onClick={() => updateMutation.mutate({ id: f.id, data: { evidenceStatus: "approved" } })} data-testid={`button-approve-evidence-${f.id}`}>
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Approve
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this evidence file?")) deleteMutation.mutate(f.id); }} data-testid={`button-delete-evidence-${f.id}`}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
+                    {isAdmin && (
+                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this evidence file?")) deleteMutation.mutate(f.id); }} data-testid={`button-delete-evidence-${f.id}`}>
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    )}
                     </>
                   )}
                 </div>

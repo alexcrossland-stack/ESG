@@ -7,7 +7,7 @@
  *
  * @group regression
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import fs from "fs";
 
 function readSeedInfo() {
@@ -22,6 +22,35 @@ function readSeedInfo() {
   };
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const metricsRes = await request.get("/api/metrics", { headers });
+  expect(metricsRes.status()).toBe(200);
+  const metrics = await metricsRes.json() as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+
+  const createRes = await request.post("/api/metrics", {
+    headers,
+    data: {
+      name: `Release fixture manual metric ${Date.now()}`,
+      description: "Editable metric for first-entry release coverage",
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    },
+  });
+  expect(createRes.status()).toBe(200);
+  const created = await createRes.json() as { id?: string };
+  expect(created.id).toBeTruthy();
+  return created.id!;
+}
+
 test.describe("REGR-FM: First metric entry and persistence", () => {
   let sharedMetricId: string | null = null;
   const period = `2025-Q${Date.now() % 4 + 1}`;
@@ -32,10 +61,10 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
       headers: { Authorization: `Bearer ${tenantA.adminToken}` },
     });
     expect(res.status()).toBe(200);
-    const body = await res.json() as Array<{ id: string }>;
+    const body = await res.json() as EditableMetric[];
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBeGreaterThan(0);
-    sharedMetricId = body[0].id;
+    sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
   });
 
   test("admin can submit a metric value via POST /api/data-entry", async ({ request }) => {
@@ -43,11 +72,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
 
     // Get metricId if not yet set
     if (!sharedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      sharedMetricId = metrics[0]?.id ?? null;
+      sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
     expect(sharedMetricId, "metricId must be available").toBeTruthy();
 
@@ -71,11 +96,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
     const { tenantA } = readSeedInfo();
 
     if (!sharedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      sharedMetricId = metrics[0]?.id ?? null;
+      sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
 
     if (!sharedMetricId) { test.skip(); return; }
@@ -96,11 +117,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
     const { tenantA } = readSeedInfo();
 
     if (!sharedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      sharedMetricId = metrics[0]?.id ?? null;
+      sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
 
     if (!sharedMetricId) { test.skip(); return; }
@@ -108,7 +125,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
     const res = await request.post("/api/data-entry", {
       data: {
         metricId: sharedMetricId,
-        period: `2025-contrib-${Date.now()}`,
+        period: "2098-02",
         value: 55,
         notes: "contributor first-metric test",
       },
@@ -122,11 +139,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
     const { tenantA } = readSeedInfo();
 
     if (!sharedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      sharedMetricId = metrics[0]?.id ?? null;
+      sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
 
     if (!sharedMetricId) { test.skip(); return; }
@@ -142,11 +155,7 @@ test.describe("REGR-FM: First metric entry and persistence", () => {
     const { tenantA } = readSeedInfo();
 
     if (!sharedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      sharedMetricId = metrics[0]?.id ?? null;
+      sharedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
 
     if (!sharedMetricId) { test.skip(); return; }

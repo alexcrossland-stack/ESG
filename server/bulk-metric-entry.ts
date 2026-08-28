@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { auditLogs, metrics, metricValues, reportingPeriods, type Metric } from "@shared/schema";
+import { auditLogs, dataEntryPeriodLocks, evidenceFiles, metricEvidence, metrics, metricValues, reportingPeriods, type Metric } from "@shared/schema";
 import {
   formatBooleanMetricValue,
   formatMetricDisplayValue,
@@ -11,10 +11,24 @@ import {
 } from "@shared/data-entry-metrics";
 import { db, storage } from "./storage";
 import { trackTelemetryEvent } from "./telemetry";
+import {
+  acquirePeriodMutationLocks,
+  findLockedPeriodsInTransaction,
+} from "./period-locks";
+import {
+  createProtectedValueError,
+  getValueProtectionReason,
+  protectedValueMessage,
+  type ValueProtectionReason,
+} from "./value-mutation-protection";
 
-const MONTH_PERIOD_RE = /^\d{4}-\d{2}$/;
+const MONTH_PERIOD_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 const MAX_BULK_CELLS = 5000;
 const MAX_CELL_LEVEL_AUDITS = 100;
+
+function isMonthPeriod(value: unknown): value is string {
+  return typeof value === "string" && MONTH_PERIOD_RE.test(value);
+}
 
 export type BulkMetricEntryCellInput = {
   metricId: string;
@@ -32,6 +46,11 @@ type ExistingMetricValue = {
   valueText: string | null;
   valueBoolean: boolean | null;
   locked: boolean | null;
+  dataSourceType: string | null;
+  workflowStatus: string | null;
+  reviewedBy: string | null;
+  reviewedAt: Date | null;
+  hasEvidence: boolean;
 };
 
 type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled"> & {
@@ -75,6 +94,8 @@ export type BulkMetricValidationResult = {
   warnings: string[];
   readOnly: boolean;
   locked: boolean;
+  protected: boolean;
+  protectionReason: ValueProtectionReason | null;
   rowIndex?: number;
   columnIndex?: number;
 };
@@ -101,16 +122,6 @@ export type BulkMetricValidationResponse = {
   }>;
   committed: boolean;
 };
-
-function monthStart(period: string) {
-  const [year, month] = period.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
-}
-
-function monthEnd(period: string) {
-  const [year, month] = period.split("-").map(Number);
-  return new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
-}
 
 function previousMonth(period: string) {
   const [year, month] = period.split("-").map(Number);
@@ -274,10 +285,17 @@ async function loadCompanyMetrics(companyId: string): Promise<BulkGridMetric[]> 
   }));
 }
 
-async function loadMetricValues(companyId: string, metricIds: string[], periods: string[], siteId: string | null) {
+async function loadMetricValues(
+  companyId: string,
+  metricIds: string[],
+  periods: string[],
+  siteId: string | null,
+  mutationClient: any = db,
+  lockForUpdate = false,
+): Promise<ExistingMetricValue[]> {
   if (metricIds.length === 0 || periods.length === 0) return [] as ExistingMetricValue[];
 
-  return db
+  const query = mutationClient
     .select({
       id: metricValues.id,
       metricId: metricValues.metricId,
@@ -286,6 +304,33 @@ async function loadMetricValues(companyId: string, metricIds: string[], periods:
       valueText: metricValues.valueText,
       valueBoolean: metricValues.valueBoolean,
       locked: metricValues.locked,
+      dataSourceType: metricValues.dataSourceType,
+      workflowStatus: metricValues.workflowStatus,
+      reviewedBy: metricValues.reviewedBy,
+      reviewedAt: metricValues.reviewedAt,
+      hasEvidence: sql<boolean>`(
+        EXISTS (
+          SELECT 1
+          FROM ${evidenceFiles}
+          WHERE ${evidenceFiles.companyId} = ${companyId}
+            AND ${evidenceFiles.siteId} IS NOT DISTINCT FROM ${metricValues.siteId}
+            AND (
+              (${evidenceFiles.linkedModule} = 'metric_value' AND ${evidenceFiles.linkedEntityId} = ${metricValues.id})
+              OR (
+                ${evidenceFiles.linkedPeriod} = ${metricValues.period}
+                AND (
+                  ${evidenceFiles.metricId} = ${metricValues.metricId}
+                  OR (${evidenceFiles.linkedModule} = 'metric' AND ${evidenceFiles.linkedEntityId} = ${metricValues.metricId})
+                )
+              )
+            )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM ${metricEvidence}
+          WHERE ${metricEvidence.metricValueId} = ${metricValues.id}
+        )
+      )`,
     })
     .from(metricValues)
     .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
@@ -295,20 +340,44 @@ async function loadMetricValues(companyId: string, metricIds: string[], periods:
       inArray(metricValues.period, periods),
       siteId === null ? isNull(metricValues.siteId) : eq(metricValues.siteId, siteId),
     ));
+
+  const rows = await (lockForUpdate ? query.for("update") : query);
+  return rows as ExistingMetricValue[];
 }
 
 async function loadLockedPeriods(companyId: string, periods: string[]) {
   if (periods.length === 0) return new Set<string>();
-  const rows = await db
-    .select()
-    .from(reportingPeriods)
-    .where(and(eq(reportingPeriods.companyId, companyId), eq(reportingPeriods.status, "locked")));
+  const [rows, directLocks, legacyLocks] = await Promise.all([
+    db.select({
+      startMonth: sql<string>`to_char(${reportingPeriods.startDate}, 'YYYY-MM')`,
+      endMonth: sql<string>`to_char(${reportingPeriods.endDate}, 'YYYY-MM')`,
+    })
+      .from(reportingPeriods)
+      .where(and(eq(reportingPeriods.companyId, companyId), eq(reportingPeriods.status, "locked"))),
+    db.select({ period: dataEntryPeriodLocks.period })
+      .from(dataEntryPeriodLocks)
+      .where(and(
+        eq(dataEntryPeriodLocks.companyId, companyId),
+        inArray(dataEntryPeriodLocks.period, periods),
+      )),
+    db.selectDistinct({ period: metricValues.period })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(and(
+        eq(metrics.companyId, companyId),
+        inArray(metricValues.period, periods),
+        eq(metricValues.locked, true),
+      )),
+  ]);
 
-  const lockedPeriods = new Set<string>();
+  const lockedPeriods = new Set<string>([
+    ...directLocks.map((row) => row.period),
+    ...legacyLocks.map((row) => row.period),
+  ]);
   for (const period of periods) {
-    const start = monthStart(period);
-    const end = monthEnd(period);
-    if (rows.some((row) => row.startDate <= end && row.endDate >= start)) {
+    // Compare PostgreSQL calendar values rather than process-local Date
+    // objects so month-boundary locks are independent of the Node timezone.
+    if (rows.some((row) => row.startMonth <= period && row.endMonth >= period)) {
       lockedPeriods.add(period);
     }
   }
@@ -316,7 +385,7 @@ async function loadLockedPeriods(companyId: string, periods: string[]) {
 }
 
 export async function getBulkMetricGrid(companyId: string, periods: string[], siteId: string | null): Promise<BulkMetricGridResponse> {
-  const sanitizedPeriods = periods.filter((period) => MONTH_PERIOD_RE.test(period)).slice(0, 18);
+  const sanitizedPeriods = periods.filter(isMonthPeriod).slice(0, 18);
   const companyMetrics = await loadCompanyMetrics(companyId);
   const eligibleMetrics = companyMetrics
     .filter(isActiveEditableDataEntryMetric)
@@ -391,8 +460,8 @@ export async function validateBulkMetricPaste(params: {
   const metricsForCompany = await loadCompanyMetrics(companyId);
   const metricMap = new Map(metricsForCompany.map((metric) => [metric.id, metric]));
   const metricIds = Array.from(new Set(trimmedCells.map((cell) => cell.metricId).filter(Boolean)));
-  const periods = Array.from(new Set(trimmedCells.map((cell) => cell.period).filter(Boolean)));
-  const previousPeriods = periods.filter((period) => MONTH_PERIOD_RE.test(period)).map(previousMonth);
+  const periods = Array.from(new Set(trimmedCells.map((cell) => cell.period).filter(isMonthPeriod)));
+  const previousPeriods = periods.map(previousMonth);
   const requestedPeriods = Array.from(new Set(periods.concat(previousPeriods)));
   const existingValues = await loadMetricValues(companyId, metricIds, requestedPeriods, siteId);
   const existingByKey = new Map(existingValues.map((row) => [cellKey(row.metricId, row.period), row]));
@@ -404,16 +473,22 @@ export async function validateBulkMetricPaste(params: {
     const metric = metricMap.get(cell.metricId);
     const currentKey = cellKey(cell.metricId, cell.period);
     const existing = existingByKey.get(currentKey);
-    const previous = existingByKey.get(cellKey(cell.metricId, previousMonth(cell.period)));
+    const validPeriod = isMonthPeriod(cell.period);
+    const previous = validPeriod
+      ? existingByKey.get(cellKey(cell.metricId, previousMonth(cell.period)))
+      : undefined;
     const errors: string[] = [];
     const warnings: string[] = [];
     const readOnly = Boolean(metric && (!metric.enabled || (metric.metricType && metric.metricType !== "manual")));
     const locked = Boolean(existing?.locked) || lockedPeriods.has(cell.period);
+    const protectionReason = getValueProtectionReason(existing);
+    const protectedValue = protectionReason !== null && protectionReason !== "locked";
 
     if (!metric) errors.push("Unknown metric");
-    if (!MONTH_PERIOD_RE.test(cell.period)) errors.push("Invalid reporting period");
+    if (!validPeriod) errors.push("Invalid reporting period");
     if (readOnly) errors.push("This cell is read-only");
     if (locked) errors.push("This reporting period is locked");
+    if (protectedValue && protectionReason) errors.push(protectedValueMessage("This value", protectionReason));
     if (seenKeys.has(currentKey)) {
       errors.push("Duplicate metric / period combination in this paste");
     } else {
@@ -475,6 +550,8 @@ export async function validateBulkMetricPaste(params: {
       warnings,
       readOnly,
       locked,
+      protected: protectedValue,
+      protectionReason: protectedValue ? protectionReason : null,
       rowIndex: cell.rowIndex,
       columnIndex: cell.columnIndex,
     } satisfies BulkMetricValidationResult;
@@ -542,6 +619,49 @@ export async function commitBulkMetricPaste(params: {
   }> = [];
 
   await db.transaction(async (tx) => {
+    // Every batch takes all tenant+period locks in a stable order before any
+    // row-level locks or writes, then rechecks lock state inside this tx.
+    const changedPeriods = await acquirePeriodMutationLocks(
+      tx,
+      companyId,
+      changedCells.map((cell) => cell.period),
+    );
+    if (changedPeriods.length > 0) {
+      const lockedPeriods = await findLockedPeriodsInTransaction(tx, companyId, changedPeriods);
+      if (lockedPeriods.length > 0) {
+        throw Object.assign(
+          new Error(`Could not save pasted values because ${lockedPeriods.join(", ")} is locked.`),
+          { status: 409 },
+        );
+      }
+    }
+
+    const changedMetricIds = Array.from(new Set(changedCells.map((cell) => cell.metricId)));
+    const currentRows = await loadMetricValues(
+      companyId,
+      changedMetricIds,
+      changedPeriods,
+      siteId,
+      tx,
+      true,
+    );
+    const changedKeys = new Set(changedCells.map((cell) => cellKey(cell.metricId, cell.period)));
+    const protectedRows = currentRows
+      .filter((row) => changedKeys.has(cellKey(row.metricId, row.period)))
+      .map((row) => ({ row, reason: getValueProtectionReason(row) }))
+      .filter((entry): entry is { row: ExistingMetricValue; reason: ValueProtectionReason } => entry.reason !== null);
+    if (protectedRows.length > 0) {
+      const first = protectedRows[0];
+      throw createProtectedValueError("A pasted metric value", first.reason, {
+        protectedCells: protectedRows.map(({ row, reason }) => ({
+          metricId: row.metricId,
+          period: row.period,
+          siteId,
+          reason,
+        })),
+      });
+    }
+
     for (const cell of changedCells) {
       const nextDisplayValue = cell.normalizedDisplayValue ?? (cell.normalizedValue === null ? null : String(cell.normalizedValue));
       const previousDisplayValue = cell.existingDisplayValue ?? (cell.existingValue === null ? null : String(cell.existingValue));
@@ -586,6 +706,29 @@ export async function commitBulkMetricPaste(params: {
             notes = EXCLUDED.notes,
             data_source_type = EXCLUDED.data_source_type
           WHERE metric_values.locked = false
+            AND COALESCE(metric_values.workflow_status::text, 'draft') = 'draft'
+            AND COALESCE(metric_values.data_source_type::text, 'manual') <> 'evidenced'
+            AND metric_values.reviewed_by IS NULL
+            AND metric_values.reviewed_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM evidence_files ef
+              WHERE ef.company_id = ${companyId}
+                AND ef.site_id IS NOT DISTINCT FROM metric_values.site_id
+                AND (
+                  (ef.linked_module = 'metric_value' AND ef.linked_entity_id = metric_values.id)
+                  OR (
+                    ef.linked_period = metric_values.period
+                    AND (
+                      ef.metric_id = metric_values.metric_id
+                      OR (ef.linked_module = 'metric' AND ef.linked_entity_id = metric_values.metric_id)
+                    )
+                  )
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM metric_evidence me
+              WHERE me.metric_value_id = metric_values.id
+            )
           RETURNING id
         `)
         : await tx.execute(sql`
@@ -628,12 +771,39 @@ export async function commitBulkMetricPaste(params: {
             notes = EXCLUDED.notes,
             data_source_type = EXCLUDED.data_source_type
           WHERE metric_values.locked = false
+            AND COALESCE(metric_values.workflow_status::text, 'draft') = 'draft'
+            AND COALESCE(metric_values.data_source_type::text, 'manual') <> 'evidenced'
+            AND metric_values.reviewed_by IS NULL
+            AND metric_values.reviewed_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM evidence_files ef
+              WHERE ef.company_id = ${companyId}
+                AND ef.site_id IS NOT DISTINCT FROM metric_values.site_id
+                AND (
+                  (ef.linked_module = 'metric_value' AND ef.linked_entity_id = metric_values.id)
+                  OR (
+                    ef.linked_period = metric_values.period
+                    AND (
+                      ef.metric_id = metric_values.metric_id
+                      OR (ef.linked_module = 'metric' AND ef.linked_entity_id = metric_values.metric_id)
+                    )
+                  )
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM metric_evidence me
+              WHERE me.metric_value_id = metric_values.id
+            )
           RETURNING id
         `);
 
       const id = (rowResult as any).rows?.[0]?.id as string | undefined;
       if (!id) {
-        throw Object.assign(new Error(`Could not save ${cell.metricName || "metric"} for ${cell.period} because the cell is locked.`), { status: 409 });
+        throw createProtectedValueError(`${cell.metricName || "Metric"} for ${cell.period}`, "reviewed", {
+          metricId: cell.metricId,
+          period: cell.period,
+          siteId,
+        });
       }
 
       committedRows.push({

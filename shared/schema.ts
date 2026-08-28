@@ -447,6 +447,19 @@ export const rawDataInputs = pgTable("raw_data_inputs", {
   companyPeriodSiteIdx: index("idx_raw_data_company_period_site").on(table.companyId, table.period, table.siteId),
 }));
 
+export const dataEntryPeriodLocks = pgTable("data_entry_period_locks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  period: text("period").notNull(),
+  lockedBy: varchar("locked_by"),
+  lockedAt: timestamp("locked_at").notNull().defaultNow(),
+}, (table) => ({
+  companyPeriodUnique: uniqueIndex("idx_data_entry_period_locks_company_period_unique")
+    .on(table.companyId, table.period),
+  companyPeriodIdx: index("idx_data_entry_period_locks_company_period")
+    .on(table.companyId, table.period),
+}));
+
 export const evidenceStatusEnum = pgEnum("evidence_status", ["pending", "available", "quarantined", "rejected", "deleted", "uploaded", "reviewed", "approved", "expired"]);
 
 export const evidenceFiles = pgTable("evidence_files", {
@@ -814,6 +827,7 @@ export const insertEvidenceFileSchema = createInsertSchema(evidenceFiles).omit({
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export const insertPolicyGenerationInputSchema = createInsertSchema(policyGenerationInputs).omit({ id: true, createdAt: true });
 export const insertRawDataInputSchema = createInsertSchema(rawDataInputs).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertDataEntryPeriodLockSchema = createInsertSchema(dataEntryPeriodLocks).omit({ id: true, lockedAt: true });
 export const insertEmissionFactorSchema = createInsertSchema(emissionFactors).omit({ id: true, effectiveDate: true });
 export const insertCarbonCalculationSchema = createInsertSchema(carbonCalculations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertQuestionnaireSchema = createInsertSchema(questionnaires).omit({ id: true, createdAt: true, updatedAt: true });
@@ -863,6 +877,8 @@ export type PolicyGenerationInput = typeof policyGenerationInputs.$inferSelect;
 export type InsertPolicyGenerationInput = z.infer<typeof insertPolicyGenerationInputSchema>;
 export type RawDataInput = typeof rawDataInputs.$inferSelect;
 export type InsertRawDataInput = z.infer<typeof insertRawDataInputSchema>;
+export type DataEntryPeriodLock = typeof dataEntryPeriodLocks.$inferSelect;
+export type InsertDataEntryPeriodLock = z.infer<typeof insertDataEntryPeriodLockSchema>;
 export type EmissionFactor = typeof emissionFactors.$inferSelect;
 export type InsertEmissionFactor = z.infer<typeof insertEmissionFactorSchema>;
 export type CarbonCalculation = typeof carbonCalculations.$inferSelect;

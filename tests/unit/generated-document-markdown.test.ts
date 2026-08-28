@@ -43,6 +43,8 @@ function expectNotContains(name: string, actual: string, unexpected: string) {
     "",
     "This contains **bold** and *italic* emphasis.",
     "",
+    "[Official guidance](https://example.com/guidance)",
+    "",
     "| Control | Status |",
     "| --- | --- |",
     "| Review | Complete |",
@@ -60,6 +62,8 @@ function expectNotContains(name: string, actual: string, unexpected: string) {
   expectContains("renders ordered lists", renderedHtml, "<ol>");
   expectContains("renders bold text", renderedHtml, "<strong>bold</strong>");
   expectContains("renders italic text", renderedHtml, "<em>italic</em>");
+  expectContains("renders safe HTTPS links", renderedHtml, "href=\"https://example.com/guidance\"");
+  expectContains("opens safe links without opener access", renderedHtml, "rel=\"noopener noreferrer\"");
   expectContains("renders tables", renderedHtml, "<table>");
   expectContains("renders disclaimer callout styling", renderedHtml, "generated-callout-disclaimer");
   expectNotContains("strips script tags", renderedHtml, "<script>");
@@ -73,6 +77,8 @@ function expectNotContains(name: string, actual: string, unexpected: string) {
     "<svg><a href=\"javascript:alert(3)\"><animate attributeName=\"href\" values=\"javascript:alert(4)\" /></a></svg>",
     "<math><mtext><img src=x onerror=alert(5)></mtext></math>",
     "<a href=\"javascript:alert(6)\" onclick=\"alert(7)\">unsafe link</a>",
+    "[encoded unsafe link](javascript&#58;alert(8))",
+    "[data link](data:text/html,alert(9))",
   ].join("\n\n"));
   for (const [name, marker] of [
     ["strips xmp raw-text payloads", "<xmp"],
@@ -83,6 +89,8 @@ function expectNotContains(name: string, actual: string, unexpected: string) {
     ["strips event-handler attributes", "onerror="],
     ["strips onclick attributes", "onclick="],
     ["strips javascript link schemes", "href=\"javascript:"],
+    ["strips encoded executable link schemes", "javascript:"],
+    ["strips data link schemes", "data:text/html"],
   ] as const) {
     expectNotContains(name, adversarialHtml.toLowerCase(), marker);
   }

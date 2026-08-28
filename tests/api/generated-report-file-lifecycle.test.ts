@@ -60,16 +60,32 @@ async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   }
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(token: string, label: string): Promise<string> {
+  const metricsRes = await apiRequest("GET", "/api/metrics", undefined, token);
+  const metrics = parseJson<EditableMetric[]>(metricsRes, "GET /api/metrics");
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await apiRequest("POST", "/api/metrics", {
+    name: `${label} ${Date.now()}`,
+    category: "environmental",
+    unit: "kWh",
+    frequency: "monthly",
+    enabled: true,
+    metricType: "manual",
+  }, token);
+  const created = parseJson<{ id?: string }>(createRes, "POST /api/metrics");
+  assert(created.id, "editable metric fixture omitted id");
+  return created.id;
+}
+
 async function prepareTenant(companyId: string, token: string, period: string) {
   await withDb(async (client) => {
     await client.query("UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1", [companyId]);
-    await client.query("UPDATE metrics SET enabled = true WHERE company_id = $1", [companyId]);
   });
-
-  const metricsRes = await apiRequest("GET", "/api/metrics", undefined, token);
-  const metrics = parseJson<Array<{ id: string }>>(metricsRes, "GET /api/metrics");
-  const metricId = metrics[0]?.id;
-  assert(metricId, "seeded metric missing");
+  const metricId = await getOrCreateEditableMetricId(token, "Generated-file lifecycle fixture");
 
   const dataEntryRes = await apiRequest("POST", "/api/data-entry", {
     metricId,

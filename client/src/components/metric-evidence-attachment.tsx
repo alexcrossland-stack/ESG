@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { useToast } from "@/hooks/use-toast";
 import { Paperclip, Trash2, FileText, ExternalLink, Plus } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 
 type MetricEvidence = {
   id: string;
@@ -50,6 +51,7 @@ export function MetricEvidenceAttachment({ metricValueId, readOnly = false }: Me
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/metric-evidence", metricValueId] });
+      invalidateEsgReadinessQueries(queryClient);
       setShowAdd(false);
       setFileName("");
       setFileUrl("");
@@ -63,6 +65,7 @@ export function MetricEvidenceAttachment({ metricValueId, readOnly = false }: Me
     mutationFn: (id: string) => apiRequest("DELETE", `/api/metric-evidence/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/metric-evidence", metricValueId] });
+      invalidateEsgReadinessQueries(queryClient);
       toast({ title: "Evidence removed" });
     },
     onError: (e: Error) => toast({ title: "Failed to remove", description: e.message, variant: "destructive" }),

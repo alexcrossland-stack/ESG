@@ -307,13 +307,19 @@ export interface RawInputs {
 export function runCalculationsForPeriod(
   rawInputs: RawInputs,
   factors: EmissionFactorMap,
-  existingMetricValues: Record<string, number | null>
+  _existingMetricValues: Record<string, number | null>,
+  protectedExistingMetricValues: Record<string, number | null> = {},
 ): Record<string, number | null> {
   const results: Record<string, number | null> = {};
+
+  const hasInput = (key: string) => rawInputs[key] !== undefined && Number.isFinite(rawInputs[key]);
+  const hasAnyInput = (keys: string[]) => keys.some(hasInput);
 
   const elecKwh = rawInputs.electricity_kwh ?? 0;
   const gasKwh = rawInputs.gas_kwh ?? 0;
   const vehicleFuelLitres = rawInputs.vehicle_fuel_litres ?? 0;
+  const dieselLitres = rawInputs.diesel_litres ?? 0;
+  const petrolLitres = rawInputs.petrol_litres ?? 0;
   const totalWaste = rawInputs.total_waste_tonnes ?? 0;
   const recycledWaste = rawInputs.recycled_waste_tonnes ?? 0;
   const headcount = rawInputs.employee_headcount ?? 0;
@@ -327,42 +333,84 @@ export function runCalculationsForPeriod(
   const livingWageEmployees = rawInputs.living_wage_employees ?? 0;
   const femaleManagers = rawInputs.female_managers ?? 0;
   const totalManagers = rawInputs.total_managers ?? 0;
-  const annualRevenue = rawInputs.annual_revenue ?? 0;
   const trainingHours = rawInputs.total_training_hours ?? 0;
 
-  const scope1 = calculateScope1(gasKwh, vehicleFuelLitres, factors);
+  // CSV imports preserve fuel type for accurate factors and also materialise
+  // vehicle_fuel_litres for the existing guided field/metric. When either
+  // typed key is present, that split is authoritative and the aggregate must
+  // not be counted a second time.
+  const hasSeparatedVehicleFuel = hasAnyInput(["diesel_litres", "petrol_litres"]);
+  const scope1 = hasAnyInput(["gas_kwh", "vehicle_fuel_litres", "diesel_litres", "petrol_litres"])
+    ? calculateScope1(gasKwh, hasSeparatedVehicleFuel ? dieselLitres : vehicleFuelLitres, factors)
+      + (petrolLitres > 0 ? (petrolLitres * requireFactor(factors.petrol, "petrol")) / 1000 : 0)
+    : null;
   results["Scope 1 Emissions"] = scope1;
 
-  const scope2 = calculateScope2(elecKwh, factors);
+  const scope2 = hasInput("electricity_kwh") ? calculateScope2(elecKwh, factors) : null;
   results["Scope 2 Emissions"] = scope2;
 
-  results["Recycling Rate"] = calculateRecyclingRate(recycledWaste, totalWaste);
+  results["Recycling Rate"] = hasInput("recycled_waste_tonnes") && hasInput("total_waste_tonnes")
+    ? calculateRecyclingRate(recycledWaste, totalWaste)
+    : null;
 
-  const travelEmissions = calculateBusinessTravelEmissions({
-    domesticFlightKm: rawInputs.domestic_flight_km,
-    shortHaulFlightKm: rawInputs.short_haul_flight_km,
-    longHaulFlightKm: rawInputs.long_haul_flight_km,
-    railKm: rawInputs.rail_km,
-    hotelNights: rawInputs.hotel_nights,
-    carMiles: rawInputs.car_miles,
-  }, factors);
+  const travelInputKeys = [
+    "domestic_flight_km",
+    "short_haul_flight_km",
+    "long_haul_flight_km",
+    "rail_km",
+    "hotel_nights",
+    "car_miles",
+  ];
+  const travelEmissions = hasAnyInput(travelInputKeys)
+    ? calculateBusinessTravelEmissions({
+        domesticFlightKm: rawInputs.domestic_flight_km,
+        shortHaulFlightKm: rawInputs.short_haul_flight_km,
+        longHaulFlightKm: rawInputs.long_haul_flight_km,
+        railKm: rawInputs.rail_km,
+        hotelNights: rawInputs.hotel_nights,
+        carMiles: rawInputs.car_miles,
+      }, factors)
+    : null;
   results["Business Travel Emissions"] = travelEmissions;
 
-  results["Employee Turnover Rate"] = calculateTurnoverRate(leavers, headcount);
-  results["Absence Rate"] = calculateAbsenceRate(absenceDays, workingDays);
-  results["Training Hours per Employee"] = calculateTrainingHoursPerEmployee(trainingHours, headcount);
-  results["Data Privacy Training Completion"] = calculateDataPrivacyCompletion(trainedStaff, totalStaff);
-  results["Supplier Code of Conduct Adoption"] = calculateSupplierCodeAdoption(signedSuppliers, totalSuppliers);
-  results["Living Wage Coverage"] = calculateLivingWageCoverage(livingWageEmployees, headcount);
-  results["Management Gender Diversity"] = calculateManagementGenderDiversity(femaleManagers, totalManagers);
+  results["Employee Turnover Rate"] = hasInput("employee_leavers") && hasInput("employee_headcount")
+    ? calculateTurnoverRate(leavers, headcount)
+    : null;
+  results["Absence Rate"] = hasInput("absence_days") && hasInput("total_working_days")
+    ? calculateAbsenceRate(absenceDays, workingDays)
+    : null;
+  results["Training Hours per Employee"] = hasInput("total_training_hours") && hasInput("employee_headcount")
+    ? calculateTrainingHoursPerEmployee(trainingHours, headcount)
+    : null;
+  results["Data Privacy Training Completion"] = hasInput("trained_staff")
+    && (hasInput("total_staff") || hasInput("employee_headcount"))
+    ? calculateDataPrivacyCompletion(trainedStaff, totalStaff)
+    : null;
+  results["Supplier Code of Conduct Adoption"] = hasInput("signed_suppliers") && hasInput("total_suppliers")
+    ? calculateSupplierCodeAdoption(signedSuppliers, totalSuppliers)
+    : null;
+  results["Living Wage Coverage"] = hasInput("living_wage_employees") && hasInput("employee_headcount")
+    ? calculateLivingWageCoverage(livingWageEmployees, headcount)
+    : null;
+  results["Management Gender Diversity"] = hasInput("female_managers") && hasInput("total_managers")
+    ? calculateManagementGenderDiversity(femaleManagers, totalManagers)
+    : null;
 
-  const s1 = scope1 !== null && scope1 !== undefined ? scope1 : (existingMetricValues["Scope 1 Emissions"] ?? 0);
-  const s2 = scope2 !== null && scope2 !== undefined ? scope2 : (existingMetricValues["Scope 2 Emissions"] ?? 0);
-  const travel = travelEmissions !== null && travelEmissions !== undefined ? travelEmissions : (existingMetricValues["Business Travel Emissions"] ?? 0);
-  if (headcount > 0) {
+  // These component metrics are managed by this calculation run. A null result
+  // is an explicit invalidation, so ordinary persisted values must never be a
+  // fallback. The caller may separately provide protected (for example,
+  // evidenced or approved) values because those component rows remain frozen;
+  // those values take precedence so intensity stays consistent with them.
+  const emissionComponents = [
+    protectedExistingMetricValues["Scope 1 Emissions"] ?? scope1,
+    protectedExistingMetricValues["Scope 2 Emissions"] ?? scope2,
+    protectedExistingMetricValues["Business Travel Emissions"] ?? travelEmissions,
+  ];
+  const hasEmissionData = emissionComponents.some((value) => value !== null && value !== undefined);
+  const [s1, s2, travel] = emissionComponents.map((value) => value ?? 0);
+  results["Carbon Intensity"] = null;
+  if (hasEmissionData && hasInput("employee_headcount") && headcount > 0) {
     results["Carbon Intensity"] = calculateCarbonIntensity(s1, s2, travel, "per_employee", headcount);
-  } else if (annualRevenue > 0) {
-    results["Carbon Intensity"] = calculateCarbonIntensity(s1, s2, travel, "per_revenue", annualRevenue);
   }
 
   return results;

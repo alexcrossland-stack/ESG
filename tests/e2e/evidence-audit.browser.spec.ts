@@ -7,6 +7,7 @@ function readSeedInfo() {
   return JSON.parse(fs.readFileSync("tests/e2e/.auth/seed-info.json", "utf-8")) as {
     tenantA: {
       adminToken: string;
+      contributorToken: string;
       companyId: string;
     };
   };
@@ -18,13 +19,19 @@ test.describe("Evidence audit workflow", () => {
 
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
     expect(metricsRes.status).toBe(200);
-    const metrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string }>;
-    expect(metrics.length).toBeGreaterThan(1);
+    const metrics = JSON.parse(metricsRes.body) as Array<{
+      id: string;
+      name: string;
+      enabled?: boolean;
+      metricType?: string;
+    }>;
+    const editableMetrics = metrics.filter((metric) => metric.enabled === true && metric.metricType === "manual");
+    expect(editableMetrics.length, "two enabled manual metrics are required for evidence entry fixtures").toBeGreaterThan(1);
 
-    const auditMetricA = metrics[0];
-    const auditMetricB = metrics[1];
-    const auditPeriodA = `2026-02-${String((Date.now() % 20) + 1).padStart(2, "0")}`;
-    const auditPeriodB = `2026-03-${String((Date.now() % 20) + 1).padStart(2, "0")}`;
+    const auditMetricA = editableMetrics[0]!;
+    const auditMetricB = editableMetrics[1]!;
+    const auditPeriodA = "2026-02";
+    const auditPeriodB = "2026-03";
     const auditFileA = `audit-metric-a-${Date.now()}.txt`;
     const auditFileB = `audit-metric-b-${Date.now()}.txt`;
     const centralFile = `audit-central-${Date.now()}.txt`;
@@ -185,7 +192,60 @@ test.describe("Evidence audit workflow", () => {
     await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
     await expect(page.getByTestId("banner-data-entry-permission")).toBeVisible();
     await expect(page.locator('[data-testid^="button-attach-evidence-"]').first()).toBeDisabled();
+    await expect(page.getByTestId("button-lock-period-header")).toHaveCount(0);
     await expect(page).toHaveURL(/\/data-entry\?focus=evidence$/);
+
+    await page.goto("/evidence");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator('[data-testid^="button-review-evidence-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="button-approve-evidence-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="button-delete-evidence-"]')).toHaveCount(0);
+
+    await context.close();
+  });
+
+  test("contributors can upload evidence without seeing review, approval, or deletion controls", async ({ browser }) => {
+    const { tenantA } = readSeedInfo();
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    expect(metricsRes.status).toBe(200);
+    const metric = (JSON.parse(metricsRes.body) as Array<{ id: string; enabled?: boolean }>)
+      .find((candidate) => candidate.enabled !== false);
+    expect(metric?.id).toBeTruthy();
+
+    const filename = `contributor-permissions-${Date.now()}.txt`;
+    const form = new FormData();
+    form.append("metricId", metric!.id);
+    form.append("period", "2026-06");
+    form.append("notes", "Contributor evidence-control visibility fixture");
+    form.append("file", new Blob([filename], { type: "text/plain" }), filename);
+    const upload = await apiMultipartRequest("POST", "/api/evidence", form, tenantA.adminToken);
+    expect(upload.status).toBe(200);
+
+    const origin = process.env.BASE_URL || "http://localhost:5000";
+    const context = await browser.newContext({
+      storageState: {
+        cookies: [],
+        origins: [{
+          origin,
+          localStorage: [{ name: "auth_token", value: tenantA.contributorToken }],
+        }],
+      },
+    });
+    const page = await context.newPage();
+    await page.goto("/evidence");
+    await page.waitForLoadState("domcontentloaded");
+
+    if (page.url().includes("/auth") || page.url().includes("/onboarding")) {
+      test.skip(true, "Contributor auth state not available for evidence controls");
+      await context.close();
+      return;
+    }
+
+    await expect(page.getByTestId(/^text-evidence-filename-/).filter({ hasText: filename })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("button-upload-evidence")).toBeVisible();
+    await expect(page.locator('[data-testid^="button-review-evidence-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="button-approve-evidence-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="button-delete-evidence-"]')).toHaveCount(0);
 
     await context.close();
   });

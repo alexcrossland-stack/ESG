@@ -9,6 +9,10 @@
  */
 
 import { Client } from "pg";
+import {
+  parseStrictCanonicalReportingDate,
+  toCanonicalPgTimestamp,
+} from "../server/canonical-reporting-date.js";
 import { apiRequest, seedTestTenants } from "./fixtures/seed.js";
 
 const PERIOD = "2026-02";
@@ -59,8 +63,8 @@ async function getTenantAMetricId(adminToken: string): Promise<string> {
   if (res.status !== 200) {
     throw new Error(`GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
   }
-  const metrics = JSON.parse(res.body) as Array<{ id: string }>;
-  const metricId = metrics[0]?.id;
+  const metrics = JSON.parse(res.body) as Array<{ id: string; enabled?: boolean; metricType?: string | null }>;
+  const metricId = metrics.find((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"))?.id;
   if (!metricId) throw new Error("No tenant A metric found for test");
   return metricId;
 }
@@ -82,7 +86,9 @@ async function getTenantAMetricIds(adminToken: string, count: number): Promise<s
 
 async function getMetricDefinitionId(client: Client): Promise<string> {
   const result = await client.query<{ id: string }>(
-    "SELECT id FROM metric_definitions WHERE is_derived = false ORDER BY created_at ASC LIMIT 1",
+    `SELECT id FROM metric_definitions
+     WHERE is_derived = false AND is_active = true AND data_type = 'numeric'
+     ORDER BY created_at ASC LIMIT 1`,
   );
   const metricDefinitionId = result.rows[0]?.id;
   if (!metricDefinitionId) throw new Error("No metric definition found for test");
@@ -183,6 +189,11 @@ async function countMetricDefinitionValues(
   periodEnd: string,
   siteId: string | null,
 ) {
+  const parsedPeriodStart = parseStrictCanonicalReportingDate(periodStart);
+  const parsedPeriodEnd = parseStrictCanonicalReportingDate(periodEnd);
+  if (!parsedPeriodStart || !parsedPeriodEnd) {
+    throw new Error("Metric-definition-value count requires canonical reporting dates");
+  }
   const result = await client.query<{ count: string; value_numeric: string | null }>(
     `
       SELECT COUNT(*)::int AS count, MAX(value_numeric::text) AS value_numeric
@@ -196,7 +207,13 @@ async function countMetricDefinitionValues(
           OR site_id = $5::text
         )
     `,
-    [businessId, metricDefinitionId, new Date(periodStart), new Date(periodEnd), siteId],
+    [
+      businessId,
+      metricDefinitionId,
+      toCanonicalPgTimestamp(parsedPeriodStart),
+      toCanonicalPgTimestamp(parsedPeriodEnd),
+      siteId,
+    ],
   );
   return {
     count: Number(result.rows[0]?.count ?? 0),

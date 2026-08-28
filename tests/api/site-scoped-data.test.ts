@@ -41,9 +41,32 @@ async function createSite(token: string, name: string, country = "United Kingdom
 async function getMetricIds(token: string, count = 2): Promise<string[]> {
   const res = await apiRequest("GET", "/api/metrics", undefined, token);
   if (res.status !== 200) throw new Error(`GET /api/metrics failed: status=${res.status} body=${res.body.slice(0, 200)}`);
-  const metrics = JSON.parse(res.body) as Array<{ id?: string; name?: string }>;
-  const ids = metrics.map((m) => m.id).filter(Boolean) as string[];
-  if (ids.length === 0) throw new Error("No metric id available");
+  const metrics = JSON.parse(res.body) as Array<{
+    id?: string;
+    name?: string;
+    enabled?: boolean | null;
+    metricType?: string | null;
+  }>;
+  const ids = metrics
+    .filter((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"))
+    .map((metric) => metric.id)
+    .filter(Boolean) as string[];
+  while (ids.length < count) {
+    const createRes = await apiRequest("POST", "/api/metrics", {
+      name: `Site-scope fixture ${Date.now()} ${ids.length + 1}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    }, token);
+    if (createRes.status !== 200) {
+      throw new Error(`POST /api/metrics failed: status=${createRes.status} body=${createRes.body.slice(0, 200)}`);
+    }
+    const created = JSON.parse(createRes.body) as { id?: string };
+    if (!created.id) throw new Error("POST /api/metrics omitted id");
+    ids.push(created.id);
+  }
   return ids.slice(0, count);
 }
 

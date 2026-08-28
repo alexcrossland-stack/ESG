@@ -378,15 +378,50 @@ async function exportFrameworkReport(
 }
 
 function extractPdfText(buffer: Buffer): string {
-  const raw = buffer.toString("latin1");
   const pieces: string[] = [];
-  const streamPattern = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  for (const match of raw.matchAll(streamPattern)) {
-    let stream = Buffer.from(match[1], "latin1");
-    try {
-      stream = inflateSync(stream);
-    } catch {
-      // Some PDF streams may be uncompressed.
+  const streamMarker = Buffer.from("stream", "ascii");
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    let markerIndex = buffer.indexOf(streamMarker, cursor);
+    while (markerIndex >= 0) {
+      const precedingByte = markerIndex > 0 ? buffer[markerIndex - 1] : null;
+      const followingByte = buffer[markerIndex + streamMarker.length];
+      const startsKeyword = precedingByte === null || precedingByte === 0x0a || precedingByte === 0x0d || precedingByte === 0x20 || precedingByte === 0x3e;
+      const endsWithEol = followingByte === 0x0a || followingByte === 0x0d;
+      if (startsKeyword && endsWithEol) break;
+      markerIndex = buffer.indexOf(streamMarker, markerIndex + streamMarker.length);
+    }
+    if (markerIndex < 0) break;
+
+    const dictionaryStart = buffer.lastIndexOf(Buffer.from("<<", "ascii"), markerIndex);
+    const dictionary = dictionaryStart >= 0
+      ? buffer.subarray(dictionaryStart, markerIndex).toString("latin1")
+      : "";
+    const lengthMatch = dictionary.match(/\/Length\s+(\d+)\b/);
+    if (!lengthMatch) {
+      cursor = markerIndex + streamMarker.length;
+      continue;
+    }
+
+    let dataStart = markerIndex + streamMarker.length;
+    if (buffer[dataStart] === 0x0d) dataStart += 1;
+    if (buffer[dataStart] === 0x0a) dataStart += 1;
+    const streamLength = Number(lengthMatch[1]);
+    const dataEnd = dataStart + streamLength;
+    if (!Number.isSafeInteger(streamLength) || streamLength < 0 || dataEnd > buffer.length) {
+      cursor = markerIndex + streamMarker.length;
+      continue;
+    }
+
+    let stream = buffer.subarray(dataStart, dataEnd);
+    if (/\/FlateDecode\b/.test(dictionary)) {
+      try {
+        stream = inflateSync(stream);
+      } catch {
+        cursor = dataEnd;
+        continue;
+      }
     }
     const content = stream.toString("latin1");
     for (const hex of content.matchAll(/<([0-9a-fA-F\s]+)>/g)) {
@@ -397,6 +432,7 @@ function extractPdfText(buffer: Buffer): string {
     for (const literal of content.matchAll(/\(([^()]*)\)/g)) {
       pieces.push(literal[1].replace(/\\([\\()])/g, "$1"));
     }
+    cursor = dataEnd;
   }
   return pieces.join("").replace(/\s+/g, " ").trim();
 }

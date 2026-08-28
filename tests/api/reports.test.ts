@@ -43,6 +43,30 @@ async function withDb<T>(run: (client: Client) => Promise<T>): Promise<T> {
   }
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+function selectEditableMetricId(metrics: EditableMetric[]): string | undefined {
+  return metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"))?.id;
+}
+
+async function createEditableMetricId(token: string, label: string): Promise<string> {
+  const response = await apiRequest("POST", "/api/metrics", {
+    name: `${label} ${Date.now()}`,
+    category: "environmental",
+    unit: "kWh",
+    frequency: "monthly",
+    enabled: true,
+    metricType: "manual",
+  }, token);
+  if (response.status !== 200) {
+    throw new Error(`POST /api/metrics failed: status=${response.status} body=${response.body.slice(0, 200)}`);
+  }
+  const id = (JSON.parse(response.body) as { id?: string }).id;
+  if (!id) throw new Error("POST /api/metrics omitted id");
+  return id;
+}
+
 async function apiRequestBinary(method: string, path: string, body?: object, token?: string) {
   const headers: Record<string, string> = {};
   const bodyStr = body ? JSON.stringify(body) : undefined;
@@ -127,8 +151,9 @@ async function prepareReportDownloadTenant(companyId: string, token: string): Pr
     throw new Error(`GET /api/metrics failed before report test: status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
   }
 
-  const metrics = JSON.parse(metricsRes.body) as Array<{ id: string }>;
-  const metricId = Array.isArray(metrics) ? metrics[0]?.id : undefined;
+  const metrics = JSON.parse(metricsRes.body) as EditableMetric[];
+  const metricId = selectEditableMetricId(metrics)
+    ?? await createEditableMetricId(token, "Report download fixture");
   if (!metricId) {
     throw new Error(`No metrics available before report test: body=${metricsRes.body.slice(0, 200)}`);
   }
@@ -553,7 +578,8 @@ async function run(tenants: SeededTenants): Promise<void> {
       const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
       if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
       else {
-        const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+        const metricId = selectEditableMetricId(JSON.parse(metricsRes.body) as EditableMetric[])
+          ?? await createEditableMetricId(tenantA.adminToken, "Historical snapshot fixture");
         if (!metricId) fail(name, "missing metric id");
         else {
           const period = "2024-02";
@@ -604,7 +630,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
     if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
     else {
-      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      const metricId = selectEditableMetricId(JSON.parse(metricsRes.body) as EditableMetric[])
+        ?? await createEditableMetricId(tenantA.adminToken, "Quarterly report fixture");
       if (!metricId) fail(name, "missing metric id");
       else {
         const saves = [];
@@ -658,7 +685,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
     if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
     else {
-      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      const metricId = selectEditableMetricId(JSON.parse(metricsRes.body) as EditableMetric[])
+        ?? await createEditableMetricId(tenantA.adminToken, "Monthly report fixture");
       if (!metricId) fail(name, "missing metric id");
       else {
         const saves = await Promise.all([
@@ -741,7 +769,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
     if (metricsRes.status !== 200) fail(name, `metrics status=${metricsRes.status} body=${metricsRes.body.slice(0, 200)}`);
     else {
-      const metricId = (JSON.parse(metricsRes.body) as Array<{ id: string }>)[0]?.id;
+      const metricId = selectEditableMetricId(JSON.parse(metricsRes.body) as EditableMetric[])
+        ?? await createEditableMetricId(tenantA.adminToken, "Annual report fixture");
       if (!metricId) fail(name, "missing metric id");
       else {
         const saves = await Promise.all([

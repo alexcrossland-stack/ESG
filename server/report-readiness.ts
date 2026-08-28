@@ -1,5 +1,6 @@
 import { storage } from "./storage";
 import { hasMetricReportedValue } from "@shared/data-entry-metrics";
+import { isGuidedRawInputName } from "@shared/guided-raw-inputs";
 
 export interface ReportReadiness {
   isReportReady: boolean;
@@ -49,7 +50,11 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
   if (!hasEmployeeBand) missingCriticalItems.push("Employee count or revenue band");
   if (!hasRegion) missingCriticalItems.push("Country or region");
 
-  const esgEntries = rawData.filter(r => classifyEsgCategory(r.inputCategory) !== null);
+  // Historical rows created before the server-side input contract was added
+  // must not manufacture readiness. Only supported guided inputs contribute
+  // to ESG coverage and confidence calculations.
+  const supportedRawData = rawData.filter((row) => isGuidedRawInputName(row.inputName));
+  const esgEntries = supportedRawData.filter(r => classifyEsgCategory(r.inputCategory) !== null);
   const envEntries = esgEntries.filter(r => classifyEsgCategory(r.inputCategory) === "env");
   const socEntries = esgEntries.filter(r => classifyEsgCategory(r.inputCategory) === "soc");
   const govEntries = esgEntries.filter(r => classifyEsgCategory(r.inputCategory) === "gov");
@@ -84,9 +89,9 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
 
   const isReportReady = onboardingComplete && hasCompanyProfile && hasCoreEsgCategory;
 
-  const totalEntries = rawData.length;
-  const estimatedEntries = rawData.filter(r => r.dataSourceType === "estimated").length;
-  const actualEntries = rawData.filter(r => r.dataSourceType !== "estimated").length;
+  const totalEntries = supportedRawData.length;
+  const estimatedEntries = supportedRawData.filter(r => r.dataSourceType === "estimated").length;
+  const actualEntries = supportedRawData.filter(r => r.dataSourceType !== "estimated").length;
   const estimatedRatio = totalEntries > 0 ? estimatedEntries / totalEntries : 0;
 
   const estimatedCoveragePercent = totalEntries > 0

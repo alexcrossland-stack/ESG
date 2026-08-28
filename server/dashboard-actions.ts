@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import { getScoreReadiness } from "./score-readiness";
 import { getReportReadiness } from "./report-readiness";
 import type { DashboardActionStatus } from "@shared/value-source";
+import { isGuidedRawInputName } from "@shared/guided-raw-inputs";
 
 export interface DashboardAction {
   id: string;
@@ -71,14 +72,15 @@ export async function resolveDashboardActions(companyId: string): Promise<Action
 
   const onboardingComplete = company?.onboardingComplete ?? false;
 
-  const totalEntries = rawData.length;
-  const estimatedEntries = rawData.filter(r => r.dataSourceType === "estimated").length;
-  const actualEntries = rawData.filter(r => r.dataSourceType !== "estimated").length;
+  const supportedRawData = rawData.filter((row) => isGuidedRawInputName(row.inputName));
+  const totalEntries = supportedRawData.length;
+  const estimatedEntries = supportedRawData.filter(r => r.dataSourceType === "estimated").length;
+  const actualEntries = supportedRawData.filter(r => r.dataSourceType !== "estimated").length;
   const estimatedRatio = totalEntries > 0 ? estimatedEntries / totalEntries : 0;
 
-  const envEntries = rawData.filter(r => classifyCategory(r.inputCategory) === "env").length;
-  const socEntries = rawData.filter(r => classifyCategory(r.inputCategory) === "soc").length;
-  const govEntries = rawData.filter(r => classifyCategory(r.inputCategory) === "gov").length;
+  const envEntries = supportedRawData.filter(r => classifyCategory(r.inputCategory) === "env").length;
+  const socEntries = supportedRawData.filter(r => classifyCategory(r.inputCategory) === "soc").length;
+  const govEntries = supportedRawData.filter(r => classifyCategory(r.inputCategory) === "gov").length;
 
   const envMetrics = metrics.filter(m => m.category === "environmental" && m.enabled);
   const socMetrics = metrics.filter(m => m.category === "social" && m.enabled);

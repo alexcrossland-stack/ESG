@@ -4,7 +4,7 @@
  * Uses the Tenant A admin token from the shared seed (global-setup) to
  * submit and retrieve metric values without per-test user creation.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import fs from "fs";
 
 function readSeedInfo() {
@@ -13,19 +13,38 @@ function readSeedInfo() {
   };
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const metricsRes = await request.get("/api/metrics", { headers });
+  expect(metricsRes.status()).toBe(200);
+  const metrics = await metricsRes.json() as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await request.post("/api/metrics", {
+    headers,
+    data: {
+      name: `Metric-entry fixture ${Date.now()}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    },
+  });
+  expect(createRes.status()).toBe(200);
+  const created = await createRes.json() as { id?: string };
+  expect(created.id).toBeTruthy();
+  return created.id!;
+}
+
 test.describe("Metric entry flow", () => {
   test("admin can submit a metric value and retrieve it", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    expect(metricsRes.status()).toBe(200);
-    const metrics = await metricsRes.json();
-    expect(Array.isArray(metrics)).toBe(true);
-    expect(metrics.length).toBeGreaterThan(0);
-
-    const metricId = metrics[0].id;
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const submitRes = await request.post("/api/data-entry", {
       data: {
@@ -55,11 +74,7 @@ test.describe("Metric entry flow", () => {
   test("missing period returns 400 with error field", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    const metrics = await metricsRes.json();
-    const metricId = metrics[0]?.id ?? "00000000-0000-0000-0000-000000000000";
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const res = await request.post("/api/data-entry", {
       data: { metricId, value: 100 },

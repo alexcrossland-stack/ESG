@@ -24,17 +24,22 @@ function fail(name: string, detail?: string) {
 
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA } = tenants;
-  const rowUploadPeriod = `2026-04-${String((Date.now() % 27) + 1).padStart(2, "0")}`;
+  const rowUploadPeriod = "2026-04";
 
   const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
   if (metricsRes.status !== 200) {
     fail("seed metrics available for evidence tests", `status=${metricsRes.status}`);
     return;
   }
-  const metrics = JSON.parse(metricsRes.body) as Array<{ id: string; name: string }>;
-  const firstMetric = metrics[0];
+  const metrics = JSON.parse(metricsRes.body) as Array<{
+    id: string;
+    name: string;
+    enabled?: boolean;
+    metricType?: string;
+  }>;
+  const firstMetric = metrics.find((metric) => metric.enabled === true && metric.metricType === "manual");
   if (!firstMetric?.id) {
-    fail("seed metrics available for evidence tests", "no metric id");
+    fail("seed metrics available for evidence tests", "no enabled manual editable metric");
     return;
   }
   pass("seed metrics available for evidence tests", firstMetric.name);
@@ -221,7 +226,7 @@ async function run(tenants: SeededTenants): Promise<void> {
     form.append("metricId", firstMetric.id);
     form.append("period", rowUploadPeriod);
     form.append("value", "123.45");
-    form.append("notes", "Second evidence file");
+    form.append("notes", "Metric row upload evidence test");
     form.append("attachments", new Blob(["metric row evidence two"], { type: "text/plain" }), "metric-row-evidence-2.txt");
 
     const res = await apiMultipartRequest("POST", "/api/data-entry", form, tenantA.adminToken);

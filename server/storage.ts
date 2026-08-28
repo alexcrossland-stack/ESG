@@ -2,9 +2,27 @@ import { eq, and, desc, sql, lt, isNull, or, count, gte, lte, gt, inArray, asc, 
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
+  assessMetricValueProtectionWithPgClient,
+  createCanonicalProtectedValueError,
+  createProtectedValueError,
+  getCanonicalValueProtectionReason,
+  type CanonicalValueProtectionReason,
+} from "./value-mutation-protection";
+import {
+  acquirePeriodMutationLocks,
+  dataEntryPeriodMonths,
+  findLockedPeriodsInTransaction,
+  reportingMonthsForMonthBounds,
+  reportingMonthBounds,
+} from "./period-locks";
+import {
+  pgTimestampWithoutTimeZoneToUtc,
+  toCanonicalPgTimestamp,
+} from "./canonical-reporting-date";
+import {
   users, companies, companySettings, esgPolicies, policyVersions,
   materialTopics, metrics, metricTargets, metricValues, evidenceFiles,
-  actionPlans, reportRuns, auditLogs, rawDataInputs,
+  actionPlans, reportRuns, auditLogs, rawDataInputs, dataEntryPeriodLocks,
   policyGenerationInputs, emissionFactors, carbonCalculations,
   questionnaires, questionnaireQuestions,
   aiGenerationLogs, evidenceRequests, reportingPeriods,
@@ -84,6 +102,24 @@ import {
 } from "@shared/schema";
 import { isPlatformSuperAdmin } from "./permissions";
 import {
+  ACTION_PLAN_MUTABLE_FIELDS,
+  COMPANY_SETTINGS_MUTABLE_FIELDS,
+  ESG_ACTION_MUTABLE_FIELDS,
+  ESG_RISK_MUTABLE_FIELDS,
+  ESG_TARGET_MUTABLE_FIELDS,
+  GENERATED_POLICY_MUTABLE_FIELDS,
+  GOVERNANCE_ASSIGNMENT_MUTABLE_FIELDS,
+  IDENTITY_PROVIDER_MUTABLE_FIELDS,
+  MATERIALITY_ASSESSMENT_MUTABLE_FIELDS,
+  MATERIAL_TOPIC_MUTABLE_FIELDS,
+  METRIC_MUTABLE_FIELDS,
+  POLICY_RECORD_MUTABLE_FIELDS,
+  POLICY_TEMPLATE_MUTABLE_FIELDS,
+  QUESTIONNAIRE_MUTABLE_FIELDS,
+  QUESTIONNAIRE_QUESTION_MUTABLE_FIELDS,
+  pickMutableFields,
+} from "./mutation-field-allowlists";
+import {
   evaluateFrameworkRequirement,
   frameworkResponseSourceIsEligible,
   isUsableEvidenceStatus,
@@ -94,11 +130,110 @@ import {
   type FrameworkRequirementResponseFact,
   type FrameworkReadinessScope,
 } from "./framework-readiness";
+import {
+  METRIC_DEFINITION_CATALOGUE_LOCK_KEY,
+  normalizeMetricDefinitionName,
+  validateActiveMetricDefinitionCatalogue,
+} from "./admin-metric-definition-validation";
 
 export type MetricValueScope =
   | { scope: "all" }
   | { scope: "organisation" }
   | { scope: "site"; siteId: string };
+
+export type CanonicalCalculationMutationResult = {
+  outcome: "created" | "updated" | "unchanged" | "cleared" | "missing" | "protected";
+  value: MetricDefinitionValue | null;
+  reason?: CanonicalValueProtectionReason;
+};
+
+export type CanonicalRollupResult = CanonicalCalculationMutationResult & {
+  rollupValue: number | null;
+};
+
+export type MetricDefinitionCatalogueMutation =
+  | { type: "create"; data: InsertMetricDefinition }
+  | { type: "update"; id: string; data: Partial<MetricDefinition> }
+  | { type: "toggle_active"; id: string };
+
+export type MetricDefinitionSeedReservation = {
+  code: string;
+  name: string;
+};
+
+export type MetricDefinitionCatalogueMutationResult =
+  | { outcome: "created"; definition: MetricDefinition }
+  | { outcome: "updated"; definition: MetricDefinition; previous: MetricDefinition }
+  | { outcome: "invalid"; errors: string[] }
+  | { outcome: "duplicate_code" }
+  | { outcome: "duplicate_name" }
+  | { outcome: "reserved_code" }
+  | { outcome: "seed_name_immutable" }
+  | { outcome: "not_found" };
+
+const CANONICAL_VALUE_FIELDS = [
+  "valueNumeric",
+  "valueText",
+  "valueBoolean",
+  "valueJson",
+  "sourceType",
+  "notes",
+] as const;
+
+function canonicalJsonEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== typeof right) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => canonicalJsonEqual(value, right[index]));
+  }
+  if (typeof left === "object" && typeof right === "object") {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord).sort();
+    const rightKeys = Object.keys(rightRecord).sort();
+    if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
+    return leftKeys.every((key) => canonicalJsonEqual(leftRecord[key], rightRecord[key]));
+  }
+  return false;
+}
+
+function canonicalDecimalString(value: unknown): string | null {
+  const match = String(value).trim().match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return null;
+  const whole = match[2].replace(/^0+(?=\d)/, "");
+  const fraction = (match[3] ?? "").replace(/0+$/, "");
+  const isZero = whole === "0" && fraction.length === 0;
+  const sign = match[1] === "-" && !isZero ? "-" : "";
+  return `${sign}${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+function canonicalFieldEqual(field: typeof CANONICAL_VALUE_FIELDS[number], left: unknown, right: unknown): boolean {
+  if (field === "valueNumeric") {
+    if (left === null || left === undefined || left === "") return right === null || right === undefined || right === "";
+    if (right === null || right === undefined || right === "") return false;
+    const leftDecimal = canonicalDecimalString(left);
+    const rightDecimal = canonicalDecimalString(right);
+    return leftDecimal !== null && leftDecimal === rightDecimal;
+  }
+  if (field === "valueJson") return canonicalJsonEqual(left ?? null, right ?? null);
+  return (left ?? null) === (right ?? null);
+}
+
+function canonicalNextValue(
+  existing: MetricDefinitionValue,
+  data: Partial<InsertMetricDefinitionValue> | Partial<MetricDefinitionValue>,
+): MetricDefinitionValue {
+  const next = { ...existing };
+  for (const field of CANONICAL_VALUE_FIELDS) {
+    if (data[field] !== undefined) (next as any)[field] = data[field] ?? null;
+  }
+  return next;
+}
+
+function canonicalMutableValuesEqual(left: MetricDefinitionValue, right: MetricDefinitionValue): boolean {
+  return CANONICAL_VALUE_FIELDS.every((field) => canonicalFieldEqual(field, left[field], right[field]));
+}
 
 export type MetricTrendValueRow = MetricValue & {
   companyId: string;
@@ -110,22 +245,284 @@ export type MetricTrendValueRow = MetricValue & {
   enabled: boolean | null;
 };
 
+export type WorkflowEntityType =
+  | "metric_value"
+  | "raw_data"
+  | "report"
+  | "generated_policy"
+  | "questionnaire_question";
+
+export type WorkflowStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
+
+export type WorkflowSubmitOutcome = "submitted" | "already_submitted" | "already_approved" | "ineligible" | "not_found";
+
+export interface WorkflowSubmitItem {
+  entityType: WorkflowEntityType;
+  entityId: string;
+}
+
+export interface WorkflowSubmitResult {
+  requested: number;
+  unique: number;
+  duplicates: number;
+  submitted: number;
+  alreadySubmitted: number;
+  alreadyApproved: number;
+  ineligible: number;
+  notFound: number;
+  results: Array<WorkflowSubmitItem & { outcome: WorkflowSubmitOutcome; currentStatus?: WorkflowStatus }>;
+}
+
+export type WorkflowReviewResult =
+  | { outcome: "reviewed"; entityType: WorkflowEntityType; entityId: string; status: "approved" | "rejected" }
+  | { outcome: "not_submitted"; entityType: WorkflowEntityType; entityId: string; currentStatus: WorkflowStatus }
+  | { outcome: "not_found"; entityType: WorkflowEntityType; entityId: string };
+
+export interface WorkflowBulkReviewResult {
+  requested: number;
+  unique: number;
+  duplicates: number;
+  reviewed: number;
+  notSubmitted: number;
+  notFound: number;
+  results: WorkflowReviewResult[];
+}
+
+export type WorkflowReviseResult =
+  | { outcome: "revised"; entityType: "metric_value" | "raw_data"; entityId: string; status: "draft" }
+  | { outcome: "not_rejected"; entityType: "metric_value" | "raw_data"; entityId: string; currentStatus: WorkflowStatus }
+  | { outcome: "not_found"; entityType: "metric_value" | "raw_data"; entityId: string };
+
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Session-level calculation gates must never consume clients from the pool
+// used by the callback's Drizzle queries. Keeping these clients in a small,
+// dedicated pool prevents N concurrent calculations from holding all N work
+// connections while each waits for one more connection to finish its run.
+export const calculationLockPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 4,
+  application_name: "simplyesg-calculation-locks",
+});
 export const db = drizzle(pool);
+
+function metricDefinitionInsertValues(data: InsertMetricDefinition) {
+  return {
+    code: data.code,
+    name: data.name,
+    pillar: data.pillar,
+    category: data.category,
+    description: data.description ?? null,
+    dataType: data.dataType ?? "numeric" as const,
+    unit: data.unit ?? null,
+    inputFrequency: data.inputFrequency ?? "quarterly" as const,
+    isCore: data.isCore ?? true,
+    isActive: data.isActive ?? true,
+    isDerived: data.isDerived ?? false,
+    formulaJson: data.formulaJson ?? null,
+    frameworkTags: data.frameworkTags ?? null,
+    scoringWeight: data.scoringWeight ?? "1",
+    sortOrder: data.sortOrder ?? 0,
+    evidenceRequired: data.evidenceRequired ?? false,
+    rollupMethod: data.rollupMethod ?? "sum" as const,
+  };
+}
+
+function metricDefinitionUpdateFields(data: Partial<MetricDefinition>): Record<string, any> {
+  const updateFields: Record<string, any> = { updatedAt: new Date() };
+  if (data.name !== undefined) updateFields.name = data.name;
+  if (data.description !== undefined) updateFields.description = data.description;
+  if (data.pillar !== undefined) updateFields.pillar = data.pillar;
+  if (data.category !== undefined) updateFields.category = data.category;
+  if (data.unit !== undefined) updateFields.unit = data.unit;
+  if (data.inputFrequency !== undefined) updateFields.inputFrequency = data.inputFrequency;
+  if (data.dataType !== undefined) updateFields.dataType = data.dataType;
+  if (data.isCore !== undefined) updateFields.isCore = data.isCore;
+  if (data.isActive !== undefined) updateFields.isActive = data.isActive;
+  if (data.isDerived !== undefined) updateFields.isDerived = data.isDerived;
+  if (data.formulaJson !== undefined) updateFields.formulaJson = data.formulaJson;
+  if (data.frameworkTags !== undefined) updateFields.frameworkTags = data.frameworkTags;
+  if (data.scoringWeight !== undefined) updateFields.scoringWeight = data.scoringWeight;
+  if (data.sortOrder !== undefined) updateFields.sortOrder = data.sortOrder;
+  if (data.evidenceRequired !== undefined) updateFields.evidenceRequired = data.evidenceRequired;
+  if (data.rollupMethod !== undefined) updateFields.rollupMethod = data.rollupMethod;
+  return updateFields;
+}
 
 
 function pgRowToCamelCase<T>(row: Record<string, unknown>): T {
   return Object.fromEntries(
     Object.entries(row).map(([key, val]) => [
       key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase()),
-      val,
+      // Drizzle treats PostgreSQL `timestamp without time zone` values as UTC,
+      // while node-postgres raw clients parse the same wall clock in the
+      // process timezone. Rebuild raw Date values from their local calendar
+      // components so raw transactional paths return the same instant as the
+      // normal Drizzle reads (and optimistic versions compare consistently).
+      val instanceof Date
+        ? pgTimestampWithoutTimeZoneToUtc(val)
+        : val,
     ]),
   ) as unknown as T;
 }
 
 function storageError(status: number, message: string) {
   return Object.assign(new Error(message), { status });
+}
+
+function normalizeWorkflowStatus(value: unknown): WorkflowStatus {
+  if (value === "submitted" || value === "approved" || value === "rejected" || value === "archived") {
+    return value;
+  }
+  return "draft";
+}
+
+function workflowTable(entityType: WorkflowEntityType): string {
+  const tables: Record<WorkflowEntityType, string> = {
+    metric_value: "metric_values",
+    raw_data: "raw_data_inputs",
+    report: "report_runs",
+    generated_policy: "generated_policies",
+    questionnaire_question: "questionnaire_questions",
+  };
+  return tables[entityType];
+}
+
+async function selectOwnedWorkflowRowsForUpdate(
+  client: pg.PoolClient,
+  entityType: WorkflowEntityType,
+  entityIds: string[],
+  companyId: string,
+): Promise<Map<string, WorkflowStatus>> {
+  if (entityIds.length === 0) return new Map();
+
+  let query: string;
+  switch (entityType) {
+    case "metric_value":
+      query = `
+        SELECT mv.id, COALESCE(mv.workflow_status, 'draft') AS workflow_status
+        FROM metric_values mv
+        INNER JOIN metrics m ON m.id = mv.metric_id
+        WHERE mv.id = ANY($1::varchar[]) AND m.company_id = $2
+        ORDER BY mv.id
+        FOR UPDATE OF mv
+      `;
+      break;
+    case "questionnaire_question":
+      query = `
+        SELECT qq.id, COALESCE(qq.workflow_status, 'draft') AS workflow_status
+        FROM questionnaire_questions qq
+        INNER JOIN questionnaires q ON q.id = qq.questionnaire_id
+        WHERE qq.id = ANY($1::varchar[]) AND q.company_id = $2
+        ORDER BY qq.id
+        FOR UPDATE OF qq
+      `;
+      break;
+    default:
+      query = `
+        SELECT id, COALESCE(workflow_status, 'draft') AS workflow_status
+        FROM ${workflowTable(entityType)}
+        WHERE id = ANY($1::varchar[]) AND company_id = $2
+        ORDER BY id
+        FOR UPDATE
+      `;
+  }
+
+  const result = await client.query(query, [entityIds, companyId]);
+  return new Map(result.rows.map((row: { id: string; workflow_status: unknown }) => [
+    String(row.id),
+    normalizeWorkflowStatus(row.workflow_status),
+  ]));
+}
+
+async function insertWorkflowAudit(
+  client: pg.PoolClient,
+  input: {
+    companyId: string;
+    userId: string;
+    action: string;
+    entityType: WorkflowEntityType;
+    entityId: string;
+    details: Record<string, unknown>;
+  },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+    [input.companyId, input.userId, input.action, input.entityType, input.entityId, JSON.stringify(input.details)],
+  );
+}
+
+async function acquireUnlockedReportingRange(
+  client: any,
+  companyId: string,
+  startMonth: string,
+  endMonth: string,
+  options: { calculationRunLockHeld?: boolean } = {},
+): Promise<string[]> {
+  let months: string[];
+  try {
+    months = reportingMonthsForMonthBounds(startMonth, endMonth);
+  } catch (error) {
+    if (error instanceof RangeError) throw storageError(400, error.message);
+    throw error;
+  }
+  await acquirePeriodMutationLocks(client, companyId, months, options);
+  const lockedPeriods = await findLockedPeriodsInTransaction(client, companyId, months);
+  if (lockedPeriods.length > 0) {
+    throw storageError(400, `This reporting range includes locked period${lockedPeriods.length === 1 ? "" : "s"}: ${lockedPeriods.join(", ")}`);
+  }
+  return months;
+}
+
+async function validatePersistedReportingRange(
+  startDate: Date,
+  endDate: Date,
+): Promise<string[]> {
+  const result = await pool.query<{ start_month: string; end_month: string }>(
+    `SELECT
+       to_char($1::timestamp, 'YYYY-MM') AS start_month,
+       to_char($2::timestamp, 'YYYY-MM') AS end_month`,
+    [startDate, endDate],
+  );
+  const bounds = result.rows[0];
+  if (!bounds) throw storageError(400, "Reporting period dates are required");
+  try {
+    // Validate the same calendar months PostgreSQL will persist for its
+    // timestamp-without-time-zone columns. UTC getters can disagree with that
+    // representation at a process-timezone month boundary.
+    return reportingMonthsForMonthBounds(bounds.start_month, bounds.end_month);
+  } catch (error) {
+    if (error instanceof RangeError) throw storageError(400, error.message);
+    throw error;
+  }
+}
+
+async function assertUniqueReportingPeriod(
+  tx: any,
+  data: Pick<InsertReportingPeriod, "companyId" | "name" | "periodType" | "startDate" | "endDate">,
+): Promise<void> {
+  // Reporting periods are intentionally allowed to overlap (for example an
+  // annual period alongside its quarters). This tenant-scoped lock closes the
+  // retry/concurrency race only for duplicate names or identical period keys.
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`reporting-period:create:${data.companyId}`}, 0))`);
+  const [duplicate] = await tx.select({ id: reportingPeriods.id })
+    .from(reportingPeriods)
+    .where(and(
+      eq(reportingPeriods.companyId, data.companyId),
+      or(
+        sql`lower(btrim(${reportingPeriods.name})) = lower(btrim(${data.name}))`,
+        and(
+          eq(reportingPeriods.periodType, data.periodType),
+          eq(reportingPeriods.startDate, data.startDate),
+          eq(reportingPeriods.endDate, data.endDate),
+        ),
+      ),
+    ))
+    .limit(1);
+  if (duplicate) {
+    throw storageError(409, "A reporting period with this name or exact date range already exists");
+  }
 }
 
 function localCalendarDateKey(value: Date | string): string {
@@ -202,7 +599,7 @@ export interface IStorage {
   getMetrics(companyId: string): Promise<Metric[]>;
   getMetric(id: string): Promise<Metric | undefined>;
   createMetric(metric: InsertMetric): Promise<Metric>;
-  updateMetric(id: string, data: Partial<Metric>): Promise<Metric | undefined>;
+  updateMetric(id: string, companyId: string, data: Partial<Metric>): Promise<Metric | undefined>;
   getMetricTarget(metricId: string): Promise<MetricTarget | undefined>;
   upsertMetricTarget(metricId: string, targetValue: string, targetYear: number): Promise<MetricTarget>;
 
@@ -215,8 +612,10 @@ export interface IStorage {
   countEstimatedValues(companyId: string): Promise<number>;
   createMetricValue(value: InsertMetricValue): Promise<MetricValue>;
   updateMetricValue(id: string, data: Partial<MetricValue>): Promise<MetricValue | undefined>;
-  upsertMetricValue(value: InsertMetricValue): Promise<MetricValue>;
-  lockPeriod(companyId: string, period: string): Promise<void>;
+  upsertMetricValue(value: InsertMetricValue, options?: { calculationRunLockHeld?: boolean }): Promise<MetricValue>;
+  promoteMetricValueToEvidenced(companyId: string, metricValueId: string, expectedSubmittedAt: Date | string | null): Promise<MetricValue>;
+  lockPeriod(companyId: string, period: string, userId?: string | null): Promise<void>;
+  isPeriodLocked(companyId: string, period: string): Promise<boolean>;
 
   // Raw Data Inputs
   // RawDataInput / InsertRawDataInput include estimation fields added in Task #56:
@@ -225,6 +624,7 @@ export interface IStorage {
   createRawDataInput(data: InsertRawDataInput): Promise<RawDataInput>;
   updateRawDataInput(id: string, data: Partial<RawDataInput>): Promise<RawDataInput | undefined>;
   upsertRawDataInput(companyId: string, inputName: string, period: string, data: Partial<InsertRawDataInput>): Promise<RawDataInput>;
+  deleteRawDataInput(companyId: string, inputName: string, period: string, siteId: string | null): Promise<void>;
 
   // Evidence Files
   getEvidenceFiles(companyId: string, siteId?: string | null, period?: string): Promise<EvidenceFile[]>;
@@ -233,12 +633,13 @@ export interface IStorage {
   createEvidenceFile(file: Omit<EvidenceFile, "id" | "uploadedAt" | "reviewedBy" | "reviewedAt">): Promise<EvidenceFile>;
   updateEvidenceFile(id: string, data: Partial<EvidenceFile>): Promise<EvidenceFile | undefined>;
   deleteEvidenceFile(id: string): Promise<void>;
+  deleteEvidenceFileForCompany(id: string, companyId: string): Promise<boolean>;
 
   // Action Plans
   getActionPlans(companyId: string): Promise<ActionPlan[]>;
   getActionPlan(id: string): Promise<ActionPlan | undefined>;
   createActionPlan(plan: InsertActionPlan): Promise<ActionPlan>;
-  updateActionPlan(id: string, data: Partial<ActionPlan>): Promise<ActionPlan | undefined>;
+  updateActionPlan(id: string, companyId: string, data: Partial<ActionPlan>): Promise<ActionPlan | undefined>;
   deleteActionPlan(id: string): Promise<void>;
 
   // Reports
@@ -318,13 +719,22 @@ export interface IStorage {
 
   // Questionnaires
   getQuestionnaires(companyId: string, siteId?: string | null, reportingPeriodId?: string): Promise<Questionnaire[]>;
-  getQuestionnaire(id: string): Promise<Questionnaire | undefined>;
+  getQuestionnaire(id: string, companyId: string): Promise<Questionnaire | undefined>;
   createQuestionnaire(q: InsertQuestionnaire): Promise<Questionnaire>;
-  updateQuestionnaire(id: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
-  deleteQuestionnaire(id: string): Promise<void>;
+  createQuestionnaireWithQuestions(
+    q: InsertQuestionnaire,
+    questions: Array<Omit<InsertQuestionnaireQuestion, "questionnaireId">>,
+  ): Promise<{ questionnaire: Questionnaire; questions: QuestionnaireQuestion[] }>;
+  updateQuestionnaire(id: string, companyId: string, data: Partial<Questionnaire>): Promise<Questionnaire | undefined>;
+  deleteQuestionnaire(id: string, companyId: string): Promise<boolean>;
   getQuestionnaireQuestions(questionnaireId: string): Promise<QuestionnaireQuestion[]>;
   createQuestionnaireQuestion(q: InsertQuestionnaireQuestion): Promise<QuestionnaireQuestion>;
-  updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>): Promise<QuestionnaireQuestion | undefined>;
+  updateQuestionnaireQuestion(
+    id: string,
+    questionnaireId: string,
+    companyId: string,
+    data: Partial<QuestionnaireQuestion>,
+  ): Promise<QuestionnaireQuestion | undefined>;
   deleteQuestionnaireQuestions(questionnaireId: string): Promise<void>;
 
   // Organisation Sites
@@ -347,7 +757,12 @@ export interface IStorage {
   getGeneratedPolicies(companyId: string): Promise<GeneratedPolicy[]>;
   getGeneratedPolicy(id: string): Promise<GeneratedPolicy | undefined>;
   createGeneratedPolicy(p: InsertGeneratedPolicy): Promise<GeneratedPolicy>;
-  updateGeneratedPolicy(id: string, data: Partial<GeneratedPolicy>): Promise<GeneratedPolicy | undefined>;
+  updateGeneratedPolicy(
+    id: string,
+    companyId: string,
+    data: Partial<GeneratedPolicy>,
+    options?: { approveTransition?: boolean },
+  ): Promise<GeneratedPolicy | undefined>;
   deleteGeneratedPolicy(id: string): Promise<void>;
 
   // AI Generation Logs
@@ -355,7 +770,11 @@ export interface IStorage {
   getAiGenerationLogs(companyId: string, entityType?: string, entityId?: string): Promise<AiGenerationLog[]>;
 
   // Workflow
-  updateWorkflowStatus(table: string, id: string, status: string, userId: string, comment?: string, companyId?: string): Promise<void>;
+  submitWorkflowItems(items: WorkflowSubmitItem[], companyId: string, userId: string): Promise<WorkflowSubmitResult>;
+  submitWorkflowEntities(entityType: WorkflowEntityType, entityIds: string[], companyId: string, userId: string): Promise<WorkflowSubmitResult>;
+  reviewWorkflowEntity(entityType: WorkflowEntityType, entityId: string, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowReviewResult>;
+  bulkReviewWorkflowEntities(items: Array<{ entityType: WorkflowEntityType; entityId: string }>, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowBulkReviewResult>;
+  reviseWorkflowEntity(entityType: "metric_value" | "raw_data", entityId: string, companyId: string, userId: string): Promise<WorkflowReviseResult>;
   getWorkflowPendingItems(companyId: string): Promise<any>;
 
   // Task Ownership
@@ -375,7 +794,13 @@ export interface IStorage {
   createReportingPeriod(data: InsertReportingPeriod): Promise<ReportingPeriod>;
   closeReportingPeriod(id: string, companyId: string): Promise<ReportingPeriod | undefined>;
   lockReportingPeriod(id: string, companyId: string): Promise<ReportingPeriod | undefined>;
-  copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod): Promise<{ period: ReportingPeriod; copiedMetrics: number; copiedActions: number }>;
+  copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod): Promise<{
+    period: ReportingPeriod;
+    copiedMetrics: number;
+    copiedActions: number;
+    carriedForwardMetrics: number;
+    carriedForwardActions: number;
+  }>;
   getPeriodComparison(companyId: string, currentPeriod: string, comparePeriod: string): Promise<any[]>;
 
   createBackgroundJob(job: InsertBackgroundJob): Promise<BackgroundJob>;
@@ -456,23 +881,32 @@ export interface IStorage {
   getMetricDefinitions(filters?: { pillar?: string; isCore?: boolean; isActive?: boolean; search?: string }): Promise<MetricDefinition[]>;
   getMetricDefinition(id: string): Promise<MetricDefinition | undefined>;
   getMetricDefinitionByCode(code: string): Promise<MetricDefinition | undefined>;
-  createMetricDefinition(data: InsertMetricDefinition): Promise<MetricDefinition>;
-  updateMetricDefinition(id: string, data: Partial<MetricDefinition>): Promise<MetricDefinition | undefined>;
-  seedMetricDefinitions(definitions: InsertMetricDefinition[]): Promise<number>;
+  mutateMetricDefinitionCatalogue(
+    mutation: MetricDefinitionCatalogueMutation,
+    seedReservations: readonly MetricDefinitionSeedReservation[],
+  ): Promise<MetricDefinitionCatalogueMutationResult>;
 
   // Metric Definition Values
   getMetricDefinitionValues(businessId: string, filters?: { metricDefinitionId?: string; siteId?: string | null; periodStart?: Date; periodEnd?: Date }): Promise<MetricDefinitionValue[]>;
+  getMetricDefinitionValuesExact(businessId: string, siteId: string | null, periodStart: Date, periodEnd: Date): Promise<MetricDefinitionValue[]>;
   getMetricDefinitionValueById(id: string, businessId: string): Promise<MetricDefinitionValue | undefined>;
   createMetricDefinitionValue(data: InsertMetricDefinitionValue): Promise<MetricDefinitionValue>;
   updateMetricDefinitionValue(id: string, businessId: string, data: Partial<MetricDefinitionValue>): Promise<MetricDefinitionValue | undefined>;
   upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>): Promise<MetricDefinitionValue>;
-  rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null>;
+  upsertCalculatedMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, valueNumeric: string): Promise<CanonicalCalculationMutationResult>;
+  clearCalculatedMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date): Promise<CanonicalCalculationMutationResult>;
+  transitionMetricDefinitionValue(id: string, businessId: string, actorUserId: string, action: "submit" | "approve" | "reject" | "revise", comment?: string | null): Promise<MetricDefinitionValue | undefined>;
+  rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<CanonicalRollupResult>;
 
   // Metric Evidence
   getMetricEvidence(metricValueId: string): Promise<MetricEvidence[]>;
   getMetricEvidenceById(id: string, businessId: string): Promise<MetricEvidence | undefined>;
   createMetricEvidence(data: InsertMetricEvidence): Promise<MetricEvidence>;
+  createLegacyMetricEvidence(businessId: string, data: InsertMetricEvidence): Promise<MetricEvidence>;
+  createCanonicalMetricEvidence(businessId: string, data: InsertMetricEvidence): Promise<MetricEvidence>;
   deleteMetricEvidence(id: string): Promise<void>;
+  deleteLegacyMetricEvidence(id: string, businessId: string): Promise<boolean>;
+  deleteCanonicalMetricEvidence(id: string, businessId: string): Promise<boolean>;
 
   // Metric Calculation Runs
   createMetricCalculationRun(data: InsertMetricCalculationRun): Promise<MetricCalculationRun>;
@@ -484,8 +918,13 @@ export interface IStorage {
   upsertMaterialTopicScores(id: string, companyId: string, data: Partial<MaterialTopic>): Promise<MaterialTopic | undefined>;
   seedDefaultMaterialTopics(companyId: string): Promise<void>;
   getMaterialityAssessments(companyId: string): Promise<BusinessMaterialityAssessment[]>;
-  createMaterialityAssessment(data: InsertBusinessMaterialityAssessment): Promise<BusinessMaterialityAssessment>;
-  updateMaterialityAssessment(id: string, companyId: string, data: Partial<BusinessMaterialityAssessment>): Promise<BusinessMaterialityAssessment | undefined>;
+  createMaterialityAssessment(data: InsertBusinessMaterialityAssessment, actorUserId?: string): Promise<BusinessMaterialityAssessment>;
+  updateMaterialityAssessment(
+    id: string,
+    companyId: string,
+    data: Partial<BusinessMaterialityAssessment>,
+    actorUserId?: string,
+  ): Promise<BusinessMaterialityAssessment | undefined>;
 
   // Policy Records
   getPolicyRecords(companyId: string): Promise<PolicyRecord[]>;
@@ -524,8 +963,8 @@ export interface IStorage {
   getIdentityProviders(companyId: string): Promise<IdentityProvider[]>;
   getIdentityProvider(id: string): Promise<IdentityProvider | undefined>;
   createIdentityProvider(data: InsertIdentityProvider): Promise<IdentityProvider>;
-  updateIdentityProvider(id: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined>;
-  deleteIdentityProvider(id: string): Promise<void>;
+  updateIdentityProvider(id: string, companyId: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined>;
+  deleteIdentityProvider(id: string, companyId: string): Promise<void>;
 
   // Data Export Jobs
   createDataExportJob(data: InsertDataExportJob): Promise<DataExportJob>;
@@ -665,12 +1104,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertCompanySettings(companyId: string, data: Partial<CompanySettings>) {
+    const mutable = pickMutableFields(data, COMPANY_SETTINGS_MUTABLE_FIELDS) as Partial<CompanySettings>;
     const existing = await this.getCompanySettings(companyId);
     if (existing) {
-      const [s] = await db.update(companySettings).set(data).where(eq(companySettings.companyId, companyId)).returning();
+      const [s] = await db.update(companySettings).set(mutable).where(eq(companySettings.companyId, companyId)).returning();
       return s;
     } else {
-      const [s] = await db.insert(companySettings).values({ companyId, ...data } as any).returning();
+      const [s] = await db.insert(companySettings).values({ ...mutable, companyId } as any).returning();
       return s;
     }
   }
@@ -732,8 +1172,11 @@ export class DatabaseStorage implements IStorage {
     return m;
   }
 
-  async updateMetric(id: string, data: Partial<Metric>) {
-    const [m] = await db.update(metrics).set(data).where(eq(metrics.id, id)).returning();
+  async updateMetric(id: string, companyId: string, data: Partial<Metric>) {
+    const mutable = pickMutableFields(data, METRIC_MUTABLE_FIELDS) as Partial<Metric>;
+    const [m] = await db.update(metrics).set(mutable)
+      .where(and(eq(metrics.id, id), eq(metrics.companyId, companyId)))
+      .returning();
     return m;
   }
 
@@ -879,11 +1322,30 @@ export class DatabaseStorage implements IStorage {
     return v;
   }
 
-  async upsertMetricValue(value: InsertMetricValue) {
+  async upsertMetricValue(value: InsertMetricValue, options: { calculationRunLockHeld?: boolean } = {}) {
+    const mutationPeriods = dataEntryPeriodMonths(value.period);
+    if (!mutationPeriods) {
+      throw storageError(400, "period must use YYYY-MM, YYYY-Q1..Q4, or YYYY format");
+    }
     const lockKey = `metric_values:${value.metricId}:${value.period}:${value.siteId ?? "__org__"}`;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const metricCompanyResult = await client.query<{ company_id: string }>(
+        "SELECT company_id FROM metrics WHERE id = $1 LIMIT 1",
+        [value.metricId],
+      );
+      const companyId = metricCompanyResult.rows[0]?.company_id;
+      if (!companyId) {
+        throw storageError(404, "Metric not found");
+      }
+      // Period lock ordering is always tenant+period first, then the narrower
+      // metric-value scope lock. This matches guided, CSV and bulk mutations.
+      await acquirePeriodMutationLocks(client, companyId, mutationPeriods, options);
+      const lockedPeriods = await findLockedPeriodsInTransaction(client, companyId, mutationPeriods);
+      if (lockedPeriods.length > 0) {
+        throw storageError(400, "This period is locked and cannot be edited");
+      }
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
       await client.query("LOCK TABLE metric_values IN SHARE ROW EXCLUSIVE MODE");
 
@@ -918,6 +1380,18 @@ export class DatabaseStorage implements IStorage {
         if (existing.locked) {
           await client.query("COMMIT");
           return existing;
+        }
+        const protection = await assessMetricValueProtectionWithPgClient(client as any, {
+          metricValueId: existing.id,
+          lockForUpdate: true,
+        });
+        const protectionReason = protection?.reason ?? null;
+        if (protectionReason) {
+          throw createProtectedValueError("This metric value", protectionReason, {
+            metricId: value.metricId,
+            period: value.period,
+            siteId: value.siteId ?? null,
+          });
         }
         const updateResult = await client.query(
           `
@@ -1010,6 +1484,96 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  async promoteMetricValueToEvidenced(
+    companyId: string,
+    metricValueId: string,
+    expectedSubmittedAt: Date | string | null,
+  ): Promise<MetricValue> {
+    const expectedTimestamp = expectedSubmittedAt ? new Date(expectedSubmittedAt) : null;
+    if (!expectedTimestamp || !Number.isFinite(expectedTimestamp.getTime())) {
+      throw storageError(409, "The saved metric value changed before its evidence provenance could be confirmed");
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const scopeResult = await client.query<{
+        metric_id: string;
+        period: string;
+        site_id: string | null;
+      }>(
+        `SELECT mv.metric_id, mv.period, mv.site_id
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1`,
+        [metricValueId, companyId],
+      );
+      const scope = scopeResult.rows[0];
+      if (!scope) throw storageError(404, "Metric value not found");
+
+      const mutationPeriods = dataEntryPeriodMonths(scope.period);
+      if (!mutationPeriods) throw storageError(400, "Metric value has an invalid reporting period");
+      await acquirePeriodMutationLocks(client, companyId, mutationPeriods);
+      const lockedPeriods = await findLockedPeriodsInTransaction(client, companyId, mutationPeriods);
+      if (lockedPeriods.length > 0) {
+        throw Object.assign(
+          storageError(409, "The value and evidence were saved, but the source label could not be changed because the reporting period is now locked"),
+          { code: "PROVENANCE_PERIOD_LOCKED" },
+        );
+      }
+
+      const lockKey = `metric_values:${scope.metric_id}:${scope.period}:${scope.site_id ?? "__org__"}`;
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
+      const currentResult = await client.query(
+        `SELECT mv.*
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1
+         FOR UPDATE OF mv`,
+        [metricValueId, companyId],
+      );
+      const current = currentResult.rows[0];
+      if (!current) throw storageError(404, "Metric value not found");
+      const currentValue = pgRowToCamelCase<MetricValue>(current);
+      const currentSubmittedAt = currentValue.submittedAt ? new Date(currentValue.submittedAt) : null;
+      if (!currentSubmittedAt || currentSubmittedAt.getTime() !== expectedTimestamp.getTime()) {
+        throw storageError(409, "The metric value changed while its evidence was uploading; the evidence was not linked");
+      }
+
+      const durableEvidenceResult = await client.query(
+        `SELECT 1
+         FROM evidence_files
+         WHERE company_id = $1
+           AND linked_module = 'metric_value'
+           AND linked_entity_id = $2
+           AND file_url IS NOT NULL
+           AND storage_path IS NOT NULL
+         LIMIT 1`,
+        [companyId, metricValueId],
+      );
+      if (durableEvidenceResult.rowCount !== 1) {
+        throw storageError(409, "Evidence provenance cannot be confirmed until at least one file is durably stored");
+      }
+
+      const updatedResult = await client.query(
+        `UPDATE metric_values
+         SET data_source_type = 'evidenced'
+         WHERE id = $1
+         RETURNING *`,
+        [metricValueId],
+      );
+      await client.query("COMMIT");
+      return pgRowToCamelCase<MetricValue>(updatedResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async updateMetricValue(id: string, data: Partial<MetricValue>) {
     // Guard: never overwrite a measured (manual/evidenced) value with an estimate
     const MEASURED_SOURCES: string[] = ["manual", "evidenced"];
@@ -1024,13 +1588,66 @@ export class DatabaseStorage implements IStorage {
     return v;
   }
 
-  async lockPeriod(companyId: string, period: string) {
-    await db
-      .update(metricValues)
-      .set({ locked: true })
-      .where(
-        sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId}) AND ${metricValues.period} = ${period}`
-      );
+  async lockPeriod(companyId: string, period: string, userId?: string | null) {
+    if (!reportingMonthBounds(period)) {
+      throw storageError(400, "period must use YYYY-MM format");
+    }
+    await db.transaction(async (tx) => {
+      await acquirePeriodMutationLocks(tx, companyId, [period]);
+      await tx.insert(dataEntryPeriodLocks)
+        .values({ companyId, period, lockedBy: userId ?? null })
+        .onConflictDoUpdate({
+          target: [dataEntryPeriodLocks.companyId, dataEntryPeriodLocks.period],
+          set: { lockedBy: userId ?? null, lockedAt: new Date() },
+        });
+      await tx
+        .update(metricValues)
+        .set({ locked: true })
+        .where(
+          sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId}) AND ${metricValues.period} = ${period}`
+        );
+    });
+  }
+
+  async isPeriodLocked(companyId: string, period: string) {
+    const mutationPeriods = dataEntryPeriodMonths(period);
+    if (!mutationPeriods) return false;
+    const [lock] = await db.select({ id: dataEntryPeriodLocks.id })
+      .from(dataEntryPeriodLocks)
+      .where(and(
+        eq(dataEntryPeriodLocks.companyId, companyId),
+        inArray(dataEntryPeriodLocks.period, mutationPeriods),
+      ))
+      .limit(1);
+    if (lock) return true;
+
+    // Backward compatibility for periods locked before the durable lock table
+    // was introduced.
+    const [legacyLock] = await db.select({ id: metricValues.id })
+      .from(metricValues)
+      .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+      .where(and(
+        eq(metrics.companyId, companyId),
+        inArray(metricValues.period, Array.from(new Set([period, ...mutationPeriods]))),
+        eq(metricValues.locked, true),
+      ))
+      .limit(1);
+    if (legacyLock) return true;
+
+    // A locked reporting range protects every month it overlaps, including
+    // months that do not yet contain raw inputs or metric-value rows.
+    const rangeStart = `${mutationPeriods[0]}-01 00:00:00`;
+    const rangeEndStart = `${mutationPeriods[mutationPeriods.length - 1]}-01 00:00:00`;
+    const [reportingRangeLock] = await db.select({ id: reportingPeriods.id })
+      .from(reportingPeriods)
+      .where(and(
+        eq(reportingPeriods.companyId, companyId),
+        eq(reportingPeriods.status, "locked"),
+        sql`${reportingPeriods.startDate} < (${rangeEndStart}::timestamp + INTERVAL '1 month')`,
+        sql`${reportingPeriods.endDate} >= ${rangeStart}::timestamp`,
+      ))
+      .limit(1);
+    return Boolean(reportingRangeLock);
   }
 
   async hasAnyData(companyId: string): Promise<boolean> {
@@ -1121,6 +1738,15 @@ export class DatabaseStorage implements IStorage {
       const [r] = await db.insert(rawDataInputs).values({ companyId, inputName, period, ...data } as any).returning();
       return r;
     }
+  }
+
+  async deleteRawDataInput(companyId: string, inputName: string, period: string, siteId: string | null) {
+    await db.delete(rawDataInputs).where(and(
+      eq(rawDataInputs.companyId, companyId),
+      eq(rawDataInputs.inputName, inputName),
+      eq(rawDataInputs.period, period),
+      siteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, siteId),
+    ));
   }
 
   async getEvidenceFiles(companyId: string, siteId?: string | null, period?: string) {
@@ -1242,6 +1868,152 @@ export class DatabaseStorage implements IStorage {
     await db.delete(evidenceFiles).where(eq(evidenceFiles.id, id));
   }
 
+  /**
+   * User-facing evidence deletion remains tenant scoped and, for an evidence
+   * file linked directly to a legacy metric value, is one atomic provenance
+   * mutation. Removing the final evidence record returns a draft value to the
+   * truthful manual fallback; submitted/reviewed values and locked periods are
+   * never changed through the evidence surface.
+   */
+  async deleteEvidenceFileForCompany(id: string, companyId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const fileResult = await client.query<{
+        id: string;
+        linked_module: string | null;
+        linked_entity_id: string | null;
+      }>(
+        `SELECT id, linked_module, linked_entity_id
+         FROM evidence_files
+         WHERE id = $1 AND company_id = $2
+         LIMIT 1`,
+        [id, companyId],
+      );
+      const file = fileResult.rows[0];
+      if (!file) {
+        await client.query("COMMIT");
+        return false;
+      }
+
+      if (file.linked_module !== "metric_value" || !file.linked_entity_id) {
+        const deleted = await client.query(
+          "DELETE FROM evidence_files WHERE id = $1 AND company_id = $2 RETURNING id",
+          [id, companyId],
+        );
+        await client.query("COMMIT");
+        return deleted.rowCount === 1;
+      }
+
+      const scopeResult = await client.query<{
+        metric_id: string;
+        period: string;
+        site_id: string | null;
+      }>(
+        `SELECT mv.metric_id, mv.period, mv.site_id
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1`,
+        [file.linked_entity_id, companyId],
+      );
+      const scope = scopeResult.rows[0];
+      if (!scope) {
+        // The owned evidence row is orphaned, so there is no protected value
+        // whose provenance can be changed by removing it.
+        const deleted = await client.query(
+          "DELETE FROM evidence_files WHERE id = $1 AND company_id = $2 RETURNING id",
+          [id, companyId],
+        );
+        await client.query("COMMIT");
+        return deleted.rowCount === 1;
+      }
+
+      const mutationPeriods = dataEntryPeriodMonths(scope.period);
+      if (!mutationPeriods) throw storageError(409, "Evidence cannot be changed because the linked metric value has an invalid reporting period");
+      await acquirePeriodMutationLocks(client, companyId, mutationPeriods);
+      const lockedPeriods = await findLockedPeriodsInTransaction(client, companyId, mutationPeriods);
+      if (lockedPeriods.length > 0) {
+        throw storageError(409, "Evidence cannot be changed while the linked reporting period is locked");
+      }
+
+      const naturalKey = `metric_values:${scope.metric_id}:${scope.period}:${scope.site_id ?? "__org__"}`;
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [naturalKey]);
+      const valueResult = await client.query(
+        `SELECT mv.*
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1
+         FOR UPDATE OF mv`,
+        [file.linked_entity_id, companyId],
+      );
+      const value = valueResult.rows[0];
+      if (!value) {
+        await client.query("COMMIT");
+        return false;
+      }
+      if (
+        value.locked === true
+        || (value.workflow_status ?? "draft") !== "draft"
+        || value.reviewed_by !== null
+        || value.reviewed_at !== null
+      ) {
+        throw Object.assign(new Error("Evidence cannot be removed from a locked, submitted or reviewed metric value"), {
+          status: 409,
+          code: "VALUE_PROTECTED",
+        });
+      }
+
+      const deleted = await client.query(
+        `DELETE FROM evidence_files
+         WHERE id = $1 AND company_id = $2
+           AND linked_module = 'metric_value' AND linked_entity_id = $3
+         RETURNING id`,
+        [id, companyId, file.linked_entity_id],
+      );
+      if (deleted.rowCount !== 1) {
+        await client.query("COMMIT");
+        return false;
+      }
+
+      const remainingEvidence = await client.query(
+        `SELECT (
+           EXISTS (
+             SELECT 1 FROM evidence_files ef
+             WHERE ef.company_id = $1
+               AND ef.site_id IS NOT DISTINCT FROM $4::varchar
+               AND (
+                 (ef.linked_module = 'metric_value' AND ef.linked_entity_id = $2)
+                 OR (
+                   ef.linked_period = $5
+                   AND (
+                     ef.metric_id = $3
+                     OR (ef.linked_module = 'metric' AND ef.linked_entity_id = $3)
+                   )
+                 )
+               )
+           )
+           OR EXISTS (SELECT 1 FROM metric_evidence me WHERE me.metric_value_id = $2)
+         ) AS present`,
+        [companyId, file.linked_entity_id, scope.metric_id, scope.site_id, scope.period],
+      );
+      if (remainingEvidence.rows[0]?.present !== true && value.data_source_type === "evidenced") {
+        await client.query(
+          "UPDATE metric_values SET data_source_type = 'manual' WHERE id = $1",
+          [file.linked_entity_id],
+        );
+      }
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getActionPlans(companyId: string) {
     return db.select().from(actionPlans).where(eq(actionPlans.companyId, companyId)).orderBy(desc(actionPlans.createdAt));
   }
@@ -1252,12 +2024,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createActionPlan(plan: InsertActionPlan) {
-    const [p] = await db.insert(actionPlans).values(plan).returning();
+    const mutable = pickMutableFields(plan, ACTION_PLAN_MUTABLE_FIELDS);
+    const [p] = await db.insert(actionPlans).values({ ...mutable, companyId: plan.companyId } as InsertActionPlan).returning();
     return p;
   }
 
-  async updateActionPlan(id: string, data: Partial<ActionPlan>) {
-    const [p] = await db.update(actionPlans).set({ ...data, updatedAt: new Date() }).where(eq(actionPlans.id, id)).returning();
+  async updateActionPlan(id: string, companyId: string, data: Partial<ActionPlan>) {
+    const mutable = pickMutableFields(data, ACTION_PLAN_MUTABLE_FIELDS) as Partial<ActionPlan>;
+    const [p] = await db.update(actionPlans).set({ ...mutable, updatedAt: new Date() })
+      .where(and(eq(actionPlans.id, id), eq(actionPlans.companyId, companyId)))
+      .returning();
     return p;
   }
 
@@ -1553,8 +2329,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(questionnaires).where(and(...conditions)).orderBy(desc(questionnaires.createdAt));
   }
 
-  async getQuestionnaire(id: string) {
-    const [r] = await db.select().from(questionnaires).where(eq(questionnaires.id, id));
+  async getQuestionnaire(id: string, companyId: string) {
+    const [r] = await db.select().from(questionnaires).where(and(
+      eq(questionnaires.id, id),
+      eq(questionnaires.companyId, companyId),
+    ));
     return r;
   }
 
@@ -1563,14 +2342,46 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
-  async updateQuestionnaire(id: string, data: Partial<Questionnaire>) {
-    const [r] = await db.update(questionnaires).set({ ...data, updatedAt: new Date() }).where(eq(questionnaires.id, id)).returning();
+  async createQuestionnaireWithQuestions(
+    q: InsertQuestionnaire,
+    questions: Array<Omit<InsertQuestionnaireQuestion, "questionnaireId">>,
+  ) {
+    return db.transaction(async (tx) => {
+      const [questionnaire] = await tx.insert(questionnaires).values(q as any).returning();
+      const createdQuestions = questions.length > 0
+        ? await tx.insert(questionnaireQuestions).values(questions.map((question) => ({
+          ...question,
+          questionnaireId: questionnaire.id,
+        })) as any).returning()
+        : [];
+      return { questionnaire, questions: createdQuestions };
+    });
+  }
+
+  async updateQuestionnaire(id: string, companyId: string, data: Partial<Questionnaire>) {
+    const mutable = pickMutableFields(data, QUESTIONNAIRE_MUTABLE_FIELDS) as Partial<Questionnaire>;
+    const [r] = await db.update(questionnaires)
+      .set({ ...mutable, updatedAt: new Date() })
+      .where(and(eq(questionnaires.id, id), eq(questionnaires.companyId, companyId)))
+      .returning();
     return r;
   }
 
-  async deleteQuestionnaire(id: string) {
-    await db.delete(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, id));
-    await db.delete(questionnaires).where(eq(questionnaires.id, id));
+  async deleteQuestionnaire(id: string, companyId: string) {
+    return db.transaction(async (tx) => {
+      const [owned] = await tx.select({ id: questionnaires.id })
+        .from(questionnaires)
+        .where(and(eq(questionnaires.id, id), eq(questionnaires.companyId, companyId)))
+        .limit(1)
+        .for("update");
+      if (!owned) return false;
+
+      await tx.delete(questionnaireQuestions).where(eq(questionnaireQuestions.questionnaireId, id));
+      const [deleted] = await tx.delete(questionnaires)
+        .where(and(eq(questionnaires.id, id), eq(questionnaires.companyId, companyId)))
+        .returning({ id: questionnaires.id });
+      return Boolean(deleted);
+    });
   }
 
   async getQuestionnaireQuestions(questionnaireId: string) {
@@ -1582,8 +2393,20 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
-  async updateQuestionnaireQuestion(id: string, data: Partial<QuestionnaireQuestion>) {
-    const [r] = await db.update(questionnaireQuestions).set(data).where(eq(questionnaireQuestions.id, id)).returning();
+  async updateQuestionnaireQuestion(id: string, questionnaireId: string, companyId: string, data: Partial<QuestionnaireQuestion>) {
+    const mutable = pickMutableFields(data, QUESTIONNAIRE_QUESTION_MUTABLE_FIELDS) as Partial<QuestionnaireQuestion>;
+    const [r] = await db.update(questionnaireQuestions)
+      .set(mutable)
+      .where(and(
+        eq(questionnaireQuestions.id, id),
+        eq(questionnaireQuestions.questionnaireId, questionnaireId),
+        sql`EXISTS (
+          SELECT 1 FROM questionnaires q
+          WHERE q.id = ${questionnaireQuestions.questionnaireId}
+            AND q.company_id = ${companyId}
+        )`,
+      ))
+      .returning();
     return r;
   }
 
@@ -1607,7 +2430,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updatePolicyTemplate(slug: string, data: Partial<PolicyTemplate>) {
-    const [r] = await db.update(policyTemplates).set(data).where(eq(policyTemplates.slug, slug)).returning();
+    const mutable = pickMutableFields(data, POLICY_TEMPLATE_MUTABLE_FIELDS) as Partial<PolicyTemplate>;
+    const [r] = await db.update(policyTemplates).set(mutable).where(eq(policyTemplates.slug, slug)).returning();
     return r;
   }
 
@@ -1631,8 +2455,22 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
-  async updateGeneratedPolicy(id: string, data: Partial<GeneratedPolicy>) {
-    const [r] = await db.update(generatedPolicies).set({ ...data, updatedAt: new Date() }).where(eq(generatedPolicies.id, id)).returning();
+  async updateGeneratedPolicy(
+    id: string,
+    companyId: string,
+    data: Partial<GeneratedPolicy>,
+    options?: { approveTransition?: boolean },
+  ) {
+    const mutable = pickMutableFields(data, GENERATED_POLICY_MUTABLE_FIELDS) as Partial<GeneratedPolicy>;
+    const serverManaged = options?.approveTransition
+      ? {
+          approvedAt: new Date(),
+          versionNumber: sql`coalesce(${generatedPolicies.versionNumber}, 0) + 1`,
+        }
+      : {};
+    const [r] = await db.update(generatedPolicies).set({ ...mutable, ...serverManaged, updatedAt: new Date() })
+      .where(and(eq(generatedPolicies.id, id), eq(generatedPolicies.companyId, companyId)))
+      .returning();
     return r;
   }
 
@@ -1652,47 +2490,308 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(aiGenerationLogs).where(and(...conditions)).orderBy(desc(aiGenerationLogs.generatedAt));
   }
 
-  async updateWorkflowStatus(table: string, id: string, status: string, reviewedBy: string, comment?: string, companyId?: string) {
-    const allowedTables = ["metric_values", "raw_data_inputs", "report_runs", "generated_policies", "questionnaire_questions"];
-    if (!allowedTables.includes(table)) throw new Error("Invalid table for workflow status update");
-
-    if (companyId) {
-      let ownershipQuery;
-      if (table === "metric_values") {
-        ownershipQuery = sql`SELECT mv.id FROM metric_values mv INNER JOIN metrics m ON mv.metric_id = m.id WHERE mv.id = ${id} AND m.company_id = ${companyId}`;
-      } else if (table === "questionnaire_questions") {
-        ownershipQuery = sql`SELECT qq.id FROM questionnaire_questions qq INNER JOIN questionnaires q ON qq.questionnaire_id = q.id WHERE qq.id = ${id} AND q.company_id = ${companyId}`;
-      } else {
-        ownershipQuery = sql`SELECT id FROM ${sql.raw(table)} WHERE id = ${id} AND company_id = ${companyId}`;
-      }
-      const result = await db.execute(ownershipQuery);
-      if (!result.rows || result.rows.length === 0) {
-        throw new Error("Entity not found or does not belong to your company");
-      }
-    }
-
-    const validTransitions: Record<string, string[]> = {
-      draft: ["submitted"],
-      submitted: ["approved", "rejected"],
-      rejected: ["draft", "submitted"],
-      approved: ["archived"],
+  async submitWorkflowItems(
+    items: WorkflowSubmitItem[],
+    companyId: string,
+    userId: string,
+  ): Promise<WorkflowSubmitResult> {
+    const seen = new Set<string>();
+    const uniqueItems = items.filter((item) => {
+      const key = `${item.entityType}:${item.entityId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const result: WorkflowSubmitResult = {
+      requested: items.length,
+      unique: uniqueItems.length,
+      duplicates: items.length - uniqueItems.length,
+      submitted: 0,
+      alreadySubmitted: 0,
+      alreadyApproved: 0,
+      ineligible: 0,
+      notFound: 0,
+      results: [],
     };
-    const currentResult = await db.execute(
-      sql`SELECT workflow_status FROM ${sql.raw(table)} WHERE id = ${id}`
-    );
-    const currentStatus = currentResult.rows?.[0]?.workflow_status || "draft";
-    if (validTransitions[currentStatus as string] && !validTransitions[currentStatus as string].includes(status)) {
-      throw new Error(`Cannot transition from ${currentStatus} to ${status}`);
-    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const statuses = new Map<string, WorkflowStatus>();
+      const typeOrder: WorkflowEntityType[] = [
+        "metric_value",
+        "raw_data",
+        "report",
+        "generated_policy",
+        "questionnaire_question",
+      ];
+      for (const entityType of typeOrder) {
+        const entityIds = uniqueItems
+          .filter((item) => item.entityType === entityType)
+          .map((item) => item.entityId)
+          .sort();
+        const owned = await selectOwnedWorkflowRowsForUpdate(client, entityType, entityIds, companyId);
+        owned.forEach((status, entityId) => statuses.set(`${entityType}:${entityId}`, status));
+      }
 
-    if (status === "submitted") {
-      await db.execute(
-        sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, submitted_by = ${reviewedBy}, submitted_at = NOW() WHERE id = ${id}`
+      for (const item of uniqueItems) {
+        const { entityType, entityId } = item;
+        const currentStatus = statuses.get(`${entityType}:${entityId}`);
+        if (!currentStatus) {
+          result.notFound += 1;
+          result.results.push({ entityType, entityId, outcome: "not_found" });
+          continue;
+        }
+        if (currentStatus === "submitted") {
+          result.alreadySubmitted += 1;
+          result.results.push({ entityType, entityId, outcome: "already_submitted", currentStatus });
+          continue;
+        }
+        if (currentStatus === "approved") {
+          result.alreadyApproved += 1;
+          result.results.push({ entityType, entityId, outcome: "already_approved", currentStatus });
+          continue;
+        }
+        if (currentStatus !== "draft") {
+          result.ineligible += 1;
+          result.results.push({ entityType, entityId, outcome: "ineligible", currentStatus });
+          continue;
+        }
+
+        const updated = await client.query(
+          `UPDATE ${workflowTable(entityType)}
+           SET workflow_status = 'submitted', submitted_by = $2, submitted_at = NOW(),
+               reviewed_by = NULL, reviewed_at = NULL, review_comment = NULL
+           WHERE id = $1 AND COALESCE(workflow_status, 'draft') = 'draft'`,
+          [entityId, userId],
+        );
+        if (updated.rowCount !== 1) {
+          throw new Error(`Workflow submit transition was not applied for ${entityType}:${entityId}`);
+        }
+        await insertWorkflowAudit(client, {
+          companyId,
+          userId,
+          action: `Workflow submitted: ${entityType}`,
+          entityType,
+          entityId,
+          details: { outcome: "success", transition: { from: currentStatus, to: "submitted" } },
+        });
+        result.submitted += 1;
+        result.results.push({ entityType, entityId, outcome: "submitted", currentStatus });
+      }
+
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async submitWorkflowEntities(
+    entityType: WorkflowEntityType,
+    entityIds: string[],
+    companyId: string,
+    userId: string,
+  ): Promise<WorkflowSubmitResult> {
+    return this.submitWorkflowItems(
+      entityIds.map((entityId) => ({ entityType, entityId })),
+      companyId,
+      userId,
+    );
+  }
+
+  async reviewWorkflowEntity(
+    entityType: WorkflowEntityType,
+    entityId: string,
+    action: "approve" | "reject",
+    companyId: string,
+    userId: string,
+    comment?: string,
+  ): Promise<WorkflowReviewResult> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const ownedStatuses = await selectOwnedWorkflowRowsForUpdate(client, entityType, [entityId], companyId);
+      const currentStatus = ownedStatuses.get(entityId);
+      if (!currentStatus) {
+        await client.query("COMMIT");
+        return { outcome: "not_found", entityType, entityId };
+      }
+      if (currentStatus !== "submitted") {
+        await client.query("COMMIT");
+        return { outcome: "not_submitted", entityType, entityId, currentStatus };
+      }
+
+      const status = action === "approve" ? "approved" : "rejected";
+      const updated = await client.query(
+        `UPDATE ${workflowTable(entityType)}
+         SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+         WHERE id = $1 AND workflow_status = 'submitted'`,
+        [entityId, status, userId, comment?.trim() || null],
       );
-    } else {
-      await db.execute(
-        sql`UPDATE ${sql.raw(table)} SET workflow_status = ${status}, reviewed_by = ${reviewedBy}, reviewed_at = NOW(), review_comment = ${comment || null} WHERE id = ${id}`
+      if (updated.rowCount !== 1) {
+        throw new Error(`Workflow review transition was not applied for ${entityType}:${entityId}`);
+      }
+      await insertWorkflowAudit(client, {
+        companyId,
+        userId,
+        action: `Workflow ${status}: ${entityType}`,
+        entityType,
+        entityId,
+        details: { outcome: "success", action, comment: comment?.trim() || null, transition: { from: "submitted", to: status } },
+      });
+      await client.query("COMMIT");
+      return { outcome: "reviewed", entityType, entityId, status };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async bulkReviewWorkflowEntities(
+    items: Array<{ entityType: WorkflowEntityType; entityId: string }>,
+    action: "approve" | "reject",
+    companyId: string,
+    userId: string,
+    comment?: string,
+  ): Promise<WorkflowBulkReviewResult> {
+    const seen = new Set<string>();
+    const uniqueItems = items.filter((item) => {
+      const key = `${item.entityType}:${item.entityId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const result: WorkflowBulkReviewResult = {
+      requested: items.length,
+      unique: uniqueItems.length,
+      duplicates: items.length - uniqueItems.length,
+      reviewed: 0,
+      notSubmitted: 0,
+      notFound: 0,
+      results: [],
+    };
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const statuses = new Map<string, WorkflowStatus>();
+      const typeOrder: WorkflowEntityType[] = [
+        "metric_value",
+        "raw_data",
+        "report",
+        "generated_policy",
+        "questionnaire_question",
+      ];
+      for (const entityType of typeOrder) {
+        const ids = uniqueItems
+          .filter((item) => item.entityType === entityType)
+          .map((item) => item.entityId)
+          .sort();
+        const owned = await selectOwnedWorkflowRowsForUpdate(client, entityType, ids, companyId);
+        owned.forEach((ownedStatus, entityId) => statuses.set(`${entityType}:${entityId}`, ownedStatus));
+      }
+
+      const status = action === "approve" ? "approved" : "rejected";
+      for (const item of uniqueItems) {
+        const key = `${item.entityType}:${item.entityId}`;
+        const currentStatus = statuses.get(key);
+        if (!currentStatus) {
+          result.notFound += 1;
+          result.results.push({ outcome: "not_found", ...item });
+          continue;
+        }
+        if (currentStatus !== "submitted") {
+          result.notSubmitted += 1;
+          result.results.push({ outcome: "not_submitted", ...item, currentStatus });
+          continue;
+        }
+
+        const updated = await client.query(
+          `UPDATE ${workflowTable(item.entityType)}
+           SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+           WHERE id = $1 AND workflow_status = 'submitted'`,
+          [item.entityId, status, userId, comment?.trim() || null],
+        );
+        if (updated.rowCount !== 1) {
+          throw new Error(`Bulk workflow review transition was not applied for ${key}`);
+        }
+        await insertWorkflowAudit(client, {
+          companyId,
+          userId,
+          action: `Bulk workflow ${status}: ${item.entityType}`,
+          entityType: item.entityType,
+          entityId: item.entityId,
+          details: {
+            outcome: "success",
+            action,
+            comment: comment?.trim() || null,
+            bulk: true,
+            transition: { from: "submitted", to: status },
+          },
+        });
+        result.reviewed += 1;
+        result.results.push({ outcome: "reviewed", ...item, status });
+      }
+
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async reviseWorkflowEntity(
+    entityType: "metric_value" | "raw_data",
+    entityId: string,
+    companyId: string,
+    userId: string,
+  ): Promise<WorkflowReviseResult> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const ownedStatuses = await selectOwnedWorkflowRowsForUpdate(client, entityType, [entityId], companyId);
+      const currentStatus = ownedStatuses.get(entityId);
+      if (!currentStatus) {
+        await client.query("COMMIT");
+        return { outcome: "not_found", entityType, entityId };
+      }
+      if (currentStatus !== "rejected") {
+        await client.query("COMMIT");
+        return { outcome: "not_rejected", entityType, entityId, currentStatus };
+      }
+
+      const updated = await client.query(
+        `UPDATE ${workflowTable(entityType)}
+         SET workflow_status = 'draft', submitted_by = NULL, submitted_at = NULL,
+             reviewed_by = NULL, reviewed_at = NULL
+         WHERE id = $1 AND workflow_status = 'rejected'`,
+        [entityId],
       );
+      if (updated.rowCount !== 1) {
+        throw new Error(`Workflow revise transition was not applied for ${entityType}:${entityId}`);
+      }
+      await insertWorkflowAudit(client, {
+        companyId,
+        userId,
+        action: `Workflow revision started: ${entityType}`,
+        entityType,
+        entityId,
+        details: { outcome: "success", transition: { from: "rejected", to: "draft" } },
+      });
+      await client.query("COMMIT");
+      return { outcome: "revised", entityType, entityId, status: "draft" };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -1879,43 +2978,100 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createReportingPeriod(data: InsertReportingPeriod) {
-    const [r] = await db.insert(reportingPeriods).values(data as any).returning();
-    return r;
+    await validatePersistedReportingRange(data.startDate, data.endDate);
+    return db.transaction(async (tx) => {
+      await assertUniqueReportingPeriod(tx, data);
+      const [r] = await tx.insert(reportingPeriods).values(data as any).returning();
+      return r;
+    });
   }
 
   async closeReportingPeriod(id: string, companyId: string) {
-    const [r] = await db.update(reportingPeriods).set({ status: "closed" as any }).where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId))).returning();
-    return r;
+    const [closed] = await db.update(reportingPeriods)
+      .set({ status: "closed" as any })
+      .where(and(
+        eq(reportingPeriods.id, id),
+        eq(reportingPeriods.companyId, companyId),
+        sql`${reportingPeriods.status} <> 'locked'`,
+      ))
+      .returning();
+    if (closed) return closed;
+
+    const [existing] = await db.select({ status: reportingPeriods.status })
+      .from(reportingPeriods)
+      .where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId)))
+      .limit(1);
+    if (existing?.status === "locked") {
+      throw storageError(409, "Locked reporting periods cannot be closed");
+    }
+    return undefined;
   }
 
   async lockReportingPeriod(id: string, companyId: string) {
-    const [r] = await db.update(reportingPeriods).set({ status: "locked" as any }).where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId))).returning();
-    return r;
+    return db.transaction(async (tx) => {
+      const [period] = await tx.select({
+        startMonth: sql<string>`to_char(${reportingPeriods.startDate}, 'YYYY-MM')`,
+        endMonth: sql<string>`to_char(${reportingPeriods.endDate}, 'YYYY-MM')`,
+      }).from(reportingPeriods).where(and(
+        eq(reportingPeriods.id, id),
+        eq(reportingPeriods.companyId, companyId),
+      )).limit(1).for("update");
+      if (!period) return undefined;
+
+      let months: string[];
+      try {
+        // These calendar bounds come directly from PostgreSQL's timestamp
+        // without time zone values, avoiding process-local Date conversion at
+        // month boundaries.
+        months = reportingMonthsForMonthBounds(period.startMonth, period.endMonth);
+      } catch (error) {
+        if (error instanceof RangeError) throw storageError(400, error.message);
+        throw error;
+      }
+      await acquirePeriodMutationLocks(tx, companyId, months);
+
+      const [locked] = await tx.update(reportingPeriods)
+        .set({ status: "locked" as any })
+        .where(and(eq(reportingPeriods.id, id), eq(reportingPeriods.companyId, companyId)))
+        .returning();
+      return locked;
+    });
   }
 
   async copyForwardPeriod(sourcePeriodId: string, companyId: string, newPeriodData: InsertReportingPeriod) {
-    const [source] = await db.select().from(reportingPeriods).where(and(eq(reportingPeriods.id, sourcePeriodId), eq(reportingPeriods.companyId, companyId)));
-    if (!source) throw new Error("Source period not found");
+    await validatePersistedReportingRange(newPeriodData.startDate, newPeriodData.endDate);
+    return db.transaction(async (tx) => {
+      const [source] = await tx.select({ id: reportingPeriods.id })
+        .from(reportingPeriods)
+        .where(and(eq(reportingPeriods.id, sourcePeriodId), eq(reportingPeriods.companyId, companyId)))
+        .limit(1)
+        .for("update");
+      if (!source) throw storageError(404, "Source period not found");
 
-    const [newPeriod] = await db.insert(reportingPeriods).values({ ...newPeriodData, previousPeriodId: sourcePeriodId } as any).returning();
+      await assertUniqueReportingPeriod(tx, newPeriodData);
 
-    const targetRows = await db.execute(
-      sql`SELECT id FROM metric_targets WHERE metric_id IN (SELECT id FROM metrics WHERE company_id = ${companyId})`
-    );
-    const copiedMetrics = targetRows.rows.length;
+      // Targets and action plans are company-level in the current data model;
+      // they remain visible in the new period and must not be duplicated.
+      const [targetCount] = await tx.select({ value: count() })
+        .from(metricTargets)
+        .innerJoin(metrics, eq(metricTargets.metricId, metrics.id))
+        .where(eq(metrics.companyId, companyId));
+      const [actionCount] = await tx.select({ value: count() })
+        .from(actionPlans)
+        .where(and(eq(actionPlans.companyId, companyId), sql`${actionPlans.status} <> 'complete'`));
 
-    const incompleteActions = await db.execute(
-      sql`SELECT title, description, related_metric_id, assigned_user_id, owner FROM action_plans WHERE company_id = ${companyId} AND status != 'complete'`
-    );
-    let copiedActions = 0;
-    for (const a of incompleteActions.rows) {
-      await db.execute(
-        sql`INSERT INTO action_plans (id, company_id, title, description, status, related_metric_id, assigned_user_id, owner) VALUES (gen_random_uuid(), ${companyId}, ${(a as any).title}, ${(a as any).description}, 'not_started', ${(a as any).related_metric_id}, ${(a as any).assigned_user_id}, ${(a as any).owner})`
-      );
-      copiedActions++;
-    }
+      const [newPeriod] = await tx.insert(reportingPeriods)
+        .values({ ...newPeriodData, companyId, previousPeriodId: sourcePeriodId } as any)
+        .returning();
 
-    return { period: newPeriod, copiedMetrics, copiedActions };
+      return {
+        period: newPeriod,
+        copiedMetrics: 0,
+        copiedActions: 0,
+        carriedForwardMetrics: Number(targetCount?.value ?? 0),
+        carriedForwardActions: Number(actionCount?.value ?? 0),
+      };
+    });
   }
 
   async getPeriodComparison(companyId: string, currentPeriod: string, comparePeriod: string) {
@@ -2813,61 +3969,94 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
-  async createMetricDefinition(data: InsertMetricDefinition): Promise<MetricDefinition> {
-    const [r] = await db.insert(metricDefinitions).values({
-      code: data.code,
-      name: data.name,
-      pillar: data.pillar,
-      category: data.category,
-      description: data.description ?? null,
-      dataType: data.dataType ?? "numeric",
-      unit: data.unit ?? null,
-      inputFrequency: data.inputFrequency ?? "quarterly",
-      isCore: data.isCore ?? true,
-      isActive: data.isActive ?? true,
-      isDerived: data.isDerived ?? false,
-      formulaJson: data.formulaJson ?? null,
-      frameworkTags: data.frameworkTags ?? null,
-      scoringWeight: data.scoringWeight ?? "1",
-      sortOrder: data.sortOrder ?? 0,
-      evidenceRequired: data.evidenceRequired ?? false,
-      rollupMethod: data.rollupMethod ?? "sum",
-    }).returning();
-    return r;
-  }
+  async mutateMetricDefinitionCatalogue(
+    mutation: MetricDefinitionCatalogueMutation,
+    seedReservations: readonly MetricDefinitionSeedReservation[],
+  ): Promise<MetricDefinitionCatalogueMutationResult> {
+    return db.transaction(async (tx) => {
+      // The lock, catalogue read, prospective validation, and mutation all
+      // share one transaction. Concurrent admins therefore validate against
+      // the state committed by the previous catalogue writer.
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${METRIC_DEFINITION_CATALOGUE_LOCK_KEY}, 0)
+        )
+      `);
 
-  async updateMetricDefinition(id: string, data: Partial<MetricDefinition>): Promise<MetricDefinition | undefined> {
-    const updateFields: Record<string, any> = { updatedAt: new Date() };
-    if (data.name !== undefined) updateFields.name = data.name;
-    if (data.description !== undefined) updateFields.description = data.description;
-    if (data.pillar !== undefined) updateFields.pillar = data.pillar;
-    if (data.category !== undefined) updateFields.category = data.category;
-    if (data.unit !== undefined) updateFields.unit = data.unit;
-    if (data.inputFrequency !== undefined) updateFields.inputFrequency = data.inputFrequency;
-    if (data.dataType !== undefined) updateFields.dataType = data.dataType;
-    if (data.isCore !== undefined) updateFields.isCore = data.isCore;
-    if (data.isActive !== undefined) updateFields.isActive = data.isActive;
-    if (data.isDerived !== undefined) updateFields.isDerived = data.isDerived;
-    if (data.formulaJson !== undefined) updateFields.formulaJson = data.formulaJson;
-    if (data.frameworkTags !== undefined) updateFields.frameworkTags = data.frameworkTags;
-    if (data.scoringWeight !== undefined) updateFields.scoringWeight = data.scoringWeight;
-    if (data.sortOrder !== undefined) updateFields.sortOrder = data.sortOrder;
-    if (data.evidenceRequired !== undefined) updateFields.evidenceRequired = data.evidenceRequired;
-    if (data.rollupMethod !== undefined) updateFields.rollupMethod = data.rollupMethod;
-    const [r] = await db.update(metricDefinitions).set(updateFields).where(eq(metricDefinitions.id, id)).returning();
-    return r;
-  }
-
-  async seedMetricDefinitions(definitions: InsertMetricDefinition[]): Promise<number> {
-    let seeded = 0;
-    for (const def of definitions) {
-      const existing = await this.getMetricDefinitionByCode(def.code);
-      if (!existing) {
-        await this.createMetricDefinition(def);
-        seeded++;
+      const definitions = await tx.select().from(metricDefinitions);
+      const seedReservationByCode = new Map(
+        seedReservations.map((reservation) => [reservation.code, reservation]),
+      );
+      const seedReservationByName = new Map<string, MetricDefinitionSeedReservation>();
+      for (const reservation of seedReservations) {
+        const normalizedName = normalizeMetricDefinitionName(reservation.name);
+        if (!seedReservationByName.has(normalizedName)) {
+          seedReservationByName.set(normalizedName, reservation);
+        }
       }
-    }
-    return seeded;
+      if (mutation.type === "create") {
+        if (definitions.some((definition) => definition.code === mutation.data.code)) {
+          return { outcome: "duplicate_code" };
+        }
+        if (seedReservationByCode.has(mutation.data.code)) {
+          return { outcome: "reserved_code" };
+        }
+        const normalizedName = normalizeMetricDefinitionName(mutation.data.name);
+        if (
+          seedReservationByName.has(normalizedName)
+          || definitions.some((definition) => normalizeMetricDefinitionName(definition.name) === normalizedName)
+        ) {
+          return { outcome: "duplicate_name" };
+        }
+        const prospective = [...definitions, metricDefinitionInsertValues(mutation.data)];
+        const errors = validateActiveMetricDefinitionCatalogue(prospective);
+        if (errors.length > 0) return { outcome: "invalid", errors };
+
+        const [definition] = await tx.insert(metricDefinitions)
+          .values(metricDefinitionInsertValues(mutation.data))
+          .returning();
+        return { outcome: "created", definition };
+      }
+
+      const previous = definitions.find((definition) => definition.id === mutation.id);
+      if (!previous) return { outcome: "not_found" };
+      const updates = mutation.type === "toggle_active"
+        ? { isActive: !previous.isActive }
+        : mutation.data;
+      const seedReservation = seedReservationByCode.get(previous.code);
+      if (
+        updates.name !== undefined
+        && updates.name !== previous.name
+        && seedReservation
+        && updates.name !== seedReservation.name
+      ) {
+        return { outcome: "seed_name_immutable" };
+      }
+      if (
+        updates.name !== undefined
+        && (
+          (!seedReservation && seedReservationByName.has(normalizeMetricDefinitionName(updates.name)))
+          || definitions.some((definition) =>
+            definition.id !== mutation.id
+            && normalizeMetricDefinitionName(definition.name) === normalizeMetricDefinitionName(updates.name),
+          )
+        )
+      ) {
+        return { outcome: "duplicate_name" };
+      }
+      const prospective = definitions.map((definition) =>
+        definition.id === mutation.id ? { ...definition, ...updates } : definition,
+      );
+      const errors = validateActiveMetricDefinitionCatalogue(prospective);
+      if (errors.length > 0) return { outcome: "invalid", errors };
+
+      const [definition] = await tx.update(metricDefinitions)
+        .set(metricDefinitionUpdateFields(updates))
+        .where(eq(metricDefinitions.id, mutation.id))
+        .returning();
+      if (!definition) return { outcome: "not_found" };
+      return { outcome: "updated", definition, previous };
+    });
   }
 
   // ============================================================
@@ -2885,6 +4074,20 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(metricDefinitionValues).where(and(...conditions)).orderBy(desc(metricDefinitionValues.reportingPeriodStart));
   }
 
+  async getMetricDefinitionValuesExact(
+    businessId: string,
+    siteId: string | null,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<MetricDefinitionValue[]> {
+    return db.select().from(metricDefinitionValues).where(and(
+      eq(metricDefinitionValues.businessId, businessId),
+      siteId === null ? isNull(metricDefinitionValues.siteId) : eq(metricDefinitionValues.siteId, siteId),
+      eq(metricDefinitionValues.reportingPeriodStart, periodStart),
+      eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
+    ));
+  }
+
   async getMetricDefinitionValueById(id: string, businessId: string): Promise<MetricDefinitionValue | undefined> {
     const [r] = await db.select().from(metricDefinitionValues)
       .where(and(eq(metricDefinitionValues.id, id), eq(metricDefinitionValues.businessId, businessId)));
@@ -2892,40 +4095,116 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMetricDefinitionValue(data: InsertMetricDefinitionValue): Promise<MetricDefinitionValue> {
-    const insertData: typeof metricDefinitionValues.$inferInsert = {
-      businessId: data.businessId,
-      metricDefinitionId: data.metricDefinitionId,
-      siteId: data.siteId ?? null,
-      reportingPeriodStart: data.reportingPeriodStart,
-      reportingPeriodEnd: data.reportingPeriodEnd,
-      valueNumeric: data.valueNumeric ?? null,
-      valueText: data.valueText ?? null,
-      valueBoolean: data.valueBoolean ?? null,
-      valueJson: data.valueJson ?? null,
-      sourceType: data.sourceType ?? undefined,
-      notes: data.notes ?? null,
-      enteredByUserId: data.enteredByUserId ?? null,
-      status: data.status ?? undefined,
-    };
-    const [r] = await db.insert(metricDefinitionValues).values(insertData).returning();
-    return r;
+    return this.upsertMetricDefinitionValue(
+      data.businessId,
+      data.metricDefinitionId,
+      data.siteId ?? null,
+      data.reportingPeriodStart,
+      data.reportingPeriodEnd,
+      data,
+    );
   }
 
   async updateMetricDefinitionValue(id: string, businessId: string, data: Partial<MetricDefinitionValue>): Promise<MetricDefinitionValue | undefined> {
-    const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status } = data;
-    const [r] = await db.update(metricDefinitionValues)
-      .set({ valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, updatedAt: new Date() })
-      .where(and(eq(metricDefinitionValues.id, id), eq(metricDefinitionValues.businessId, businessId)))
-      .returning();
-    return r;
+    const existing = await this.getMetricDefinitionValueById(id, businessId);
+    if (!existing) return undefined;
+    const mutation = await this.mutateMetricDefinitionValueNaturalKey(
+      businessId,
+      existing.metricDefinitionId,
+      existing.siteId ?? null,
+      existing.reportingPeriodStart,
+      existing.reportingPeriodEnd,
+      data,
+      "user",
+    );
+    return mutation.value ?? undefined;
   }
 
   async upsertMetricDefinitionValue(businessId: string, metricDefinitionId: string, siteId: string | null, periodStart: Date, periodEnd: Date, data: Partial<InsertMetricDefinitionValue>) {
-    const { valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes, status, enteredByUserId } = data;
+    const mutation = await this.mutateMetricDefinitionValueNaturalKey(
+      businessId,
+      metricDefinitionId,
+      siteId,
+      periodStart,
+      periodEnd,
+      data,
+      "user",
+    );
+    if (!mutation.value) throw storageError(500, "Canonical metric value mutation did not return a value");
+    return mutation.value;
+  }
+
+  async upsertCalculatedMetricDefinitionValue(
+    businessId: string,
+    metricDefinitionId: string,
+    siteId: string | null,
+    periodStart: Date,
+    periodEnd: Date,
+    valueNumeric: string,
+  ): Promise<CanonicalCalculationMutationResult> {
+    return this.mutateMetricDefinitionValueNaturalKey(
+      businessId,
+      metricDefinitionId,
+      siteId,
+      periodStart,
+      periodEnd,
+      { valueNumeric, valueText: null, valueBoolean: null, valueJson: null, sourceType: "calculated", notes: null },
+      "calculation",
+    );
+  }
+
+  async clearCalculatedMetricDefinitionValue(
+    businessId: string,
+    metricDefinitionId: string,
+    siteId: string | null,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<CanonicalCalculationMutationResult> {
+    return this.mutateMetricDefinitionValueNaturalKey(
+      businessId,
+      metricDefinitionId,
+      siteId,
+      periodStart,
+      periodEnd,
+      {},
+      "clear-calculation",
+    );
+  }
+
+  private async mutateMetricDefinitionValueNaturalKey(
+    businessId: string,
+    metricDefinitionId: string,
+    siteId: string | null,
+    periodStart: Date,
+    periodEnd: Date,
+    data: Partial<InsertMetricDefinitionValue> | Partial<MetricDefinitionValue>,
+    mode: "user" | "calculation" | "clear-calculation",
+  ): Promise<CanonicalCalculationMutationResult> {
+    if (!Number.isFinite(periodStart.getTime()) || !Number.isFinite(periodEnd.getTime()) || periodStart > periodEnd) {
+      throw storageError(400, "Reporting period dates must form a valid ascending range");
+    }
+    if (mode === "user" && data.sourceType === "calculated") {
+      throw storageError(400, "Calculated provenance is reserved for the calculation engine");
+    }
+    const periodStartParameter = toCanonicalPgTimestamp(periodStart);
+    const periodEndParameter = toCanonicalPgTimestamp(periodEnd);
     const lockKey = `metric_definition_values:${businessId}:${metricDefinitionId}:${periodStart.toISOString()}:${periodEnd.toISOString()}:${siteId ?? "__org__"}`;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const calendarBounds = await client.query<{ start_month: string; end_month: string }>(
+        `SELECT
+           to_char($1::timestamp, 'YYYY-MM') AS start_month,
+           to_char($2::timestamp, 'YYYY-MM') AS end_month`,
+        [periodStartParameter, periodEndParameter],
+      );
+      const bounds = calendarBounds.rows[0];
+      if (!bounds) throw storageError(400, "Reporting period dates are required");
+      // Lock every overlapped month before the narrower canonical-value key,
+      // then recheck after waiting so a concurrent period/range lock wins.
+      await acquireUnlockedReportingRange(client, businessId, bounds.start_month, bounds.end_month, {
+        calculationRunLockHeld: mode !== "user",
+      });
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
 
       const selectSql = siteId === null
@@ -2952,12 +4231,56 @@ export class DatabaseStorage implements IStorage {
             FOR UPDATE
           `;
       const selectParams = siteId === null
-        ? [businessId, metricDefinitionId, periodStart, periodEnd]
-        : [businessId, metricDefinitionId, periodStart, periodEnd, siteId];
+        ? [businessId, metricDefinitionId, periodStartParameter, periodEndParameter]
+        : [businessId, metricDefinitionId, periodStartParameter, periodEndParameter, siteId];
       const existingResult = await client.query(selectSql, selectParams);
-      const existing = existingResult.rows[0] as MetricDefinitionValue | undefined;
+      const existing = existingResult.rows[0]
+        ? pgRowToCamelCase<MetricDefinitionValue>(existingResult.rows[0])
+        : undefined;
 
       if (existing) {
+        const evidenceResult = await client.query(
+          "SELECT 1 FROM metric_evidence WHERE metric_value_id = $1 LIMIT 1",
+          [existing.id],
+        );
+        const hasEvidence = evidenceResult.rowCount === 1;
+        const protectionReason = getCanonicalValueProtectionReason({ ...existing, hasEvidence });
+        const next = canonicalNextValue(existing, data);
+
+        if (mode === "user") {
+          if (protectionReason && !canonicalMutableValuesEqual(existing, next)) {
+            throw createCanonicalProtectedValueError(protectionReason, {
+              metricDefinitionId,
+              siteId,
+              reportingPeriodStart: periodStart.toISOString(),
+              reportingPeriodEnd: periodEnd.toISOString(),
+            });
+          }
+          if (canonicalMutableValuesEqual(existing, next)) {
+            await client.query("COMMIT");
+            return { outcome: "unchanged", value: existing, ...(protectionReason ? { reason: protectionReason } : {}) };
+          }
+        } else {
+          if (hasEvidence || existing.status !== "draft") {
+            const reason = hasEvidence ? "evidenced" : "workflow";
+            await client.query("COMMIT");
+            return { outcome: "protected", value: existing, reason };
+          }
+          if (existing.sourceType !== "calculated") {
+            await client.query("COMMIT");
+            return { outcome: "protected", value: existing, reason: "authoritative" };
+          }
+          if (mode === "clear-calculation") {
+            await client.query("DELETE FROM metric_definition_values WHERE id = $1", [existing.id]);
+            await client.query("COMMIT");
+            return { outcome: "cleared", value: null };
+          }
+          if (canonicalMutableValuesEqual(existing, next)) {
+            await client.query("COMMIT");
+            return { outcome: "unchanged", value: existing };
+          }
+        }
+
         const updateResult = await client.query(
           `
             UPDATE metric_definition_values
@@ -2968,27 +4291,35 @@ export class DatabaseStorage implements IStorage {
               value_json = $5,
               source_type = $6,
               notes = $7,
-              status = $8,
-              entered_by_user_id = $9,
+              entered_by_user_id = $8,
               updated_at = NOW()
             WHERE id = $1
             RETURNING *
           `,
           [
             existing.id,
-            valueNumeric ?? null,
-            valueText ?? null,
-            valueBoolean ?? null,
-            valueJson ?? null,
-            sourceType ?? "manual",
-            notes ?? null,
-            status ?? "draft",
-            enteredByUserId ?? null,
+            next.valueNumeric ?? null,
+            next.valueText ?? null,
+            next.valueBoolean ?? null,
+            next.valueJson ?? null,
+            next.sourceType ?? "manual",
+            next.notes ?? null,
+            data.enteredByUserId ?? existing.enteredByUserId ?? null,
           ],
         );
         await client.query("COMMIT");
-        return updateResult.rows[0] as MetricDefinitionValue;
+        return {
+          outcome: "updated",
+          value: pgRowToCamelCase<MetricDefinitionValue>(updateResult.rows[0]),
+        };
       }
+
+      if (mode === "clear-calculation") {
+        await client.query("COMMIT");
+        return { outcome: "missing", value: null };
+      }
+
+      const sourceType = mode === "calculation" ? "calculated" : data.sourceType ?? "manual";
 
       const insertResult = await client.query(
         `
@@ -3004,20 +4335,23 @@ export class DatabaseStorage implements IStorage {
           businessId,
           metricDefinitionId,
           siteId ?? null,
-          periodStart,
-          periodEnd,
-          valueNumeric ?? null,
-          valueText ?? null,
-          valueBoolean ?? null,
-          valueJson ?? null,
-          sourceType ?? "manual",
-          notes ?? null,
-          status ?? "draft",
-          enteredByUserId ?? null,
+          periodStartParameter,
+          periodEndParameter,
+          data.valueNumeric ?? null,
+          data.valueText ?? null,
+          data.valueBoolean ?? null,
+          data.valueJson ?? null,
+          sourceType,
+          data.notes ?? null,
+          "draft",
+          data.enteredByUserId ?? null,
         ],
       );
       await client.query("COMMIT");
-      return insertResult.rows[0] as MetricDefinitionValue;
+      return {
+        outcome: "created",
+        value: pgRowToCamelCase<MetricDefinitionValue>(insertResult.rows[0]),
+      };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw error;
@@ -3026,11 +4360,109 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<number | null> {
-    const defn = await this.getMetricDefinition(metricDefinitionId);
-    if (!defn || defn.rollupMethod === "none") return null;
+  async transitionMetricDefinitionValue(
+    id: string,
+    businessId: string,
+    actorUserId: string,
+    action: "submit" | "approve" | "reject" | "revise",
+    comment?: string | null,
+  ): Promise<MetricDefinitionValue | undefined> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const scopeResult = await client.query<{ start_month: string; end_month: string }>(
+        `SELECT
+           to_char(reporting_period_start, 'YYYY-MM') AS start_month,
+           to_char(reporting_period_end, 'YYYY-MM') AS end_month
+         FROM metric_definition_values
+         WHERE id = $1 AND business_id = $2
+         LIMIT 1`,
+        [id, businessId],
+      );
+      const scope = scopeResult.rows[0];
+      if (!scope) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      await acquireUnlockedReportingRange(client, businessId, scope.start_month, scope.end_month);
+      const currentResult = await client.query(
+        `SELECT * FROM metric_definition_values
+         WHERE id = $1 AND business_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [id, businessId],
+      );
+      const current = currentResult.rows[0]
+        ? pgRowToCamelCase<MetricDefinitionValue>(currentResult.rows[0])
+        : undefined;
+      if (!current) {
+        await client.query("COMMIT");
+        return undefined;
+      }
 
-    const siteValues = await db.select().from(metricDefinitionValues)
+      const targetStatus = action === "submit"
+        ? "submitted"
+        : action === "approve"
+          ? "approved"
+          : action === "reject"
+            ? "rejected"
+            : "draft";
+      const allowedCurrent = action === "submit"
+        ? ["draft"]
+        : action === "revise"
+          ? ["rejected"]
+          : ["submitted"];
+      if (current.status === targetStatus) {
+        await client.query("COMMIT");
+        return current;
+      }
+      if (!allowedCurrent.includes(current.status)) {
+        throw Object.assign(
+          new Error(`Cannot ${action} a canonical metric value while its status is ${current.status}`),
+          { status: 409, code: "INVALID_WORKFLOW_TRANSITION" },
+        );
+      }
+
+      const updatedResult = await client.query(
+        `UPDATE metric_definition_values
+         SET status = $3, updated_at = NOW()
+         WHERE id = $1 AND business_id = $2
+         RETURNING *`,
+        [id, businessId, targetStatus],
+      );
+      await client.query(
+        `INSERT INTO audit_logs (company_id, user_id, action, entity_type, entity_id, details)
+         VALUES ($1, $2, $3, 'metric_definition_value', $4, $5::jsonb)`,
+        [
+          businessId,
+          actorUserId,
+          `metric_definition_value_${action}`,
+          id,
+          JSON.stringify({ before: current.status, after: targetStatus, comment: comment ?? null }),
+        ],
+      );
+      await client.query("COMMIT");
+      return pgRowToCamelCase<MetricDefinitionValue>(updatedResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async rollupSiteValuesToCompany(businessId: string, metricDefinitionId: string, periodStart: Date, periodEnd: Date): Promise<CanonicalRollupResult> {
+    const defn = await this.getMetricDefinition(metricDefinitionId);
+    if (!defn || defn.rollupMethod === "none") {
+      return { outcome: "missing", value: null, rollupValue: null };
+    }
+
+    const siteValueRows = await db.select({ value: metricDefinitionValues }).from(metricDefinitionValues)
+      .innerJoin(organisationSites, and(
+        eq(organisationSites.id, metricDefinitionValues.siteId),
+        eq(organisationSites.companyId, businessId),
+        eq(organisationSites.status, "active"),
+      ))
       .where(
         and(
           eq(metricDefinitionValues.businessId, businessId),
@@ -3038,14 +4470,24 @@ export class DatabaseStorage implements IStorage {
           eq(metricDefinitionValues.reportingPeriodStart, periodStart),
           eq(metricDefinitionValues.reportingPeriodEnd, periodEnd),
           sql`${metricDefinitionValues.siteId} IS NOT NULL`,
+          sql`${metricDefinitionValues.status} <> 'rejected'`,
         )
       )
       .orderBy(desc(metricDefinitionValues.updatedAt));
 
-    if (siteValues.length === 0) return null;
+    const siteValues = siteValueRows.map((row) => row.value);
 
     const validSiteValues = siteValues.filter(v => v.valueNumeric !== null && !isNaN(parseFloat(v.valueNumeric!)));
-    if (validSiteValues.length === 0) return null;
+    if (validSiteValues.length === 0) {
+      const cleared = await this.clearCalculatedMetricDefinitionValue(
+        businessId,
+        metricDefinitionId,
+        null,
+        periodStart,
+        periodEnd,
+      );
+      return { ...cleared, rollupValue: null };
+    }
 
     let rollupValue: number | null = null;
     if (defn.rollupMethod === "sum") {
@@ -3069,14 +4511,16 @@ export class DatabaseStorage implements IStorage {
       rollupValue = parseFloat(validSiteValues[0].valueNumeric!);
     }
 
-    if (rollupValue !== null) {
-      await this.upsertMetricDefinitionValue(businessId, metricDefinitionId, null, periodStart, periodEnd, {
-        valueNumeric: String(rollupValue),
-        sourceType: "calculated",
-      });
-    }
-
-    return rollupValue;
+    if (rollupValue === null) return { outcome: "missing", value: null, rollupValue: null };
+    const mutation = await this.upsertCalculatedMetricDefinitionValue(
+      businessId,
+      metricDefinitionId,
+      null,
+      periodStart,
+      periodEnd,
+      String(rollupValue),
+    );
+    return { ...mutation, rollupValue };
   }
 
   // ============================================================
@@ -3108,8 +4552,264 @@ export class DatabaseStorage implements IStorage {
     return r;
   }
 
+  async createLegacyMetricEvidence(businessId: string, data: InsertMetricEvidence): Promise<MetricEvidence> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const scopeResult = await client.query<{
+        metric_id: string;
+        period: string;
+        site_id: string | null;
+      }>(
+        `SELECT mv.metric_id, mv.period, mv.site_id
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1`,
+        [data.metricValueId, businessId],
+      );
+      const scope = scopeResult.rows[0];
+      if (!scope) throw storageError(404, "Metric value not found");
+
+      const mutationPeriods = dataEntryPeriodMonths(scope.period);
+      if (!mutationPeriods) throw storageError(409, "Evidence cannot be changed because the linked metric value has an invalid reporting period");
+      await acquirePeriodMutationLocks(client, businessId, mutationPeriods);
+      const lockedPeriods = await findLockedPeriodsInTransaction(client, businessId, mutationPeriods);
+      if (lockedPeriods.length > 0) {
+        throw storageError(409, "Evidence cannot be changed while the linked reporting period is locked");
+      }
+      const naturalKey = `metric_values:${scope.metric_id}:${scope.period}:${scope.site_id ?? "__org__"}`;
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [naturalKey]);
+
+      const valueResult = await client.query(
+        `SELECT mv.*
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1
+         FOR UPDATE OF mv`,
+        [data.metricValueId, businessId],
+      );
+      const value = valueResult.rows[0];
+      if (!value) throw storageError(404, "Metric value not found");
+      // Match the direct-entry append policy: an existing workflow-protected
+      // value may receive additional evidence without changing its measured
+      // fields, but a period/value lock still blocks every mutation.
+      if (value.locked === true) {
+        throw Object.assign(new Error("Evidence cannot be attached to a locked metric value"), {
+          status: 409,
+          code: "VALUE_PROTECTED",
+        });
+      }
+
+      const createdResult = await client.query(
+        `INSERT INTO metric_evidence (
+           metric_value_id, file_url, storage_key, file_name, file_type,
+           uploaded_by_user_id, notes
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          data.metricValueId,
+          data.fileUrl ?? null,
+          data.storageKey ?? null,
+          data.fileName,
+          data.fileType ?? null,
+          data.uploadedByUserId ?? null,
+          data.notes ?? null,
+        ],
+      );
+      if (value.data_source_type !== "evidenced") {
+        await client.query("UPDATE metric_values SET data_source_type = 'evidenced' WHERE id = $1", [data.metricValueId]);
+      }
+      await client.query("COMMIT");
+      return pgRowToCamelCase<MetricEvidence>(createdResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createCanonicalMetricEvidence(businessId: string, data: InsertMetricEvidence): Promise<MetricEvidence> {
+    return db.transaction(async (tx) => {
+      const [scope] = await tx.select({
+        startMonth: sql<string>`to_char(${metricDefinitionValues.reportingPeriodStart}, 'YYYY-MM')`,
+        endMonth: sql<string>`to_char(${metricDefinitionValues.reportingPeriodEnd}, 'YYYY-MM')`,
+      }).from(metricDefinitionValues).where(and(
+        eq(metricDefinitionValues.id, data.metricValueId),
+        eq(metricDefinitionValues.businessId, businessId),
+      )).limit(1);
+      if (!scope) throw storageError(404, "Metric value not found");
+      await acquireUnlockedReportingRange(tx, businessId, scope.startMonth, scope.endMonth);
+
+      const [value] = await tx.select().from(metricDefinitionValues).where(and(
+        eq(metricDefinitionValues.id, data.metricValueId),
+        eq(metricDefinitionValues.businessId, businessId),
+      )).limit(1).for("update");
+      if (!value) throw storageError(404, "Metric value not found");
+      if (value.status !== "draft") {
+        throw Object.assign(new Error("Evidence cannot be changed after a canonical metric value is submitted for review"), {
+          status: 409,
+          code: "VALUE_PROTECTED",
+        });
+      }
+      if (value.sourceType === "calculated") {
+        throw Object.assign(new Error("Attach evidence to the source values, not an automatically calculated value"), {
+          status: 409,
+          code: "CALCULATED_VALUE",
+        });
+      }
+
+      const [created] = await tx.insert(metricEvidence).values({
+        metricValueId: data.metricValueId,
+        fileUrl: data.fileUrl ?? null,
+        storageKey: data.storageKey ?? null,
+        fileName: data.fileName,
+        fileType: data.fileType ?? null,
+        uploadedByUserId: data.uploadedByUserId ?? null,
+        notes: data.notes ?? null,
+      }).returning();
+      return created;
+    });
+  }
+
   async deleteMetricEvidence(id: string): Promise<void> {
     await db.delete(metricEvidence).where(eq(metricEvidence.id, id));
+  }
+
+  async deleteLegacyMetricEvidence(id: string, businessId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const scopeResult = await client.query<{
+        metric_value_id: string;
+        metric_id: string;
+        period: string;
+        site_id: string | null;
+      }>(
+        `SELECT me.metric_value_id, mv.metric_id, mv.period, mv.site_id
+         FROM metric_evidence me
+         INNER JOIN metric_values mv ON mv.id = me.metric_value_id
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE me.id = $1 AND m.company_id = $2
+         LIMIT 1`,
+        [id, businessId],
+      );
+      const scope = scopeResult.rows[0];
+      if (!scope) {
+        await client.query("COMMIT");
+        return false;
+      }
+
+      const mutationPeriods = dataEntryPeriodMonths(scope.period);
+      if (!mutationPeriods) throw storageError(409, "Evidence cannot be changed because the linked metric value has an invalid reporting period");
+      await acquirePeriodMutationLocks(client, businessId, mutationPeriods);
+      const lockedPeriods = await findLockedPeriodsInTransaction(client, businessId, mutationPeriods);
+      if (lockedPeriods.length > 0) {
+        throw storageError(409, "Evidence cannot be changed while the linked reporting period is locked");
+      }
+      const naturalKey = `metric_values:${scope.metric_id}:${scope.period}:${scope.site_id ?? "__org__"}`;
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [naturalKey]);
+
+      const valueResult = await client.query(
+        `SELECT mv.*
+         FROM metric_values mv
+         INNER JOIN metrics m ON m.id = mv.metric_id
+         WHERE mv.id = $1 AND m.company_id = $2
+         LIMIT 1
+         FOR UPDATE OF mv`,
+        [scope.metric_value_id, businessId],
+      );
+      const value = valueResult.rows[0];
+      if (!value) {
+        await client.query("COMMIT");
+        return false;
+      }
+      if (
+        value.locked === true
+        || (value.workflow_status ?? "draft") !== "draft"
+        || value.reviewed_by !== null
+        || value.reviewed_at !== null
+      ) {
+        throw Object.assign(new Error("Evidence cannot be removed from a locked, submitted or reviewed metric value"), {
+          status: 409,
+          code: "VALUE_PROTECTED",
+        });
+      }
+
+      const deleted = await client.query(
+        "DELETE FROM metric_evidence WHERE id = $1 AND metric_value_id = $2 RETURNING id",
+        [id, scope.metric_value_id],
+      );
+      if (deleted.rowCount !== 1) {
+        await client.query("COMMIT");
+        return false;
+      }
+      const remainingEvidence = await client.query(
+        `SELECT (
+           EXISTS (SELECT 1 FROM metric_evidence me WHERE me.metric_value_id = $2)
+           OR EXISTS (
+             SELECT 1 FROM evidence_files ef
+             WHERE ef.company_id = $1
+               AND ef.site_id IS NOT DISTINCT FROM $4::varchar
+               AND (
+                 (ef.linked_module = 'metric_value' AND ef.linked_entity_id = $2)
+                 OR (
+                   ef.linked_period = $5
+                   AND (
+                     ef.metric_id = $3
+                     OR (ef.linked_module = 'metric' AND ef.linked_entity_id = $3)
+                   )
+                 )
+               )
+           )
+         ) AS present`,
+        [businessId, scope.metric_value_id, scope.metric_id, scope.site_id, scope.period],
+      );
+      if (remainingEvidence.rows[0]?.present !== true && value.data_source_type === "evidenced") {
+        await client.query("UPDATE metric_values SET data_source_type = 'manual' WHERE id = $1", [scope.metric_value_id]);
+      }
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteCanonicalMetricEvidence(id: string, businessId: string): Promise<boolean> {
+    return db.transaction(async (tx) => {
+      const [scope] = await tx.select({
+        metricValueId: metricEvidence.metricValueId,
+        startMonth: sql<string>`to_char(${metricDefinitionValues.reportingPeriodStart}, 'YYYY-MM')`,
+        endMonth: sql<string>`to_char(${metricDefinitionValues.reportingPeriodEnd}, 'YYYY-MM')`,
+      }).from(metricEvidence)
+        .innerJoin(metricDefinitionValues, eq(metricEvidence.metricValueId, metricDefinitionValues.id))
+        .where(and(eq(metricEvidence.id, id), eq(metricDefinitionValues.businessId, businessId)))
+        .limit(1);
+      if (!scope) return false;
+      await acquireUnlockedReportingRange(tx, businessId, scope.startMonth, scope.endMonth);
+
+      const [value] = await tx.select().from(metricDefinitionValues).where(and(
+        eq(metricDefinitionValues.id, scope.metricValueId),
+        eq(metricDefinitionValues.businessId, businessId),
+      )).limit(1).for("update");
+      if (!value) return false;
+      if (value.status !== "draft") {
+        throw Object.assign(new Error("Evidence cannot be changed after a canonical metric value is submitted for review"), {
+          status: 409,
+          code: "VALUE_PROTECTED",
+        });
+      }
+      const deleted = await tx.delete(metricEvidence).where(and(
+        eq(metricEvidence.id, id),
+        eq(metricEvidence.metricValueId, value.id),
+      )).returning({ id: metricEvidence.id });
+      return deleted.length === 1;
+    });
   }
 
   // ============================================================
@@ -3763,8 +5463,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertMaterialTopicScores(id: string, companyId: string, data: Partial<MaterialTopic>): Promise<MaterialTopic | undefined> {
+    const mutable = pickMutableFields(data, MATERIAL_TOPIC_MUTABLE_FIELDS) as Partial<MaterialTopic>;
     const [t] = await db.update(materialTopics)
-      .set(data)
+      .set(mutable)
       .where(and(eq(materialTopics.id, id), eq(materialTopics.companyId, companyId)))
       .returning();
     return t;
@@ -3813,14 +5514,31 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(businessMaterialityAssessments.assessmentYear));
   }
 
-  async createMaterialityAssessment(data: InsertBusinessMaterialityAssessment): Promise<BusinessMaterialityAssessment> {
-    const [a] = await db.insert(businessMaterialityAssessments).values(data).returning();
+  async createMaterialityAssessment(data: InsertBusinessMaterialityAssessment, actorUserId?: string): Promise<BusinessMaterialityAssessment> {
+    const mutable = pickMutableFields(data, MATERIALITY_ASSESSMENT_MUTABLE_FIELDS);
+    const completion = mutable.status === "completed"
+      ? { completedAt: new Date(), completedBy: actorUserId ?? null }
+      : {};
+    const [a] = await db.insert(businessMaterialityAssessments)
+      .values({ ...mutable, ...completion, companyId: data.companyId } as InsertBusinessMaterialityAssessment)
+      .returning();
     return a;
   }
 
-  async updateMaterialityAssessment(id: string, companyId: string, data: Partial<BusinessMaterialityAssessment>): Promise<BusinessMaterialityAssessment | undefined> {
+  async updateMaterialityAssessment(
+    id: string,
+    companyId: string,
+    data: Partial<BusinessMaterialityAssessment>,
+    actorUserId?: string,
+  ): Promise<BusinessMaterialityAssessment | undefined> {
+    const mutable = pickMutableFields(data, MATERIALITY_ASSESSMENT_MUTABLE_FIELDS) as Partial<BusinessMaterialityAssessment>;
+    const completion = mutable.status === "completed"
+      ? { completedAt: new Date(), completedBy: actorUserId ?? null }
+      : mutable.status !== undefined
+        ? { completedAt: null, completedBy: null }
+        : {};
     const [a] = await db.update(businessMaterialityAssessments)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...mutable, ...completion, updatedAt: new Date() })
       .where(and(eq(businessMaterialityAssessments.id, id), eq(businessMaterialityAssessments.companyId, companyId)))
       .returning();
     return a;
@@ -3843,13 +5561,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPolicyRecord(data: InsertPolicyRecord): Promise<PolicyRecord> {
-    const [r] = await db.insert(policyRecords).values(data).returning();
+    const mutable = pickMutableFields(data, POLICY_RECORD_MUTABLE_FIELDS);
+    const [r] = await db.insert(policyRecords)
+      .values({ ...mutable, companyId: data.companyId } as InsertPolicyRecord)
+      .returning();
     return r;
   }
 
   async updatePolicyRecord(id: string, companyId: string, data: Partial<PolicyRecord>): Promise<PolicyRecord | undefined> {
+    const mutable = pickMutableFields(data, POLICY_RECORD_MUTABLE_FIELDS) as Partial<PolicyRecord>;
     const [r] = await db.update(policyRecords)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...mutable, updatedAt: new Date() })
       .where(and(eq(policyRecords.id, id), eq(policyRecords.companyId, companyId)))
       .returning();
     return r;
@@ -3871,17 +5593,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertGovernanceAssignment(companyId: string, area: string, data: Partial<InsertGovernanceAssignment>): Promise<GovernanceAssignment> {
+    const mutable = pickMutableFields(data, GOVERNANCE_ASSIGNMENT_MUTABLE_FIELDS) as Partial<InsertGovernanceAssignment>;
     const existing = await db.select().from(governanceAssignments)
       .where(and(eq(governanceAssignments.companyId, companyId), eq(governanceAssignments.area, area as any)));
     if (existing.length > 0) {
       const [r] = await db.update(governanceAssignments)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...mutable, updatedAt: new Date() })
         .where(and(eq(governanceAssignments.companyId, companyId), eq(governanceAssignments.area, area as any)))
         .returning();
       return r;
     } else {
       const [r] = await db.insert(governanceAssignments)
-        .values({ companyId, area: area as any, ...data } as any)
+        .values({ ...mutable, companyId, area: area as any } as any)
         .returning();
       return r;
     }
@@ -3909,13 +5632,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEsgTarget(data: InsertEsgTarget): Promise<EsgTarget> {
-    const [t] = await db.insert(esgTargets).values(data).returning();
+    const mutable = pickMutableFields(data, ESG_TARGET_MUTABLE_FIELDS);
+    const [t] = await db.insert(esgTargets).values({ ...mutable, companyId: data.companyId } as InsertEsgTarget).returning();
     return t;
   }
 
   async updateEsgTarget(id: string, companyId: string, data: Partial<EsgTarget>): Promise<EsgTarget | undefined> {
+    const mutable = pickMutableFields(data, ESG_TARGET_MUTABLE_FIELDS) as Partial<EsgTarget>;
     const [t] = await db.update(esgTargets)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...mutable, updatedAt: new Date() })
       .where(and(eq(esgTargets.id, id), eq(esgTargets.companyId, companyId)))
       .returning();
     return t;
@@ -3944,13 +5669,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEsgAction(data: InsertEsgAction): Promise<EsgAction> {
-    const [a] = await db.insert(esgActions).values(data).returning();
+    const mutable = pickMutableFields(data, ESG_ACTION_MUTABLE_FIELDS);
+    const [a] = await db.insert(esgActions).values({ ...mutable, companyId: data.companyId } as InsertEsgAction).returning();
     return a;
   }
 
   async updateEsgAction(id: string, companyId: string, data: Partial<EsgAction>): Promise<EsgAction | undefined> {
+    const mutable = pickMutableFields(data, ESG_ACTION_MUTABLE_FIELDS) as Partial<EsgAction>;
     const [a] = await db.update(esgActions)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...mutable, updatedAt: new Date() })
       .where(and(eq(esgActions.id, id), eq(esgActions.companyId, companyId)))
       .returning();
     return a;
@@ -3980,13 +5707,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEsgRisk(data: InsertEsgRisk): Promise<EsgRisk> {
-    const [r] = await db.insert(esgRisks).values(data).returning();
+    const mutable = pickMutableFields(data, ESG_RISK_MUTABLE_FIELDS);
+    const [r] = await db.insert(esgRisks).values({ ...mutable, companyId: data.companyId } as InsertEsgRisk).returning();
     return r;
   }
 
   async updateEsgRisk(id: string, companyId: string, data: Partial<EsgRisk>): Promise<EsgRisk | undefined> {
+    const mutable = pickMutableFields(data, ESG_RISK_MUTABLE_FIELDS) as Partial<EsgRisk>;
     const [r] = await db.update(esgRisks)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...mutable, updatedAt: new Date() })
       .where(and(eq(esgRisks.id, id), eq(esgRisks.companyId, companyId)))
       .returning();
     return r;
@@ -4009,20 +5738,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createIdentityProvider(data: InsertIdentityProvider): Promise<IdentityProvider> {
-    const [p] = await db.insert(identityProviders).values(data).returning();
-    return p;
-  }
-
-  async updateIdentityProvider(id: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined> {
-    const [p] = await db.update(identityProviders)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(identityProviders.id, id))
+    const mutable = pickMutableFields(data, IDENTITY_PROVIDER_MUTABLE_FIELDS);
+    const [p] = await db.insert(identityProviders)
+      .values({ ...mutable, companyId: data.companyId, createdBy: data.createdBy } as InsertIdentityProvider)
       .returning();
     return p;
   }
 
-  async deleteIdentityProvider(id: string): Promise<void> {
-    await db.delete(identityProviders).where(eq(identityProviders.id, id));
+  async updateIdentityProvider(id: string, companyId: string, data: Partial<IdentityProvider>): Promise<IdentityProvider | undefined> {
+    const mutable = pickMutableFields(data, IDENTITY_PROVIDER_MUTABLE_FIELDS) as Partial<IdentityProvider>;
+    const [p] = await db.update(identityProviders)
+      .set({ ...mutable, updatedAt: new Date() })
+      .where(and(eq(identityProviders.id, id), eq(identityProviders.companyId, companyId)))
+      .returning();
+    return p;
+  }
+
+  async deleteIdentityProvider(id: string, companyId: string): Promise<void> {
+    await db.delete(identityProviders).where(and(eq(identityProviders.id, id), eq(identityProviders.companyId, companyId)));
   }
 
   async createDataExportJob(data: InsertDataExportJob): Promise<DataExportJob> {

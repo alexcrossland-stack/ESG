@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS,
+  DATA_ENTRY_PERIOD_LOCK_MIGRATIONS,
   FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
+  REQUIRED_DATA_ENTRY_PERIOD_LOCK_COLUMNS,
+  REQUIRED_DATA_ENTRY_PERIOD_LOCK_INDEXES,
   REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_COLUMNS,
   REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_INDEXES,
   invalidSuperAdminActionIdentifierColumns,
   missingFrameworkRequirementResponseColumns,
   missingFrameworkRequirementResponseIndexes,
+  missingDataEntryPeriodLockColumns,
+  missingDataEntryPeriodLockIndexes,
   runStartupMigrationStatements,
 } from "../../server/startup-schema-migrations";
 
@@ -68,6 +73,23 @@ const carbonSql = CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS.join("\n");
 assert.match(carbonSql, /company_settings[\s\S]*emission_factor_set SET DEFAULT 'UK_GOVERNMENT_2026'/);
 assert.match(carbonSql, /emission_factors[\s\S]*factor_year SET DEFAULT 2026/);
 assert.match(carbonSql, /carbon_calculations[\s\S]*factor_year SET DEFAULT 2026/);
+
+const lockColumns = REQUIRED_DATA_ENTRY_PERIOD_LOCK_COLUMNS.map((column_name) => ({ column_name }));
+assert.deepEqual(missingDataEntryPeriodLockColumns(lockColumns), []);
+assert.deepEqual(
+  missingDataEntryPeriodLockColumns(lockColumns.filter((row) => row.column_name !== "locked_at")),
+  ["locked_at"],
+);
+const lockIndexes = REQUIRED_DATA_ENTRY_PERIOD_LOCK_INDEXES.map((indexname) => ({ indexname }));
+assert.deepEqual(missingDataEntryPeriodLockIndexes(lockIndexes), []);
+assert.deepEqual(
+  missingDataEntryPeriodLockIndexes(lockIndexes.filter((row) => row.indexname !== "idx_data_entry_period_locks_company_period_unique")),
+  ["idx_data_entry_period_locks_company_period_unique"],
+);
+const lockSql = DATA_ENTRY_PERIOD_LOCK_MIGRATIONS.join("\n");
+assert.match(lockSql, /CREATE TABLE IF NOT EXISTS data_entry_period_locks/);
+assert.match(lockSql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_data_entry_period_locks_company_period_unique/);
+assert.match(lockSql, /locked_at timestamp NOT NULL DEFAULT now\(\)/);
 
 const migrationFile = await readFile(
   new URL("../../scripts/migrations/2026-08-27-reconcile-2026-emission-factor-defaults.sql", import.meta.url),

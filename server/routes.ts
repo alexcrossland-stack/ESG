@@ -4,20 +4,21 @@ import { createServer, type Server } from "http";
 import fs from "fs/promises";
 import path from "path";
 import session from "express-session";
-import { storage } from "./storage";
+import { storage, type WorkflowEntityType } from "./storage";
 import { db } from "./storage";
 import { DEFAULT_METRICS } from "./default-metrics";
 import {
-  insertUserSchema, insertCompanySchema, insertMetricSchema,
+  insertUserSchema, insertCompanySchema,
   insertMetricValueSchema, insertActionPlanSchema, insertPolicyVersionSchema,
   hasPermission, type PermissionModule,
   emissionFactors as emissionFactorsTable,
-  users, metrics, metricValues, generatedFiles, reportRuns,
+  users, metrics, metricValues, metricDefinitionValues, metricEvidence, rawDataInputs, evidenceFiles,
+  generatedFiles, reportRuns,
   type InsertMetricDefinition,
   type UserSession,
 } from "@shared/schema";
 import { hasProvisioningPermission, isPlatformSuperAdmin, type ProvisioningAction } from "./permissions";
-import { eq, and, sql, inArray, desc } from "drizzle-orm";
+import { eq, and, sql, inArray, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
@@ -28,7 +29,7 @@ import Stripe from "stripe";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { POLICY_TEMPLATES } from "./policy-templates";
-import { getTrafficLightStatus, runCalculationsForPeriod, calculateWeightedEsgScore, type RawInputs, type ScoredMetric, type EmissionFactorMap } from "./calculations";
+import { getTrafficLightStatus, calculateWeightedEsgScore, type ScoredMetric } from "./calculations";
 import { startScheduler, enqueueJob, getSchedulerStatus, registerJobHandler } from "./scheduler";
 import { buildSavedReportSnapshotSections, generatePdf, generateDocx } from "./report-engine";
 import { CURRENT_UK_FACTOR_YEAR, emissionFactorYearFromSet } from "@shared/emission-factor-metadata";
@@ -101,6 +102,63 @@ import {
   selectPassportMetricValue,
 } from "./esg-passport-accuracy";
 import { classifyValueSource } from "@shared/value-source";
+import { clearGuidedRawInputsFromMetrics } from "./raw-data-metric-sync";
+import { recalculateGuidedPeriod } from "./guided-recalculation";
+import { getConfiguredEmissionFactors } from "./emission-factor-resolution";
+import {
+  acquirePeriodMutationLocks,
+  dataEntryPeriodMonths,
+  isPeriodLockedInTransaction,
+  reportingMonthsForDateRange,
+} from "./period-locks";
+import { createProtectedValueError, getValueProtectionReason } from "./value-mutation-protection";
+import {
+  adminMetricDefinitionCreateSchema,
+  adminMetricDefinitionPatchSchema,
+  normalizeMetricDefinitionName,
+} from "./admin-metric-definition-validation";
+import {
+  GUIDED_RAW_INPUT_NAME_SET,
+  MAX_GUIDED_RAW_INPUT_MUTATIONS,
+  guidedRawInputCategory,
+  isGuidedRawInputName,
+} from "@shared/guided-raw-inputs";
+import {
+  actionPlanCreateSchema,
+  actionPlanUpdateSchema,
+  apiValidationError,
+  calculateRiskScore,
+  companySettingsMutationSchema,
+  esgActionCreateSchema,
+  esgActionUpdateSchema,
+  esgRiskCreateSchema,
+  esgRiskUpdateSchema,
+  esgTargetCreateSchema,
+  esgTargetUpdateSchema,
+  estimateRequestSchema,
+  generatedPolicyUserUpdateSchema,
+  governanceAreaSchema,
+  governanceAssignmentMutationSchema,
+  identityProviderCreateSchema,
+  identityProviderUpdateSchema,
+  materialityAssessmentCreateSchema,
+  materialityAssessmentUpdateSchema,
+  materialTopicMutationSchema,
+  metricMutationSchema,
+  policyTemplateAdminUpdateSchema,
+  QUESTIONNAIRE_IMPORT_MAX_BYTES,
+  questionnaireCreateSchema,
+  questionnaireImportQuestionsSchema,
+  questionnaireImportSchema,
+  questionnaireQuestionUserUpdateSchema,
+  reportingPeriodMutationSchema,
+} from "./api-mutation-schemas";
+import { parseStrictCanonicalReportingDate } from "./canonical-reporting-date";
+import {
+  questionnaireCarbonCalculationIsInScope,
+  questionnaireMetricValueIsInScope,
+  type QuestionnaireContextBoundary,
+} from "./questionnaire-context";
 
 type DashboardTrendCard = {
   key: string;
@@ -373,47 +431,6 @@ async function calculateReportTrendSummary(input: {
   return buildReportTrendSummary(trendResult.trends, input.currentPeriod, previousPeriod, trendResult.comparisonLabel);
 }
 
-function buildEmissionFactorMap(dbFactors: any[]): EmissionFactorMap {
-  const map: EmissionFactorMap = {};
-  for (const f of dbFactors) {
-    const val = parseFloat(f.factor);
-    if (isNaN(val)) continue;
-    const cat = (f.category || "").toLowerCase();
-    const name = (f.name || "").toLowerCase();
-    const ft = (f.fuelType || "").toLowerCase();
-    switch (cat) {
-      case "electricity": map.electricity = val; break;
-      case "gas": map.naturalGas = val; break;
-      case "fuel":
-        if (ft === "diesel" || name.includes("diesel")) map.diesel = val;
-        else if (ft === "petrol" || name.includes("petrol")) map.petrol = val;
-        break;
-      case "vehicles":
-        if (!ft || ft === "mixed" || ft === "average" || name.includes("average")) map.companyCar = val;
-        break;
-      case "travel":
-        if (name.includes("domestic")) map.domesticFlight = val;
-        else if (name.includes("short")) map.shortHaulFlight = val;
-        else if (name.includes("long")) map.longHaulFlight = val;
-        else if (name.includes("rail")) map.rail = val;
-        else if (name.includes("hotel")) map.hotelNight = val;
-        break;
-    }
-  }
-  return map;
-}
-
-async function getConfiguredEmissionFactors(companyId: string, country = "UK") {
-  const settings = await storage.getCompanySettings(companyId);
-  const configuredYear = emissionFactorYearFromSet(settings?.emissionFactorSet);
-  const configured = await storage.getEmissionFactors(country, configuredYear);
-  if (configured.length > 0) return configured;
-
-  // An unavailable legacy selection must not cause hard-coded or mixed-year
-  // calculations. Fall back to the newest complete factor set in the database.
-  return storage.getEmissionFactors(country);
-}
-
 const BLOCKED_EXTENSIONS = /\.(exe|bat|cmd|sh|ps1|msi|vbs|js|jsx|ts|tsx|py|rb|pl|php|java|class|jar|dll|so|elf|dmg|pkg|app|cpl|scr|pif|com|gadget|reg|inf|sys|drv|bin|run|deb|rpm|apk)$/i;
 const ALLOWED_FILE_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "png", "jpg", "jpeg", "gif", "webp", "svg", "ppt", "pptx", "odt", "ods", "odp", "zip", "eml", "msg"];
 const EVIDENCE_MAX_SIZE_BYTES = 25 * 1024 * 1024;
@@ -674,38 +691,6 @@ async function attachPolicyUpload({
   }
 }
 
-async function rollbackMetricSave({
-  resultId,
-  existingForPeriod,
-}: {
-  resultId: string;
-  existingForPeriod?: any;
-}) {
-  if (existingForPeriod) {
-    await db.update(metricValues).set({
-      value: existingForPeriod.value ?? null,
-      previousValue: existingForPeriod.previousValue ?? null,
-      targetValue: existingForPeriod.targetValue ?? null,
-      status: existingForPeriod.status ?? null,
-      percentChange: existingForPeriod.percentChange ?? null,
-      submittedBy: existingForPeriod.submittedBy ?? null,
-      submittedAt: existingForPeriod.submittedAt ?? null,
-      notes: existingForPeriod.notes ?? null,
-      locked: existingForPeriod.locked ?? false,
-      dataSourceType: existingForPeriod.dataSourceType ?? "manual",
-      workflowStatus: existingForPeriod.workflowStatus ?? "draft",
-      reviewedBy: existingForPeriod.reviewedBy ?? null,
-      reviewedAt: existingForPeriod.reviewedAt ?? null,
-      reviewComment: existingForPeriod.reviewComment ?? null,
-      reportingPeriodId: existingForPeriod.reportingPeriodId ?? null,
-      siteId: existingForPeriod.siteId ?? null,
-    } as any).where(eq(metricValues.id, resultId));
-    return;
-  }
-
-  await db.delete(metricValues).where(eq(metricValues.id, resultId));
-}
-
 const policyRecordStatusValues = ["draft", "active", "under_review", "retired"] as const;
 const policyRecordTypeValues = [
   "environmental",
@@ -731,8 +716,7 @@ const policyRecordPayloadSchema = z.object({
   documentLink: z.string().trim().nullable().optional(),
   notes: z.string().trim().nullable().optional(),
   linkedMaterialTopicIds: z.array(z.string()).optional(),
-  ownerUserId: z.string().nullable().optional(),
-});
+}).strict();
 
 function normalizePolicyRecordPayload(input: unknown) {
   const parsed = policyRecordPayloadSchema.safeParse(input);
@@ -773,9 +757,15 @@ function normalizePolicyRecordPayload(input: unknown) {
       documentLink: toNullableText(parsed.data.documentLink),
       notes: toNullableText(parsed.data.notes),
       linkedMaterialTopicIds: parsed.data.linkedMaterialTopicIds,
-      ownerUserId: parsed.data.ownerUserId ?? null,
     },
   };
+}
+
+async function materialTopicIdsBelongToCompany(companyId: string, topicIds: string[] | undefined): Promise<boolean> {
+  if (!topicIds?.length) return true;
+  const uniqueIds = Array.from(new Set(topicIds));
+  const topics = await Promise.all(uniqueIds.map((id) => storage.getMaterialTopic(id)));
+  return topics.every((topic) => topic?.companyId === companyId);
 }
 
 async function buildPolicyRecordResponse(companyId: string, record: any) {
@@ -1323,7 +1313,11 @@ function requireEvidenceUpdatePermission(req: Request, res: Response, next: Func
     if (!user || !companyId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    if (isPlatformSuperAdmin(user) || hasProvisioningPermission(user.role, "upload_evidence")) {
+    // Upload authority is deliberately not review authority. Contributors may
+    // add evidence, but only company/platform administrators may mutate
+    // ordinary evidence after upload. Approvers receive the narrow framework
+    // review exception below.
+    if (isPlatformSuperAdmin(user) || user.role === "admin") {
       return next();
     }
     if (user.role !== "approver") {
@@ -1360,6 +1354,113 @@ const frameworkResponseReviewSchema = z.object({
   workflowStatus: z.enum(["approved", "rejected"]),
   reviewComment: z.string().trim().max(2_000).nullable().optional(),
 });
+
+const canonicalMetricValueFieldsSchema = z.object({
+  valueNumeric: z.union([z.string(), z.number()]).nullable().optional(),
+  valueText: z.string().max(20_000).nullable().optional(),
+  valueBoolean: z.boolean().nullable().optional(),
+  valueJson: z.unknown().nullable().optional(),
+  sourceType: z.enum(["manual", "imported", "api"]).optional(),
+  notes: z.string().max(20_000).nullable().optional(),
+});
+
+const canonicalMetricValueCreateSchema = canonicalMetricValueFieldsSchema.extend({
+  metricDefinitionId: z.string().trim().min(1).max(100),
+  siteId: z.string().trim().min(1).max(100).nullable().optional(),
+  reportingPeriodStart: z.string().refine((value) => parseStrictCanonicalReportingDate(value) !== null),
+  reportingPeriodEnd: z.string().refine((value) => parseStrictCanonicalReportingDate(value) !== null),
+}).strict();
+
+const canonicalMetricValuePatchSchema = canonicalMetricValueFieldsSchema.strict().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one editable value field is required" },
+);
+
+const canonicalMetricReviewSchema = z.object({
+  action: z.enum(["approve", "reject"]),
+  comment: z.string().trim().max(2_000).nullable().optional(),
+}).strict().superRefine((value, context) => {
+  if (value.action === "reject" && !value.comment?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["comment"],
+      message: "A rejection comment is required",
+    });
+  }
+});
+
+const metricEvidenceCreateSchema = z.object({
+  metricValueId: z.string().trim().min(1).max(100),
+  fileName: z.string().trim().min(1).max(255),
+  fileUrl: z.string().trim().url().max(2_000).nullable().optional(),
+  storageKey: z.string().trim().max(1_000).nullable().optional(),
+  fileType: z.string().trim().max(255).nullable().optional(),
+  notes: z.string().trim().max(5_000).nullable().optional(),
+}).strict();
+
+type MetricEvidenceValueOwner =
+  | { kind: "canonical"; status: string; sourceType: string }
+  | { kind: "legacy"; status: string; sourceType: string | null };
+
+async function resolveMetricEvidenceValueOwner(
+  companyId: string,
+  metricValueId: string,
+): Promise<MetricEvidenceValueOwner | null> {
+  const [canonical] = await db.select({
+    status: metricDefinitionValues.status,
+    sourceType: metricDefinitionValues.sourceType,
+  }).from(metricDefinitionValues).where(and(
+    eq(metricDefinitionValues.id, metricValueId),
+    eq(metricDefinitionValues.businessId, companyId),
+  )).limit(1);
+  if (canonical) return { kind: "canonical", status: canonical.status, sourceType: canonical.sourceType };
+
+  const [legacy] = await db.select({
+    status: metricValues.workflowStatus,
+    sourceType: metricValues.dataSourceType,
+  }).from(metricValues)
+    .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
+    .where(and(eq(metricValues.id, metricValueId), eq(metrics.companyId, companyId)))
+    .limit(1);
+  return legacy
+    ? { kind: "legacy", status: legacy.status ?? "draft", sourceType: legacy.sourceType ?? null }
+    : null;
+}
+
+function normaliseCanonicalNumeric(value: string | number | null | undefined): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  const text = String(value).trim();
+  const match = text.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return undefined;
+  const wholeDigits = match[2].replace(/^0+(?=\d)/, "");
+  const fractionalDigits = match[3] ?? "";
+  if (wholeDigits.length > 14 || fractionalDigits.length > 6) return undefined;
+  return `${match[1] === "+" ? "" : match[1]}${match[2]}${fractionalDigits ? `.${fractionalDigits}` : ""}`;
+}
+
+function validateCanonicalValueForDefinition(
+  dataType: string,
+  input: z.infer<typeof canonicalMetricValueFieldsSchema>,
+): { valid: true; data: z.infer<typeof canonicalMetricValueFieldsSchema> } | { valid: false; error: string } {
+  const typedFields = ["valueNumeric", "valueText", "valueBoolean", "valueJson"] as const;
+  const expectedField = dataType === "text"
+    ? "valueText"
+    : dataType === "boolean"
+      ? "valueBoolean"
+      : dataType === "json"
+        ? "valueJson"
+        : "valueNumeric";
+  const wrongField = typedFields.find((field) => field !== expectedField && input[field] !== undefined && input[field] !== null);
+  if (wrongField) return { valid: false, error: `${wrongField} is not valid for a ${dataType} metric` };
+  if (input.valueNumeric !== undefined && input.valueNumeric !== null) {
+    const normalised = normaliseCanonicalNumeric(input.valueNumeric);
+    if (normalised === undefined) {
+      return { valid: false, error: "valueNumeric must be a decimal with at most 14 whole digits and 6 decimal places" };
+    }
+    return { valid: true, data: { ...input, valueNumeric: normalised } };
+  }
+  return { valid: true, data: input };
+}
 
 async function validateFrameworkResponseSource(
   companyId: string,
@@ -1550,17 +1651,45 @@ async function requireSuperAdmin(req: Request, res: Response, next: Function) {
 }
 
 
-const ENVIRONMENTAL_RAW_KEYS = [
-  "elec", "gas", "fuel", "waste", "water", "flight", "hotel", "rail", "car_miles",
-];
-const SOCIAL_RAW_KEYS = [
-  "employee", "headcount", "absence", "training", "female", "manager", "living", "leaver",
-];
-
 function classifyRawDataCategory(inputName: string): "environmental" | "social" | "governance" {
-  if (ENVIRONMENTAL_RAW_KEYS.some(k => inputName.includes(k))) return "environmental";
-  if (SOCIAL_RAW_KEYS.some(k => inputName.includes(k))) return "social";
-  return "governance";
+  if (!isGuidedRawInputName(inputName)) {
+    throw Object.assign(new Error(`Unsupported guided input: ${inputName}`), {
+      status: 400,
+      code: "UNSUPPORTED_GUIDED_INPUT",
+    });
+  }
+  return guidedRawInputCategory(inputName);
+}
+
+function normalizeGuidedRawDecimal(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const raw = String(value).trim();
+  if (!/^(?:\d+|\d*\.\d+)$/.test(raw)) return null;
+  const [wholePart = "0", fractionalPart = ""] = raw.split(".");
+  const normalizedWhole = wholePart.replace(/^0+(?=\d)/, "") || "0";
+  if (normalizedWhole.length > 11 || fractionalPart.length > 4) return null;
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return fractionalPart ? `${normalizedWhole}.${fractionalPart}` : normalizedWhole;
+}
+
+const GUIDED_MONTH_PERIOD_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
+
+function rawDataMutationScopeLockKey(companyId: string, period: string, siteId: string | null): string {
+  return `raw_data_inputs:${companyId}:${period}:${siteId ?? "__org__"}`;
+}
+
+async function lockRawDataMutationScope(
+  mutationClient: any,
+  companyId: string,
+  period: string,
+  siteId: string | null,
+): Promise<void> {
+  await mutationClient.execute(sql`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${rawDataMutationScopeLockKey(companyId, period, siteId)}, 0)
+    )
+  `);
 }
 
 const TOTAL_ONBOARDING_STEPS_V1 = 8;
@@ -1599,12 +1728,34 @@ const METRIC_KEY_MAP: Record<string, string> = {
 };
 
 function normalizeMetricName(name: string | null | undefined): string {
-  const normalized = (name ?? "").trim().toLowerCase();
-  const aliases: Record<string, string> = {
-    "natural gas consumption": "gas / fuel consumption",
-  };
-  return aliases[normalized] ?? normalized;
+  return normalizeMetricDefinitionName(name);
 }
+
+async function metricDefinitionSeedReservations() {
+  const { ALL_STARTUP_METRIC_DEFINITION_SEEDS } = await import("./seed-metric-definitions");
+  return ALL_STARTUP_METRIC_DEFINITION_SEEDS.map(({ code, name }) => ({ code, name }));
+}
+
+const createCustomMetricSchema = z.object({
+  name: z.string({ required_error: "Metric name is required" })
+    .trim()
+    .min(1, "Metric name is required")
+    .max(160, "Metric name must be 160 characters or fewer"),
+  description: z.string().trim().max(2000, "Description must be 2,000 characters or fewer").optional(),
+  category: z.enum(["environmental", "social", "governance"], {
+    required_error: "Metric category is required",
+  }),
+  unit: z.string().trim().max(64, "Unit must be 64 characters or fewer").optional(),
+  frequency: z.enum(["monthly", "quarterly", "annual"]).default("monthly"),
+  dataOwner: z.string().trim().max(160, "Data owner must be 160 characters or fewer").optional(),
+  enabled: z.boolean().default(true),
+  metricType: z.enum(["manual", "calculated", "derived"]).default("manual"),
+  calculationType: z.string().trim().min(1).max(100).optional(),
+  formulaText: z.string().trim().max(2000, "Formula description must be 2,000 characters or fewer").optional(),
+  direction: z.enum(["higher_is_better", "lower_is_better", "target_range", "compliance_yes_no"])
+    .default("higher_is_better"),
+  displayOrder: z.number().int().min(0).max(100000).default(0),
+}).strict("Unsupported metric field");
 
 function buildCompanyMetricFromDefinition(companyId: string, def: any) {
   const defaultMetric = DEFAULT_METRICS.find(
@@ -2864,11 +3015,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.session as any).userId;
       const before = await storage.getCompany(companyId);
       const updateSchema = z.object({
-        name: z.string().min(1).max(200).optional(),
-        industry: z.string().min(1).max(120).optional(),
-        country: z.string().min(1).max(120).optional(),
-        employeeCount: z.coerce.number().int().nonnegative().optional(),
-        revenueBand: z.string().min(1).max(120).optional(),
+        name: z.string().trim().min(1).max(200).optional(),
+        industry: z.string().trim().min(1).max(120).nullable().optional(),
+        country: z.string().trim().min(1).max(120).nullable().optional(),
+        employeeCount: z.number().int().nonnegative().nullable().optional(),
+        revenueBand: z.string().trim().min(1).max(120).nullable().optional(),
         locations: z.coerce.number().int().positive().optional(),
         businessType: z.string().min(1).max(120).optional(),
         hasVehicles: z.boolean().optional(),
@@ -2908,7 +3059,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/company/settings", requireAuth, requireProvisioningPermission("update_company_settings"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const update = { ...req.body };
+      const parsed = companySettingsMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const update = parsed.data;
       if (Object.prototype.hasOwnProperty.call(update, "emissionFactorSet")) {
         if (typeof update.emissionFactorSet !== "string" || !/^UK_(?:DEFRA|GOVERNMENT)_\d{4}$/.test(update.emissionFactorSet)) {
           return res.status(400).json({ error: "Select a published UK Government emission factor set." });
@@ -3716,22 +3869,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/metrics", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const parsed = insertMetricSchema.parse({ ...req.body, companyId });
-      const metric = await storage.createMetric(parsed);
+      const parsed = createCustomMetricSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const metric = await storage.createMetric({ ...parsed.data, companyId });
       res.json(metric);
     } catch (e: any) {
-      res.status(400).json({ error: e.message });
+      sendServerError(res, e, "create custom metric");
     }
   });
 
   app.put("/api/metrics/:id", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const parsed = metricMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
       const existing = await storage.getMetric(req.params.id);
       if (!existing || existing.companyId !== companyId) {
         return res.status(404).json({ error: "Metric not found" });
       }
-      const metric = await storage.updateMetric(req.params.id, req.body);
+      const metric = await storage.updateMetric(String(req.params.id), companyId, parsed.data);
       res.json(metric);
     } catch (e: any) {
       sendServerError(res, e);
@@ -3871,6 +4027,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Metric Values (data entry)
   app.get(DATA_ENTRY_PERIOD_ROUTE, requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
+    if (!dataEntryPeriodMonths(req.params.period)) {
+      return res.status(400).json({ error: "period must use YYYY-MM, YYYY-Q1..Q4, or YYYY format" });
+    }
     const siteIdParam = req.query.siteId as string | undefined;
     const siteId = siteIdParam === "null" || siteIdParam === "__org__" ? null : siteIdParam;
     if (siteId) {
@@ -3901,6 +4060,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     res.json({
+      periodLocked: await storage.isPeriodLocked(companyId, req.params.period),
       values: values.map((value: any) => ({
         ...value,
         attachments: [
@@ -3945,7 +4105,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (!validation.ok) {
-        return res.status(400).json(validation);
+        const hasProtectedCells = validation.cells.some((cell) => cell.protected);
+        return res.status(hasProtectedCells ? 409 : 400).json({
+          ...validation,
+          ...(hasProtectedCells ? { code: "VALUE_PROTECTED" } : {}),
+        });
       }
 
       const committed = await commitBulkMetricPaste({
@@ -3957,6 +4121,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(committed);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({
+          error: e.message,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.details || {}),
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -4000,10 +4171,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (!metricId) return res.status(400).json({ error: "metricId is required" });
       if (!period) return res.status(400).json({ error: "period is required" });
+      if (!dataEntryPeriodMonths(period)) {
+        return res.status(400).json({ error: "period must use YYYY-MM, YYYY-Q1..Q4, or YYYY format" });
+      }
       // Validate metric exists and belongs to this company
       const metric = await storage.getMetric(metricId);
       if (!metric || metric.companyId !== companyId) {
         return res.status(404).json({ error: "Metric not found" });
+      }
+      if (!isActiveEditableDataEntryMetric(metric)) {
+        return res.status(400).json({
+          error: "This metric is disabled or calculated automatically and cannot accept direct data entry.",
+          code: "METRIC_NOT_EDITABLE",
+        });
+      }
+      if (dataSourceType !== null && dataSourceType !== "manual" && dataSourceType !== "estimated") {
+        return res.status(400).json({
+          error: "dataSourceType must be manual or estimated. Evidenced provenance is set automatically after a file is stored.",
+          code: "INVALID_DATA_SOURCE_TYPE",
+        });
       }
       const metricDataType = await resolveCompanyMetricDataType(companyId, metric);
       const isBooleanMetric = isBooleanMetricDataType(metricDataType);
@@ -4013,7 +4199,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (isBooleanMetric && parsedBooleanValue === null) {
         return res.status(400).json({ error: "value must be Yes or No" });
       }
-      if (!isBooleanMetric && value !== undefined && value !== null && isNaN(Number(value))) {
+      if (!isBooleanMetric && value !== undefined && value !== null && value !== "" && !Number.isFinite(Number(value))) {
         return res.status(400).json({ error: "value must be a number" });
       }
       const activeSitesForEntry = await storage.getSites(companyId);
@@ -4026,7 +4212,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
 
+      const validatedAttachments: Array<{
+        file: File;
+        fileName: string;
+        fileType: string;
+        mimeType: string;
+      }> = [];
+      for (const file of attachments) {
+        const validation = validateEvidenceAttachment(file);
+        if (!validation.ok) return res.status(400).json({ error: validation.error });
+        validatedAttachments.push({ file, ...validation });
+      }
+
       const resolvedSiteId = bodySiteId || null;
+      if (await storage.isPeriodLocked(companyId, period)) {
+        return res.status(400).json({ error: "This period is locked and cannot be edited" });
+      }
       const existingForPeriod = await storage.getMetricValueForPeriodSite(metricId, period, resolvedSiteId);
 
       const isFirstInsert = !existingForPeriod;
@@ -4036,7 +4237,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "This period is locked and cannot be edited" });
       }
 
-      const effectiveSourceType = attachments.length > 0 ? "evidenced" : dataSourceType;
+      let protectedNoop = false;
+      if (existingForPeriod) {
+        const [entityEvidence, periodEvidence, canonicalEvidence] = await Promise.all([
+          storage.getEvidenceByEntity(companyId, "metric_value", existingForPeriod.id, resolvedSiteId),
+          storage.getEvidenceFiles(companyId, resolvedSiteId, period),
+          storage.getMetricEvidence(existingForPeriod.id),
+        ]);
+        const hasLinkedEvidence = canonicalEvidence.length > 0 || entityEvidence.length > 0 || periodEvidence.some((file: any) =>
+          file.metricId === metricId
+          || (file.linkedModule === "metric" && file.linkedEntityId === metricId),
+        );
+        const protectionReason = getValueProtectionReason({
+          ...existingForPeriod,
+          hasEvidence: hasLinkedEvidence,
+        });
+        if (protectionReason) {
+          const sameValue = isBooleanMetric
+            ? existingForPeriod.valueBoolean === parsedBooleanValue
+            : (() => {
+                const currentRaw = existingForPeriod.valueNumeric ?? existingForPeriod.value;
+                const currentValue = currentRaw === null || currentRaw === undefined ? null : Number(currentRaw);
+                const nextValue = value === null || value === undefined || value === "" ? null : Number(value);
+                return currentValue === nextValue;
+              })();
+          const normalizedNotes = notes === "" ? null : notes;
+          const sameNotes = (existingForPeriod.notes ?? null) === normalizedNotes;
+          const sameExplicitSource = !dataSourceType || dataSourceType === existingForPeriod.dataSourceType;
+          protectedNoop = sameValue && sameNotes && sameExplicitSource;
+          if (!protectedNoop) {
+            return res.status(409).json({
+              error: "This metric value is reviewed, approved or evidenced and cannot be changed until its protection is removed.",
+              code: "VALUE_PROTECTED",
+              reason: protectionReason,
+              metricId,
+              period,
+              siteId: resolvedSiteId,
+            });
+          }
+        }
+      }
+
       const createData: any = isBooleanMetric
         ? {
             metricId,
@@ -4061,8 +4302,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             locked: false,
             siteId: bodySiteId || null,
           };
-      if (effectiveSourceType) createData.dataSourceType = effectiveSourceType;
-      const result = await storage.upsertMetricValue(createData);
+      // Store only user-declared provenance here. Evidence provenance is
+      // promoted after a file is durably linked, never before persistence.
+      if (dataSourceType) createData.dataSourceType = dataSourceType;
+      let result = protectedNoop && existingForPeriod
+        ? existingForPeriod
+        : await storage.upsertMetricValue(createData);
+      const metricValueWasPersisted = !protectedNoop;
       if (result.locked) {
         return res.status(400).json({ error: "This period is locked and cannot be edited" });
       }
@@ -4070,19 +4316,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Metric-row uploads allow multiple evidence files per metric value.
       // New uploads append to the existing attachment set rather than replacing it.
       const createdAttachments: any[] = [];
+      let attachmentsDurablyLinked = false;
       try {
-        for (const file of attachments) {
-          const validation = validateEvidenceAttachment(file);
-          if (!validation.ok) {
-            throw new Error(validation.error);
-          }
-
+        for (const { file, fileName, fileType, mimeType } of validatedAttachments) {
           const created = await storage.createEvidenceFile({
             companyId,
-            filename: validation.fileName,
+            filename: fileName,
             fileUrl: null,
-            fileType: validation.fileType,
-            mimeType: validation.mimeType,
+            fileType,
+            mimeType,
             fileSize: file.size,
             storagePath: null,
             description: notes || null,
@@ -4100,27 +4342,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } as any);
 
           try {
-            await persistEvidenceFile(companyId, created.id, file, validation.fileName);
+            await persistEvidenceFile(companyId, created.id, file, fileName);
             const updated = await storage.updateEvidenceFile(created.id, {
               fileUrl: buildEvidenceDownloadUrl(created.id),
-              storagePath: buildEvidenceDiskPath(companyId, created.id, validation.fileName),
+              storagePath: buildEvidenceDiskPath(companyId, created.id, fileName),
             } as any);
             createdAttachments.push(updated || { ...created, fileUrl: buildEvidenceDownloadUrl(created.id) });
           } catch (error) {
             await storage.deleteEvidenceFile(created.id).catch(() => {});
-            await removeEvidenceFileIfPresent(companyId, created.id, validation.fileName);
+            await removeEvidenceFileIfPresent(companyId, created.id, fileName);
             throw error;
           }
         }
-      } catch (error) {
-        for (const attachment of createdAttachments) {
-          await storage.deleteEvidenceFile(attachment.id).catch(() => {});
-          await removeEvidenceFileIfPresent(companyId, attachment.id, attachment.filename);
+        attachmentsDurablyLinked = createdAttachments.length > 0
+          && createdAttachments.length === validatedAttachments.length;
+        if (createdAttachments.length > 0 && result.dataSourceType !== "evidenced") {
+          result = await storage.promoteMetricValueToEvidenced(companyId, result.id, result.submittedAt ?? null);
         }
-        await rollbackMetricSave({
-          resultId: result.id,
-          existingForPeriod,
-        }).catch(() => {});
+      } catch (error) {
+        const provenanceLockWon = attachmentsDurablyLinked
+          && (error as any)?.code === "PROVENANCE_PERIOD_LOCKED";
+        // A reporting-period lock that wins after durable evidence linkage
+        // must not erase the user's successful upload. Other failures retain
+        // the existing all-or-nothing attachment cleanup contract.
+        if (!provenanceLockWon) {
+          for (const attachment of createdAttachments) {
+            await storage.deleteEvidenceFile(attachment.id).catch(() => {});
+            await removeEvidenceFileIfPresent(companyId, attachment.id, attachment.filename);
+          }
+        }
+        if (metricValueWasPersisted || provenanceLockWon) {
+          const attachmentError = error instanceof Error ? error.message : "Attachment persistence failed";
+          let auditWarning: string | undefined;
+          try {
+            await storage.createAuditLog({
+              companyId,
+              userId,
+              action: provenanceLockWon
+                ? "metric_value_evidence_saved_provenance_locked"
+                : existingForPeriod
+                  ? "metric_value_updated_attachment_failed"
+                  : "metric_value_created_attachment_failed",
+              entityType: "metric_value",
+              entityId: result.id,
+              details: {
+                metricId,
+                period,
+                partialSuccess: true,
+                attachmentRetained: provenanceLockWon,
+                attachmentError,
+                before: existingForPeriod
+                  ? { value: formatMetricAuditValue(existingForPeriod), notes: existingForPeriod.notes }
+                  : null,
+                after: { value: formatMetricAuditValue(result), notes: notes ?? null },
+              },
+            });
+          } catch (auditError) {
+            auditWarning = "The retained metric value could not be written to the audit log.";
+            console.error("[data-entry] Failed to audit retained partial-success value:", auditError);
+          }
+          return res.status(409).json({
+            error: provenanceLockWon
+              ? "The metric value and evidence were saved, but the source label could not be updated because the reporting period became locked."
+              : "The metric value was saved, but its attachment could not be stored.",
+            code: provenanceLockWon
+              ? "EVIDENCE_PROVENANCE_PARTIAL_SUCCESS"
+              : "ATTACHMENT_PARTIAL_SUCCESS",
+            partialSuccess: true,
+            attachmentRetained: provenanceLockWon,
+            metricValueId: result.id,
+            savedMetricValue: result,
+            ...(provenanceLockWon ? { retainedAttachments: createdAttachments } : {}),
+            attachmentWarning: attachmentError,
+            ...(auditWarning ? { auditWarning } : {}),
+          });
+        }
         throw error;
       }
 
@@ -4128,7 +4424,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         companyId,
         userId,
         actorType: "user",
-        action: existingForPeriod ? "metric_value_updated" : "metric_value_created",
+        action: protectedNoop
+          ? attachments.length > 0 ? "metric_value_evidence_appended" : "metric_value_unchanged"
+          : existingForPeriod ? "metric_value_updated" : "metric_value_created",
         entityType: "metric_value",
         entityId: result.id,
         details: {
@@ -4157,6 +4455,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         newlyCreatedAttachments: createdAttachments,
       });
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({
+          error: e.message,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.details || {}),
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -4165,12 +4470,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      await storage.lockPeriod(companyId, req.params.period);
+      const period = String(req.params.period);
+      if (!GUIDED_MONTH_PERIOD_RE.test(period)) {
+        return res.status(400).json({ error: "period must use YYYY-MM format" });
+      }
+      await storage.lockPeriod(companyId, period, userId);
       await storage.createAuditLog({
         companyId, userId,
-        action: `Period ${req.params.period} locked`,
+        action: `Period ${period} locked`,
         entityType: "period",
-        entityId: req.params.period,
+        entityId: period,
         details: {},
       });
       res.json({ ok: true });
@@ -4200,7 +4509,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { inputs, period } = req.body;
+      const inputs = req.body?.inputs;
+      const period = req.body?.period;
+      const clearInputs = req.body?.clearInputs ?? [];
+      if (!period || typeof period !== "string" || !GUIDED_MONTH_PERIOD_RE.test(period)) {
+        return res.status(400).json({ error: "period must use YYYY-MM format" });
+      }
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) {
+        return res.status(400).json({ error: "inputs must be an object" });
+      }
+      if (
+        !Array.isArray(clearInputs)
+        || clearInputs.some((entry: unknown) => typeof entry !== "string")
+        || clearInputs.length > MAX_GUIDED_RAW_INPUT_MUTATIONS
+      ) {
+        return res.status(400).json({ error: "clearInputs must be an array of input names" });
+      }
+      const inputEntries = Object.entries(inputs);
+      const allInputNames = inputEntries.map(([inputName]) => inputName);
+      if (inputEntries.length > MAX_GUIDED_RAW_INPUT_MUTATIONS) {
+        return res.status(400).json({ error: `inputs may contain at most ${MAX_GUIDED_RAW_INPUT_MUTATIONS} supported guided fields` });
+      }
+      const unsupportedInputNames = Array.from(new Set([
+        ...allInputNames,
+        ...clearInputs,
+      ].filter((inputName) => !GUIDED_RAW_INPUT_NAME_SET.has(inputName))));
+      if (unsupportedInputNames.length > 0) {
+        return res.status(400).json({
+          error: "One or more guided input names are not supported",
+          code: "UNSUPPORTED_GUIDED_INPUT",
+          inputNames: unsupportedInputNames,
+        });
+      }
+      const clearInputSet = new Set<string>(clearInputs);
+      if (allInputNames.some((inputName) => clearInputSet.has(inputName))) {
+        return res.status(400).json({ error: "The same guided input cannot be saved and cleared in one request" });
+      }
+      const normalizedInputEntries: Array<[string, string]> = [];
+      for (const [inputName, value] of inputEntries) {
+        if (value === null || value === undefined || value === "") continue;
+        const normalizedValue = normalizeGuidedRawDecimal(value);
+        if (normalizedValue === null) {
+          return res.status(400).json({
+            error: `${inputName} must be a non-negative number with no more than 11 whole digits and 4 decimal places`,
+          });
+        }
+        normalizedInputEntries.push([inputName, normalizedValue]);
+      }
+      const savesCombinedVehicleFuel = normalizedInputEntries.some(([inputName]) => inputName === "vehicle_fuel_litres");
+      const savesSeparatedVehicleFuel = normalizedInputEntries.some(([inputName]) =>
+        inputName === "diesel_litres" || inputName === "petrol_litres");
+      const rawDeleteInputSet = new Set<string>(clearInputSet);
+      const metricClearInputSet = new Set<string>(clearInputSet);
+      if (clearInputSet.has("vehicle_fuel_litres") || (savesCombinedVehicleFuel && !savesSeparatedVehicleFuel)) {
+        rawDeleteInputSet.add("diesel_litres");
+        rawDeleteInputSet.add("petrol_litres");
+        metricClearInputSet.add("diesel_litres");
+        metricClearInputSet.add("petrol_litres");
+      }
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
       const rawSiteId = req.body?.siteId;
       const bodySiteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
@@ -4216,26 +4582,139 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
 
-      const results: any[] = [];
-      for (const [inputName, value] of Object.entries(inputs)) {
-        if (value === null || value === undefined || value === "") continue;
-        const cat = classifyRawDataCategory(inputName);
-        const r = await storage.upsertRawDataInput(companyId, inputName, period, {
-          inputCategory: cat, value: String(value), unit: "", enteredBy: userId, siteId: bodySiteId || null,
-        } as any);
-        results.push(r);
+      if (await storage.isPeriodLocked(companyId, String(period))) {
+        return res.status(400).json({ error: "This period is locked and cannot be edited" });
       }
+
+      const existingRawData = await storage.getRawDataByPeriod(companyId, period, bodySiteId || null);
+      const mutatedInputNames = new Set<string>([
+        ...Array.from(rawDeleteInputSet),
+        ...normalizedInputEntries.map(([inputName]) => inputName),
+      ]);
+      const protectedRawInputs = existingRawData.filter((entry) =>
+        mutatedInputNames.has(entry.inputName)
+        && (entry.dataSourceType === "evidenced" || (entry.workflowStatus && entry.workflowStatus !== "draft")),
+      );
+      if (protectedRawInputs.length > 0) {
+        return res.status(409).json({
+          error: "Reviewed or evidenced guided inputs cannot be changed until their protection is removed.",
+          inputNames: protectedRawInputs.map((entry) => entry.inputName),
+        });
+      }
+
+      const { guidedMetricClear, results } = await db.transaction(async (tx) => {
+        // Lock ordering is tenant+period first, then the narrower site-scoped
+        // raw-data key. Recheck after waiting so a concurrent period lock wins.
+        await acquirePeriodMutationLocks(tx, companyId, [period]);
+        if (await isPeriodLockedInTransaction(tx, companyId, period)) {
+          throw Object.assign(new Error("This period is locked and cannot be edited"), { status: 400 });
+        }
+        await lockRawDataMutationScope(tx, companyId, period, bodySiteId);
+        const mutationInputNames = Array.from(mutatedInputNames);
+        if (mutationInputNames.length > 0) {
+          const currentRawInputs = await tx.select().from(rawDataInputs).where(and(
+            eq(rawDataInputs.companyId, companyId),
+            eq(rawDataInputs.period, period),
+            inArray(rawDataInputs.inputName, mutationInputNames),
+            bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+          )).for("update");
+          const currentIds = currentRawInputs.map((entry) => entry.id);
+          const evidencedIds = new Set<string>();
+          if (currentIds.length > 0) {
+            const linkedEvidence = await tx.select({ linkedEntityId: evidenceFiles.linkedEntityId })
+              .from(evidenceFiles)
+              .where(and(
+                eq(evidenceFiles.companyId, companyId),
+                inArray(evidenceFiles.linkedModule, ["raw_data", "raw_data_input"]),
+                inArray(evidenceFiles.linkedEntityId, currentIds),
+                bodySiteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, bodySiteId),
+              ));
+            for (const evidence of linkedEvidence) {
+              if (evidence.linkedEntityId) evidencedIds.add(evidence.linkedEntityId);
+            }
+          }
+          const protectedInputs = currentRawInputs
+            .map((entry) => ({
+              entry,
+              reason: getValueProtectionReason({ ...entry, hasEvidence: evidencedIds.has(entry.id) }),
+            }))
+            .filter((item) => item.reason !== null);
+          if (protectedInputs.length > 0) {
+            const first = protectedInputs[0];
+            throw createProtectedValueError("A guided input", first.reason!, {
+              inputNames: protectedInputs.map(({ entry }) => entry.inputName),
+              protectedInputs: protectedInputs.map(({ entry, reason }) => ({ inputName: entry.inputName, reason })),
+            });
+          }
+        }
+        const guidedMetricClear = await clearGuidedRawInputsFromMetrics({
+          companyId,
+          inputNames: Array.from(metricClearInputSet),
+          period,
+          siteId: bodySiteId || null,
+          mutationClient: tx,
+        });
+        if (guidedMetricClear.skippedLocked.length > 0 || guidedMetricClear.skippedProtected.length > 0) {
+          throw Object.assign(
+            new Error("One or more mapped values are locked, evidenced or under review and cannot be cleared."),
+            { status: 409, details: { guidedMetricClear } },
+          );
+        }
+
+        if (rawDeleteInputSet.size > 0) {
+          await tx.delete(rawDataInputs).where(and(
+            eq(rawDataInputs.companyId, companyId),
+            eq(rawDataInputs.period, period),
+            inArray(rawDataInputs.inputName, Array.from(rawDeleteInputSet)),
+            bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+          ));
+        }
+
+        const results: any[] = [];
+        for (const [inputName, value] of normalizedInputEntries) {
+          const [existing] = await tx.select().from(rawDataInputs).where(and(
+            eq(rawDataInputs.companyId, companyId),
+            eq(rawDataInputs.inputName, inputName),
+            eq(rawDataInputs.period, period),
+            bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+          ));
+          const rowData = {
+            inputCategory: classifyRawDataCategory(inputName),
+            value,
+            unit: "",
+            enteredBy: userId,
+            siteId: bodySiteId,
+            dataSourceType: "manual" as const,
+            workflowStatus: "draft" as const,
+            updatedAt: new Date(),
+          };
+          const [saved] = existing
+            ? await tx.update(rawDataInputs).set(rowData).where(eq(rawDataInputs.id, existing.id)).returning()
+            : await tx.insert(rawDataInputs).values({
+              companyId,
+              inputName,
+              period,
+              ...rowData,
+            }).returning();
+          results.push(saved);
+        }
+
+        return { guidedMetricClear, results };
+      });
 
       await storage.createAuditLog({
         companyId, userId,
         action: "Raw data submitted",
         entityType: "raw_data",
         entityId: period,
-        details: { period, inputCount: results.length },
+        details: { period, inputCount: results.length, clearedInputNames: Array.from(rawDeleteInputSet) },
       });
 
-      res.json({ saved: results.length, results });
+      res.json({ saved: results.length, cleared: rawDeleteInputSet.size, results, guidedMetricClear });
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.details || {}) });
+      }
       sendServerError(res, e);
     }
   });
@@ -4245,7 +4724,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const period = req.params.period;
+      const period = String(req.params.period);
+      if (!GUIDED_MONTH_PERIOD_RE.test(period)) {
+        return res.status(400).json({ error: "period must use YYYY-MM format" });
+      }
       const rawSiteId = req.body?.siteId;
       const siteScopeProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "siteId");
       const siteId = rawSiteId === "__org__" || rawSiteId === "null" ? null : rawSiteId || null;
@@ -4259,83 +4741,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
-      const metricValueScope = siteScopeProvided
-        ? siteId === null
-          ? { scope: "organisation" as const }
-          : { scope: "site" as const, siteId }
-        : { scope: "all" as const };
+      const recalculation = await recalculateGuidedPeriod({
+        companyId,
+        userId,
+        period,
+        siteId,
+        siteScopeProvided,
+      });
+      const {
+        updated,
+        guidedMetricSync,
+        calculatedSkippedLocked,
+        calculatedSkippedProtected,
+      } = recalculation;
 
-      const rawData = await storage.getRawDataByPeriod(companyId, period, siteScopeProvided ? siteId : undefined);
-      const rawInputs: RawInputs = {};
-      for (const d of rawData) {
-        rawInputs[d.inputName] = d.value !== null && d.value !== undefined ? Number(d.value) : undefined;
-      }
+      auditLog({
+        companyId,
+        userId,
+        actorType: "user",
+        action: "Guided metrics recalculated",
+        entityType: "metric_value",
+        entityId: period,
+        details: {
+          period,
+          siteId,
+          calculatedMetricCount: updated.length,
+          guidedMetricIds: guidedMetricSync.synced.map((entry) => entry.metricId),
+          lockedMetricIds: [
+            ...guidedMetricSync.skippedLocked.map((entry) => entry.metricId),
+            ...calculatedSkippedLocked.map((entry) => entry.metricId),
+          ],
+          protectedMetricIds: guidedMetricSync.skippedProtected.map((entry) => entry.metricId),
+          protectedCalculatedMetricIds: calculatedSkippedProtected.map((entry) => entry.metricId),
+        },
+        req,
+      });
 
-      const allMetrics = await storage.getMetrics(companyId);
-      const existingValues: Record<string, number | null> = {};
-      for (const m of allMetrics) {
-        const scopedVals = await storage.getMetricValuesForMetric(companyId, m.id, metricValueScope);
-        const periodVal = scopedVals.find(v => v.period === period);
-        if (periodVal) existingValues[m.name] = periodVal.value !== null ? Number(periodVal.value) : null;
-      }
-
-      const dbFactors = await getConfiguredEmissionFactors(companyId, "UK");
-      const efMap = buildEmissionFactorMap(dbFactors);
-      const calculated = runCalculationsForPeriod(rawInputs, efMap, existingValues);
-      const updated: any[] = [];
-
-      for (const [metricName, calcValue] of Object.entries(calculated)) {
-        if (calcValue === null || calcValue === undefined) continue;
-        const metric = allMetrics.find(m => m.name === metricName && (m.metricType === "calculated" || m.metricType === "derived"));
-        if (!metric) continue;
-
-        const scopedVals = await storage.getMetricValuesForMetric(companyId, metric.id, metricValueScope);
-        const existingForPeriod = scopedVals.find(v => v.period === period);
-        const sortedPrev = scopedVals.filter(v => v.period < period).sort((a, b) => a.period.localeCompare(b.period));
-        const previousPeriodVal = sortedPrev.length > 0 ? sortedPrev[sortedPrev.length - 1] : null;
-        const prevVal = previousPeriodVal?.value !== null && previousPeriodVal?.value !== undefined ? Number(previousPeriodVal.value) : null;
-        const pctChange = prevVal && prevVal !== 0 ? Math.round(((calcValue - prevVal) / Math.abs(prevVal)) * 10000) / 100 : null;
-        const status = getTrafficLightStatus(
-          calcValue,
-          metric.targetValue ? Number(metric.targetValue) : null,
-          metric.direction || "higher_is_better",
-          Number(metric.amberThreshold || 5),
-          Number(metric.redThreshold || 15),
-          metric.targetMin ? Number(metric.targetMin) : null,
-          metric.targetMax ? Number(metric.targetMax) : null,
-          prevVal
-        );
-
-        if (existingForPeriod) {
-          const r = await storage.updateMetricValue(existingForPeriod.id, {
-            value: calcValue.toString(),
-            previousValue: prevVal?.toString() || null,
-            status,
-            percentChange: pctChange?.toString() || null,
-            siteId,
-            sourceType: "calculated",
-          });
-          updated.push({ metric: metricName, value: calcValue, status, updated: true });
-        } else {
-          await storage.createMetricValue({
-            metricId: metric.id,
-            period,
-            value: calcValue.toString(),
-            previousValue: prevVal?.toString() || null,
-            targetValue: metric.targetValue?.toString() || null,
-            status,
-            percentChange: pctChange?.toString() || null,
-            submittedBy: userId,
-            notes: "Auto-calculated",
-            sourceType: "calculated",
-            locked: false,
-            siteId,
-          });
-          updated.push({ metric: metricName, value: calcValue, status, created: true });
-        }
-      }
-
-      res.json({ period, updated });
+      res.json(recalculation);
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -4395,7 +4837,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const metricBelongs = allMetrics.find((m: any) => m.id === req.params.id);
       if (!metricBelongs) return res.status(403).json({ error: "Metric does not belong to your company" });
       const { direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner, weight, importance } = req.body;
-      const result = await storage.updateMetric(req.params.id, {
+      const result = await storage.updateMetric(String(req.params.id), companyId, {
         direction, targetValue, targetMin, targetMax, amberThreshold, redThreshold, enabled, helpText, dataOwner, weight, importance,
       });
       await storage.createAuditLog({
@@ -4467,7 +4909,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
 
       if (existingMetric) {
-        const updatedMetric = await storage.updateMetric(existingMetric.id, { enabled: isActive });
+        const updatedMetric = await storage.updateMetric(existingMetric.id, companyId, { enabled: isActive });
         return res.json({ ...def, isActive: Boolean(updatedMetric?.enabled) });
       }
 
@@ -4498,18 +4940,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/metric-evidence/:metricValueId", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const metricValueResult = await db.execute(sql`
-        SELECT mv.id
-        FROM metric_values mv
-        INNER JOIN metrics m ON m.id = mv.metric_id
-        WHERE mv.id = ${req.params.metricValueId}
-          AND m.company_id = ${companyId}
-        LIMIT 1
-      `);
-      if (!((metricValueResult as any).rows ?? [])[0]) {
+      const metricValueId = String(req.params.metricValueId);
+      if (!await resolveMetricEvidenceValueOwner(companyId, metricValueId)) {
         return res.status(404).json({ error: "Metric value not found" });
       }
-      const evidence = await storage.getMetricEvidence(req.params.metricValueId);
+      const evidence = await storage.getMetricEvidence(metricValueId);
       res.json(evidence);
     } catch (e: any) {
       sendServerError(res, e);
@@ -4521,20 +4956,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = req.body;
-      if (!metricValueId || !fileName) return res.status(400).json({ error: "metricValueId and fileName are required" });
-      const metricValueResult = await db.execute(sql`
-        SELECT mv.id
-        FROM metric_values mv
-        INNER JOIN metrics m ON m.id = mv.metric_id
-        WHERE mv.id = ${metricValueId}
-          AND m.company_id = ${companyId}
-        LIMIT 1
-      `);
-      if (!((metricValueResult as any).rows ?? [])[0]) {
-        return res.status(404).json({ error: "Metric value not found" });
-      }
-      const evidence = await storage.createMetricEvidence({
+      const parsed = metricEvidenceCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid metric evidence payload", details: parsed.error.flatten() });
+      const { metricValueId, fileName, fileUrl, storageKey, fileType, notes } = parsed.data;
+      const owner = await resolveMetricEvidenceValueOwner(companyId, metricValueId);
+      if (!owner) return res.status(404).json({ error: "Metric value not found" });
+      const evidenceData = {
         metricValueId,
         fileName,
         fileUrl: fileUrl || null,
@@ -4542,9 +4969,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         fileType: fileType || null,
         uploadedByUserId: userId,
         notes: notes || null,
-      });
+      };
+      const evidence = owner.kind === "canonical"
+        ? await storage.createCanonicalMetricEvidence(companyId, evidenceData)
+        : await storage.createLegacyMetricEvidence(companyId, evidenceData);
       res.status(201).json(evidence);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       sendServerError(res, e);
     }
   });
@@ -4553,21 +4986,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/metric-evidence/:id", requireAuth, requireProvisioningPermission("delete_evidence"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const evidenceResult = await db.execute(sql`
-        SELECT me.id
-        FROM metric_evidence me
-        INNER JOIN metric_values mv ON mv.id = me.metric_value_id
-        INNER JOIN metrics m ON m.id = mv.metric_id
-        WHERE me.id = ${req.params.id}
-          AND m.company_id = ${companyId}
-        LIMIT 1
-      `);
-      if (!((evidenceResult as any).rows ?? [])[0]) {
-        return res.status(404).json({ error: "Evidence not found" });
+      const evidenceId = String(req.params.id);
+      const [evidence] = await db.select().from(metricEvidence).where(eq(metricEvidence.id, evidenceId)).limit(1);
+      if (!evidence) return res.status(404).json({ error: "Evidence not found" });
+      const owner = await resolveMetricEvidenceValueOwner(companyId, evidence.metricValueId);
+      if (!owner) return res.status(404).json({ error: "Evidence not found" });
+      if (owner.kind === "canonical") {
+        if (!await storage.deleteCanonicalMetricEvidence(evidenceId, companyId)) {
+          return res.status(404).json({ error: "Evidence not found" });
+        }
+      } else {
+        if (!await storage.deleteLegacyMetricEvidence(evidenceId, companyId)) {
+          return res.status(404).json({ error: "Evidence not found" });
+        }
       }
-      await storage.deleteMetricEvidence(req.params.id);
       res.json({ success: true });
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       sendServerError(res, e);
     }
   });
@@ -4984,27 +5421,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // POST /api/metric-values/:id/calculate — trigger derived calculations for a value
-  app.post("/api/metric-values/:id/calculate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
-    try {
-      const companyId = (req.session as any).companyId;
-      const { metricCode, periodStart, periodEnd, siteId } = req.body;
-      if (!metricCode || !periodStart || !periodEnd) {
-        return res.status(400).json({ error: "metricCode, periodStart, and periodEnd are required" });
-      }
-      const { triggerDerivedCalculationsForMetric } = await import("./metric-engine");
-      await triggerDerivedCalculationsForMetric(
-        companyId,
-        metricCode,
-        new Date(periodStart),
-        new Date(periodEnd),
-        siteId || null,
-        req.params.id
-      );
-      res.json({ success: true });
-    } catch (e: any) {
-      sendServerError(res, e);
-    }
+  // Retired: the legacy engine trusted caller-supplied tenant/site/period
+  // context and wrote unscoped legacy rows. Canonical metric-definition value
+  // writes trigger the tenant-scoped calculation engine instead.
+  app.post("/api/metric-values/:id/calculate", requireAuth, requireProvisioningPermission("enter_metric_data"), (_req, res) => {
+    res.status(410).json({ error: "This legacy calculation endpoint has been retired" });
   });
 
   // ============================================================
@@ -5027,24 +5448,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       sendServerError(res, e);
     }
   });
-
-  // POST /api/data-entries/estimate — returns estimation suggestions only, does NOT persist
-  app.post("/api/data-entries/estimate", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
-    if (!featureFlags.estimationEnabled) {
-      const { status, body } = featureDisabledResponse("estimation");
-      return res.status(status).json(body);
-    }
-    try {
-      const { runEstimationEngine } = await import("./estimation-engine");
-      const profile = req.body?.profile ?? {};
-      const actuals = req.body?.actuals ?? {};
-      const estimates = runEstimationEngine(profile, actuals);
-      res.json({ estimates, notice: "These are estimates only and have not been saved. Review and accept individual values to persist them." });
-    } catch (e: any) {
-      sendServerError(res, e);
-    }
-  });
-
 
   // Enhanced dashboard
   app.get("/api/dashboard/enhanced", requireAuth, async (req, res) => {
@@ -5409,8 +5812,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const companyId = (req.session as any).companyId;
+      const parsed = estimateRequestSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const { period, metricIds, force, siteId } = parsed.data;
+      if (siteId) {
+        const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
+        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
+      }
       const company = await storage.getCompany(companyId);
-      const { period, metricIds, force } = req.body;
 
       const allMetrics = await storage.getMetrics(companyId);
       const targetMetrics = metricIds
@@ -5430,7 +5839,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }> = [];
 
       const industry = company?.industry || "Professional Services";
-      const employeeCount = company?.employeeCount || 25;
+      const configuredEmployeeCount = company?.employeeCount ?? 25;
+      const employeeCount = Number.isFinite(configuredEmployeeCount) && configuredEmployeeCount >= 0
+        ? configuredEmployeeCount
+        : 25;
       const sizeLabel = employeeCount <= 9 ? "micro" : employeeCount <= 49 ? "small" : employeeCount <= 249 ? "medium" : "large";
 
       // Industry-based estimation benchmarks
@@ -5472,12 +5884,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const metric of targetMetrics) {
         if (!metric.enabled || metric.metricType === "calculated" || metric.metricType === "derived") continue;
 
-        // Check if metric already has actual data
-        const vals = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
+        // Estimate suggestions are scoped to exactly the organisation or site
+        // currently being edited. Data at one site must not suppress another.
+        const vals = await storage.getMetricValuesForMetric(
+          companyId,
+          metric.id,
+          siteId ? { scope: "site", siteId } : { scope: "organisation" },
+        );
         const existingActual = vals.find(v =>
           v.value !== null &&
           v.value !== undefined &&
           v.dataSourceType !== "estimated" &&
+          v.workflowStatus !== "rejected" &&
           (!period || v.period === period)
         );
 
@@ -5487,6 +5905,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const existingEstimate = vals.find(v =>
           v.value !== null &&
           v.dataSourceType === "estimated" &&
+          v.workflowStatus !== "rejected" &&
           (!period || v.period === period)
         );
 
@@ -5509,7 +5928,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      res.json({ estimates, period, industry, employeeCount });
+      res.json({
+        estimates,
+        period,
+        industry,
+        employeeCount,
+        siteId: siteId ?? null,
+        notice: "These are estimates only and have not been saved. Review and accept individual values to persist them.",
+      });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -5526,7 +5952,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const plan = await storage.createActionPlan({ ...req.body, companyId });
+      const parsed = actionPlanCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (parsed.data.relatedMetricId) {
+        const relatedMetric = await storage.getMetric(parsed.data.relatedMetricId);
+        if (!relatedMetric || relatedMetric.companyId !== companyId) {
+          return res.status(400).json({ error: "relatedMetricId must reference a metric in your company" });
+        }
+      }
+      const plan = await storage.createActionPlan({ ...parsed.data, companyId });
       await storage.createAuditLog({
         companyId, userId,
         action: "Action created",
@@ -5544,17 +5978,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
+      const parsed = actionPlanUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
       const existing = await storage.getActionPlan(req.params.id);
       if (!existing || existing.companyId !== companyId) {
         return res.status(404).json({ error: "Action not found" });
       }
-      const plan = await storage.updateActionPlan(req.params.id, req.body);
+      if (parsed.data.relatedMetricId) {
+        const relatedMetric = await storage.getMetric(parsed.data.relatedMetricId);
+        if (!relatedMetric || relatedMetric.companyId !== companyId) {
+          return res.status(400).json({ error: "relatedMetricId must reference a metric in your company" });
+        }
+      }
+      const plan = await storage.updateActionPlan(String(req.params.id), companyId, parsed.data);
       await storage.createAuditLog({
         companyId, userId,
         action: "Action updated",
         entityType: "action",
         entityId: req.params.id,
-        details: { status: req.body.status },
+        details: { status: parsed.data.status },
       });
       res.json(plan);
     } catch (e: any) {
@@ -7645,6 +8087,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ===== QUESTIONNAIRE AUTOFILL =====
+  async function validateQuestionnaireScope(
+    companyId: string,
+    siteId: string | null | undefined,
+    reportingPeriodId: string | null | undefined,
+  ): Promise<{ valid: true } | { valid: false; status: number; message: string }> {
+    if (!siteId && (await storage.getSites(companyId)).length > 0) {
+      return {
+        valid: false,
+        status: 400,
+        message: "Please select a site. Questionnaires must be assigned to a specific site.",
+      };
+    }
+    if (siteId) {
+      const ownership = await validateSiteOwnership(siteId, companyId, { write: true });
+      if (!ownership.valid) return ownership;
+    }
+    if (reportingPeriodId) {
+      const ownedPeriod = (await storage.getReportingPeriods(companyId))
+        .some((period) => period.id === reportingPeriodId);
+      if (!ownedPeriod) {
+        return {
+          valid: false,
+          status: 400,
+          message: "reportingPeriodId must reference a reporting period in your company",
+        };
+      }
+    }
+    return { valid: true };
+  }
+
   app.get("/api/questionnaires", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
@@ -7672,8 +8144,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!company) return res.status(404).json({ error: "Company not found" });
     const { tier } = await getEffectivePlanTier(company);
     if (tier !== "pro") return upgradeRequired(req, res);
-    const q = await storage.getQuestionnaire(req.params.id);
-    if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Questionnaire not found" });
+    const q = await storage.getQuestionnaire(req.params.id, companyId);
+    if (!q) return res.status(404).json({ error: "Questionnaire not found" });
     const questions = await storage.getQuestionnaireQuestions(q.id);
     res.json({ ...q, questions });
   });
@@ -7682,36 +8154,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { title, source, questions, siteId: bodySiteId, reportingPeriodId: bodyRpId } = req.body;
+      const parsed = questionnaireCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const { title, source, questions, siteId: bodySiteId, reportingPeriodId: bodyRpId } = parsed.data;
       const _company = await storage.getCompany(companyId);
       if (!_company) return res.status(404).json({ error: "Company not found" });
       const { tier: _tier } = await getEffectivePlanTier(_company);
       if (_tier !== "pro") return upgradeRequired(req, res);
-      // Enforce siteId when company has any active sites
-      if (!bodySiteId) {
-        const _qSites = await storage.getSites(companyId);
-        const _qActiveSites = _qSites.filter(s => s.status === "active");
-        if (_qActiveSites.length >= 1) {
-          return res.status(400).json({ error: "Please select a site. Questionnaires must be assigned to a specific site." });
-        }
-      }
-      // Validate siteId ownership if provided (write: true blocks archived sites)
-      if (bodySiteId) {
-        const ownership = await validateSiteOwnership(bodySiteId, companyId, { write: true });
-        if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
-      }
+      const scope = await validateQuestionnaireScope(companyId, bodySiteId, bodyRpId);
+      if (!scope.valid) return res.status(scope.status).json({ error: scope.message });
 
-      const q = await storage.createQuestionnaire({ companyId, title, source, status: "draft", siteId: bodySiteId || null, reportingPeriodId: bodyRpId || null } as any);
-
-      if (questions && Array.isArray(questions)) {
-        for (let i = 0; i < questions.length; i++) {
-          await storage.createQuestionnaireQuestion({
-            questionnaireId: q.id,
-            questionText: questions[i],
-            orderIndex: i,
-          });
-        }
-      }
+      const created = await storage.createQuestionnaireWithQuestions(
+        { companyId, title, source, status: "draft", siteId: bodySiteId || null, reportingPeriodId: bodyRpId || null } as any,
+        questions.map((questionText, orderIndex) => ({ questionText, orderIndex })),
+      );
+      const q = created.questionnaire;
 
       await storage.createAuditLog({
         companyId, userId,
@@ -7721,8 +8178,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { title, questionCount: questions?.length || 0 },
       });
 
-      const savedQuestions = await storage.getQuestionnaireQuestions(q.id);
-      res.json({ ...q, questions: savedQuestions });
+      res.json({ ...q, questions: created.questions });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -7738,8 +8194,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
 
-      const qRecord = await storage.getQuestionnaire(questionnaireId);
-      if (!qRecord || qRecord.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      const qRecord = await storage.getQuestionnaire(questionnaireId, companyId);
+      if (!qRecord) return res.status(404).json({ error: "Not found" });
+
+      // Revalidate the persisted scope immediately before reading facts. A
+      // questionnaire may outlive an archived site or deleted reporting period;
+      // never fall back to another site/period when that happens.
+      const persistedScope = await validateQuestionnaireScope(
+        companyId,
+        qRecord.siteId,
+        qRecord.reportingPeriodId,
+      );
+      if (!persistedScope.valid) {
+        return res.status(409).json({
+          error: "This questionnaire's saved site or reporting period is no longer available. Update its scope before autofilling.",
+          code: "QUESTIONNAIRE_SCOPE_STALE",
+          reason: persistedScope.message,
+        });
+      }
+
+      const reportingPeriod = qRecord.reportingPeriodId
+        ? (await storage.getReportingPeriods(companyId)).find((period) => period.id === qRecord.reportingPeriodId)
+        : null;
+      if (qRecord.reportingPeriodId && !reportingPeriod) {
+        return res.status(409).json({
+          error: "This questionnaire's saved reporting period is no longer available. Update its scope before autofilling.",
+          code: "QUESTIONNAIRE_SCOPE_STALE",
+        });
+      }
+      const contextBoundary: QuestionnaireContextBoundary | null = reportingPeriod
+        ? { siteId: qRecord.siteId ?? null, reportingPeriod }
+        : null;
 
       const questions = await storage.getQuestionnaireQuestions(questionnaireId);
       if (!questions.length) return res.status(400).json({ error: "No questions found" });
@@ -7751,12 +8236,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const actions = await storage.getActionPlans(companyId);
-      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+      const carbonCalcs = contextBoundary
+        ? (await storage.getCarbonCalculations(companyId, contextBoundary.siteId))
+            .filter((calculation) => questionnaireCarbonCalculationIsInScope(calculation, contextBoundary))
+        : [];
 
-      // Get recent metric values
+      // Only facts within the questionnaire's saved site and reporting period
+      // may enter the prompt. Missing period scope deliberately yields no
+      // metric/carbon facts instead of choosing an unrelated latest value.
       const metricData: Record<string, any> = {};
       for (const m of allMetrics.filter(m => m.enabled)) {
-        const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
+        const vals = contextBoundary
+          ? (await storage.getMetricValuesForMetric(
+              companyId,
+              m.id,
+              contextBoundary.siteId
+                ? { scope: "site", siteId: contextBoundary.siteId }
+                : { scope: "organisation" },
+            )).filter((value) => questionnaireMetricValueIsInScope(value, contextBoundary))
+          : [];
         if (vals.length > 0) {
           metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
         }
@@ -7792,19 +8290,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
 
-        const updated = await storage.updateQuestionnaireQuestion(q.id, {
+        const updated = await storage.updateQuestionnaireQuestion(q.id, questionnaireId, companyId, {
           category,
           suggestedAnswer,
           confidence: confidence as any,
           sourceRef,
           rationale,
           sourceData: sourceData as any,
-          workflowStatus: "draft",
         });
         updatedQuestions.push(updated);
       }
 
-      await storage.updateQuestionnaire(questionnaireId, { status: "in_progress" });
+      await storage.updateQuestionnaire(questionnaireId, companyId, { status: "in_progress" });
 
       await storage.createAiGenerationLog({
         companyId,
@@ -7812,7 +8309,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         modelName: "gpt-5.2",
         promptVersion: "v1",
         generatedBy: userId,
-        sourceDataSummary: { questionCount: questions.length },
+        sourceDataSummary: {
+          questionCount: questions.length,
+          siteId: qRecord.siteId ?? null,
+          reportingPeriodId: qRecord.reportingPeriodId ?? null,
+        },
         promptText: "<autofill system prompt>",
         outputSummary: questions.length + " questions autofilled",
         entityId: questionnaireId,
@@ -7827,7 +8328,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         details: { questionCount: questions.length },
       });
 
-      res.json({ questions: updatedQuestions });
+      res.json({ id: questionnaireId, questions: updatedQuestions });
     } catch (e: any) {
       console.error("[questionnaire-autofill] OpenAI generation failed:", safeOpenAiErrorMeta(e));
       sendServerError(res, e);
@@ -7836,12 +8337,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.put("/api/questionnaires/:qId/questions/:id", requireAuth, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
-      const _cId = (req.session as any).companyId;
-      const _co = await storage.getCompany(_cId);
+      const companyId = (req.session as any).companyId;
+      const _co = await storage.getCompany(companyId);
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
-      const updated = await storage.updateQuestionnaireQuestion(req.params.id, req.body);
+      const parsed = questionnaireQuestionUserUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const parent = await storage.getQuestionnaire(req.params.qId, companyId);
+      if (!parent) return res.status(404).json({ error: "Question not found" });
+      const updated = await storage.updateQuestionnaireQuestion(
+        req.params.id,
+        req.params.qId,
+        companyId,
+        parsed.data,
+      );
+      if (!updated) return res.status(404).json({ error: "Question not found" });
       res.json(updated);
     } catch (e: any) {
       sendServerError(res, e);
@@ -7855,9 +8366,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!_co) return res.status(404).json({ error: "Company not found" });
       const { tier: _t } = await getEffectivePlanTier(_co);
       if (_t !== "pro") return upgradeRequired(req, res);
-      const q = await storage.getQuestionnaire(req.params.id);
-      if (!q || q.companyId !== companyId) return res.status(404).json({ error: "Not found" });
-      await storage.deleteQuestionnaire(req.params.id);
+      const deleted = await storage.deleteQuestionnaire(req.params.id, companyId);
+      if (!deleted) return res.status(404).json({ error: "Not found" });
       res.json({ ok: true });
     } catch (e: any) {
       sendServerError(res, e);
@@ -7985,17 +8495,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
+      const parsed = generatedPolicyUserUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
       const policy = await storage.getGeneratedPolicy(req.params.id);
       if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
 
-      const updated = await storage.updateGeneratedPolicy(req.params.id, req.body);
+      const updated = await storage.updateGeneratedPolicy(
+        String(req.params.id),
+        companyId,
+        parsed.data,
+        { approveTransition: parsed.data.status === "approved" && policy.status !== "approved" },
+      );
 
       await storage.createAuditLog({
         companyId, userId,
         action: `Policy updated: ${policy.title}`,
         entityType: "generated_policy",
         entityId: policy.id,
-        details: { status: req.body.status },
+        details: { status: parsed.data.status },
       });
 
       res.json(updated);
@@ -8016,9 +8533,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.put("/api/policy-templates/:slug/admin", requireAuth, requireProvisioningPermission("manage_templates"), async (req, res) => {
+  app.put("/api/policy-templates/:slug/admin", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
-      const updated = await storage.updatePolicyTemplate(req.params.slug, req.body);
+      const parsed = policyTemplateAdminUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const updated = await storage.updatePolicyTemplate(req.params.slug, parsed.data);
       if (!updated) return res.status(404).json({ error: "Template not found" });
       res.json(updated);
     } catch (e: any) {
@@ -8229,39 +8748,76 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ===== WORKFLOW ROUTES =====
+  const workflowEntityTypeSchema = z.enum([
+    "metric_value",
+    "raw_data",
+    "report",
+    "generated_policy",
+    "questionnaire_question",
+  ]);
+  const workflowEntityIdSchema = z.string().trim().min(1).max(255);
+  const workflowSubmitItemSchema = z.object({
+    entityType: workflowEntityTypeSchema,
+    entityId: workflowEntityIdSchema,
+  }).strict();
+  const workflowSubmitSchema = z.union([
+    z.object({
+      items: z.array(workflowSubmitItemSchema).min(1).max(500),
+    }).strict(),
+    // Retain the original single-entity-type contract for existing API clients.
+    z.object({
+      entityType: workflowEntityTypeSchema,
+      entityIds: z.array(workflowEntityIdSchema).min(1).max(500),
+    }).strict(),
+  ]);
+  const workflowReviewSchema = z.object({
+    entityType: workflowEntityTypeSchema,
+    entityId: workflowEntityIdSchema,
+    action: z.enum(["approve", "reject"]),
+    comment: z.string().trim().max(2000).optional(),
+  }).strict().superRefine((body, context) => {
+    if (body.action === "reject" && !body.comment) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["comment"], message: "Comment is required for rejection" });
+    }
+  });
+  const workflowBulkReviewSchema = z.object({
+    items: z.array(z.object({
+      entityType: workflowEntityTypeSchema,
+      entityId: workflowEntityIdSchema,
+    }).strict()).min(1).max(500),
+    action: z.enum(["approve", "reject"]),
+    comment: z.string().trim().max(2000).optional(),
+  }).strict().superRefine((body, context) => {
+    if (body.action === "reject" && !body.comment) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["comment"], message: "Comment is required for rejection" });
+    }
+  });
+  const workflowReviseSchema = z.object({
+    entityType: z.enum(["metric_value", "raw_data"]),
+    entityId: workflowEntityIdSchema,
+  }).strict();
+
   app.post("/api/workflow/submit", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const user = await storage.getUser(userId);
-      const { entityType, entityIds } = req.body;
-      const validTypes: Record<string, string> = {
-        metric_value: "metric_values",
-        raw_data: "raw_data_inputs",
-        report: "report_runs",
-        generated_policy: "generated_policies",
-        questionnaire_question: "questionnaire_questions",
-      };
-      if (!validTypes[entityType]) {
-        return res.status(400).json({ error: "Invalid entityType. Must be one of: metric_value, raw_data, report, generated_policy, questionnaire_question" });
+      const parsed = workflowSubmitSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid workflow submission", fields: parsed.error.flatten().fieldErrors });
       }
-      if (!Array.isArray(entityIds) || entityIds.length === 0) {
-        return res.status(400).json({ error: "entityIds must be a non-empty array" });
-      }
-      const table = validTypes[entityType];
-      for (const id of entityIds) {
-        await storage.updateWorkflowStatus(table, id, "submitted", userId, undefined, companyId);
-      }
-      await storage.createAuditLog({
-        companyId, userId,
-        action: `Workflow submitted: ${entityType}`,
-        entityType,
-        entityId: entityIds.join(","),
-        details: { entityIds, entityType },
-      });
-      res.json({ ok: true, submitted: entityIds.length });
+      const items = "items" in parsed.data
+        ? parsed.data.items
+        : parsed.data.entityIds.map((entityId) => ({
+            entityType: parsed.data.entityType,
+            entityId,
+          }));
+      const result = await storage.submitWorkflowItems(items as Array<{
+        entityType: WorkflowEntityType;
+        entityId: string;
+      }>, companyId, userId);
+      res.json({ ok: true, ...result });
     } catch (e: any) {
-      sendServerError(res, e);
+      sendServerError(res, e, "submit workflow entities");
     }
   });
 
@@ -8269,33 +8825,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { entityType, entityId, action, comment } = req.body;
-      const validTypes: Record<string, string> = {
-        metric_value: "metric_values",
-        raw_data: "raw_data_inputs",
-        report: "report_runs",
-        generated_policy: "generated_policies",
-        questionnaire_question: "questionnaire_questions",
-      };
-      if (!validTypes[entityType]) {
-        return res.status(400).json({ error: "Invalid entityType" });
+      const parsed = workflowReviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid workflow review", fields: parsed.error.flatten().fieldErrors });
       }
-      if (!["approve", "reject"].includes(action)) {
-        return res.status(400).json({ error: "Action must be 'approve' or 'reject'" });
+      const result = await storage.reviewWorkflowEntity(
+        parsed.data.entityType as WorkflowEntityType,
+        parsed.data.entityId,
+        parsed.data.action,
+        companyId,
+        userId,
+        parsed.data.comment,
+      );
+      if (result.outcome === "not_found") {
+        return res.status(404).json({ error: "Workflow item not found" });
       }
-      const status = action === "approve" ? "approved" : "rejected";
-      const table = validTypes[entityType];
-      await storage.updateWorkflowStatus(table, entityId, status, userId, comment, companyId);
-      await storage.createAuditLog({
-        companyId, userId,
-        action: `Workflow ${action}d: ${entityType}`,
-        entityType,
-        entityId,
-        details: { action, comment, entityType },
-      });
-      res.json({ ok: true, status });
+      if (result.outcome === "not_submitted") {
+        return res.status(409).json({
+          error: "Workflow item is no longer awaiting review",
+          currentStatus: result.currentStatus,
+        });
+      }
+      res.json({ ok: true, status: result.status, outcome: result.outcome });
     } catch (e: any) {
-      sendServerError(res, e);
+      sendServerError(res, e, "review workflow entity");
     }
   });
 
@@ -8303,52 +8856,62 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { items, action, comment } = req.body;
-      const validTypes: Record<string, string> = {
-        metric_value: "metric_values",
-        raw_data: "raw_data_inputs",
-        report: "report_runs",
-        generated_policy: "generated_policies",
-        questionnaire_question: "questionnaire_questions",
-      };
-      if (!Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: "Items array is required" });
+      const parsed = workflowBulkReviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid bulk workflow review", fields: parsed.error.flatten().fieldErrors });
       }
-      if (!["approve", "reject"].includes(action)) {
-        return res.status(400).json({ error: "Action must be 'approve' or 'reject'" });
-      }
-      if (action === "reject" && (!comment || !comment.trim())) {
-        return res.status(400).json({ error: "Comment is required for rejection" });
-      }
-      const status = action === "approve" ? "approved" : "rejected";
-      let succeeded = 0;
-      let failed = 0;
-      const errors: string[] = [];
-      for (const item of items) {
-        const table = validTypes[item.entityType];
-        if (!table) {
-          failed++;
-          errors.push(`Invalid entityType: ${item.entityType}`);
-          continue;
-        }
-        try {
-          await storage.updateWorkflowStatus(table, item.entityId, status, userId, comment, companyId);
-          await storage.createAuditLog({
-            companyId, userId,
-            action: `Bulk workflow ${action}d: ${item.entityType}`,
-            entityType: item.entityType,
-            entityId: item.entityId,
-            details: { action, comment, entityType: item.entityType, bulk: true },
-          });
-          succeeded++;
-        } catch (e: any) {
-          failed++;
-          errors.push(`${item.entityType}:${item.entityId} - ${e.message}`);
-        }
-      }
-      res.json({ succeeded, failed, errors });
+      const result = await storage.bulkReviewWorkflowEntities(
+        parsed.data.items as Array<{ entityType: WorkflowEntityType; entityId: string }>,
+        parsed.data.action,
+        companyId,
+        userId,
+        parsed.data.comment,
+      );
+      const failed = result.notSubmitted + result.notFound;
+      const errors = result.results.flatMap((item) => {
+        if (item.outcome === "reviewed") return [];
+        if (item.outcome === "not_found") return [`${item.entityType}:${item.entityId} was not found`];
+        return [`${item.entityType}:${item.entityId} is ${item.currentStatus}, not submitted`];
+      });
+      res.json({
+        ok: true,
+        ...result,
+        // Backward-compatible aliases for existing approval screens.
+        succeeded: result.reviewed,
+        failed,
+        errors,
+      });
     } catch (e: any) {
-      sendServerError(res, e);
+      sendServerError(res, e, "bulk review workflow entities");
+    }
+  });
+
+  app.post("/api/workflow/revise", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+    try {
+      const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
+      const parsed = workflowReviseSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid workflow revision", fields: parsed.error.flatten().fieldErrors });
+      }
+      const result = await storage.reviseWorkflowEntity(
+        parsed.data.entityType,
+        parsed.data.entityId,
+        companyId,
+        userId,
+      );
+      if (result.outcome === "not_found") {
+        return res.status(404).json({ error: "Workflow item not found" });
+      }
+      if (result.outcome === "not_rejected") {
+        return res.status(409).json({
+          error: "Only rejected workflow items can be revised",
+          currentStatus: result.currentStatus,
+        });
+      }
+      res.json({ ok: true, status: result.status, outcome: result.outcome });
+    } catch (e: any) {
+      sendServerError(res, e, "revise workflow entity");
     }
   });
 
@@ -8577,14 +9140,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { name, periodType, startDate, endDate } = req.body;
-      if (!name || !periodType || !startDate || !endDate) {
-        return res.status(400).json({ error: "name, periodType, startDate, endDate are required" });
-      }
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      const parsed = reportingPeriodMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const { name, periodType, startDate, endDate } = parsed.data;
+      const start = new Date(`${startDate}T00:00:00.000Z`);
+      const end = new Date(`${endDate}T00:00:00.000Z`);
       if (start >= end) {
         return res.status(400).json({ error: "startDate must be before endDate" });
+      }
+      try {
+        reportingMonthsForDateRange({ startDate: start, endDate: end });
+      } catch (error) {
+        if (error instanceof RangeError) return res.status(400).json({ error: error.message });
+        throw error;
       }
       const period = await storage.createReportingPeriod({
         companyId, name, periodType, startDate: start, endDate: end,
@@ -8598,6 +9166,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.status(201).json(period);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message });
+      }
       sendServerError(res, e);
     }
   });
@@ -8617,6 +9188,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message });
+      }
       sendServerError(res, e);
     }
   });
@@ -8636,6 +9210,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json(result);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message });
+      }
       sendServerError(res, e);
     }
   });
@@ -8644,27 +9221,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { name, periodType, startDate, endDate } = req.body;
-      if (!name || !periodType || !startDate || !endDate) {
-        return res.status(400).json({ error: "name, periodType, startDate, endDate are required" });
-      }
-      if (new Date(startDate) >= new Date(endDate)) {
+      const parsed = reportingPeriodMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const { name, periodType, startDate, endDate } = parsed.data;
+      const start = new Date(`${startDate}T00:00:00.000Z`);
+      const end = new Date(`${endDate}T00:00:00.000Z`);
+      if (start >= end) {
         return res.status(400).json({ error: "startDate must be before endDate" });
+      }
+      try {
+        reportingMonthsForDateRange({ startDate: start, endDate: end });
+      } catch (error) {
+        if (error instanceof RangeError) return res.status(400).json({ error: error.message });
+        throw error;
       }
       const result = await storage.copyForwardPeriod(req.params.id, companyId, {
         companyId, name, periodType,
-        startDate: new Date(startDate), endDate: new Date(endDate),
+        startDate: start, endDate: end,
       });
       await storage.createAuditLog({
         companyId, userId,
         action: "reporting_period_copied",
         entityType: "reporting_period",
         entityId: result.period.id,
-        details: { sourcePeriodId: req.params.id, newPeriodId: result.period.id, copiedMetrics: result.copiedMetrics, copiedActions: result.copiedActions },
+        details: {
+          sourcePeriodId: req.params.id,
+          newPeriodId: result.period.id,
+          copiedMetrics: result.copiedMetrics,
+          copiedActions: result.copiedActions,
+          carriedForwardMetrics: result.carriedForwardMetrics,
+          carriedForwardActions: result.carriedForwardActions,
+        },
       });
       res.status(201).json(result);
     } catch (e: any) {
-      if (e.message === "Source period not found") return res.status(404).json({ error: e.message });
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message });
+      }
       sendServerError(res, e);
     }
   });
@@ -9111,7 +9704,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const allFiles = await storage.getEvidenceFiles(companyId);
       const owned = allFiles.find(f => f.id === req.params.id);
       if (!owned) return res.status(404).json({ error: "Evidence not found" });
-      await storage.deleteEvidenceFile(req.params.id);
+      if (!await storage.deleteEvidenceFileForCompany(req.params.id, companyId)) {
+        return res.status(404).json({ error: "Evidence not found" });
+      }
       await removeEvidenceFileIfPresent(companyId, owned.id, owned.filename);
       auditLog({
         companyId,
@@ -9128,6 +9723,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.json({ ok: true });
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       sendServerError(res, e);
     }
   });
@@ -10315,33 +10913,62 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { format, content, title } = req.body;
+      const request = questionnaireImportSchema.safeParse(req.body);
+      if (!request.success) {
+        if (request.error.issues.some((issue) => issue.path[0] === "format")) {
+          return res.status(400).json({ error: "Format must be text or csv" });
+        }
+        return res.status(400).json(apiValidationError(request.error));
+      }
+      const { format, content, title, siteId, reportingPeriodId } = request.data;
       const _iCo = await storage.getCompany(companyId);
       if (!_iCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _iTier } = await getEffectivePlanTier(_iCo);
       if (_iTier !== "pro") return upgradeRequired(req, res);
-      if (!title || !content) { res.status(400).json({ error: "Title and content are required" }); return; }
-      if (title.length > 200) { res.status(400).json({ error: "Title must be 200 characters or fewer" }); return; }
-      const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
-      if (content.length > MAX_IMPORT_BYTES) { res.status(400).json({ error: "File exceeds 5MB limit" }); return; }
 
-      let questions: string[] = [];
+      const scope = await validateQuestionnaireScope(companyId, siteId, reportingPeriodId);
+      if (!scope.valid) return res.status(scope.status).json({ error: scope.message });
+
+      let rawQuestions: string[] = [];
       if (format === "text") {
-        questions = content.split("\n").map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+        if (Buffer.byteLength(content, "utf8") > QUESTIONNAIRE_IMPORT_MAX_BYTES) {
+          return res.status(400).json({ error: "Import content exceeds the 1MB limit" });
+        }
+        rawQuestions = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       } else if (format === "csv") {
+        if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content)) {
+          return res.status(400).json({ error: "CSV content must be valid base64" });
+        }
         const buf = Buffer.from(content, "base64");
-        const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true });
+        if (buf.length > QUESTIONNAIRE_IMPORT_MAX_BYTES) {
+          return res.status(400).json({ error: "Import content exceeds the 1MB limit" });
+        }
+        let records: Array<Record<string, string>>;
+        try {
+          records = csvParse(buf, {
+            columns: true,
+            skip_empty_lines: true,
+            relax_column_count: true,
+            max_record_size: 10_000,
+          });
+        } catch {
+          return res.status(400).json({ error: "CSV content could not be parsed" });
+        }
         for (const record of records) {
           const questionCol = Object.keys(record).find(k => k.toLowerCase().includes("question")) || Object.keys(record)[0];
-          if (questionCol && record[questionCol]) questions.push(record[questionCol].trim());
+          if (questionCol && record[questionCol]) rawQuestions.push(record[questionCol].trim());
         }
-      } else {
-        res.status(400).json({ error: "Format must be text or csv" }); return;
       }
 
-      if (!questions.length) { res.status(400).json({ error: "No questions found" }); return; }
+      const parsedQuestions = questionnaireImportQuestionsSchema.safeParse(rawQuestions);
+      if (!parsedQuestions.success) return res.status(400).json(apiValidationError(parsedQuestions.error));
+      const questions = parsedQuestions.data;
 
-      const existingAnswers = await db.execute(sql`SELECT id, question, answer, category FROM procurement_answers WHERE company_id = ${companyId}`);
+      const existingAnswers = await db.execute(sql`
+        SELECT id, question, answer, category
+        FROM procurement_answers
+        WHERE company_id = ${companyId} AND status = 'approved'
+      `);
       const answerLibrary = (existingAnswers as any).rows || [];
 
       const matchResults = questions.map((q: string) => {
@@ -10405,38 +11032,79 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         };
       });
 
-      const questionnaire = await storage.createQuestionnaire({ companyId, title, source: `import_${format}`, status: "draft" } as any);
-
-      for (let i = 0; i < matchResults.length; i++) {
-        const mr = matchResults[i];
-        await storage.createQuestionnaireQuestion({
-          questionnaireId: questionnaire.id,
+      const created = await storage.createQuestionnaireWithQuestions(
+        {
+          companyId,
+          title,
+          source: `import_${format}`,
+          status: "draft",
+          siteId: siteId || null,
+          reportingPeriodId: reportingPeriodId || null,
+        } as any,
+        matchResults.map((mr, orderIndex) => ({
           questionText: mr.text,
-          orderIndex: i,
+          orderIndex,
           suggestedAnswer: mr.suggestedAnswer,
           confidence: mr.confidence >= 70 ? "high" : mr.confidence >= 40 ? "medium" : "low",
           sourceRef: mr.sourceType !== "none" ? `${mr.sourceType}:${mr.sourceAnswerId}` : null,
           workflowStatus: "draft",
-        } as any);
-      }
+        })),
+      );
+      const questionnaire = created.questionnaire;
 
       const matched = matchResults.filter(m => m.confidence > 0).length;
+      await storage.createAuditLog({
+        companyId,
+        userId,
+        action: "Questionnaire imported",
+        entityType: "questionnaire",
+        entityId: questionnaire.id,
+        details: {
+          title,
+          format,
+          questionCount: matchResults.length,
+          matched,
+          unmatched: matchResults.length - matched,
+          siteId: siteId || null,
+          reportingPeriodId: reportingPeriodId || null,
+        },
+      });
       res.json({ questionnaireId: questionnaire.id, totalQuestions: matchResults.length, matched, unmatched: matchResults.length - matched, questions: matchResults });
     } catch (e: any) {
       sendServerError(res, e);
     }
   });
 
+  const questionnaireResponseGenerationSchema = z.object({
+    text: z.string().trim().min(1, "Questionnaire text is required").max(50_000, "Text exceeds 50,000 character limit"),
+    title: z.string().trim().max(300).optional(),
+    siteId: z.string().trim().min(1).max(100).nullable().optional(),
+    reportingPeriodId: z.string().trim().min(1).max(100).nullable().optional(),
+  }).strict();
+
   app.post("/api/questionnaires/generate-responses", requireAuth, aiLimiter, requireProvisioningPermission("manage_questionnaires"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
-      const { text, title } = req.body;
+      const parsed = questionnaireResponseGenerationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const { text, siteId, reportingPeriodId } = parsed.data;
       const _grCo = await storage.getCompany(companyId);
       if (!_grCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _grTier } = await getEffectivePlanTier(_grCo);
       if (_grTier !== "pro") return upgradeRequired(req, res);
-      if (!text || typeof text !== "string") { res.status(400).json({ error: "Questionnaire text is required" }); return; }
-      if (text.length > 50000) { res.status(400).json({ error: "Text exceeds 50,000 character limit" }); return; }
+
+      const scope = await validateQuestionnaireScope(companyId, siteId, reportingPeriodId);
+      if (!scope.valid) return res.status(scope.status).json({ error: scope.message });
+      const reportingPeriods = await storage.getReportingPeriods(companyId);
+      if (reportingPeriods.length > 0 && !reportingPeriodId) {
+        return res.status(400).json({ error: "Please select a reporting period before generating responses" });
+      }
+      const reportingPeriod = reportingPeriodId
+        ? reportingPeriods.find((period) => period.id === reportingPeriodId)
+        : null;
+      const contextBoundary: QuestionnaireContextBoundary | null = reportingPeriod
+        ? { siteId: siteId ?? null, reportingPeriod }
+        : null;
 
       const questions = text
         .split(/\n+/)
@@ -10452,18 +11120,33 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const actions = await storage.getActionPlans(companyId);
-      const carbonCalcs = await storage.getCarbonCalculations(companyId);
+      const carbonCalcs = contextBoundary
+        ? (await storage.getCarbonCalculations(companyId, contextBoundary.siteId))
+            .filter((calculation) => questionnaireCarbonCalculationIsInScope(calculation, contextBoundary))
+        : [];
 
       const metricData: Record<string, any> = {};
-      const currentPeriod = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
       for (const m of allMetrics.filter((m: any) => m.enabled)) {
-        const vals = await storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" });
+        const vals = contextBoundary
+          ? (await storage.getMetricValuesForMetric(
+              companyId,
+              m.id,
+              contextBoundary.siteId
+                ? { scope: "site", siteId: contextBoundary.siteId }
+                : { scope: "organisation" },
+            )).filter((value) => questionnaireMetricValueIsInScope(value, contextBoundary))
+          : [];
         if (vals.length > 0) {
           metricData[m.name] = { latestValue: vals[0].value, unit: m.unit, period: vals[0].period };
         }
       }
 
-      const existingAnswers = await db.execute(sql`SELECT question, answer, category FROM procurement_answers WHERE company_id = ${companyId} ORDER BY created_at DESC`);
+      const existingAnswers = await db.execute(sql`
+        SELECT question, answer, category
+        FROM procurement_answers
+        WHERE company_id = ${companyId} AND status = 'approved'
+        ORDER BY created_at DESC
+      `);
       const answerLibrary = (existingAnswers as any).rows || [];
 
       const context = buildCompanyContext(company, latestVersion?.content, topics, metricData, actions, carbonCalcs);
@@ -10515,28 +11198,58 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         });
       }
 
-      res.json({ questions: results, total: results.length });
+      res.json({
+        questions: results,
+        total: results.length,
+        siteId: contextBoundary?.siteId ?? null,
+        reportingPeriodId: contextBoundary?.reportingPeriod.id ?? null,
+      });
     } catch (e: any) {
       sendServerError(res, new Error("Failed to generate responses"), "generate responses");
     }
   });
 
   const CARBON_COLUMN_MAP: Record<string, string> = {
-    "electricity": "elec", "electricity (kwh)": "elec", "elec_kwh": "elec", "elec": "elec",
-    "gas": "gas", "natural gas": "gas", "gas (kwh)": "gas", "gas_kwh": "gas",
-    "diesel": "diesel", "diesel (litres)": "diesel", "diesel_litres": "diesel",
-    "petrol": "petrol", "petrol (litres)": "petrol", "petrol_litres": "petrol",
-    "waste general": "waste_general", "general waste": "waste_general", "waste_general_tonnes": "waste_general",
-    "waste recycled": "waste_recycled", "recycled waste": "waste_recycled", "waste_recycled_tonnes": "waste_recycled",
-    "water": "water", "water (m3)": "water", "water_m3": "water",
-    "employees": "employees", "employee count": "employees", "headcount": "employees",
-    "flights domestic": "flights_domestic", "domestic flights": "flights_domestic",
-    "flights short haul": "flights_short", "short haul flights": "flights_short",
-    "flights long haul": "flights_long", "long haul flights": "flights_long",
-    "rail": "rail", "rail (km)": "rail", "rail_km": "rail",
+    "electricity": "electricity_kwh", "electricity (kwh)": "electricity_kwh", "elec_kwh": "electricity_kwh", "elec": "electricity_kwh",
+    "gas": "gas_kwh", "natural gas": "gas_kwh", "gas (kwh)": "gas_kwh", "gas_kwh": "gas_kwh",
+    "diesel": "diesel_litres", "diesel (litres)": "diesel_litres", "diesel_litres": "diesel_litres",
+    "petrol": "petrol_litres", "petrol (litres)": "petrol_litres", "petrol_litres": "petrol_litres",
+    "waste general": "total_waste_tonnes", "general waste": "total_waste_tonnes", "waste_general_tonnes": "total_waste_tonnes",
+    "waste recycled": "recycled_waste_tonnes", "recycled waste": "recycled_waste_tonnes", "waste_recycled_tonnes": "recycled_waste_tonnes",
+    "water": "water_m3", "water (m3)": "water_m3",
+    "employees": "employee_headcount", "employee count": "employee_headcount", "headcount": "employee_headcount",
+    "employee headcount": "employee_headcount",
+    "employee leavers": "employee_leavers", "leavers": "employee_leavers",
+    "female managers": "female_managers",
+    "total managers": "total_managers",
+    "absence days": "absence_days", "employee absence days": "absence_days",
+    "total working days": "total_working_days", "working days": "total_working_days",
+    "training hours": "total_training_hours", "total training hours": "total_training_hours",
+    "living wage employees": "living_wage_employees",
+    "flights domestic": "domestic_flight_km", "domestic flights": "domestic_flight_km",
+    "flights short haul": "short_haul_flight_km", "short haul flights": "short_haul_flight_km",
+    "flights long haul": "long_haul_flight_km", "long haul flights": "long_haul_flight_km",
+    "rail": "rail_km", "rail (km)": "rail_km",
     "hotel nights": "hotel_nights", "hotel": "hotel_nights",
     "company car": "car_miles", "car miles": "car_miles", "company car miles": "car_miles",
   };
+  const CARBON_IMPORT_INPUT_KEYS = new Set(
+    Object.values(CARBON_COLUMN_MAP).filter((inputKey) => GUIDED_RAW_INPUT_NAME_SET.has(inputKey)),
+  );
+  const GUIDED_DECIMAL_SCALE = 10_000;
+  const MAX_GUIDED_DECIMAL_SCALED = 999_999_999_999_999;
+
+  function guidedDecimalToScaledInteger(normalized: string): number {
+    const [wholePart = "0", fractionalPart = ""] = normalized.split(".");
+    return Number(wholePart) * GUIDED_DECIMAL_SCALE
+      + Number(fractionalPart.padEnd(4, "0") || "0");
+  }
+
+  function scaledIntegerToGuidedDecimal(value: number): string {
+    const wholePart = Math.floor(value / GUIDED_DECIMAL_SCALE);
+    const fractionalPart = String(value % GUIDED_DECIMAL_SCALE).padStart(4, "0").replace(/0+$/, "");
+    return fractionalPart ? `${wholePart}.${fractionalPart}` : String(wholePart);
+  }
 
   function matchColumn(col: string): { inputKey: string | null; confidence: number } {
     const normalized = col.toLowerCase().trim();
@@ -10579,7 +11292,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       if (format === "csv") {
         const buf = Buffer.from(content, "base64");
-        const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true });
+        const records = csvParse(buf, { columns: true, skip_empty_lines: true, relax_column_count: true }) as Array<Record<string, string>>;
         if (records.length > 0) columns = Object.keys(records[0]);
         rows = records;
       } else {
@@ -10587,7 +11300,10 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       }
 
       const mappings = columns.map(col => ({ column: col, ...matchColumn(col) }));
-      res.json({ columns, rows: rows.slice(0, 100), mappings });
+      if (rows.length > 10000) {
+        return res.status(400).json({ error: "Row count exceeds limit of 10,000" });
+      }
+      res.json({ columns, rows, mappings });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -10597,7 +11313,12 @@ Use the live data above to give accurate, specific advice. If you don't have inf
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
-      const { mappings, rows, period, siteId: bodySiteId } = req.body;
+      const { mappings, rows, period } = req.body;
+      const rawSiteId = req.body?.siteId;
+      const bodySiteId = rawSiteId === undefined || rawSiteId === null || rawSiteId === ""
+        || rawSiteId === "__org__" || rawSiteId === "null"
+        ? null
+        : String(rawSiteId);
       const _confCo = await storage.getCompany(companyId);
       if (!_confCo) return res.status(404).json({ error: "Company not found" });
       const { tier: _confTier } = await getEffectivePlanTier(_confCo);
@@ -10605,6 +11326,32 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       if (!mappings || !rows || !period) { res.status(400).json({ error: "mappings, rows, and period are required" }); return; }
       if (!Array.isArray(rows) || rows.length > 10000) { res.status(400).json({ error: "Row count exceeds limit of 10,000" }); return; }
       if (!Array.isArray(mappings) || mappings.length > 100) { res.status(400).json({ error: "Too many column mappings" }); return; }
+      if (typeof period !== "string" || !GUIDED_MONTH_PERIOD_RE.test(period)) {
+        return res.status(400).json({ error: "period must use YYYY-MM format" });
+      }
+      const invalidMapping = mappings.find((mapping: unknown) => {
+        if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) return true;
+        const candidate = mapping as { column?: unknown; inputKey?: unknown };
+        return typeof candidate.column !== "string"
+          || candidate.column.length < 1
+          || candidate.column.length > 300
+          || (candidate.inputKey !== null && candidate.inputKey !== undefined && typeof candidate.inputKey !== "string");
+      });
+      if (invalidMapping) {
+        return res.status(400).json({ error: "Each column mapping must contain a valid column and inputKey" });
+      }
+      const unsupportedInputKeys = Array.from(new Set(
+        mappings
+          .map((mapping: any) => mapping.inputKey)
+          .filter((inputKey: unknown): inputKey is string => Boolean(inputKey) && !CARBON_IMPORT_INPUT_KEYS.has(String(inputKey))),
+      ));
+      if (unsupportedInputKeys.length > 0) {
+        return res.status(400).json({
+          error: "One or more import mappings target an unsupported guided input",
+          code: "INVALID_IMPORT_MAPPING",
+          inputKeys: unsupportedInputKeys,
+        });
+      }
       // Enforce siteId when company has any active sites
       if (!bodySiteId) {
         const _impSites = await storage.getSites(companyId);
@@ -10618,39 +11365,219 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
       }
 
-      let imported = 0;
       let skipped = 0;
       const unmatched: string[] = [];
-      const validMappings = mappings.filter((m: any) => m.inputKey);
+      let validCellCount = 0;
+      const validMappings = mappings
+        .filter((mapping: any) => typeof mapping.inputKey === "string" && mapping.inputKey.length > 0)
+        .map((mapping: any) => ({ column: String(mapping.column), inputKey: String(mapping.inputKey) }));
+      const aggregatedValues = new Map<string, number>();
+      const stockInputs = new Set([
+        "employee_headcount",
+        "female_managers",
+        "total_managers",
+        "living_wage_employees",
+      ]);
+      const invalidValues: Array<{ row: number; column: string; value: string; error: string }> = [];
 
-      for (const row of rows) {
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+        const row = rows[rowIndex];
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+          invalidValues.push({ row: rowIndex + 1, column: "*", value: "", error: "Row must be an object" });
+          continue;
+        }
         for (const mapping of validMappings) {
           const rawVal = row[mapping.column];
           if (rawVal === undefined || rawVal === null || rawVal === "") { skipped++; continue; }
-          const numVal = parseFloat(String(rawVal));
-          if (isNaN(numVal)) { skipped++; continue; }
-
-          try {
-            await storage.upsertRawDataInput(companyId, mapping.inputKey, period, {
-              companyId,
-              inputName: mapping.inputKey,
-              inputCategory: "imported",
-              value: String(numVal),
-              period,
-              source: "csv_import",
-              enteredBy: userId,
-              siteId: bodySiteId || null,
+          const normalized = normalizeGuidedRawDecimal(rawVal);
+          if (normalized === null) {
+            invalidValues.push({
+              row: rowIndex + 1,
+              column: mapping.column,
+              value: String(rawVal).slice(0, 100),
+              error: "Value must be a non-negative number with no more than 11 whole digits and 4 decimal places",
             });
-            imported++;
-          } catch { skipped++; }
+            continue;
+          }
+          const scaledValue = guidedDecimalToScaledInteger(normalized);
+          const nextValue = stockInputs.has(mapping.inputKey)
+            ? scaledValue
+            : (aggregatedValues.get(mapping.inputKey) ?? 0) + scaledValue;
+          if (nextValue > MAX_GUIDED_DECIMAL_SCALED) {
+            invalidValues.push({
+              row: rowIndex + 1,
+              column: mapping.column,
+              value: String(rawVal).slice(0, 100),
+              error: "Aggregated value exceeds the supported 11 whole digits and 4 decimal places",
+            });
+            continue;
+          }
+          aggregatedValues.set(mapping.inputKey, nextValue);
+          validCellCount++;
         }
       }
+      if (invalidValues.length > 0) {
+        return res.status(400).json({
+          error: "The CSV contains invalid values. No data was imported.",
+          code: "INVALID_IMPORT_VALUE",
+          invalidValues: invalidValues.slice(0, 100),
+          invalidValueCount: invalidValues.length,
+        });
+      }
+
+      const savedRows = await db.transaction(async (tx) => {
+        // Match guided saves: tenant+period first, then the narrower site key.
+        // The post-wait state check closes the concurrent period-lock race.
+        await acquirePeriodMutationLocks(tx, companyId, [period]);
+        if (await isPeriodLockedInTransaction(tx, companyId, period)) {
+          throw Object.assign(new Error("This period is locked and cannot be edited"), { status: 400 });
+        }
+        await lockRawDataMutationScope(tx, companyId, period, bodySiteId);
+
+        // Keep the guided Company Vehicle Fuel field useful while the
+        // fuel-specific keys remain authoritative for emission factors.
+        if (aggregatedValues.has("diesel_litres") || aggregatedValues.has("petrol_litres")) {
+          const existingFuelRows = await tx.select().from(rawDataInputs).where(and(
+            eq(rawDataInputs.companyId, companyId),
+            eq(rawDataInputs.period, period),
+            inArray(rawDataInputs.inputName, ["diesel_litres", "petrol_litres"]),
+            bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+          ));
+          const existingFuelValue = (inputName: string) => {
+            const rawValue = existingFuelRows.find((entry) => entry.inputName === inputName)?.value;
+            const normalized = normalizeGuidedRawDecimal(rawValue);
+            return normalized === null ? 0 : guidedDecimalToScaledInteger(normalized);
+          };
+          const combinedFuel = (aggregatedValues.get("diesel_litres") ?? existingFuelValue("diesel_litres"))
+            + (aggregatedValues.get("petrol_litres") ?? existingFuelValue("petrol_litres"));
+          if (combinedFuel > MAX_GUIDED_DECIMAL_SCALED) {
+            throw Object.assign(new Error("Combined diesel and petrol volume exceeds the supported numeric range"), {
+              status: 400,
+              code: "INVALID_IMPORT_VALUE",
+            });
+          }
+          aggregatedValues.set("vehicle_fuel_litres", combinedFuel);
+        }
+
+        const importEntries = Array.from(aggregatedValues.entries());
+        if (importEntries.length === 0) return [];
+        const inputNames = importEntries.map(([inputName]) => inputName);
+        const existingRows = await tx.select().from(rawDataInputs).where(and(
+          eq(rawDataInputs.companyId, companyId),
+          eq(rawDataInputs.period, period),
+          inArray(rawDataInputs.inputName, inputNames),
+          bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+        )).for("update");
+        const existingIds = existingRows.map((row) => row.id);
+        const evidencedRawIds = new Set<string>();
+        if (existingIds.length > 0) {
+          const linkedEvidence = await tx.select({ linkedEntityId: evidenceFiles.linkedEntityId })
+            .from(evidenceFiles)
+            .where(and(
+              eq(evidenceFiles.companyId, companyId),
+              inArray(evidenceFiles.linkedModule, ["raw_data", "raw_data_input"]),
+              inArray(evidenceFiles.linkedEntityId, existingIds),
+              bodySiteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, bodySiteId),
+            ));
+          for (const evidence of linkedEvidence) {
+            if (evidence.linkedEntityId) evidencedRawIds.add(evidence.linkedEntityId);
+          }
+        }
+        const protectedRows = existingRows
+          .map((row) => ({
+            row,
+            reason: getValueProtectionReason({ ...row, hasEvidence: evidencedRawIds.has(row.id) }),
+          }))
+          .filter((entry) => entry.reason !== null);
+        if (protectedRows.length > 0) {
+          const first = protectedRows[0];
+          throw createProtectedValueError("An imported guided input", first.reason!, {
+            inputNames: protectedRows.map(({ row }) => row.inputName),
+            protectedInputs: protectedRows.map(({ row, reason }) => ({ inputName: row.inputName, reason })),
+          });
+        }
+
+        const existingByInputName = new Map(existingRows.map((row) => [row.inputName, row]));
+        const saved: any[] = [];
+        for (const [inputName, scaledValue] of importEntries) {
+          const existing = existingByInputName.get(inputName);
+          const rowData = {
+            inputCategory: classifyRawDataCategory(inputName),
+            value: scaledIntegerToGuidedDecimal(scaledValue),
+            source: "csv_import",
+            dataSourceType: "manual" as const,
+            enteredBy: userId,
+            siteId: bodySiteId,
+            updatedAt: new Date(),
+          };
+          const [savedRow] = existing
+            ? await tx.update(rawDataInputs).set(rowData).where(and(
+                eq(rawDataInputs.id, existing.id),
+                eq(rawDataInputs.companyId, companyId),
+                eq(rawDataInputs.period, period),
+                bodySiteId === null ? isNull(rawDataInputs.siteId) : eq(rawDataInputs.siteId, bodySiteId),
+              )).returning()
+            : await tx.insert(rawDataInputs).values({
+                companyId,
+                inputName,
+                period,
+                ...rowData,
+              }).returning();
+          saved.push(savedRow);
+        }
+        return saved;
+      });
 
       const unmappedCols = mappings.filter((m: any) => !m.inputKey).map((m: any) => m.column);
       unmatched.push(...unmappedCols);
 
+      let recalculation: Awaited<ReturnType<typeof recalculateGuidedPeriod>> | null = null;
+      let recalculationWarning: { code: "RECALCULATION_INCOMPLETE"; message: string } | null = null;
+      if (aggregatedValues.size > 0) {
+        try {
+          recalculation = await recalculateGuidedPeriod({
+            companyId,
+            userId,
+            period,
+            siteId: bodySiteId,
+            siteScopeProvided: true,
+          });
+        } catch (recalculationError) {
+          // The raw-data transaction has already committed. Return an explicit
+          // partial success instead of making the client believe the import was
+          // rolled back while leaving newly imported rows hidden in the database.
+          console.error(
+            "[raw-data/import/confirm] Raw data committed but guided recalculation failed:",
+            recalculationError instanceof Error ? recalculationError.message : String(recalculationError),
+          );
+          recalculationWarning = {
+            code: "RECALCULATION_INCOMPLETE",
+            message: "The CSV data was imported successfully, but linked metrics could not be fully recalculated. Your imported data is saved; retry recalculation from Data Entry.",
+          };
+        }
+      }
+
+      // Count accepted source cells only after the all-or-nothing persistence
+      // transaction has committed successfully.
+      const imported = validCellCount;
+
       try {
-        await storage.createAuditLog({ companyId, userId, action: "carbon_data_import", entityType: "raw_data", details: { period, imported, skipped, unmatched } });
+        await storage.createAuditLog({
+          companyId,
+          userId,
+          action: "carbon_data_import",
+          entityType: "raw_data",
+          details: {
+            period,
+            imported,
+            savedInputCount: savedRows.length,
+            skipped,
+            unmatched,
+            guidedMetricIds: recalculation?.guidedMetricSync.synced.map((entry) => entry.metricId) || [],
+            calculatedMetricCount: recalculation?.updated.length || 0,
+            recalculationWarningCode: recalculationWarning?.code || null,
+          },
+        });
       } catch {}
 
       if (bodySiteId && imported > 0) {
@@ -10663,8 +11590,25 @@ Use the live data above to give accurate, specific advice. If you don't have inf
         }).catch(() => {});
       }
 
-      res.json({ imported, skipped, unmatched, period });
+      res.json({
+        success: true,
+        partialSuccess: recalculationWarning !== null,
+        imported,
+        savedInputCount: savedRows.length,
+        skipped,
+        unmatched,
+        period,
+        recalculation,
+        ...(recalculationWarning ? { recalculationWarning } : {}),
+      });
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({
+          error: e.message,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.details || {}),
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -10749,7 +11693,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       }
 
       const rawData = await storage.getRawDataByPeriod(companyId, currentPeriod);
-      const elecInput = rawData.find(r => r.inputName === "elec");
+      const elecInput = rawData.find(r => r.inputName === "electricity_kwh" || r.inputName === "elec");
       if (elecInput?.value) {
         companyMetrics.push({ metricKey: "energy_intensity", value: parseFloat(elecInput.value) / employeeCount });
       }
@@ -13208,7 +14152,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
 
       if (existingMetric) {
-        const updatedMetric = await storage.updateMetric(existingMetric.id, { enabled: !existingMetric.enabled });
+        const updatedMetric = await storage.updateMetric(existingMetric.id, companyId, { enabled: !existingMetric.enabled });
         return res.json({ ...def, isActive: Boolean(updatedMetric?.enabled) });
       }
 
@@ -13221,9 +14165,12 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.post("/api/metric-definitions/seed", requireAuth, requireSuperAdmin, async (req, res) => {
     try {
-      const { ALL_METRIC_DEFINITIONS } = await import("./metric-definitions-seed");
-      const count = await storage.seedMetricDefinitions(ALL_METRIC_DEFINITIONS as InsertMetricDefinition[]);
-      res.json({ seeded: count, message: `Seeded ${count} new metric definitions` });
+      // Runtime recovery is the startup reconciliation, not a second seed
+      // implementation. This restores both canonical codes and the required
+      // name-aware SME starter catalogue under the same global writer lock.
+      const { seedMetricDefinitions: reconcileMetricDefinitionCatalogue } = await import("./seed-metric-definitions");
+      const count = await reconcileMetricDefinitionCatalogue();
+      res.json({ seeded: count, message: `Reconciled the metric-definition catalogue (${count} inserted)` });
     } catch (e: any) {
       sendServerError(res, e);
     }
@@ -13247,8 +14194,21 @@ Include all 12 months. Make the progression realistic: start with quick wins and
           if (!ownership.valid) return res.status(ownership.status).json({ error: ownership.message });
         }
       }
-      if (periodStart) filters.periodStart = new Date(periodStart as string);
-      if (periodEnd) filters.periodEnd = new Date(periodEnd as string);
+      if (periodStart !== undefined) {
+        if (typeof periodStart !== "string") return res.status(400).json({ error: "periodStart must be one reporting date" });
+        const parsedPeriodStart = parseStrictCanonicalReportingDate(periodStart);
+        if (!parsedPeriodStart) return res.status(400).json({ error: "periodStart must be a valid YYYY-MM-DD or canonical UTC date" });
+        filters.periodStart = parsedPeriodStart;
+      }
+      if (periodEnd !== undefined) {
+        if (typeof periodEnd !== "string") return res.status(400).json({ error: "periodEnd must be one reporting date" });
+        const parsedPeriodEnd = parseStrictCanonicalReportingDate(periodEnd);
+        if (!parsedPeriodEnd) return res.status(400).json({ error: "periodEnd must be a valid YYYY-MM-DD or canonical UTC date" });
+        filters.periodEnd = parsedPeriodEnd;
+      }
+      if (filters.periodStart && filters.periodEnd && filters.periodStart > filters.periodEnd) {
+        return res.status(400).json({ error: "Reporting period dates must form a valid ascending range" });
+      }
       const values = await storage.getMetricDefinitionValues(companyId, filters);
       res.json(values);
     } catch (e: any) {
@@ -13260,20 +14220,26 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req as any)._auth?.companyId;
       const userId = (req as any)._auth?.userId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-
-      const { metricDefinitionId, siteId, reportingPeriodStart, reportingPeriodEnd, valueNumeric, valueText, valueBoolean, valueJson, sourceType, notes } = req.body;
-      if (!metricDefinitionId || !reportingPeriodStart || !reportingPeriodEnd) {
-        return res.status(400).json({ error: "metricDefinitionId, reportingPeriodStart, and reportingPeriodEnd are required" });
+      if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+      const parsed = canonicalMetricValueCreateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid canonical metric value payload", details: parsed.error.flatten() });
       }
+      const { metricDefinitionId, siteId, reportingPeriodStart, reportingPeriodEnd, ...rawValueData } = parsed.data;
 
       const def = await storage.getMetricDefinition(metricDefinitionId);
       if (!def) return res.status(404).json({ error: "Metric definition not found" });
       if (def.isDerived) return res.status(400).json({ error: "Derived metrics cannot be entered manually" });
+      if (!def.isActive) return res.status(400).json({ error: "Inactive metric definitions cannot accept data entry" });
+      const validatedValue = validateCanonicalValueForDefinition(def.dataType, rawValueData);
+      if (!validatedValue.valid) return res.status(400).json({ error: validatedValue.error });
 
-      const periodStart = new Date(reportingPeriodStart);
-      const periodEnd = new Date(reportingPeriodEnd);
-      const resolvedSiteId = siteId ?? null;
+      const periodStart = parseStrictCanonicalReportingDate(reportingPeriodStart)!;
+      const periodEnd = parseStrictCanonicalReportingDate(reportingPeriodEnd)!;
+      if (periodStart > periodEnd) {
+        return res.status(400).json({ error: "Reporting period dates must form a valid ascending range" });
+      }
+      const resolvedSiteId = !siteId || siteId === "__org__" || siteId === "null" ? null : siteId;
 
       if (resolvedSiteId) {
         const siteOwnership = await validateSiteOwnership(resolvedSiteId, companyId, { write: true });
@@ -13282,16 +14248,41 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       const value = await storage.upsertMetricDefinitionValue(
         companyId, metricDefinitionId, resolvedSiteId, periodStart, periodEnd,
-        { valueNumeric, valueText, valueBoolean: valueBoolean, valueJson, sourceType: sourceType ?? "manual", notes, enteredByUserId: userId }
+        { ...validatedValue.data, enteredByUserId: userId } as any,
       );
 
       const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
-      await triggerCalculationsForMetricValue(value.id, companyId, resolvedSiteId, periodStart, periodEnd).catch(err => {
-        console.error("[MetricEngine] Calculation trigger failed:", err);
+      let calculation: Awaited<ReturnType<typeof triggerCalculationsForMetricValue>>;
+      try {
+        calculation = await triggerCalculationsForMetricValue(value.id, companyId, resolvedSiteId, periodStart, periodEnd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[MetricEngine] Calculation trigger failed:", error);
+        calculation = { failures: [message], updated: [], cleared: [], skippedMissing: [], skippedProtected: [], rollups: [] };
+      }
+      const hasCalculationWarning = calculation.failures.length > 0
+        || calculation.skippedProtected.length > 0
+        || calculation.cleared.length > 0;
+      res.json({
+        ...value,
+        calculationSummary: calculation,
+        ...(hasCalculationWarning ? {
+          partialSuccess: true,
+          calculationWarning: "The base value was saved, but one or more dependent calculations were cleared, protected, or could not be completed.",
+          calculationFailures: calculation.failures,
+          calculationCleared: calculation.cleared,
+          calculationSkippedMissing: calculation.skippedMissing,
+          calculationSkippedProtected: calculation.skippedProtected,
+        } : {}),
       });
-
-      res.json(value);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({
+          error: e.message,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.details || {}),
+        });
+      }
       sendServerError(res, e);
     }
   });
@@ -13299,26 +14290,202 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.patch("/api/metric-definition-values/:id", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
     try {
       const companyId = (req as any)._auth?.companyId;
-      if (!companyId) return res.status(401).json({ error: "Not authenticated" });
+      const userId = (req as any)._auth?.userId;
+      if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+      const parsed = canonicalMetricValuePatchSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid canonical metric value update", details: parsed.error.flatten() });
+      }
 
-      const existing = await storage.getMetricDefinitionValueById(req.params.id, companyId);
+      const valueId = String(req.params.id);
+      const existing = await storage.getMetricDefinitionValueById(valueId, companyId);
       if (!existing) return res.status(404).json({ error: "Not found" });
 
       const def = await storage.getMetricDefinition(existing.metricDefinitionId);
       if (def?.isDerived) return res.status(400).json({ error: "Derived metric values cannot be edited directly" });
+      if (!def?.isActive) return res.status(400).json({ error: "Inactive metric definitions cannot accept data entry" });
+      const validatedValue = validateCanonicalValueForDefinition(def.dataType, parsed.data);
+      if (!validatedValue.valid) return res.status(400).json({ error: validatedValue.error });
 
-      const updated = await storage.updateMetricDefinitionValue(req.params.id, companyId, req.body);
+      const updated = await storage.updateMetricDefinitionValue(valueId, companyId, {
+        ...validatedValue.data,
+        enteredByUserId: userId,
+      } as any);
       if (!updated) return res.status(404).json({ error: "Not found" });
 
-      const periodStart = updated.reportingPeriodStart ?? (req.body.reportingPeriodStart ? new Date(req.body.reportingPeriodStart) : null);
-      const periodEnd = updated.reportingPeriodEnd ?? (req.body.reportingPeriodEnd ? new Date(req.body.reportingPeriodEnd) : null);
-      if (periodStart && periodEnd) {
-        const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
-        await triggerCalculationsForMetricValue(updated.id, companyId, updated.siteId ?? null, periodStart, periodEnd).catch(() => {});
+      const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
+      let calculation: Awaited<ReturnType<typeof triggerCalculationsForMetricValue>>;
+      try {
+        calculation = await triggerCalculationsForMetricValue(
+          updated.id,
+          companyId,
+          updated.siteId ?? null,
+          updated.reportingPeriodStart,
+          updated.reportingPeriodEnd,
+        );
+      } catch (error) {
+        calculation = {
+          failures: [error instanceof Error ? error.message : String(error)],
+          updated: [],
+          cleared: [],
+          skippedMissing: [],
+          skippedProtected: [],
+          rollups: [],
+        };
       }
+      const hasCalculationWarning = calculation.failures.length > 0
+        || calculation.skippedProtected.length > 0
+        || calculation.cleared.length > 0;
+      res.json({
+        ...updated,
+        calculationSummary: calculation,
+        ...(hasCalculationWarning ? {
+          partialSuccess: true,
+          calculationWarning: "The base value was saved, but one or more dependent calculations were cleared, protected, or could not be completed.",
+          calculationFailures: calculation.failures,
+          calculationCleared: calculation.cleared,
+          calculationSkippedMissing: calculation.skippedMissing,
+          calculationSkippedProtected: calculation.skippedProtected,
+        } : {}),
+      });
+    } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({
+          error: e.message,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.details || {}),
+        });
+      }
+      sendServerError(res, e);
+    }
+  });
 
+  app.post("/api/metric-definition-values/:id/submit", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      const userId = (req as any)._auth?.userId;
+      if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+      const updated = await storage.transitionMetricDefinitionValue(String(req.params.id), companyId, userId, "submit");
+      if (!updated) return res.status(404).json({ error: "Not found" });
       res.json(updated);
     } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
+      sendServerError(res, e);
+    }
+  });
+
+  app.post("/api/metric-definition-values/:id/revise", requireAuth, requirePermission("metrics_data_entry"), async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      const userId = (req as any)._auth?.userId;
+      if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+      const updated = await storage.transitionMetricDefinitionValue(String(req.params.id), companyId, userId, "revise");
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
+      let calculation: Awaited<ReturnType<typeof triggerCalculationsForMetricValue>>;
+      try {
+        calculation = await triggerCalculationsForMetricValue(
+          updated.id,
+          companyId,
+          updated.siteId ?? null,
+          updated.reportingPeriodStart,
+          updated.reportingPeriodEnd,
+        );
+      } catch (error) {
+        calculation = {
+          failures: [error instanceof Error ? error.message : String(error)],
+          updated: [],
+          cleared: [],
+          skippedMissing: [],
+          skippedProtected: [],
+          rollups: [],
+        };
+      }
+      const hasCalculationWarning = calculation.failures.length > 0
+        || calculation.skippedProtected.length > 0
+        || calculation.cleared.length > 0;
+      res.json({
+        ...updated,
+        calculationSummary: calculation,
+        ...(hasCalculationWarning ? {
+          partialSuccess: true,
+          calculationWarning: "The value was revised, but one or more dependent calculations were cleared, protected, or could not be completed.",
+          calculationFailures: calculation.failures,
+          calculationCleared: calculation.cleared,
+          calculationSkippedMissing: calculation.skippedMissing,
+          calculationSkippedProtected: calculation.skippedProtected,
+        } : {}),
+      });
+    } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
+      sendServerError(res, e);
+    }
+  });
+
+  app.post("/api/metric-definition-values/:id/review", requireAuth, requireFrameworkResponseReview, async (req, res) => {
+    try {
+      const companyId = (req as any)._auth?.companyId;
+      const userId = (req as any)._auth?.userId;
+      if (!companyId || !userId) return res.status(401).json({ error: "Not authenticated" });
+      const parsed = canonicalMetricReviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid canonical review payload", details: parsed.error.flatten() });
+      }
+      const updated = await storage.transitionMetricDefinitionValue(
+        String(req.params.id),
+        companyId,
+        userId,
+        parsed.data.action,
+        parsed.data.comment,
+      );
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      if (parsed.data.action !== "reject") return res.json(updated);
+
+      // Rejected facts are unavailable immediately, so clear/recalculate
+      // dependent values and site rollups in the same request outcome.
+      const { triggerCalculationsForMetricValue } = await import("./metric-calculation-engine");
+      let calculation: Awaited<ReturnType<typeof triggerCalculationsForMetricValue>>;
+      try {
+        calculation = await triggerCalculationsForMetricValue(
+          updated.id,
+          companyId,
+          updated.siteId ?? null,
+          updated.reportingPeriodStart,
+          updated.reportingPeriodEnd,
+        );
+      } catch (error) {
+        calculation = {
+          failures: [error instanceof Error ? error.message : String(error)],
+          updated: [],
+          cleared: [],
+          skippedMissing: [],
+          skippedProtected: [],
+          rollups: [],
+        };
+      }
+      const hasCalculationWarning = calculation.failures.length > 0
+        || calculation.skippedProtected.length > 0
+        || calculation.cleared.length > 0;
+      res.json({
+        ...updated,
+        calculationSummary: calculation,
+        ...(hasCalculationWarning ? {
+          partialSuccess: true,
+          calculationWarning: "The value was rejected, but one or more dependent calculations were cleared, protected, or could not be completed.",
+          calculationFailures: calculation.failures,
+          calculationCleared: calculation.cleared,
+          calculationSkippedMissing: calculation.skippedMissing,
+          calculationSkippedProtected: calculation.skippedProtected,
+        } : {}),
+      });
+    } catch (e: any) {
+      if (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+        return res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+      }
       sendServerError(res, e);
     }
   });
@@ -13361,13 +14528,10 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
       const { id } = req.params;
-      const { selected, financialMateriality, impactMateriality, rationale } = req.body;
-      const updated = await storage.upsertMaterialTopicScores(id, companyId, {
-        ...(selected !== undefined && { selected }),
-        ...(financialMateriality !== undefined && { financialMateriality }),
-        ...(impactMateriality !== undefined && { impactMateriality }),
-        ...(rationale !== undefined && { rationale }),
-      });
+      const parsed = materialTopicMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const updated = await storage.upsertMaterialTopicScores(id, companyId, parsed.data);
+      if (!updated) return res.status(404).json({ error: "Material topic not found" });
       res.json(updated);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13388,8 +14552,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.post("/api/materiality/assessments", requireAuth, requireProvisioningPermission("manage_materiality"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const a = await storage.createMaterialityAssessment({ ...req.body, companyId });
+      const parsed = materialityAssessmentCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const a = await storage.createMaterialityAssessment({ ...parsed.data, companyId }, userId);
       res.json(a);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13399,8 +14566,12 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.patch("/api/materiality/assessments/:id", requireAuth, requireProvisioningPermission("manage_materiality"), async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
+      const userId = (req.session as any).userId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const a = await storage.updateMaterialityAssessment(req.params.id, companyId, req.body);
+      const parsed = materialityAssessmentUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const a = await storage.updateMaterialityAssessment(String(req.params.id), companyId, parsed.data, userId);
+      if (!a) return res.status(404).json({ error: "Materiality assessment not found" });
       res.json(a);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13448,6 +14619,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       if (!normalized.success) {
         return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
       }
+      if (!await materialTopicIdsBelongToCompany(companyId, normalized.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
+      }
       const r = await storage.createPolicyRecord({ ...normalized.data, companyId });
       if (attachment) {
         try {
@@ -13490,13 +14664,18 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         const uploaded = formData.get("attachment");
         attachment = uploaded instanceof File && uploaded.size > 0 ? uploaded : null;
         removeAttachment = getFormValue(formData, "removeAttachment") === "true";
-      } else if (req.body?.removeAttachment === true) {
-        removeAttachment = true;
+      } else {
+        const { removeAttachment: requestedRemoval, ...payload } = req.body ?? {};
+        removeAttachment = requestedRemoval === true;
+        payloadInput = payload;
       }
 
       const normalized = normalizePolicyRecordPayload(payloadInput);
       if (!normalized.success) {
         return res.status(400).json({ code: "INVALID_POLICY_RECORD", error: normalized.error });
+      }
+      if (!await materialTopicIdsBelongToCompany(companyId, normalized.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
       }
       const existingAttachments = await storage.getEvidenceByEntity(companyId, "policy", req.params.id);
       const currentAttachment = existingAttachments[0] ?? null;
@@ -13576,7 +14755,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const r = await storage.upsertGovernanceAssignment(companyId, req.params.area, req.body);
+      const area = governanceAreaSchema.safeParse(req.params.area);
+      if (!area.success) return res.status(400).json(apiValidationError(area.error));
+      const parsed = governanceAssignmentMutationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const r = await storage.upsertGovernanceAssignment(companyId, area.data, parsed.data);
       res.json(r);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13613,7 +14796,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const t = await storage.createEsgTarget({ ...req.body, companyId });
+      const parsed = esgTargetCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (parsed.data.linkedMetricId) {
+        const metric = await storage.getMetric(parsed.data.linkedMetricId);
+        if (!metric || metric.companyId !== companyId) return res.status(400).json({ error: "linkedMetricId must reference a metric in your company" });
+      }
+      if (parsed.data.linkedMetricDefinitionId && !await storage.getMetricDefinition(parsed.data.linkedMetricDefinitionId)) {
+        return res.status(400).json({ error: "linkedMetricDefinitionId must reference a valid metric definition" });
+      }
+      if (!await materialTopicIdsBelongToCompany(companyId, parsed.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
+      }
+      const t = await storage.createEsgTarget({ ...parsed.data, companyId });
       res.json(t);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13624,7 +14819,20 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const t = await storage.updateEsgTarget(req.params.id, companyId, req.body);
+      const parsed = esgTargetUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (parsed.data.linkedMetricId) {
+        const metric = await storage.getMetric(parsed.data.linkedMetricId);
+        if (!metric || metric.companyId !== companyId) return res.status(400).json({ error: "linkedMetricId must reference a metric in your company" });
+      }
+      if (parsed.data.linkedMetricDefinitionId && !await storage.getMetricDefinition(parsed.data.linkedMetricDefinitionId)) {
+        return res.status(400).json({ error: "linkedMetricDefinitionId must reference a valid metric definition" });
+      }
+      if (!await materialTopicIdsBelongToCompany(companyId, parsed.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
+      }
+      const t = await storage.updateEsgTarget(req.params.id, companyId, parsed.data);
+      if (!t) return res.status(404).json({ error: "ESG target not found" });
       res.json(t);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13662,7 +14870,15 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const a = await storage.createEsgAction({ ...req.body, companyId });
+      const parsed = esgActionCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (parsed.data.targetId && !await storage.getEsgTarget(parsed.data.targetId, companyId)) {
+        return res.status(400).json({ error: "targetId must reference a target in your company" });
+      }
+      if (parsed.data.riskId && !await storage.getEsgRisk(parsed.data.riskId, companyId)) {
+        return res.status(400).json({ error: "riskId must reference a risk in your company" });
+      }
+      const a = await storage.createEsgAction({ ...parsed.data, companyId });
       res.json(a);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13673,7 +14889,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const a = await storage.updateEsgAction(req.params.id, companyId, req.body);
+      const parsed = esgActionUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (parsed.data.targetId && !await storage.getEsgTarget(parsed.data.targetId, companyId)) {
+        return res.status(400).json({ error: "targetId must reference a target in your company" });
+      }
+      if (parsed.data.riskId && !await storage.getEsgRisk(parsed.data.riskId, companyId)) {
+        return res.status(400).json({ error: "riskId must reference a risk in your company" });
+      }
+      const a = await storage.updateEsgAction(req.params.id, companyId, parsed.data);
+      if (!a) return res.status(404).json({ error: "ESG action not found" });
       res.json(a);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13711,7 +14936,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const r = await storage.createEsgRisk({ ...req.body, companyId });
+      const parsed = esgRiskCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (!await materialTopicIdsBelongToCompany(companyId, parsed.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
+      }
+      const r = await storage.createEsgRisk({
+        ...parsed.data,
+        riskScore: calculateRiskScore(parsed.data.likelihood, parsed.data.impact),
+        companyId,
+      });
       res.json(r);
     } catch (e: any) {
       sendServerError(res, e);
@@ -13722,7 +14956,19 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req.session as any).companyId;
       if (!companyId) return res.status(401).json({ error: "Not authenticated" });
-      const r = await storage.updateEsgRisk(req.params.id, companyId, req.body);
+      const parsed = esgRiskUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      if (!await materialTopicIdsBelongToCompany(companyId, parsed.data.linkedMaterialTopicIds)) {
+        return res.status(400).json({ error: "linkedMaterialTopicIds must reference topics in your company" });
+      }
+      const existing = await storage.getEsgRisk(req.params.id, companyId);
+      if (!existing) return res.status(404).json({ error: "ESG risk not found" });
+      const r = await storage.updateEsgRisk(req.params.id, companyId, {
+        ...parsed.data,
+        ...((parsed.data.likelihood || parsed.data.impact) ? {
+          riskScore: calculateRiskScore(parsed.data.likelihood ?? existing.likelihood, parsed.data.impact ?? existing.impact),
+        } : {}),
+      });
       res.json(r);
     } catch (e: any) {
       sendServerError(res, e);
@@ -14382,33 +15628,53 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
   app.post("/api/admin/metric-definitions", requireSuperAdmin, async (req, res) => {
     try {
-      const { code, name, pillar, category, description, dataType, unit, inputFrequency,
-        isCore, isActive, isDerived, formulaJson, frameworkTags, scoringWeight, sortOrder,
-        evidenceRequired, rollupMethod } = req.body;
-
-      if (!code || !name || !pillar || !category) {
-        return res.status(400).json({ error: "code, name, pillar, and category are required" });
+      const parsed = adminMetricDefinitionCreateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid metric definition payload",
+          code: "INVALID_METRIC_DEFINITION_PAYLOAD",
+          details: parsed.error.flatten(),
+        });
       }
-
-      const existing = await storage.getMetricDefinitionByCode(code);
-      if (existing) return res.status(409).json({ error: "A metric definition with this code already exists" });
-
-      const def = await storage.createMetricDefinition({
-        code, name, pillar, category,
-        description: description || null,
-        dataType: dataType || "numeric",
-        unit: unit || null,
-        inputFrequency: inputFrequency || "quarterly",
-        isCore: isCore ?? false,
-        isActive: isActive ?? true,
-        isDerived: isDerived ?? false,
-        formulaJson: formulaJson || null,
-        frameworkTags: frameworkTags || [],
-        scoringWeight: scoringWeight ?? "1",
-        sortOrder: sortOrder ?? 0,
-        evidenceRequired: evidenceRequired ?? false,
-        rollupMethod: rollupMethod || "sum",
-      });
+      const input = parsed.data;
+      const seedReservations = await metricDefinitionSeedReservations();
+      const mutation = await storage.mutateMetricDefinitionCatalogue({
+        type: "create",
+        data: {
+          ...input,
+          description: input.description || null,
+          unit: input.unit || null,
+        },
+      }, seedReservations);
+      if (mutation.outcome === "duplicate_code") {
+        return res.status(409).json({
+          error: "A metric definition with this code already exists",
+          code: "DUPLICATE_METRIC_DEFINITION_CODE",
+        });
+      }
+      if (mutation.outcome === "duplicate_name") {
+        return res.status(409).json({
+          error: "A metric definition with this name already exists",
+          code: "DUPLICATE_METRIC_DEFINITION_NAME",
+        });
+      }
+      if (mutation.outcome === "reserved_code") {
+        return res.status(409).json({
+          error: "This metric definition code is reserved by the platform catalogue",
+          code: "RESERVED_METRIC_DEFINITION_CODE",
+        });
+      }
+      if (mutation.outcome === "invalid") {
+        return res.status(400).json({
+          error: "Invalid metric definition catalogue",
+          code: "INVALID_METRIC_DEFINITION_CATALOGUE",
+          details: mutation.errors,
+        });
+      }
+      if (mutation.outcome !== "created") {
+        throw new Error(`Unexpected metric definition create outcome: ${mutation.outcome}`);
+      }
+      const def = mutation.definition;
 
       const adminUser = (req as any)._superAdmin;
       await storage.createSuperAdminAction({
@@ -14419,6 +15685,9 @@ Include all 12 months. Make the progression realistic: start with quick wins and
 
       res.status(201).json(def);
     } catch (e: any) {
+      if (e?.code === "23505") {
+        return res.status(409).json({ error: "A metric definition with this code already exists" });
+      }
       sendServerError(res, e);
     }
   });
@@ -14426,19 +15695,52 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.patch("/api/admin/metric-definitions/:id", requireSuperAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      const existing = await storage.getMetricDefinition(id);
-      if (!existing) return res.status(404).json({ error: "Not found" });
-
-      // Prevent editing historical metric_values directly — only definition metadata can change
-      const allowedFields = ["name", "description", "unit", "inputFrequency", "isCore", "isActive",
-        "isDerived", "formulaJson", "frameworkTags", "scoringWeight", "sortOrder",
-        "evidenceRequired", "rollupMethod", "category", "pillar"];
-      const updates: any = {};
-      for (const f of allowedFields) {
-        if (req.body[f] !== undefined) updates[f] = req.body[f];
+      if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "code")) {
+        return res.status(400).json({
+          error: "Metric definition code is immutable",
+          code: "METRIC_DEFINITION_CODE_IMMUTABLE",
+        });
       }
-
-      const def = await storage.updateMetricDefinition(id, updates);
+      const parsed = adminMetricDefinitionPatchSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid metric definition payload",
+          code: "INVALID_METRIC_DEFINITION_PAYLOAD",
+          details: parsed.error.flatten(),
+        });
+      }
+      const updates = parsed.data;
+      const seedReservations = await metricDefinitionSeedReservations();
+      const mutation = await storage.mutateMetricDefinitionCatalogue(
+        { type: "update", id, data: updates },
+        seedReservations,
+      );
+      if (mutation.outcome === "not_found") {
+        return res.status(404).json({ error: "Not found" });
+      }
+      if (mutation.outcome === "duplicate_name") {
+        return res.status(409).json({
+          error: "A metric definition with this name already exists",
+          code: "DUPLICATE_METRIC_DEFINITION_NAME",
+        });
+      }
+      if (mutation.outcome === "seed_name_immutable") {
+        return res.status(409).json({
+          error: "Platform catalogue metric names cannot be changed",
+          code: "SEEDED_METRIC_DEFINITION_NAME_IMMUTABLE",
+        });
+      }
+      if (mutation.outcome === "invalid") {
+        return res.status(400).json({
+          error: "Invalid metric definition catalogue",
+          code: "INVALID_METRIC_DEFINITION_CATALOGUE",
+          details: mutation.errors,
+        });
+      }
+      if (mutation.outcome !== "updated") {
+        throw new Error(`Unexpected metric definition update outcome: ${mutation.outcome}`);
+      }
+      const def = mutation.definition;
 
       const adminUser = (req as any)._superAdmin;
       await storage.createSuperAdminAction({
@@ -14456,10 +15758,26 @@ Include all 12 months. Make the progression realistic: start with quick wins and
   app.patch("/api/admin/metric-definitions/:id/toggle-active", requireSuperAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      const existing = await storage.getMetricDefinition(id);
-      if (!existing) return res.status(404).json({ error: "Not found" });
-
-      const def = await storage.updateMetricDefinition(id, { isActive: !existing.isActive });
+      const seedReservations = await metricDefinitionSeedReservations();
+      const mutation = await storage.mutateMetricDefinitionCatalogue(
+        { type: "toggle_active", id },
+        seedReservations,
+      );
+      if (mutation.outcome === "not_found") {
+        return res.status(404).json({ error: "Not found" });
+      }
+      if (mutation.outcome === "invalid") {
+        return res.status(400).json({
+          error: "Invalid metric definition catalogue",
+          code: "INVALID_METRIC_DEFINITION_CATALOGUE",
+          details: mutation.errors,
+        });
+      }
+      if (mutation.outcome !== "updated") {
+        throw new Error(`Unexpected metric definition toggle outcome: ${mutation.outcome}`);
+      }
+      const def = mutation.definition;
+      const existing = mutation.previous;
 
       const adminUser = (req as any)._superAdmin;
       await storage.createSuperAdminAction({
@@ -15495,16 +16813,16 @@ Include all 12 months. Make the progression realistic: start with quick wins and
     try {
       const companyId = (req as any)._auth.companyId;
       const userId = (req as any)._auth.userId;
-      const { name, providerType, domain, config } = req.body;
-      if (!name || !providerType) return res.status(400).json({ error: "Name and providerType required" });
-      const provider = await storage.createIdentityProvider({ companyId, name, providerType, domain, config, createdBy: userId });
+      const parsed = identityProviderCreateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const provider = await storage.createIdentityProvider({ companyId, ...parsed.data, createdBy: userId });
       await storage.createAuditLog({
         companyId,
         userId,
         action: "identity_provider_created",
         entityType: "identity_provider",
         entityId: provider.id,
-        details: { name, providerType },
+        details: { name: parsed.data.name, providerType: parsed.data.providerType },
       });
       res.json(sanitizeIdentityProvider(provider));
     } catch (e: any) {
@@ -15519,14 +16837,17 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { id } = req.params;
       const provider = await storage.getIdentityProvider(id);
       if (!provider || provider.companyId !== companyId) return res.status(404).json({ error: "Not found" });
-      const updated = await storage.updateIdentityProvider(id, req.body);
+      const parsed = identityProviderUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
+      const updated = await storage.updateIdentityProvider(id, companyId, parsed.data);
+      if (!updated) return res.status(404).json({ error: "Not found" });
       await storage.createAuditLog({
         companyId,
         userId,
         action: "identity_provider_updated",
         entityType: "identity_provider",
         entityId: id,
-        details: sanitizeIdentityProviderConfig(req.body),
+        details: sanitizeIdentityProviderConfig(parsed.data),
       });
       res.json(sanitizeIdentityProvider(updated));
     } catch (e: any) {
@@ -15541,7 +16862,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const { id } = req.params;
       const provider = await storage.getIdentityProvider(id);
       if (!provider || provider.companyId !== companyId) return res.status(404).json({ error: "Not found" });
-      await storage.deleteIdentityProvider(id);
+      await storage.deleteIdentityProvider(id, companyId);
       await storage.createAuditLog({
         companyId,
         userId,

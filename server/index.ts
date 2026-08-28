@@ -10,10 +10,13 @@ import { seedFrameworks } from "./seed-frameworks";
 import { seedCurrentEmissionFactors } from "./seed-emission-factors";
 import {
   CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS,
+  DATA_ENTRY_PERIOD_LOCK_MIGRATIONS,
   FRAMEWORK_REQUIREMENT_RESPONSE_MIGRATIONS,
   invalidSuperAdminActionIdentifierColumns,
   missingFrameworkRequirementResponseColumns,
   missingFrameworkRequirementResponseIndexes,
+  missingDataEntryPeriodLockColumns,
+  missingDataEntryPeriodLockIndexes,
   runStartupMigrationStatements,
 } from "./startup-schema-migrations";
 import { redactResponseForLog } from "./log-redaction";
@@ -436,6 +439,37 @@ app.use((req, res, next) => {
     console.log("[Startup] 2026 emission factor defaults reconciled");
   } catch (e: any) {
     console.error("[Startup] FATAL: Could not reconcile 2026 emission factor defaults");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+  try {
+    await runStartupMigrationStatements(
+      (statement) => db.execute(sql.raw(statement)),
+      DATA_ENTRY_PERIOD_LOCK_MIGRATIONS,
+    );
+    const lockColumnsResult = await db.execute(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'data_entry_period_locks'
+    `);
+    const missingColumns = missingDataEntryPeriodLockColumns((lockColumnsResult as any).rows ?? []);
+    if (missingColumns.length > 0) {
+      throw new Error(`data_entry_period_locks is missing columns: ${missingColumns.join(", ")}`);
+    }
+    const lockIndexesResult = await db.execute(sql`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'data_entry_period_locks'
+    `);
+    const missingIndexes = missingDataEntryPeriodLockIndexes((lockIndexesResult as any).rows ?? []);
+    if (missingIndexes.length > 0) {
+      throw new Error(`data_entry_period_locks is missing indexes: ${missingIndexes.join(", ")}`);
+    }
+    console.log("[Startup] Data entry period lock schema migration applied and validated");
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not create or validate data_entry_period_locks");
     console.error("[Startup] FATAL:", e.message ?? e);
     process.exit(1);
   }

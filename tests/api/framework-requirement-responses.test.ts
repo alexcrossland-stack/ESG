@@ -308,6 +308,16 @@ async function run() {
 
       const ordinaryReview = await apiRequest("PUT", `/api/evidence/${ordinaryEvidence.id}`, { evidenceStatus: "approved" }, approverToken);
       assert(ordinaryReview.status === 403, `approver edited ordinary evidence: ${ordinaryReview.status}`);
+      const contributorOrdinaryReview = await apiRequest(
+        "PUT",
+        `/api/evidence/${ordinaryEvidence.id}`,
+        { evidenceStatus: "approved" },
+        tenantA.contributorToken,
+      );
+      assert(
+        contributorOrdinaryReview.status === 403,
+        `contributor reviewed ordinary evidence: ${contributorOrdinaryReview.status}`,
+      );
       const metadataEdit = await apiRequest("PUT", `/api/evidence/${evidenceId}`, { description: "approver metadata edit" }, approverToken);
       assert(metadataEdit.status === 403, `approver edited framework metadata: ${metadataEdit.status}`);
 

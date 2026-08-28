@@ -37,21 +37,43 @@ async function withDb<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   }
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const metricsRes = await request.get("/api/metrics", { headers });
+  expect(metricsRes.status()).toBe(200);
+  const metrics = await metricsRes.json() as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await request.post("/api/metrics", {
+    headers,
+    data: {
+      name: `Audit-log UI fixture ${Date.now()}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    },
+  });
+  expect(createRes.status()).toBe(200);
+  const created = await createRes.json() as { id?: string };
+  expect(created.id).toBeTruthy();
+  return created.id!;
+}
+
 async function prepareTenant(request: APIRequestContext, companyId: string, token: string, period: string, value: number) {
   await withDb(async (client) => {
     await client.query("UPDATE companies SET plan_tier = 'pro', plan_status = 'active' WHERE id = $1", [companyId]);
-    await client.query("UPDATE metrics SET enabled = true WHERE company_id = $1", [companyId]);
   });
-
-  const metricsRes = await request.get("/api/metrics", { headers: { Authorization: `Bearer ${token}` } });
-  expect(metricsRes.status()).toBe(200);
-  const metrics = await metricsRes.json() as Array<{ id: string }>;
-  expect(metrics[0]?.id).toBeTruthy();
+  const metricId = await getOrCreateEditableMetricId(request, token);
 
   const saveRes = await request.post("/api/data-entry", {
     headers: { Authorization: `Bearer ${token}` },
     data: {
-      metricId: metrics[0].id,
+      metricId,
       period,
       value,
       notes: "audit log UI access seed",

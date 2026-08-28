@@ -1,217 +1,211 @@
-import { storage } from "./storage";
+import { calculationLockPool, storage } from "./storage";
 import type { MetricDefinition } from "@shared/schema";
+import { buildEmissionFactorMap, getConfiguredEmissionFactors } from "./emission-factor-resolution";
+import {
+  evaluateMetricFormula,
+  metricFormulaDependencies,
+  metricFormulaDependencyError,
+  normalizeMetricFormula,
+  type MetricFormulaEvaluationContext,
+  type NormalizedMetricFormula,
+} from "./metric-formula-contract";
+import {
+  reportingMonthsForDateRange,
+  withPeriodCalculationRunLocks,
+} from "./period-locks";
 
-export interface FormulaContext {
-  values: Record<string, number | null>;
-}
-
-interface FormulaJson {
-  type: "expression" | "ratio";
-  sources?: string[];
-  numerator?: string[];
-  denominator?: string;
-  expression?: string;
-  scale?: number;
-  description?: string;
-}
-
-// Safe arithmetic expression evaluator using Shunting-Yard algorithm.
-// Only supports: numeric literals, variable names (alphanumeric/_), +, -, *, /, (, ).
-// No eval(), new Function(), or dynamic code execution used.
-function parseTokens(expr: string): string[] | null {
-  const tokens: string[] = [];
-  let i = 0;
-  while (i < expr.length) {
-    const ch = expr[i];
-    if (ch === " " || ch === "\t") { i++; continue; }
-    if ("+-*/()".includes(ch)) { tokens.push(ch); i++; continue; }
-    if (ch >= "0" && ch <= "9" || ch === ".") {
-      let num = "";
-      while (i < expr.length && (expr[i] >= "0" && expr[i] <= "9" || expr[i] === ".")) {
-        num += expr[i++];
-      }
-      tokens.push(num);
-      continue;
-    }
-    if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_") {
-      let name = "";
-      while (i < expr.length && (
-        (expr[i] >= "a" && expr[i] <= "z") ||
-        (expr[i] >= "A" && expr[i] <= "Z") ||
-        (expr[i] >= "0" && expr[i] <= "9") ||
-        expr[i] === "_"
-      )) {
-        name += expr[i++];
-      }
-      tokens.push(name);
-      continue;
-    }
-    return null; // Unknown character → reject
-  }
-  return tokens;
-}
-
-const PREC: Record<string, number> = { "+": 1, "-": 1, "*": 2, "/": 2 };
-
-function evalTokens(tokens: string[], context: Record<string, number>): number | null {
-  const out: number[] = [];
-  const ops: string[] = [];
-
-  function applyOp(): boolean {
-    const op = ops.pop();
-    if (!op) return false;
-    const b = out.pop();
-    const a = out.pop();
-    if (a === undefined || b === undefined) return false;
-    if (op === "+") out.push(a + b);
-    else if (op === "-") out.push(a - b);
-    else if (op === "*") out.push(a * b);
-    else if (op === "/") {
-      if (b === 0) return false;
-      out.push(a / b);
-    } else return false;
-    return true;
-  }
-
-  for (const tok of tokens) {
-    if (PREC[tok] !== undefined) {
-      while (ops.length > 0 && ops[ops.length - 1] !== "(" && (PREC[ops[ops.length - 1]] ?? 0) >= PREC[tok]) {
-        if (!applyOp()) return null;
-      }
-      ops.push(tok);
-    } else if (tok === "(") {
-      ops.push("(");
-    } else if (tok === ")") {
-      while (ops.length > 0 && ops[ops.length - 1] !== "(") {
-        if (!applyOp()) return null;
-      }
-      ops.pop(); // remove "("
-    } else {
-      const num = parseFloat(tok);
-      if (!isNaN(num)) {
-        out.push(num);
-      } else if (Object.prototype.hasOwnProperty.call(context, tok)) {
-        out.push(context[tok]);
-      } else {
-        return null; // Unknown variable
-      }
-    }
-  }
-  while (ops.length > 0) {
-    if (!applyOp()) return null;
-  }
-  if (out.length !== 1 || !isFinite(out[0])) return null;
-  return out[0];
-}
-
-function evaluateExpression(expression: string, context: Record<string, number>): number | null {
-  const tokens = parseTokens(expression);
-  if (!tokens) return null;
-  return evalTokens(tokens, context);
-}
-
-function resolveFormulaValue(formula: FormulaJson, sourceValues: Record<string, number | null>): number | null {
-  if (formula.type === "expression") {
-    if (!formula.expression || !formula.sources) return null;
-    const ctx: Record<string, number> = {};
-    for (const code of formula.sources) {
-      const v = sourceValues[code];
-      if (v === null || v === undefined) return null;
-      ctx[code] = v;
-    }
-    return evaluateExpression(formula.expression, ctx);
-  }
-
-  if (formula.type === "ratio") {
-    if (!formula.numerator || !formula.denominator) return null;
-    const denomVal = sourceValues[formula.denominator];
-    if (denomVal === null || denomVal === undefined || denomVal === 0) return null;
-
-    let numeratorSum = 0;
-    for (const code of formula.numerator) {
-      const v = sourceValues[code];
-      if (v === null || v === undefined) return null;
-      numeratorSum += v;
-    }
-
-    const scale = formula.scale ?? 1;
-    return (numeratorSum / denomVal) * scale;
-  }
-
-  return null;
-}
-
-function buildDependencyGraph(definitions: MetricDefinition[]): Map<string, string[]> {
+function buildDependencyGraph(
+  definitions: MetricDefinition[],
+  formulasByCode: ReadonlyMap<string, NormalizedMetricFormula>,
+): Map<string, string[]> {
   const graph = new Map<string, string[]>();
   for (const def of definitions) {
-    if (!def.isDerived || !def.formulaJson) continue;
-    const formula = def.formulaJson as FormulaJson;
-    const deps: string[] = [];
-    if (formula.sources) deps.push(...formula.sources);
-    if (formula.numerator) deps.push(...formula.numerator);
-    if (formula.denominator) deps.push(formula.denominator);
-    graph.set(def.code, deps);
+    const formula = formulasByCode.get(def.code);
+    graph.set(def.code, formula ? metricFormulaDependencies(formula) : []);
   }
   return graph;
 }
 
-function detectCycle(code: string, graph: Map<string, string[]>, visited: Set<string>, stack: Set<string>): boolean {
-  if (stack.has(code)) return true;
-  if (visited.has(code)) return false;
-  visited.add(code);
-  stack.add(code);
-  const deps = graph.get(code) || [];
-  for (const dep of deps) {
-    if (detectCycle(dep, graph, visited, stack)) return true;
+function topologicallySortDerivedDefinitions(
+  definitions: MetricDefinition[],
+  graph: Map<string, string[]>,
+): { ordered: MetricDefinition[]; cyclic: MetricDefinition[] } {
+  const byCode = new Map(definitions.map((definition) => [definition.code, definition]));
+  const inDegree = new Map<string, number>();
+  const dependants = new Map<string, string[]>();
+
+  for (const definition of definitions) {
+    const derivedDependencies = (graph.get(definition.code) || []).filter((code) => byCode.has(code));
+    inDegree.set(definition.code, derivedDependencies.length);
+    for (const dependency of derivedDependencies) {
+      dependants.set(dependency, [...(dependants.get(dependency) || []), definition.code]);
+    }
   }
-  stack.delete(code);
-  return false;
+
+  const sortDefinitions = (left: MetricDefinition, right: MetricDefinition) =>
+    (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.code.localeCompare(right.code);
+  const queue = definitions.filter((definition) => inDegree.get(definition.code) === 0).sort(sortDefinitions);
+  const ordered: MetricDefinition[] = [];
+  while (queue.length > 0) {
+    const definition = queue.shift()!;
+    ordered.push(definition);
+    for (const dependantCode of dependants.get(definition.code) || []) {
+      const nextDegree = (inDegree.get(dependantCode) || 0) - 1;
+      inDegree.set(dependantCode, nextDegree);
+      if (nextDegree === 0) {
+        queue.push(byCode.get(dependantCode)!);
+        queue.sort(sortDefinitions);
+      }
+    }
+  }
+
+  const orderedCodes = new Set(ordered.map((definition) => definition.code));
+  return {
+    ordered,
+    cyclic: definitions.filter((definition) => !orderedCodes.has(definition.code)).sort(sortDefinitions),
+  };
 }
 
-function hasCycle(code: string, graph: Map<string, string[]>): boolean {
-  return detectCycle(code, graph, new Set(), new Set());
+export interface DerivedMetricCalculationResult {
+  failures: string[];
+  updated: string[];
+  cleared: string[];
+  skippedMissing: string[];
+  skippedProtected: Array<{ code: string; operation: "calculation" | "clear" | "rollup"; reason: string }>;
+  rollups: Array<{ code: string; outcome: string; value: number | null }>;
 }
+
+type MetricCalculationStorage = Pick<typeof storage,
+  | "getMetricDefinitions"
+  | "getMetricDefinitionValuesExact"
+  | "createMetricCalculationRun"
+  | "updateMetricCalculationRun"
+  | "upsertCalculatedMetricDefinitionValue"
+  | "clearCalculatedMetricDefinitionValue"
+  | "rollupSiteValuesToCompany"
+>;
+
+export interface MetricCalculationEngineDependencies {
+  storage: MetricCalculationStorage;
+  lockPool: { connect(): Promise<any> };
+  loadFormulaContext(businessId: string): Promise<MetricFormulaEvaluationContext>;
+}
+
+const defaultDependencies: MetricCalculationEngineDependencies = {
+  storage,
+  lockPool: calculationLockPool,
+  loadFormulaContext: async (businessId) => ({
+    emissionFactors: buildEmissionFactorMap(await getConfiguredEmissionFactors(businessId, "UK")),
+  }),
+};
 
 export async function runDerivedMetricCalculations(
   businessId: string,
   siteId: string | null,
   periodStart: Date,
   periodEnd: Date,
-  triggeredByMetricValueId?: string
-): Promise<void> {
-  const allDefinitions = await storage.getMetricDefinitions();
-  const derivedDefs = allDefinitions.filter(d => d.isDerived && d.isActive && d.formulaJson);
+  triggeredByMetricValueId?: string,
+  dependencies: MetricCalculationEngineDependencies = defaultDependencies,
+): Promise<DerivedMetricCalculationResult> {
+  const periods = reportingMonthsForDateRange({ startDate: periodStart, endDate: periodEnd });
+  return withPeriodCalculationRunLocks(dependencies.lockPool, businessId, periods, () =>
+    runDerivedMetricCalculationsLocked(
+      businessId,
+      siteId,
+      periodStart,
+      periodEnd,
+      triggeredByMetricValueId,
+      dependencies,
+    ));
+}
 
-  if (derivedDefs.length === 0) return;
+async function runDerivedMetricCalculationsLocked(
+  businessId: string,
+  siteId: string | null,
+  periodStart: Date,
+  periodEnd: Date,
+  triggeredByMetricValueId: string | undefined,
+  dependencies: MetricCalculationEngineDependencies,
+): Promise<DerivedMetricCalculationResult> {
+  const failures: string[] = [];
+  const updated: string[] = [];
+  const cleared: string[] = [];
+  const skippedMissing: string[] = [];
+  const skippedProtected: DerivedMetricCalculationResult["skippedProtected"] = [];
+  const rollups: DerivedMetricCalculationResult["rollups"] = [];
+  const calculationStorage = dependencies.storage;
+  const allDefinitions = await calculationStorage.getMetricDefinitions();
+  // An active derived definition with absent or malformed formula metadata is
+  // a configuration failure, not a metric with missing input data.
+  const derivedDefs = allDefinitions.filter(d => d.isDerived && d.isActive);
+  const activeNumericMetricCodes = new Set(
+    allDefinitions
+      .filter((definition) => definition.isActive && definition.dataType === "numeric")
+      .map((definition) => definition.code),
+  );
+  const formulasByCode = new Map<string, NormalizedMetricFormula>();
+  const formulaConfigurationErrors = new Map<string, string>();
+  for (const definition of derivedDefs) {
+    if (definition.dataType !== "numeric") {
+      formulaConfigurationErrors.set(definition.code, "derived formula target must use the numeric data type");
+      continue;
+    }
+    const normalized = normalizeMetricFormula(definition.formulaJson);
+    if (normalized.status === "invalid") {
+      formulaConfigurationErrors.set(definition.code, normalized.error);
+      continue;
+    }
+    const dependencyError = metricFormulaDependencyError(normalized.formula, activeNumericMetricCodes);
+    if (dependencyError) {
+      formulaConfigurationErrors.set(definition.code, dependencyError);
+      continue;
+    }
+    formulasByCode.set(definition.code, normalized.formula);
+  }
 
-  const depGraph = buildDependencyGraph(allDefinitions);
+  const depGraph = buildDependencyGraph(derivedDefs, formulasByCode);
+  const sortedDefinitions = topologicallySortDerivedDefinitions(derivedDefs, depGraph);
+  const invalidFormulaCodes = new Set<string>(formulaConfigurationErrors.keys());
+  for (const definition of sortedDefinitions.cyclic) {
+    const message = `${definition.code}: circular derived-metric dependency`;
+    console.warn(`[MetricEngine] ${message}`);
+    failures.push(message);
+    invalidFormulaCodes.add(definition.code);
+  }
 
-  const existingValues = await storage.getMetricDefinitionValues(businessId, {
+  // Calculations are scoped to one exact canonical reporting range. Contained
+  // monthly/quarterly facts belong to readiness aggregation, not this formula.
+  const existingValues = await calculationStorage.getMetricDefinitionValuesExact(
+    businessId,
     siteId,
     periodStart,
     periodEnd,
-  });
+  );
 
   const valuesByCode: Record<string, number | null> = {};
   const defById: Record<string, MetricDefinition> = {};
   for (const def of allDefinitions) defById[def.id] = def;
 
   for (const v of existingValues) {
+    // Rejected facts are explicitly unavailable until revised. They must not
+    // drive either this calculation or downstream derived dependencies.
+    if (v.status === "rejected") continue;
     const def = defById[v.metricDefinitionId];
     if (def) {
       valuesByCode[def.code] = v.valueNumeric !== null ? parseFloat(v.valueNumeric) : null;
     }
   }
 
-  for (const def of derivedDefs) {
-    if (hasCycle(def.code, depGraph)) {
-      console.warn(`[MetricEngine] Circular dependency detected for metric ${def.code}, skipping`);
-      continue;
-    }
+  let formulaContextPromise: Promise<MetricFormulaEvaluationContext> | null = null;
+  const formulaContext = () => {
+    formulaContextPromise ??= dependencies.loadFormulaContext(businessId);
+    return formulaContextPromise;
+  };
 
+  for (const def of sortedDefinitions.ordered) {
     let runRecord;
     try {
-      runRecord = await storage.createMetricCalculationRun({
+      runRecord = await calculationStorage.createMetricCalculationRun({
         businessId,
         metricDefinitionId: def.id,
         siteId,
@@ -224,44 +218,125 @@ export async function runDerivedMetricCalculations(
     } catch (runCreateErr: unknown) {
       const msg = runCreateErr instanceof Error ? runCreateErr.message : String(runCreateErr);
       console.error(`[MetricEngine] Failed to create run record for ${def.code}: ${msg}`);
+      failures.push(`${def.code}: ${msg}`);
+      invalidFormulaCodes.add(def.code);
       continue;
     }
 
     try {
-      const formula = def.formulaJson as FormulaJson;
-      const result = resolveFormulaValue(formula, valuesByCode);
+      const configurationError = formulaConfigurationErrors.get(def.code);
+      if (configurationError) {
+        const message = `${def.code}: invalid formula configuration: ${configurationError}`;
+        failures.push(message);
+        invalidFormulaCodes.add(def.code);
+        await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+          status: "error",
+          errorText: `Invalid formula configuration: ${configurationError}`,
+          outputJson: { outcome: "invalid_formula" },
+        });
+        continue;
+      }
 
-      if (result !== null) {
-        await storage.upsertMetricDefinitionValue(
+      const formula = formulasByCode.get(def.code)!;
+      const invalidDependency = metricFormulaDependencies(formula)
+        .find((dependency) => invalidFormulaCodes.has(dependency));
+      if (invalidDependency) {
+        const message = `${def.code}: dependency ${invalidDependency} has an invalid or failed formula`;
+        failures.push(message);
+        invalidFormulaCodes.add(def.code);
+        await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+          status: "error",
+          errorText: `Dependency ${invalidDependency} has an invalid or failed formula`,
+          outputJson: { outcome: "invalid_dependency", dependency: invalidDependency },
+        });
+        continue;
+      }
+
+      let evaluation = evaluateMetricFormula(formula, valuesByCode);
+      if (
+        formula.type === "custom"
+        && evaluation.status === "invalid"
+        && evaluation.error === `${formula.customFn} requires configured emission factors`
+      ) {
+        try {
+          evaluation = evaluateMetricFormula(formula, valuesByCode, await formulaContext());
+        } catch (contextError: unknown) {
+          evaluation = {
+            status: "invalid",
+            error: contextError instanceof Error ? contextError.message : String(contextError),
+          };
+        }
+      }
+
+      if (evaluation.status === "value") {
+        const result = evaluation.value;
+        const mutation = await calculationStorage.upsertCalculatedMetricDefinitionValue(
           businessId,
           def.id,
           siteId,
           periodStart,
           periodEnd,
-          {
-            valueNumeric: String(result),
-            sourceType: "calculated",
-            status: "draft",
-          }
+          String(result),
         );
-
-        valuesByCode[def.code] = result;
-
-        await storage.updateMetricCalculationRun(runRecord.id, {
-          status: "success",
-          outputJson: { result },
+        if (mutation.outcome === "protected") {
+          skippedProtected.push({
+            code: def.code,
+            operation: "calculation",
+            reason: mutation.reason || "protected",
+          });
+          await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+            status: "skipped",
+            outputJson: { result, outcome: mutation.outcome, reason: mutation.reason },
+            errorText: "Existing canonical value is protected",
+          });
+        } else {
+          valuesByCode[def.code] = result;
+          if (mutation.outcome === "created" || mutation.outcome === "updated") updated.push(def.code);
+          await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+            status: "success",
+            outputJson: { result, outcome: mutation.outcome },
+          });
+        }
+      } else if (evaluation.status === "unavailable") {
+        const mutation = await calculationStorage.clearCalculatedMetricDefinitionValue(
+          businessId,
+          def.id,
+          siteId,
+          periodStart,
+          periodEnd,
+        );
+        if (mutation.outcome === "protected") {
+          skippedProtected.push({
+            code: def.code,
+            operation: "clear",
+            reason: mutation.reason || "protected",
+          });
+        } else {
+          valuesByCode[def.code] = null;
+          skippedMissing.push(def.code);
+          if (mutation.outcome === "cleared") cleared.push(def.code);
+        }
+        await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+          status: "skipped",
+          outputJson: { outcome: mutation.outcome, reason: mutation.reason, unavailableReason: evaluation.reason },
+          errorText: evaluation.reason,
         });
       } else {
-        await storage.updateMetricCalculationRun(runRecord.id, {
-          status: "skipped",
-          outputJson: null,
-          errorText: "One or more source values missing or zero denominator",
+        const message = `${def.code}: invalid formula evaluation: ${evaluation.error}`;
+        failures.push(message);
+        invalidFormulaCodes.add(def.code);
+        await calculationStorage.updateMetricCalculationRun(runRecord.id, {
+          status: "error",
+          outputJson: { outcome: "invalid_formula_evaluation" },
+          errorText: evaluation.error,
         });
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[MetricEngine] Calculation failed for ${def.code}: ${msg}`);
-      await storage.updateMetricCalculationRun(runRecord.id, {
+      failures.push(`${def.code}: ${msg}`);
+      invalidFormulaCodes.add(def.code);
+      await calculationStorage.updateMetricCalculationRun(runRecord.id, {
         status: "error",
         errorText: msg,
       }).catch((updateErr: unknown) => {
@@ -272,11 +347,32 @@ export async function runDerivedMetricCalculations(
 
   if (siteId !== null) {
     for (const def of allDefinitions.filter(d => d.rollupMethod !== "none" && d.isActive)) {
-      await storage.rollupSiteValuesToCompany(businessId, def.id, periodStart, periodEnd).catch((rollupErr: unknown) => {
-        console.error(`[MetricEngine] Rollup failed for ${def.code}: ${String(rollupErr)}`);
-      });
+      // A failed formula must not mutate the organisation fact indirectly via
+      // a site rollup either. Preserve the last known calculated value until
+      // the configuration/evaluation failure is corrected.
+      if (def.isDerived && invalidFormulaCodes.has(def.code)) continue;
+      try {
+        const rollup = await calculationStorage.rollupSiteValuesToCompany(
+          businessId,
+          def.id,
+          periodStart,
+          periodEnd,
+        );
+        rollups.push({ code: def.code, outcome: rollup.outcome, value: rollup.rollupValue });
+        if (rollup.outcome === "protected") {
+          skippedProtected.push({ code: def.code, operation: "rollup", reason: rollup.reason || "protected" });
+        } else if (rollup.outcome === "cleared") {
+          cleared.push(`${def.code}:rollup`);
+        }
+      } catch (rollupErr: unknown) {
+        const msg = rollupErr instanceof Error ? rollupErr.message : String(rollupErr);
+        console.error(`[MetricEngine] Rollup failed for ${def.code}: ${msg}`);
+        failures.push(`${def.code} rollup: ${msg}`);
+      }
     }
   }
+
+  return { failures, updated, cleared, skippedMissing, skippedProtected, rollups };
 }
 
 export async function triggerCalculationsForMetricValue(
@@ -285,6 +381,6 @@ export async function triggerCalculationsForMetricValue(
   siteId: string | null,
   periodStart: Date,
   periodEnd: Date
-): Promise<void> {
-  await runDerivedMetricCalculations(businessId, siteId, periodStart, periodEnd, metricValueId);
+): Promise<DerivedMetricCalculationResult> {
+  return runDerivedMetricCalculations(businessId, siteId, periodStart, periodEnd, metricValueId);
 }

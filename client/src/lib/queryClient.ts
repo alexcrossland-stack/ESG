@@ -36,15 +36,24 @@ export class StepUpRequiredError extends Error {
   }
 }
 
+export type ApiRequestError = Error & {
+  code?: string;
+  status?: number;
+  details?: Record<string, unknown>;
+  partialSuccess?: boolean;
+};
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     let message: string;
     let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
       const json = JSON.parse(text);
       message = json.error || json.message || text;
       code = json.code;
+      if (json && typeof json === "object" && !Array.isArray(json)) details = json;
     } catch {
       message = text;
     }
@@ -54,8 +63,13 @@ async function throwIfResNotOk(res: Response) {
     if (res.status === 429) {
       message = "Too many attempts. Please wait a few minutes before trying again.";
     }
-    const err = new Error(message) as Error & { code?: string };
+    const err = new Error(message) as ApiRequestError;
     if (code) err.code = code;
+    err.status = res.status;
+    if (details) {
+      err.details = details;
+      if (details.partialSuccess === true) err.partialSuccess = true;
+    }
     throw err;
   }
 }
@@ -86,10 +100,12 @@ export async function apiRequest(
     const text = (await res.text()) || res.statusText;
     let message: string;
     let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
       const json = JSON.parse(text);
       message = json.error || json.message || text;
       code = json.code;
+      if (json && typeof json === "object" && !Array.isArray(json)) details = json;
     } catch {
       message = text;
     }
@@ -103,8 +119,13 @@ export async function apiRequest(
     if (res.status === 429) {
       message = "Too many attempts. Please wait a few minutes before trying again.";
     }
-    const apiErr = new Error(message) as Error & { code?: string };
+    const apiErr = new Error(message) as ApiRequestError;
     if (code) apiErr.code = code;
+    apiErr.status = res.status;
+    if (details) {
+      apiErr.details = details;
+      if (details.partialSuccess === true) apiErr.partialSuccess = true;
+    }
     throw apiErr;
   }
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ import { usePermissions } from "@/lib/permissions";
 import { CURRENT_UK_FACTOR_SET } from "@shared/emission-factor-metadata";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { Link } from "wouter";
+import { invalidateMetricDependentQueries } from "@/lib/metric-query-invalidation";
 
 const INDUSTRIES = [
   "Construction", "Education", "Energy & Utilities", "Financial Services",
@@ -47,6 +49,29 @@ const COUNTRIES = [
   "New Zealand", "Germany", "France", "Netherlands", "Other",
 ];
 
+type CompanyDetailsFormValues = {
+  name: string;
+  industry: string;
+  country: string;
+  employeeCount: string;
+  revenueBand: string;
+  locations: string;
+};
+
+function nullableTrimmedValue(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function nullableIntegerValue(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("Number of employees must be a whole number of zero or more.");
+  }
+  return parsed;
+}
+
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -56,7 +81,7 @@ export default function Settings() {
   const { data: authData, isLoading: authLoading } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: company, isLoading: companyLoading } = useQuery<any>({ queryKey: ["/api/company"] });
 
-  const companyForm = useForm({
+  const companyForm = useForm<CompanyDetailsFormValues>({
     defaultValues: {
       name: "",
       industry: "",
@@ -72,25 +97,29 @@ export default function Settings() {
       name: company.name || "",
       industry: company.industry || "",
       country: company.country || "",
-      employeeCount: String(company.employeeCount || ""),
+      employeeCount: company.employeeCount == null ? "" : String(company.employeeCount),
       revenueBand: company.revenueBand || "",
-      locations: String(company.locations || "1"),
+      locations: String(company.locations ?? 1),
     });
     setFormInitialized(true);
   }
 
   const updateCompanyMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("PUT", "/api/company", {
-      ...data,
-      employeeCount: parseInt(data.employeeCount) || null,
-      locations: parseInt(data.locations) || 1,
+    mutationFn: (data: CompanyDetailsFormValues) => apiRequest("PUT", "/api/company", {
+      name: data.name.trim(),
+      industry: nullableTrimmedValue(data.industry),
+      country: nullableTrimmedValue(data.country),
+      employeeCount: nullableIntegerValue(data.employeeCount),
+      revenueBand: nullableTrimmedValue(data.revenueBand),
+      locations: Math.max(1, Number.parseInt(data.locations, 10) || 1),
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/company"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      invalidateEsgReadinessQueries(queryClient);
       toast({ title: "Company details updated" });
     },
-    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "Update failed", description: error.message, variant: "destructive" }),
   });
 
   if (authLoading || companyLoading) {
@@ -142,27 +171,53 @@ export default function Settings() {
                     <FormField control={companyForm.control} name="industry" render={({ field }) => (
                       <FormItem>
                         <FormLabel className="text-xs">Industry</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        <div className="flex items-center gap-1">
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger className="flex-1" data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            disabled={!field.value}
+                            aria-label="Clear industry"
+                            onClick={() => field.onChange("")}
+                            data-testid="button-clear-industry"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </FormItem>
                     )} />
                     <FormField control={companyForm.control} name="country" render={({ field }) => (
                       <FormItem>
                         <FormLabel className="text-xs">Country</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger data-testid="select-country"><SelectValue placeholder="Select country" /></SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        <div className="flex items-center gap-1">
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger className="flex-1" data-testid="select-country"><SelectValue placeholder="Select country" /></SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {COUNTRIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            disabled={!field.value}
+                            aria-label="Clear country"
+                            onClick={() => field.onChange("")}
+                            data-testid="button-clear-country"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </FormItem>
                     )} />
                     <FormField control={companyForm.control} name="employeeCount" render={({ field }) => (
@@ -174,14 +229,27 @@ export default function Settings() {
                     <FormField control={companyForm.control} name="revenueBand" render={({ field }) => (
                       <FormItem>
                         <FormLabel className="text-xs">Revenue Band</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger data-testid="select-revenue"><SelectValue placeholder="Select range" /></SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {REVENUE_BANDS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        <div className="flex items-center gap-1">
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger className="flex-1" data-testid="select-revenue"><SelectValue placeholder="Select range" /></SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {REVENUE_BANDS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            disabled={!field.value}
+                            aria-label="Clear revenue band"
+                            onClick={() => field.onChange("")}
+                            data-testid="button-clear-revenue"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </FormItem>
                     )} />
                     <FormField control={companyForm.control} name="locations" render={({ field }) => (
@@ -1078,6 +1146,7 @@ function AccountDeletionCard({ companyName }: { companyName?: string }) {
 
 function AdminPanel() {
   const [section, setSection] = useState("users");
+  const { isSuperAdmin } = usePermissions();
 
   const sections = [
     { key: "users", label: "Users & Roles", icon: Users },
@@ -1085,7 +1154,7 @@ function AdminPanel() {
     { key: "modules", label: "Module Configuration", icon: ToggleLeft },
     { key: "scoring", label: "Scoring Weights", icon: Scale },
     { key: "metrics", label: "Metric Settings", icon: BarChart3 },
-    { key: "templates", label: "Policy Templates", icon: Library },
+    ...(isSuperAdmin ? [{ key: "templates", label: "Policy Templates", icon: Library }] : []),
     { key: "factors", label: "Emission Factors", icon: Leaf },
     { key: "workflow", label: "Approval Workflow", icon: ClipboardCheck },
     { key: "reminders", label: "Reminders", icon: Clock },
@@ -1119,7 +1188,7 @@ function AdminPanel() {
       {section === "modules" && <ModuleConfiguration />}
       {section === "scoring" && <ScoringWeights />}
       {section === "metrics" && <MetricsAdmin />}
-      {section === "templates" && <PolicyTemplateAdmin />}
+      {section === "templates" && isSuperAdmin && <PolicyTemplateAdmin />}
       {section === "factors" && <EmissionFactorAdmin />}
       {section === "workflow" && <WorkflowSettings />}
       {section === "reminders" && <ReminderSettings />}
@@ -1252,7 +1321,7 @@ function ModuleConfiguration() {
   if (isLoading) return <Skeleton className="h-48" />;
 
   const handleToggle = (key: string, value: boolean) => {
-    updateMutation.mutate({ ...settings, [key]: value });
+    updateMutation.mutate({ [key]: value });
   };
 
   return (
@@ -1299,8 +1368,7 @@ function ScoringWeights() {
       return apiRequest("PUT", `/api/metrics/${id}/admin`, { weight, importance });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics/all"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      invalidateMetricDependentQueries(queryClient);
       toast({ title: "Scoring weight updated" });
     },
     onError: () => toast({ title: "Update failed", variant: "destructive" }),
@@ -1422,9 +1490,7 @@ function MetricsAdmin() {
       return apiRequest("PUT", `/api/metrics/${editingMetric.id}/admin`, data);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics/all"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
+      invalidateMetricDependentQueries(queryClient);
       setEditingMetric(null);
       toast({ title: "Metric settings updated" });
     },
@@ -1921,7 +1987,7 @@ function EmissionFactorAdmin() {
               className={`flex items-center justify-between py-3 px-3 border rounded-md cursor-pointer transition-colors ${
                 currentSet === fs.key ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
               }`}
-              onClick={() => updateMutation.mutate({ ...settings, emissionFactorSet: fs.key })}
+              onClick={() => updateMutation.mutate({ emissionFactorSet: fs.key })}
               data-testid={`factor-set-${fs.key}`}
             >
               <div>
@@ -1962,7 +2028,7 @@ function WorkflowSettings() {
   if (isLoading) return <Skeleton className="h-48" />;
 
   const handleToggle = (key: string, value: boolean) => {
-    updateMutation.mutate({ ...settings, [key]: value });
+    updateMutation.mutate({ [key]: value });
   };
 
   const workflowItems = [
@@ -2070,7 +2136,7 @@ function ReminderSettings() {
           </div>
           <Switch
             checked={settings?.reminderEnabled ?? true}
-            onCheckedChange={(v) => updateMutation.mutate({ ...settings, reminderEnabled: v })}
+            onCheckedChange={(v) => updateMutation.mutate({ reminderEnabled: v })}
             disabled={updateMutation.isPending}
             data-testid="switch-reminder-enabled"
           />
@@ -2079,7 +2145,7 @@ function ReminderSettings() {
           <Label className="text-xs">Reminder frequency</Label>
           <Select
             value={settings?.reminderFrequency || "daily"}
-            onValueChange={(v) => updateMutation.mutate({ ...settings, reminderFrequency: v })}
+            onValueChange={(v) => updateMutation.mutate({ reminderFrequency: v })}
           >
             <SelectTrigger className="w-40" data-testid="select-reminder-frequency">
               <SelectValue />
@@ -2139,7 +2205,6 @@ function ReportBranding() {
 
   const handleSave = () => {
     updateMutation.mutate({
-      ...settings,
       reportBrandingName: brandName || null,
       reportBrandingTagline: brandTagline || null,
       reportBrandingColor: brandColor || null,
@@ -2287,6 +2352,9 @@ function ReportingPeriodsAdmin() {
       toast({ title: "Period closed" });
       queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
     },
+    onError: (e: any) => {
+      toast({ title: "Could not close period", description: e.message, variant: "destructive" });
+    },
   });
 
   const lockMutation = useMutation({
@@ -2298,6 +2366,9 @@ function ReportingPeriodsAdmin() {
       toast({ title: "Period locked" });
       queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
     },
+    onError: (e: any) => {
+      toast({ title: "Could not lock period", description: e.message, variant: "destructive" });
+    },
   });
 
   const copyMutation = useMutation({
@@ -2308,7 +2379,10 @@ function ReportingPeriodsAdmin() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: `Period copied: ${data.copiedMetrics} metrics, ${data.copiedActions} actions carried forward` });
+      toast({
+        title: "Reporting period created",
+        description: `${data.carriedForwardMetrics ?? 0} existing targets and ${data.carriedForwardActions ?? 0} open actions remain available.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/reporting-periods"] });
       setCopyOpen(null);
       setCopyName("");
@@ -2394,12 +2468,12 @@ function ReportingPeriodsAdmin() {
             </div>
             <div className="flex items-center gap-1.5">
               {p.status === "open" && (
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { if (confirm("Close this period? Data entry will still be possible but the period will be marked as closed.")) closeMutation.mutate(p.id); }} data-testid={`button-close-period-${p.id}`}>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={closeMutation.isPending} onClick={() => { if (confirm("Close this period? Data entry will still be possible but the period will be marked as closed.")) closeMutation.mutate(p.id); }} data-testid={`button-close-period-${p.id}`}>
                   Close
                 </Button>
               )}
               {p.status === "closed" && (
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { if (confirm("Lock this period? No further data changes will be possible.")) lockMutation.mutate(p.id); }} data-testid={`button-lock-period-${p.id}`}>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={lockMutation.isPending} onClick={() => { if (confirm("Lock this period? No further data changes will be possible.")) lockMutation.mutate(p.id); }} data-testid={`button-lock-period-${p.id}`}>
                   <LockIcon className="w-3 h-3 mr-1" />Lock
                 </Button>
               )}

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { authFetch, apiRequest } from "@/lib/queryClient";
+import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 import { parseBulkGridResponse, resolvePasteGridState, type GridMetric, type GridResponse } from "@/lib/paste-grid-response";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -258,7 +259,7 @@ export function PasteFromExcelTab({
       startTransition(() => setValidation(result));
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
+      invalidateEsgReadinessQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry/bulk-grid"] });
       toast({
         title: "Bulk paste saved",

@@ -58,13 +58,32 @@ async function assertPermission(opts: {
   else pass(name, `actor=${actor} status=${res.status}`);
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(token: string): Promise<string | null> {
+  const metricsRes = await apiRequest("GET", "/api/metrics", undefined, token);
+  if (metricsRes.status !== 200) return null;
+  const metrics = JSON.parse(metricsRes.body) as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await apiRequest("POST", "/api/metrics", {
+    name: `Permissions fixture ${Date.now()}`,
+    category: "environmental",
+    unit: "kWh",
+    frequency: "monthly",
+    enabled: true,
+    metricType: "manual",
+  }, token);
+  if (createRes.status !== 200) return null;
+  return (JSON.parse(createRes.body) as { id?: string }).id ?? null;
+}
+
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA, tenantB } = tenants;
 
   // Need a real metricId from Tenant A to test write operations
-  const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
-  const metrics = JSON.parse(metricsRes.body) as Array<{ id: string }>;
-  const metricId = metrics[0]?.id;
+  const metricId = await getOrCreateEditableMetricId(tenantA.adminToken);
 
   if (!metricId) {
     fail("setup — get Tenant A metricId", "no metrics found");
@@ -182,7 +201,7 @@ async function run(tenants: SeededTenants): Promise<void> {
   // ════════════════════════════════════════════════════════════════════════
   // ENDPOINT 4: PUT /api/company/settings — admin-only settings
   // ════════════════════════════════════════════════════════════════════════
-  const settingsPayload = { displayName: "Test Company Updated" };
+  const settingsPayload = { trackEnergy: true };
 
   await assertPermission({
     name: "PERM-04a: PUT /api/company/settings — unauthenticated → 401",

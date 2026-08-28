@@ -29,7 +29,7 @@
  * @group regression
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
@@ -54,6 +54,33 @@ function readSeedInfo() {
       contributorEmail: string;
     };
   };
+}
+
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const metricsRes = await request.get("/api/metrics", { headers });
+  expect(metricsRes.status()).toBe(200);
+  const metrics = await metricsRes.json() as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await request.post("/api/metrics", {
+    headers,
+    data: {
+      name: `Regression fixture manual metric ${Date.now()}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    },
+  });
+  expect(createRes.status()).toBe(200);
+  const created = await createRes.json() as { id?: string };
+  expect(created.id).toBeTruthy();
+  return created.id!;
 }
 
 async function dbClient(): Promise<Client> {
@@ -362,13 +389,7 @@ test.describe("REGR-07: First metric entry and persistence", () => {
   test("admin can submit a metric value (201) and it is retrievable", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    expect(metricsRes.status()).toBe(200);
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    expect(metrics.length).toBeGreaterThan(0);
-    capturedMetricId = metrics[0].id;
+    capturedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const submitRes = await request.post("/api/data-entry", {
       data: {
@@ -390,11 +411,7 @@ test.describe("REGR-07: First metric entry and persistence", () => {
     const { tenantA } = readSeedInfo();
 
     if (!capturedMetricId) {
-      const metricsRes = await request.get("/api/metrics", {
-        headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-      });
-      const metrics = await metricsRes.json() as Array<{ id: string }>;
-      capturedMetricId = metrics[0]?.id ?? null;
+      capturedMetricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
     }
 
     if (!capturedMetricId) {
@@ -441,18 +458,12 @@ test.describe("REGR-08: Evidence upload and retrieval", () => {
 
   test("admin can upload evidence file and it appears in the list", async ({ request }) => {
     const { tenantA } = readSeedInfo();
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    expect(metricsRes.status()).toBe(200);
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    const metricId = metrics[0]?.id;
-    expect(metricId).toBeTruthy();
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const uniqueFilename = `regression-test-${Date.now()}.txt`;
     const uploadRes = await request.post("/api/evidence", {
       multipart: {
-        metricId: metricId!,
+        metricId,
         period: `2026-05-${String((Date.now() % 20) + 1).padStart(2, "0")}`,
         notes: "Regression pack evidence test",
         file: {
@@ -482,14 +493,11 @@ test.describe("REGR-08: Evidence upload and retrieval", () => {
 
   test("POST /api/evidence without file returns 400 (not 500)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const res = await request.post("/api/evidence", {
       multipart: {
-        metricId: metrics[0]?.id,
+        metricId,
         period: "2026-05",
       },
       headers: { Authorization: `Bearer ${tenantA.adminToken}` },
@@ -710,12 +718,7 @@ test.describe("REGR-11: Permission guard — Contributor cannot set metric targe
     const { tenantA } = readSeedInfo();
 
     // Get a metric ID using admin token
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    expect(metrics.length).toBeGreaterThan(0);
-    const metricId = metrics[0].id;
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     // REGRESSION: contributor must be blocked from setting targets
     const res = await request.put(`/api/metrics/${metricId}/target`, {
@@ -730,11 +733,7 @@ test.describe("REGR-11: Permission guard — Contributor cannot set metric targe
   test("viewer PUT /api/metrics/:id/target returns 403", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    const metricId = metrics[0]?.id ?? "00000000-0000-0000-0000-000000000000";
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const res = await request.put(`/api/metrics/${metricId}/target`, {
       data: { targetValue: 50, targetYear: 2030 },
@@ -752,13 +751,7 @@ test.describe("REGR-12: Permission guard — Admin can set metric targets", () =
   test("admin PUT /api/metrics/:id/target succeeds (200) or returns expected client error (400)", async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    expect(metricsRes.status()).toBe(200);
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    expect(metrics.length).toBeGreaterThan(0);
-    const metricId = metrics[0].id;
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     const res = await request.put(`/api/metrics/${metricId}/target`, {
       data: { targetValue: 100, targetYear: 2030, direction: "lower_is_better" },

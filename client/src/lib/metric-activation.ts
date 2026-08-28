@@ -17,6 +17,8 @@ type MetricDefinitionLike = {
   evidenceRequired?: boolean | null;
   rollupMethod?: string | null;
   sortOrder?: number | null;
+  metricType?: string | null;
+  formulaText?: string | null;
 };
 
 type CompanyMetricLike = {
@@ -25,6 +27,7 @@ type CompanyMetricLike = {
   category: "environmental" | "social" | "governance";
   description?: string | null;
   unit?: string | null;
+  frequency?: string | null;
   dataType?: string | null;
   enabled?: boolean | null;
   metricType?: string | null;
@@ -87,10 +90,11 @@ function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEn
     description: definition.description ?? null,
     unit: definition.unit ?? null,
     dataType: definition.dataType ?? "numeric",
-    metricType: definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual"),
+    metricType: definition.metricType
+      ?? (definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual")),
     direction: "higher_is_better",
     helpText: definition.description ?? null,
-    formulaText: null,
+    formulaText: definition.formulaText ?? null,
     missingCompanyMetric: true,
     source: "definition",
   };
@@ -154,7 +158,7 @@ function buildSyntheticLibraryMetric(metric: CompanyMetricLike): MetricLibraryEn
     description: metric.description ?? metric.helpText ?? null,
     dataType: "numeric",
     unit: metric.unit ?? null,
-    inputFrequency: "monthly",
+    inputFrequency: metric.frequency ?? "monthly",
     isCore: false,
     isActive: Boolean(metric.enabled),
     isDerived: metric.metricType === "derived",
@@ -164,6 +168,8 @@ function buildSyntheticLibraryMetric(metric: CompanyMetricLike): MetricLibraryEn
     evidenceRequired: false,
     rollupMethod: "sum",
     sortOrder: 9999,
+    metricType: metric.metricType ?? "manual",
+    formulaText: metric.formulaText ?? null,
     companyMetricId: metric.id,
     isSyntheticCustom: true,
   };
@@ -196,7 +202,22 @@ export function buildMetricLibraryEntries(
 
   for (const metric of companyMetrics) {
     const canonicalId = normalizeMetricActivationName(metric.name);
-    if (byCanonicalId.has(canonicalId)) continue;
+    if (byCanonicalId.has(canonicalId)) {
+      const existing = byCanonicalId.get(canonicalId)!;
+      const metricType = metric.metricType ?? existing.metricType ?? "manual";
+      const isCalculated = metricType === "calculated" || metricType === "derived";
+      byCanonicalId.set(canonicalId, {
+        ...existing,
+        isActive: Boolean(metric.enabled),
+        inputFrequency: metric.frequency ?? existing.inputFrequency ?? "monthly",
+        isDerived: Boolean(existing.isDerived) || metricType === "derived",
+        formulaJson: existing.formulaJson ?? (isCalculated ? {} : null),
+        metricType,
+        formulaText: metric.formulaText ?? existing.formulaText ?? null,
+        companyMetricId: metric.id,
+      });
+      continue;
+    }
     byCanonicalId.set(canonicalId, buildSyntheticLibraryMetric(metric));
   }
 

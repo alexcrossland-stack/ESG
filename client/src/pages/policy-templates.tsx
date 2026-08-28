@@ -832,11 +832,7 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
   };
 
   const handleApprove = () => {
-    updateMutation.mutate({
-      status: "approved",
-      approvedAt: new Date().toISOString(),
-      versionNumber: (policy.versionNumber || 1) + 1,
-    });
+    updateMutation.mutate({ status: "approved" });
   };
 
   const handlePublish = () => {

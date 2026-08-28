@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
-import { apiRequest, queryClient, authFetch } from "@/lib/queryClient";
+import { apiRequest, queryClient, authFetch, type ApiRequestError } from "@/lib/queryClient";
+import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 import { resolveApiError } from "@/lib/errorResolver";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +47,18 @@ import {
   getInlineMetricEvidenceState,
   type InlineMetricEvidenceState,
 } from "@/lib/metric-evidence-state";
+import { buildGuidedRawDataMutation } from "@/lib/guided-raw-data-mutation";
+import {
+  combineWorkflowSubmitResponses,
+  normalizeDataEntryWorkflowStatus,
+  selectDataEntryWorkflowItems,
+  summarizeDataEntryWorkflow,
+  workflowReviewNotice,
+  workflowSubmitNotice,
+  type DataEntryWorkflowItem,
+  type WorkflowSubmitResponse,
+} from "@/lib/workflow-outcomes";
+import { GUIDED_RAW_INPUT_NAME_SET } from "@shared/guided-raw-inputs";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -77,9 +90,10 @@ const RAW_DATA_FIELDS = {
     { key: "total_staff", label: "Total Staff (for training %)", unit: "people", help: "Total staff for training completion %" },
     { key: "signed_suppliers", label: "Suppliers Signed CoC", unit: "suppliers", help: "Suppliers who signed code of conduct" },
     { key: "total_suppliers", label: "Total Suppliers", unit: "suppliers", help: "Total number of suppliers" },
-    { key: "annual_revenue", label: "Annual Revenue", unit: "GBP", help: "Annual revenue for carbon intensity calculation" },
   ],
 };
+
+const GUIDED_RAW_DATA_INPUT_KEYS = GUIDED_RAW_INPUT_NAME_SET;
 
 const SME_STARTER_INPUT_KEYS = new Set([
   "electricity_kwh",
@@ -89,7 +103,6 @@ const SME_STARTER_INPUT_KEYS = new Set([
   "employee_leavers",
   "trained_staff",
   "total_staff",
-  "annual_revenue",
 ]);
 
 function generatePeriods() {
@@ -182,7 +195,7 @@ function InlineMetricEvidenceBadge({ state, metricKey }: { state: InlineMetricEv
 export default function DataEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { can, isApprover } = usePermissions();
+  const { can, isAdmin, isApprover } = usePermissions();
   const { isPro } = useBillingStatus();
   const { activeSiteId, activeSite, activeSites, setActiveSiteId, isLoading: sitesLoading } = useSiteContext();
   const hasActiveSites = activeSites.length > 0;
@@ -198,6 +211,10 @@ export default function DataEntry() {
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
+
+  const invalidateReadinessQueries = () => {
+    invalidateEsgReadinessQueries(queryClient);
+  };
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
@@ -308,23 +325,24 @@ export default function DataEntry() {
   const activation = useActivationState();
 
   const saveRawMutation = useMutation({
-    mutationFn: (data: { inputs: Record<string, string>; period: string; siteId?: string | null }) =>
+    mutationFn: (data: { inputs: Record<string, string>; clearInputs?: string[]; period: string; siteId?: string | null }) =>
       apiRequest("POST", "/api/raw-data", data),
     onSuccess: () => {
       const isFirstData = !activation.hasAddedData;
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
+      invalidateReadinessQueries();
       if (isFirstData) trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: selectedPeriod });
       toast({
         title: "Data saved",
         description: isFirstData
           ? "Great start — add a supporting document to back this up."
-          : "Your figures have been saved and metrics recalculated.",
+          : "Your figures have been saved. Recalculating your metrics now.",
       });
     },
-    onError: () => toast({
+    onError: (error: Error) => toast({
       title: "Save failed",
-      description: "We couldn't save your data. Check your internet connection and try again. If the problem persists, refresh the page.",
+      description: error.message || "We couldn't save your data. Check your internet connection and try again.",
       variant: "destructive",
     }),
   });
@@ -334,8 +352,17 @@ export default function DataEntry() {
     onSuccess: (data: any) => {
       setRecalcResults(data.updated || []);
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
-      toast({ title: "Metrics recalculated", description: `${data.updated?.length || 0} metrics updated` });
+      invalidateReadinessQueries();
+      const protectedCount = (data.guidedMetricSync?.skippedProtected?.length || 0)
+        + (data.guidedMetricSync?.skippedLocked?.length || 0)
+        + (data.calculatedSkippedLocked?.length || 0)
+        + (data.calculatedSkippedProtected?.length || 0);
+      toast({
+        title: protectedCount > 0 ? "Metrics recalculated with protected values" : "Metrics recalculated",
+        description: protectedCount > 0
+          ? `${data.updated?.length || 0} metrics updated. ${protectedCount} locked, evidenced or reviewed value${protectedCount === 1 ? " was" : "s were"} left unchanged.`
+          : `${data.updated?.length || 0} metrics updated`,
+      });
     },
     onError: () => toast({ title: "Recalculation failed", description: "Data was saved but metrics couldn't be recalculated. Try clicking Save again.", variant: "destructive" }),
   });
@@ -367,6 +394,38 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      invalidateReadinessQueries();
+    },
+    onError: (error: ApiRequestError) => {
+      if (error.code === "EVIDENCE_PROVENANCE_PARTIAL_SUCCESS" && error.partialSuccess) {
+        queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+        invalidateReadinessQueries();
+        toast({
+          title: "Value and evidence saved",
+          description: `${error.message} Unlock the period before changing this value again.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (error.code === "ATTACHMENT_PARTIAL_SUCCESS" && error.partialSuccess) {
+        queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+        invalidateReadinessQueries();
+        toast({
+          title: "Value saved; evidence not attached",
+          description: `${error.message} The selected file remains queued so you can try the upload again.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Value not saved",
+        description: error.message || "We couldn't save this metric. Please try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -376,6 +435,7 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      invalidateReadinessQueries();
       toast({ title: "Evidence removed" });
     },
     onError: (error: Error) => {
@@ -384,7 +444,11 @@ export default function DataEntry() {
   });
 
   const fetchEstimatesMutation = useMutation({
-    mutationFn: (opts?: { force?: boolean }) => apiRequest("POST", "/api/data-entries/estimate", { period: selectedPeriod, force: opts?.force }).then((r: any) => r.json()),
+    mutationFn: (opts?: { force?: boolean }) => apiRequest("POST", "/api/data-entries/estimate", {
+      period: selectedPeriod,
+      force: opts?.force ?? false,
+      siteId: selectedScopeSiteId,
+    }).then((r: any) => r.json()),
     onSuccess: (data: any) => {
       const estimates: Record<string, { value: number; label: string; unit: string; metricId: string; inputKey?: string; source: string; explanation: string; methodology: string }> = {};
       if (data?.estimates && Array.isArray(data.estimates)) {
@@ -421,6 +485,7 @@ export default function DataEntry() {
     onSuccess: (_, vars) => {
       setAcceptedEstimates(prev => new Set([...Array.from(prev), vars.metricId]));
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      invalidateReadinessQueries();
     },
     onError: () => toast({ title: "Could not save estimate", variant: "destructive" }),
   });
@@ -434,13 +499,14 @@ export default function DataEntry() {
       setEditEstimateValue("");
       setEditSaveAsActual(false);
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      invalidateReadinessQueries();
       toast({ title: "Value saved", description: vars.saveAsActual ? "Saved as actual data." : "Saved as edited estimate." });
     },
     onError: () => toast({ title: "Could not save value", variant: "destructive" }),
   });
 
   useEffect(() => {
-    if (focusEvidence || autoEstimateTriggered || estimateBannerDismissed) return;
+    if (!canEdit || focusEvidence || autoEstimateTriggered || estimateBannerDismissed) return;
     if (!entryData || entryLoading) return;
     const prefillKey = `estimate_prefill_shown_${selectedPeriod}_${selectedScopeKey}`;
     if (localStorage.getItem(prefillKey) === "true") return;
@@ -454,7 +520,7 @@ export default function DataEntry() {
       localStorage.setItem(prefillKey, "true");
       fetchEstimatesMutation.mutate({});
     }
-  }, [entryData, entryLoading, focusEvidence, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod, selectedScopeKey]);
+  }, [canEdit, entryData, entryLoading, focusEvidence, autoEstimateTriggered, estimateBannerDismissed, selectedPeriod, selectedScopeKey]);
 
   const lockMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/data-entry/${selectedPeriod}/lock`, {}),
@@ -462,23 +528,33 @@ export default function DataEntry() {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
       toast({ title: `Period ${selectedPeriod} locked` });
     },
+    onError: (error: unknown) => {
+      const resolved = resolveApiError(error);
+      toast({
+        title: resolved.title || "Could not lock period",
+        description: [resolved.description, resolved.nextStep].filter(Boolean).join(" "),
+        variant: "destructive",
+      });
+    },
   });
 
   const submitWorkflowMutation = useMutation({
     mutationFn: async () => {
-      const metricValueIds = existingValues.map((v: any) => String(v.id));
-      const rawDataIds = (rawData || []).map((d: any) => String(d.id));
-      if (metricValueIds.length > 0) {
-        await apiRequest("POST", "/api/workflow/submit", { entityType: "metric_value", entityIds: metricValueIds });
-      }
-      if (rawDataIds.length > 0) {
-        await apiRequest("POST", "/api/workflow/submit", { entityType: "raw_data", entityIds: rawDataIds });
-      }
+      const items = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["draft"]);
+      const response = await apiRequest("POST", "/api/workflow/submit", { items });
+      const result = await response.json() as WorkflowSubmitResponse;
+      return combineWorkflowSubmitResponses(items.length, [result]);
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
-      toast({ title: "Period submitted for review" });
+      invalidateReadinessQueries();
+      const notice = workflowSubmitNotice(result);
+      toast({
+        title: notice.title,
+        description: notice.description,
+        variant: notice.isPartial ? "destructive" : undefined,
+      });
     },
     onError: (e: any) => {
       const r = resolveApiError(e);
@@ -487,25 +563,27 @@ export default function DataEntry() {
   });
 
   const approveWorkflowMutation = useMutation({
-    mutationFn: async (action: "approve" | "reject") => {
-      const comment = window.prompt(`Enter a comment for ${action}:`) || "";
-      const allIds = [
-        ...existingValues.map((v: any) => ({ entityType: "metric_value", entityId: String(v.id) })),
-        ...(rawData || []).map((d: any) => ({ entityType: "raw_data", entityId: String(d.id) })),
-      ];
-      for (const item of allIds) {
-        await apiRequest("POST", "/api/workflow/review", {
-          entityType: item.entityType,
-          entityId: item.entityId,
-          action,
-          comment,
-        });
-      }
+    mutationFn: async ({ action, comment }: { action: "approve" | "reject"; comment?: string }) => {
+      const items = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["submitted"]);
+      const response = await apiRequest("POST", "/api/workflow/bulk-review", { items, action, comment });
+      return response.json() as Promise<{
+        requested: number;
+        reviewed: number;
+        notSubmitted: number;
+        notFound: number;
+        duplicates: number;
+      }>;
     },
-    onSuccess: () => {
+    onSuccess: (result, { action }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
-      toast({ title: "Review action completed" });
+      invalidateReadinessQueries();
+      const notice = workflowReviewNotice(result, action);
+      toast({
+        title: notice.title,
+        description: notice.description,
+        variant: notice.isPartial ? "destructive" : undefined,
+      });
     },
     onError: (e: any) => {
       const r = resolveApiError(e);
@@ -513,29 +591,93 @@ export default function DataEntry() {
     },
   });
 
-  const handleSaveRawAndRecalc = async () => {
-    const nonEmpty: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rawInputs)) {
-      if (v !== undefined && v !== null && v.trim() !== "") nonEmpty[k] = v;
+  const reviseWorkflowMutation = useMutation({
+    mutationFn: (item: DataEntryWorkflowItem) =>
+      apiRequest("POST", "/api/workflow/revise", item).then((response) => response.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
+      invalidateReadinessQueries();
+      toast({ title: "Revision started", description: "Correct the rejected item, save it, then submit it again." });
+    },
+    onError: (error: any) => {
+      const resolved = resolveApiError(error);
+      toast({ title: resolved.title, description: `${resolved.description} ${resolved.nextStep}`, variant: "destructive" });
+    },
+  });
+
+  const handleWorkflowReview = (action: "approve" | "reject") => {
+    if (action === "approve") {
+      approveWorkflowMutation.mutate({ action });
+      return;
     }
-    await saveRawMutation.mutateAsync({ inputs: nonEmpty, period: selectedPeriod, siteId: selectedScopeSiteId });
+    const comment = window.prompt("Explain what must be corrected before this data can be resubmitted:");
+    if (comment === null) return;
+    if (!comment.trim()) {
+      toast({ title: "Rejection comment required", description: "Add clear correction guidance before rejecting these items.", variant: "destructive" });
+      return;
+    }
+    approveWorkflowMutation.mutate({ action, comment: comment.trim() });
+  };
+
+  const handleSaveRawAndRecalc = async () => {
+    const mutation = buildGuidedRawDataMutation({
+      rawInputs,
+      persistedRawData: rawData || [],
+      visibleInputKeys: GUIDED_RAW_DATA_INPUT_KEYS,
+    });
+    const blockedInputNames = new Set(
+      (rawData || [])
+        .filter((row: any) => normalizeDataEntryWorkflowStatus(row.workflowStatus) !== "draft")
+        .map((row: any) => String(row.inputName)),
+    );
+    const inputs = Object.fromEntries(
+      Object.entries(mutation.inputs).filter(([inputName]) => !blockedInputNames.has(inputName)),
+    );
+    const clearInputs = mutation.clearInputs.filter((inputName) => !blockedInputNames.has(inputName));
+    await saveRawMutation.mutateAsync({
+      inputs,
+      clearInputs,
+      period: selectedPeriod,
+      siteId: selectedScopeSiteId,
+    });
     await recalcMutation.mutateAsync();
   };
 
   const handleSaveManual = async (metricKey: string, metricId: string) => {
     const val = manualValues[metricKey];
     if (!val?.value) return;
-    const dataSourceType = manualDataSourceTypes[metricKey] || "manual";
+    const selectedSourceType = manualDataSourceTypes[metricKey] || "manual";
+    // Evidence provenance is assigned by the server only after a file is
+    // durably stored. Existing evidenced rows omit this field so an exact
+    // no-op can append another attachment without spoofing provenance.
+    const dataSourceType = selectedSourceType === "evidenced" ? undefined : selectedSourceType;
     const attachments = pendingAttachments[metricKey] || [];
-    await saveManualMutation.mutateAsync({
-      metricId,
-      period: selectedPeriod,
-      value: val.value,
-      notes: val.notes,
-      dataSourceType,
-      siteId: selectedScopeSiteId,
-      attachments,
-    });
+    try {
+      await saveManualMutation.mutateAsync({
+        metricId,
+        period: selectedPeriod,
+        value: val.value,
+        notes: val.notes,
+        dataSourceType,
+        siteId: selectedScopeSiteId,
+        attachments,
+      });
+    } catch (error) {
+      // useMutation's onError renders the truthful server outcome, including
+      // the retained-value attachment partial-success case.
+      const requestError = error as ApiRequestError;
+      if (
+        attachments.length > 0
+        && requestError.code === "EVIDENCE_PROVENANCE_PARTIAL_SUCCESS"
+        && requestError.partialSuccess
+      ) {
+        // The server confirms these files are already durable, so keeping
+        // them queued would invite a duplicate upload on the next save.
+        setPendingAttachments((prev) => ({ ...prev, [metricKey]: [] }));
+      }
+      return;
+    }
     if (attachments.length > 0) {
       setPendingAttachments((prev) => ({ ...prev, [metricKey]: [] }));
     }
@@ -560,15 +702,17 @@ export default function DataEntry() {
     selectedScopeSiteId === null
       ? value?.siteId === null || value?.siteId === undefined
       : value?.siteId === selectedScopeSiteId;
-  const isLocked = existingValues.some((v: any) => v.locked);
-  const isApproved = existingValues.some((v: any) => v.workflowStatus === "approved");
-  const periodWorkflowStatus = existingValues.length > 0 ? existingValues[0]?.workflowStatus : null;
+  const scopedExistingValues = existingValues.filter(isSelectedScopeValue);
+  const isLocked = Boolean(entryData?.periodLocked) || scopedExistingValues.some((v: any) => v.locked);
+  const workflowCounts = summarizeDataEntryWorkflow(scopedExistingValues, rawData || []);
+  const draftWorkflowItems = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["draft"]);
+  const submittedWorkflowItems = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["submitted"]);
   const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, metrics);
   const canonicalEvidenceMetrics = buildCanonicalEvidenceMetrics(allEnabledMetrics, evidenceCoverage?.metricCoverage || []);
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && isEditableDataEntryMetricType(metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
   const visibleManualMetrics = eligibleMetrics;
-  const editDisabled = isLocked || isApproved || !canEdit || isReportingPeriodLocked;
+  const editDisabled = isLocked || !canEdit || isReportingPeriodLocked;
   const getMetricEvidence = (metricValueId?: string, metricId?: string | null) =>
     evidenceFiles.filter((file: any) => (
       (metricValueId && file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId) ||
@@ -784,13 +928,22 @@ export default function DataEntry() {
               {canonicalEvidenceMetrics.filter((m) => m.hasEvidence).length}/{allEnabledMetrics.length} enabled metrics evidenced
             </Badge>
           )}
-          {periodWorkflowStatus && <WorkflowBadge status={periodWorkflowStatus} />}
+          {workflowCounts.total > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5" data-testid="workflow-status-counts">
+              {(["draft", "submitted", "approved", "rejected"] as const).map((status) => workflowCounts[status] > 0 && (
+                <span key={status} className="inline-flex items-center gap-1" data-testid={`workflow-count-${status}`}>
+                  <WorkflowBadge status={status} size="sm" />
+                  <span className="text-xs text-muted-foreground">{workflowCounts[status]}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {isLocked ? (
             <Badge variant="secondary" className="gap-1">
               <Lock className="w-3 h-3" />
               Locked
             </Badge>
-          ) : (
+          ) : isAdmin ? (
             <Button
               variant="outline"
               size="sm"
@@ -801,40 +954,40 @@ export default function DataEntry() {
               <Lock className="w-3.5 h-3.5 mr-1.5" />
               {lockMutation.isPending ? "Locking..." : "Lock Period"}
             </Button>
-          )}
-          {canEdit && !isApproved && (
+          ) : null}
+          {canEdit && draftWorkflowItems.length > 0 && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => submitWorkflowMutation.mutate()}
-              disabled={submitWorkflowMutation.isPending || existingValues.length === 0}
+              disabled={submitWorkflowMutation.isPending}
               data-testid="button-submit-period"
             >
               <Send className="w-3.5 h-3.5 mr-1.5" />
-              {submitWorkflowMutation.isPending ? "Submitting..." : "Submit Period for Review"}
+              {submitWorkflowMutation.isPending ? "Submitting..." : `Submit ${draftWorkflowItems.length} draft item${draftWorkflowItems.length === 1 ? "" : "s"}`}
             </Button>
           )}
-          {canApprove && periodWorkflowStatus === "submitted" && (
+          {canApprove && submittedWorkflowItems.length > 0 && (
             <>
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => approveWorkflowMutation.mutate("approve")}
+                onClick={() => handleWorkflowReview("approve")}
                 disabled={approveWorkflowMutation.isPending}
                 data-testid="button-approve-period"
               >
                 <Check className="w-3.5 h-3.5 mr-1.5" />
-                Approve
+                Approve {submittedWorkflowItems.length}
               </Button>
               <Button
                 variant="destructive"
                 size="sm"
-                onClick={() => approveWorkflowMutation.mutate("reject")}
+                onClick={() => handleWorkflowReview("reject")}
                 disabled={approveWorkflowMutation.isPending}
                 data-testid="button-reject-period"
               >
                 <X className="w-3.5 h-3.5 mr-1.5" />
-                Reject
+                Reject {submittedWorkflowItems.length}
               </Button>
             </>
           )}
@@ -1155,7 +1308,7 @@ export default function DataEntry() {
             <div>
               <p className="text-sm font-medium">Keep the first baseline focused</p>
               <p className="text-xs text-muted-foreground">
-                Eight useful inputs are shown first across environment, people and governance. Enter 0 where there was no activity; leave a figure blank only when it is not yet known.
+                Seven useful inputs are shown first across environment, people and governance. Enter 0 where there was no activity; leave a figure blank only when it is not yet known.
               </p>
             </div>
             <Button
@@ -1193,6 +1346,8 @@ export default function DataEntry() {
                       const fieldPriority = getRawFieldPriority(field.key);
                       const pc = PRIORITY_LABELS[fieldPriority];
                       const existingRaw = rawData?.find((d: any) => d.inputName === field.key);
+                      const rawWorkflowStatus = normalizeDataEntryWorkflowStatus(existingRaw?.workflowStatus);
+                      const rawWorkflowLocked = Boolean(existingRaw) && rawWorkflowStatus !== "draft";
                       const fieldPrompts = CONTEXTUAL_PROMPTS[field.key];
                       return (
                         <div key={field.key} className="space-y-1.5" data-testid={`raw-field-${field.key}`}>
@@ -1201,6 +1356,20 @@ export default function DataEntry() {
                             <span className="text-xs text-muted-foreground">({field.unit})</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${pc.color}`} data-testid={`badge-priority-${field.key}`}>{pc.label}</span>
                             {existingRaw?.dataSourceType && <DataSourceBadge type={existingRaw.dataSourceType} />}
+                            {existingRaw?.workflowStatus && <WorkflowBadge status={rawWorkflowStatus} size="sm" />}
+                            {rawWorkflowStatus === "rejected" && existingRaw?.id && !editDisabled && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-6 px-2 text-[11px]"
+                                disabled={reviseWorkflowMutation.isPending}
+                                onClick={() => reviseWorkflowMutation.mutate({ entityType: "raw_data", entityId: String(existingRaw.id) })}
+                                data-testid={`button-revise-raw-${field.key}`}
+                              >
+                                <Pencil className="mr-1 h-3 w-3" />
+                                Revise
+                              </Button>
+                            )}
                           </Label>
                           <Input
                             id={`raw-input-${field.key}`}
@@ -1209,11 +1378,16 @@ export default function DataEntry() {
                             value={rawInputs[field.key] ?? ""}
                             onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
                             placeholder={`Enter ${field.unit}`}
-                            disabled={editDisabled}
+                            disabled={editDisabled || rawWorkflowLocked}
                             className="h-8 text-sm"
                             data-testid={`input-raw-${field.key}`}
                           />
                           <p className="text-xs text-muted-foreground">{field.help}</p>
+                          {rawWorkflowStatus === "rejected" && existingRaw?.reviewComment && (
+                            <p className="text-xs text-destructive" data-testid={`text-rejection-raw-${field.key}`}>
+                              Reviewer feedback: {existingRaw.reviewComment}
+                            </p>
+                          )}
                           {fieldPrompts && (
                             <div className="space-y-0.5">
                               {fieldPrompts.map((prompt, i) => (
@@ -1358,6 +1532,9 @@ export default function DataEntry() {
                     const hasValue = localVal.value && localVal.value !== "";
                     const isBooleanMetric = isBooleanMetricDataType(metric.dataType);
                     const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId && isSelectedScopeValue(v)) : undefined;
+                    const metricWorkflowStatus = normalizeDataEntryWorkflowStatus(metricValue?.workflowStatus);
+                    const metricWorkflowLocked = Boolean(metricValue) && metricWorkflowStatus !== "draft";
+                    const rowEditDisabled = editDisabled || metricWorkflowLocked;
                     const metricPriority = getManualMetricPriority(metric.name);
                     const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
@@ -1393,7 +1570,20 @@ export default function DataEntry() {
                               <InlineMetricEvidenceBadge state={evidenceState} metricKey={metricKey} />
                             )}
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
-                            {metricValue?.workflowStatus && isEligible && <WorkflowBadge status={metricValue.workflowStatus} size="sm" />}
+                            {metricValue?.workflowStatus && isEligible && <WorkflowBadge status={metricWorkflowStatus} size="sm" />}
+                            {metricWorkflowStatus === "rejected" && metricValue?.id && !editDisabled && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-6 px-2 text-[11px]"
+                                disabled={reviseWorkflowMutation.isPending}
+                                onClick={() => reviseWorkflowMutation.mutate({ entityType: "metric_value", entityId: String(metricValue.id) })}
+                                data-testid={`button-revise-metric-${metricKey}`}
+                              >
+                                <Pencil className="mr-1 h-3 w-3" />
+                                Revise
+                              </Button>
+                            )}
                             {metricId && dataQuality?.perMetric?.find((q: any) => q.metricId === metricId) && (
                               <QualityBadge
                                 score={dataQuality.perMetric.find((q: any) => q.metricId === metricId).score}
@@ -1415,6 +1605,11 @@ export default function DataEntry() {
                           {metricId && <EvidenceSuggestions metricId={metricId} category={metric.category} siteId={selectedScopeSiteId} />}
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
+                          )}
+                          {metricWorkflowStatus === "rejected" && metricValue?.reviewComment && (
+                            <p className="text-xs text-destructive" data-testid={`text-rejection-metric-${metricKey}`}>
+                              Reviewer feedback: {metricValue.reviewComment}
+                            </p>
                           )}
                           {!isEligible && (
                             <p className="text-[11px] text-muted-foreground" data-testid={`hint-ineligible-${metricKey}`}>
@@ -1439,7 +1634,7 @@ export default function DataEntry() {
                                     ...prev,
                                     [metricKey]: { ...prev[metricKey] || { notes: "" }, value: value === "yes" ? "Yes" : "No" }
                                   }))}
-                                  disabled={editDisabled || !isEligible}
+                                  disabled={rowEditDisabled || !isEligible}
                                 >
                                   <SelectTrigger className="h-8 text-sm" data-testid={`input-manual-${metricKey}`}>
                                     <SelectValue placeholder={isEligible ? "Select Yes or No" : "Calculated automatically"} />
@@ -1459,7 +1654,7 @@ export default function DataEntry() {
                                     [metricKey]: { ...prev[metricKey] || { notes: "" }, value: e.target.value }
                                   }))}
                                   placeholder={isEligible ? `Enter ${metric.unit || "value"}` : "Calculated automatically"}
-                                  disabled={editDisabled || !isEligible}
+                                  disabled={rowEditDisabled || !isEligible}
                                   className="h-8 text-sm"
                                   data-testid={`input-manual-${metricKey}`}
                                 />
@@ -1474,7 +1669,7 @@ export default function DataEntry() {
                                   [metricKey]: { ...prev[metricKey] || { value: "" }, notes: e.target.value }
                                 }))}
                                 placeholder="Optional note"
-                                disabled={editDisabled || !isEligible}
+                                disabled={rowEditDisabled || !isEligible}
                                 className="h-8 text-sm"
                                 data-testid={`input-notes-${metricKey}`}
                               />
@@ -1486,7 +1681,7 @@ export default function DataEntry() {
                               <Select
                                 value={manualDataSourceTypes[metricKey] || "manual"}
                                 onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metricKey]: val }))}
-                                disabled={editDisabled || !isEligible}
+                                disabled={rowEditDisabled || !isEligible}
                               >
                                 <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metricKey}`}>
                                   <SelectValue />
@@ -1494,7 +1689,7 @@ export default function DataEntry() {
                                 <SelectContent>
                                   <SelectItem value="manual">Manual — entered directly</SelectItem>
                                   <SelectItem value="estimated">Estimated — approximate</SelectItem>
-                                  <SelectItem value="evidenced">Evidenced — backed by a file</SelectItem>
+                                  <SelectItem value="evidenced" disabled>Evidenced — set automatically by a linked file</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>
@@ -1511,7 +1706,7 @@ export default function DataEntry() {
                                   size="sm"
                                   variant={focusEvidence && evidenceState === "missing" ? "default" : "outline"}
                                   className="h-8 text-xs"
-                                  disabled={editDisabled || !isEligible}
+                                  disabled={rowEditDisabled || !isEligible}
                                   onClick={() => fileInputRefs.current[metricKey]?.click()}
                                   data-testid={`button-attach-evidence-${metricKey}`}
                                 >
@@ -1531,7 +1726,7 @@ export default function DataEntry() {
                                 type="file"
                                 multiple
                                 accept={METRIC_EVIDENCE_ACCEPT}
-                                disabled={editDisabled || !isEligible}
+                                disabled={rowEditDisabled || !isEligible}
                                 className="hidden"
                                 data-testid={`input-evidence-files-${metricKey}`}
                                 onChange={(e) => {
@@ -1556,7 +1751,7 @@ export default function DataEntry() {
                                     <Upload className="w-3 h-3 text-primary shrink-0" />
                                     <span className="flex-1 truncate font-medium">{file.name}</span>
                                     <span className="shrink-0 text-muted-foreground">{formatAttachmentSize(file.size)}</span>
-                                    {!editDisabled && (
+                                    {!rowEditDisabled && (
                                       <Button
                                         type="button"
                                         size="icon"
@@ -1592,7 +1787,7 @@ export default function DataEntry() {
                                         </Button>
                                       </a>
                                     )}
-                                    {!editDisabled && (
+                                    {!rowEditDisabled && (
                                       <Button
                                         type="button"
                                         size="icon"
@@ -1611,7 +1806,7 @@ export default function DataEntry() {
                             )}
                           </div>
                         </div>
-                        {!editDisabled && (
+                        {!rowEditDisabled && (
                           <div className="flex items-end">
                             <Button
                               size="sm"
@@ -1707,8 +1902,13 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
       setStep("result");
       qc.invalidateQueries({ queryKey: ["/api/raw-data"] });
       qc.invalidateQueries({ queryKey: ["/api/data-entry"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard/enhanced"] });
-      toast({ title: `Imported ${data.imported} values` });
+      invalidateEsgReadinessQueries(qc);
+      toast({
+        title: data.partialSuccess
+          ? `Imported ${data.imported} values with a recalculation warning`
+          : `Imported ${data.imported} values`,
+        description: data.recalculationWarning?.message,
+      });
     },
     onError: () => toast({ title: "Import failed", variant: "destructive" }),
   });
@@ -1908,6 +2108,12 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
                 <p className="text-xs text-muted-foreground mt-2">Unmatched columns: {importResult.unmatched.join(", ")}</p>
               )}
             </div>
+            {importResult.recalculationWarning && (
+              <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-100">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{importResult.recalculationWarning.message}</AlertDescription>
+              </Alert>
+            )}
             <DialogFooter>
               <Button onClick={handleClose} data-testid="button-import-done">Done</Button>
             </DialogFooter>

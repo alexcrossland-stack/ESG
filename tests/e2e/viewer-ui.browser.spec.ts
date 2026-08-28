@@ -11,6 +11,12 @@ test.describe("Viewer UI restrictions", () => {
   test("viewer navigates to data entry — manual save buttons are absent", async ({ browser }) => {
     const context = await browser.newContext({ storageState: VIEWER_STATE_FILE });
     const page = await context.newPage();
+    const estimateRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().includes("/api/data-entries/estimate")) {
+        estimateRequests.push(request.url());
+      }
+    });
 
     await page.goto("/data-entry");
     await page.waitForLoadState("domcontentloaded");
@@ -34,6 +40,9 @@ test.describe("Viewer UI restrictions", () => {
 
     const readOnlyBadge = page.getByTestId("badge-read-only");
     await expect(readOnlyBadge).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("button-lock-period-header")).toHaveCount(0);
+    await page.waitForTimeout(250);
+    expect(estimateRequests, "read-only users must not trigger the write-only estimate endpoint").toHaveLength(0);
 
     await context.close();
   });
@@ -61,6 +70,8 @@ test.describe("Viewer UI restrictions", () => {
     const saveButtons = page.locator('[data-testid^="button-save-manual-"]');
     const count = await saveButtons.count();
     expect(count).toBeGreaterThan(0);
+    await page.getByTestId("disclosure-period-review-controls").locator("summary").click();
+    await expect(page.getByTestId("button-lock-period-header")).toBeVisible();
 
     await context.close();
   });

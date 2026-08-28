@@ -221,11 +221,17 @@ async function approveCanonicalValue(input: {
     input.token,
   ), "create canonical metric value");
   parseJson(await apiRequest(
-    "PATCH",
-    `/api/metric-definition-values/${created.id}`,
-    { valueNumeric: input.value, status: "approved" },
+    "POST",
+    `/api/metric-definition-values/${created.id}/submit`,
+    {},
     input.token,
-  ), "approve canonical metric value");
+  ), "submit canonical metric value");
+  parseJson(await apiRequest(
+    "POST",
+    `/api/metric-definition-values/${created.id}/review`,
+    { action: "approve" },
+    input.token,
+  ), "approve canonical metric value through review state machine");
   return created.id;
 }
 

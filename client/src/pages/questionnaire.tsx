@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useBillingStatus, UpgradePageGate } from "@/components/upgrade-prompt";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -43,11 +43,16 @@ import {
   ChevronUp,
   Info,
 } from "lucide-react";
-import type { Questionnaire, QuestionnaireQuestion } from "@shared/schema";
+import type { Questionnaire, QuestionnaireQuestion, ReportingPeriod } from "@shared/schema";
 import { usePermissions } from "@/lib/permissions";
 import { EmptyState } from "@/components/empty-state";
 import { WorkflowBadge, AiDraftBadge, ConfidenceBadge } from "@/components/workflow-badge";
 import { DataSourceBadge } from "@/pages/evidence";
+import {
+  combineWorkflowSubmitResponses,
+  workflowSubmitNotice,
+  type WorkflowSubmitResponse,
+} from "@/lib/workflow-outcomes";
 
 type QuestionnaireWithQuestions = Questionnaire & {
   questions: QuestionnaireQuestion[];
@@ -76,6 +81,7 @@ function QuestionCard({
 }) {
   const { toast } = useToast();
   const { can } = usePermissions();
+  const canManage = can("questionnaire_access");
   const isApprover = can("report_generation");
   const [editedAnswer, setEditedAnswer] = useState(
     question.editedAnswer || question.suggestedAnswer || ""
@@ -197,55 +203,57 @@ function QuestionCard({
                 Source: {question.sourceRef}
               </p>
             )}
-            <div className="flex items-center gap-2 flex-wrap">
-              {isEditing ? (
-                <>
-                  <Button
-                    size="sm"
-                    onClick={() => updateMutation.mutate({ editedAnswer, approved: false })}
-                    disabled={updateMutation.isPending}
-                    data-testid={`button-save-answer-${question.id}`}
-                  >
-                    {updateMutation.isPending ? "Saving..." : "Save"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setEditedAnswer(question.editedAnswer || question.suggestedAnswer || "");
-                      setIsEditing(false);
-                    }}
-                    data-testid={`button-cancel-edit-${question.id}`}
-                  >
-                    <X className="w-3.5 h-3.5 mr-1" />
-                    Cancel
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setIsEditing(true)}
-                    data-testid={`button-edit-answer-${question.id}`}
-                  >
-                    <Pencil className="w-3.5 h-3.5 mr-1" />
-                    Edit
-                  </Button>
-                  {!question.approved && (
+            {canManage && (
+              <div className="flex items-center gap-2 flex-wrap">
+                {isEditing ? (
+                  <>
                     <Button
                       size="sm"
-                      onClick={() => updateMutation.mutate({ editedAnswer, approved: true })}
+                      onClick={() => updateMutation.mutate({ editedAnswer, approved: false })}
                       disabled={updateMutation.isPending}
-                      data-testid={`button-accept-answer-${question.id}`}
+                      data-testid={`button-save-answer-${question.id}`}
                     >
-                      <Check className="w-3.5 h-3.5 mr-1" />
-                      Accept
+                      {updateMutation.isPending ? "Saving..." : "Save"}
                     </Button>
-                  )}
-                </>
-              )}
-            </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditedAnswer(question.editedAnswer || question.suggestedAnswer || "");
+                        setIsEditing(false);
+                      }}
+                      data-testid={`button-cancel-edit-${question.id}`}
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" />
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsEditing(true)}
+                      data-testid={`button-edit-answer-${question.id}`}
+                    >
+                      <Pencil className="w-3.5 h-3.5 mr-1" />
+                      Edit
+                    </Button>
+                    {!question.approved && (
+                      <Button
+                        size="sm"
+                        onClick={() => updateMutation.mutate({ editedAnswer, approved: true })}
+                        disabled={updateMutation.isPending}
+                        data-testid={`button-accept-answer-${question.id}`}
+                      >
+                        <Check className="w-3.5 h-3.5 mr-1" />
+                        Accept
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {isApprover && question.workflowStatus === "submitted" && (
               <div className="flex items-center gap-2 pt-1 flex-wrap" data-testid={`review-controls-${question.id}`}>
                 <Button
@@ -285,15 +293,28 @@ function QuestionCard({
 
 function NewQuestionnaireTab() {
   const { toast } = useToast();
+  const { can } = usePermissions();
   const { activeSiteId, activeSites } = useSiteContext();
   const isMultiSite = activeSites.length >= 1;
   const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
+  const { data: reportingPeriods = [] } = useQuery<ReportingPeriod[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
+  const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState("");
   const [title, setTitle] = useState("");
   const [pasteMode, setPasteMode] = useState(true);
   const [pastedQuestions, setPastedQuestions] = useState("");
   const [singleQuestion, setSingleQuestion] = useState("");
   const [manualQuestions, setManualQuestions] = useState<string[]>([]);
   const [resultId, setResultId] = useState<string | null>(null);
+  const reportingPeriodRequired = reportingPeriods.length > 0;
+  const canSubmitForReview = can("metrics_data_entry");
+
+  useEffect(() => {
+    if (reportingPeriods.some((period) => period.id === selectedReportingPeriodId)) return;
+    const defaultPeriod = reportingPeriods.find((period) => period.status === "open") ?? reportingPeriods[0];
+    setSelectedReportingPeriodId(defaultPeriod?.id ?? "");
+  }, [reportingPeriods, selectedReportingPeriodId]);
 
   const { data: resultData, isLoading: isLoadingResult } = useQuery<QuestionnaireWithQuestions>({
     queryKey: ["/api/questionnaires", resultId],
@@ -308,6 +329,7 @@ function NewQuestionnaireTab() {
         source: "manual",
         questions,
         siteId: resolvedSiteId,
+        reportingPeriodId: selectedReportingPeriodId || null,
       });
       return res.json();
     },
@@ -320,7 +342,9 @@ function NewQuestionnaireTab() {
   const autofillMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest("POST", `/api/questionnaires/${id}/autofill`, undefined);
-      return res.json();
+      const data = await res.json() as { id?: string };
+      if (!data.id) throw new Error("Autofill completed without a questionnaire result ID");
+      return data as { id: string };
     },
     onSuccess: (data: { id: string }) => {
       setResultId(data.id);
@@ -343,6 +367,10 @@ function NewQuestionnaireTab() {
     }
     if (questions.length === 0) {
       toast({ title: "Please add at least one question", variant: "destructive" });
+      return;
+    }
+    if (reportingPeriodRequired && !selectedReportingPeriodId) {
+      toast({ title: "Please select a reporting period", variant: "destructive" });
       return;
     }
     createMutation.mutate(questions);
@@ -400,14 +428,23 @@ function NewQuestionnaireTab() {
   };
 
   const submitAllMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/workflow/submit", {
+    mutationFn: async () => {
+      const entityIds = resultData?.questions.map((q) => q.id) || [];
+      const response = await apiRequest("POST", "/api/workflow/submit", {
         entityType: "questionnaire_question",
-        entityIds: resultData?.questions.map((q) => q.id) || [],
-      }),
-    onSuccess: () => {
+        entityIds,
+      });
+      const result = await response.json() as WorkflowSubmitResponse;
+      return combineWorkflowSubmitResponses(entityIds.length, [result]);
+    },
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/questionnaires", resultId] });
-      toast({ title: "All questions submitted for review" });
+      const notice = workflowSubmitNotice(result);
+      toast({
+        title: notice.title,
+        description: notice.description,
+        variant: notice.isPartial ? "destructive" : undefined,
+      });
     },
     onError: () => toast({ title: "Submit failed", variant: "destructive" }),
   });
@@ -437,15 +474,17 @@ function NewQuestionnaireTab() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Button
-              size="sm"
-              onClick={() => submitAllMutation.mutate()}
-              disabled={submitAllMutation.isPending}
-              data-testid="button-submit-all-review"
-            >
-              <Send className="w-3.5 h-3.5 mr-1" />
-              {submitAllMutation.isPending ? "Submitting..." : "Submit All for Review"}
-            </Button>
+            {canSubmitForReview && (
+              <Button
+                size="sm"
+                onClick={() => submitAllMutation.mutate()}
+                disabled={submitAllMutation.isPending}
+                data-testid="button-submit-all-review"
+              >
+                <Send className="w-3.5 h-3.5 mr-1" />
+                {submitAllMutation.isPending ? "Submitting..." : "Submit All for Review"}
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={handleCopyAll} data-testid="button-copy-all">
               <Copy className="w-3.5 h-3.5 mr-1" />
               Copy All
@@ -494,6 +533,27 @@ function NewQuestionnaireTab() {
               <SelectContent>
                 {activeSites.map(s => (
                   <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {reportingPeriods.length > 0 && (
+          <div>
+            <Label>Reporting Period *</Label>
+            <Select value={selectedReportingPeriodId} onValueChange={setSelectedReportingPeriodId}>
+              <SelectTrigger className="mt-1.5" data-testid="select-questionnaire-reporting-period">
+                <SelectValue placeholder="Select a reporting period" />
+              </SelectTrigger>
+              <SelectContent>
+                {reportingPeriods.map((period) => (
+                  <SelectItem
+                    key={period.id}
+                    value={period.id}
+                    data-testid={`option-questionnaire-reporting-period-${period.id}`}
+                  >
+                    {period.name}{period.status ? ` (${period.status})` : ""}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -597,7 +657,7 @@ function NewQuestionnaireTab() {
 
       <Button
         onClick={handleSubmit}
-        disabled={isProcessing || (isMultiSite && !selectedSiteId)}
+        disabled={isProcessing || (isMultiSite && !selectedSiteId) || (reportingPeriodRequired && !selectedReportingPeriodId)}
         data-testid="button-create-autofill"
       >
         <ClipboardList className="w-4 h-4 mr-1.5" />
@@ -843,14 +903,46 @@ function PreviousQuestionnairesTab({ onCreateQuestionnaire }: { onCreateQuestion
 
 function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
+  const { activeSiteId, activeSites, isLoading: sitesLoading } = useSiteContext();
+  const { data: reportingPeriods = [], isLoading: periodsLoading } = useQuery<ReportingPeriod[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
   const [importTab, setImportTab] = useState<"text" | "csv">("text");
   const [importTitle, setImportTitle] = useState("");
   const [importText, setImportText] = useState("");
+  const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || "");
+  const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState("");
   const [importPreview, setImportPreview] = useState<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const siteRequired = activeSites.length > 0;
+  const reportingPeriodRequired = reportingPeriods.length > 0;
+
+  useEffect(() => {
+    if (!open || sitesLoading) return;
+    const selectedIsActive = activeSites.some((site) => site.id === selectedSiteId);
+    if (!selectedIsActive) {
+      const contextualSite = activeSiteId && activeSites.some((site) => site.id === activeSiteId)
+        ? activeSiteId
+        : activeSites.length === 1 ? activeSites[0].id : "";
+      setSelectedSiteId(contextualSite);
+    }
+  }, [activeSiteId, activeSites, open, selectedSiteId, sitesLoading]);
+
+  useEffect(() => {
+    if (!open || periodsLoading) return;
+    if (reportingPeriods.some((period) => period.id === selectedReportingPeriodId)) return;
+    const defaultPeriod = reportingPeriods.find((period) => period.status === "open") ?? reportingPeriods[0];
+    setSelectedReportingPeriodId(defaultPeriod?.id ?? "");
+  }, [open, periodsLoading, reportingPeriods, selectedReportingPeriodId]);
 
   const importMutation = useMutation({
-    mutationFn: async (data: { format: string; content: string; title: string }) => {
+    mutationFn: async (data: {
+      format: string;
+      content: string;
+      title: string;
+      siteId: string | null;
+      reportingPeriodId: string | null;
+    }) => {
       const res = await apiRequest("POST", "/api/questionnaires/import", data);
       return res.json();
     },
@@ -859,23 +951,40 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
       queryClient.invalidateQueries({ queryKey: ["/api/questionnaires"] });
       toast({ title: `Imported ${data.totalQuestions} questions (${data.matched} matched)` });
     },
-    onError: () => toast({ title: "Import failed", variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "Import failed", description: error.message, variant: "destructive" }),
   });
 
   const handleTextImport = () => {
     if (!importTitle.trim()) { toast({ title: "Enter a title", variant: "destructive" }); return; }
     if (!importText.trim()) { toast({ title: "Paste some questions", variant: "destructive" }); return; }
-    importMutation.mutate({ format: "text", content: importText, title: importTitle });
+    if (siteRequired && !selectedSiteId) { toast({ title: "Select a site", variant: "destructive" }); return; }
+    if (reportingPeriodRequired && !selectedReportingPeriodId) { toast({ title: "Select a reporting period", variant: "destructive" }); return; }
+    importMutation.mutate({
+      format: "text",
+      content: importText,
+      title: importTitle,
+      siteId: selectedSiteId || null,
+      reportingPeriodId: selectedReportingPeriodId || null,
+    });
   };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!importTitle.trim()) { toast({ title: "Enter a title first", variant: "destructive" }); return; }
+    if (siteRequired && !selectedSiteId) { toast({ title: "Select a site", variant: "destructive" }); return; }
+    if (reportingPeriodRequired && !selectedReportingPeriodId) { toast({ title: "Select a reporting period", variant: "destructive" }); return; }
+    if (file.size > 1_000_000) { toast({ title: "CSV files must be 1MB or smaller", variant: "destructive" }); return; }
     const reader = new FileReader();
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
-      importMutation.mutate({ format: "csv", content: base64, title: importTitle });
+      importMutation.mutate({
+        format: "csv",
+        content: base64,
+        title: importTitle,
+        siteId: selectedSiteId || null,
+        reportingPeriodId: selectedReportingPeriodId || null,
+      });
     };
     reader.readAsArrayBuffer(file);
     if (fileRef.current) fileRef.current.value = "";
@@ -941,6 +1050,48 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
               />
             </div>
 
+            {siteRequired && (
+              <div>
+                <Label>Site</Label>
+                <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+                  <SelectTrigger className="mt-1.5" data-testid="select-import-questionnaire-site">
+                    <SelectValue placeholder="Select a site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeSites.map((site) => (
+                      <SelectItem key={site.id} value={site.id} data-testid={`option-import-questionnaire-site-${site.id}`}>
+                        {site.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Imported questionnaires are saved to the selected active site.</p>
+              </div>
+            )}
+
+            {reportingPeriods.length > 0 && (
+              <div>
+                <Label>Reporting Period</Label>
+                <Select value={selectedReportingPeriodId} onValueChange={setSelectedReportingPeriodId}>
+                  <SelectTrigger className="mt-1.5" data-testid="select-import-questionnaire-reporting-period">
+                    <SelectValue placeholder="Select a reporting period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {reportingPeriods.map((period) => (
+                      <SelectItem
+                        key={period.id}
+                        value={period.id}
+                        data-testid={`option-import-questionnaire-reporting-period-${period.id}`}
+                      >
+                        {period.name}{period.status ? ` (${period.status})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Matches are saved against this reporting period.</p>
+              </div>
+            )}
+
             <Tabs value={importTab} onValueChange={(v) => setImportTab(v as any)}>
               <TabsList>
                 <TabsTrigger value="text" data-testid="tab-import-text">Paste Text</TabsTrigger>
@@ -962,7 +1113,13 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
                 <div className="border-2 border-dashed rounded-lg p-8 text-center">
                   <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground mb-3">Upload a CSV file with questions</p>
-                  <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} data-testid="button-upload-csv">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={sitesLoading || periodsLoading || (siteRequired && !selectedSiteId) || (reportingPeriodRequired && !selectedReportingPeriodId) || importMutation.isPending}
+                    data-testid="button-upload-csv"
+                  >
                     <Upload className="w-3.5 h-3.5 mr-1.5" />
                     Choose CSV File
                   </Button>
@@ -976,7 +1133,7 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
               {importTab === "text" && (
                 <Button
                   onClick={handleTextImport}
-                  disabled={importMutation.isPending}
+                  disabled={sitesLoading || periodsLoading || importMutation.isPending || (siteRequired && !selectedSiteId) || (reportingPeriodRequired && !selectedReportingPeriodId)}
                   data-testid="button-confirm-import"
                 >
                   {importMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
@@ -993,20 +1150,99 @@ function ImportQuestionnaireDialog({ open, onClose }: { open: boolean; onClose: 
 
 function AIResponseGeneratorTab() {
   const { toast } = useToast();
+  const { activeSiteId, activeSites, isLoading: sitesLoading } = useSiteContext();
+  const { data: reportingPeriods = [], isLoading: periodsLoading } = useQuery<ReportingPeriod[]>({
+    queryKey: ["/api/reporting-periods"],
+  });
   const [text, setText] = useState("");
-  const [results, setResults] = useState<Array<{ question: string; suggestedAnswer: string; confidence: string; source: string }> | null>(null);
+  const [selectedSiteId, setSelectedSiteId] = useState(activeSiteId || "");
+  const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState("");
+  const [generatedResult, setGeneratedResult] = useState<{
+    questions: Array<{ question: string; suggestedAnswer: string; confidence: string; source: string }>;
+    siteId: string | null;
+    reportingPeriodId: string | null;
+  } | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const generationSequence = useRef(0);
+  const siteRequired = activeSites.length > 0;
+  const reportingPeriodRequired = reportingPeriods.length > 0;
+  const results = generatedResult?.questions ?? null;
+
+  function clearGeneratedResult() {
+    generationSequence.current += 1;
+    setGeneratedResult(null);
+    setExpandedIdx(null);
+    setCopiedIdx(null);
+  }
+
+  function changeSelectedSite(siteId: string) {
+    clearGeneratedResult();
+    setSelectedSiteId(siteId);
+  }
+
+  function changeSelectedReportingPeriod(reportingPeriodId: string) {
+    clearGeneratedResult();
+    setSelectedReportingPeriodId(reportingPeriodId);
+  }
+
+  useEffect(() => {
+    if (sitesLoading) return;
+    if (activeSites.some((site) => site.id === selectedSiteId)) return;
+    const contextualSite = activeSiteId && activeSites.some((site) => site.id === activeSiteId)
+      ? activeSiteId
+      : activeSites.length === 1 ? activeSites[0].id : "";
+    clearGeneratedResult();
+    setSelectedSiteId(contextualSite);
+  }, [activeSiteId, activeSites, selectedSiteId, sitesLoading]);
+
+  useEffect(() => {
+    if (periodsLoading) return;
+    if (reportingPeriods.some((period) => period.id === selectedReportingPeriodId)) return;
+    const defaultPeriod = reportingPeriods.find((period) => period.status === "open") ?? reportingPeriods[0];
+    clearGeneratedResult();
+    setSelectedReportingPeriodId(defaultPeriod?.id ?? "");
+  }, [periodsLoading, reportingPeriods, selectedReportingPeriodId]);
 
   const generateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/questionnaires/generate-responses", { text }),
-    onSuccess: async (res) => {
-      const data = await res.json();
-      setResults(data.questions || []);
+    mutationFn: (request: {
+      requestId: number;
+      text: string;
+      siteId: string | null;
+      reportingPeriodId: string | null;
+    }) => apiRequest("POST", "/api/questionnaires/generate-responses", {
+      text: request.text,
+      siteId: request.siteId,
+      reportingPeriodId: request.reportingPeriodId,
+    }),
+    onSuccess: async (res, request) => {
+      const data = await res.json() as {
+        questions?: Array<{ question: string; suggestedAnswer: string; confidence: string; source: string }>;
+        siteId?: string | null;
+        reportingPeriodId?: string | null;
+      };
+      if (request.requestId !== generationSequence.current) return;
+
+      const responseSiteId = data.siteId ?? null;
+      const responseReportingPeriodId = data.reportingPeriodId ?? null;
+      if (responseSiteId !== request.siteId || responseReportingPeriodId !== request.reportingPeriodId) {
+        clearGeneratedResult();
+        toast({
+          title: "Response context changed",
+          description: "The generated answers did not match the selected site and reporting period. Please generate them again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setGeneratedResult({
+        questions: Array.isArray(data.questions) ? data.questions : [],
+        siteId: responseSiteId,
+        reportingPeriodId: responseReportingPeriodId,
+      });
     },
-    onError: async (err: any) => {
-      const body = await err.response?.json().catch(() => ({}));
-      toast({ title: "Error", description: body?.error || "Failed to generate responses", variant: "destructive" });
+    onError: (err: Error, request) => {
+      if (request.requestId !== generationSequence.current) return;
+      toast({ title: "Error", description: err.message || "Failed to generate responses", variant: "destructive" });
     },
   });
 
@@ -1040,6 +1276,47 @@ function AIResponseGeneratorTab() {
               Paste your questionnaire questions below (one per line or numbered). The AI will draft answers using your answer library, policies, and ESG metrics.
             </p>
           </div>
+          {(siteRequired || reportingPeriodRequired) && (
+            <div className="grid gap-3 sm:grid-cols-2" data-testid="response-generator-scope">
+              {siteRequired && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Site</Label>
+                  <Select value={selectedSiteId} onValueChange={changeSelectedSite} disabled={generateMutation.isPending}>
+                    <SelectTrigger data-testid="select-response-generator-site">
+                      <SelectValue placeholder="Select a site" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {activeSites.map((site) => (
+                        <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {reportingPeriodRequired && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Reporting Period</Label>
+                  <Select value={selectedReportingPeriodId} onValueChange={changeSelectedReportingPeriod} disabled={generateMutation.isPending}>
+                    <SelectTrigger data-testid="select-response-generator-reporting-period">
+                      <SelectValue placeholder="Select a reporting period" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {reportingPeriods.map((period) => (
+                        <SelectItem key={period.id} value={period.id}>
+                          {period.name}{period.status ? ` (${period.status})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+          )}
+          {!periodsLoading && reportingPeriods.length === 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="response-generator-no-period-note">
+              No reporting period is configured, so responses will use approved library and policy content without metric or carbon figures.
+            </p>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="questionnaire-text" className="text-xs font-medium">
               Paste questionnaire questions
@@ -1048,7 +1325,11 @@ function AIResponseGeneratorTab() {
               id="questionnaire-text"
               placeholder={"1. What is your company's approach to reducing carbon emissions?\n2. Do you have a formal environmental policy?\n3. What percentage of your workforce have completed ESG training?"}
               value={text}
-              onChange={e => setText(e.target.value)}
+              onChange={(event) => {
+                clearGeneratedResult();
+                setText(event.target.value);
+              }}
+              disabled={generateMutation.isPending}
               rows={8}
               className="font-mono text-xs resize-none"
               data-testid="textarea-questionnaire-input"
@@ -1056,8 +1337,20 @@ function AIResponseGeneratorTab() {
             <p className="text-xs text-muted-foreground">{text.split("\n").filter(l => l.trim()).length} lines detected</p>
           </div>
           <Button
-            onClick={() => generateMutation.mutate()}
-            disabled={!text.trim() || generateMutation.isPending}
+            onClick={() => {
+              const requestId = generationSequence.current + 1;
+              generationSequence.current = requestId;
+              setGeneratedResult(null);
+              setExpandedIdx(null);
+              setCopiedIdx(null);
+              generateMutation.mutate({
+                requestId,
+                text,
+                siteId: selectedSiteId || null,
+                reportingPeriodId: selectedReportingPeriodId || null,
+              });
+            }}
+            disabled={sitesLoading || periodsLoading || !text.trim() || generateMutation.isPending || (siteRequired && !selectedSiteId) || (reportingPeriodRequired && !selectedReportingPeriodId)}
             className="w-full"
             data-testid="button-generate-ai-responses"
           >
@@ -1072,6 +1365,15 @@ function AIResponseGeneratorTab() {
 
       {results && (
         <div className="space-y-3" data-testid="section-generated-responses">
+          <p className="text-xs text-muted-foreground" data-testid="text-response-generator-result-scope">
+            Generated for {generatedResult?.siteId
+              ? activeSites.find((site) => site.id === generatedResult.siteId)?.name ?? "Unknown site"
+              : "the whole organisation"}
+            {" · "}
+            {generatedResult?.reportingPeriodId
+              ? reportingPeriods.find((period) => period.id === generatedResult.reportingPeriodId)?.name ?? "Unknown reporting period"
+              : "no reporting period"}
+          </p>
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium">{results.length} suggested answer{results.length !== 1 ? "s" : ""}</p>
             <div className="flex items-center gap-2">

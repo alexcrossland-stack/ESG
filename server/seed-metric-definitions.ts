@@ -2,9 +2,18 @@ import { db } from "./storage";
 import { metricDefinitions } from "@shared/schema";
 import { DEFAULT_METRICS } from "./default-metrics";
 import { resolveMetricDataType } from "@shared/data-entry-metrics";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import {
+  metricFormulaDependencies,
+  metricFormulaDependencyError,
+  normalizeMetricFormula,
+} from "./metric-formula-contract";
+import {
+  METRIC_DEFINITION_CATALOGUE_LOCK_KEY,
+  normalizeMetricDefinitionName,
+} from "./admin-metric-definition-validation";
 
-interface MetricSeed {
+export interface MetricSeed {
   code: string;
   name: string;
   pillar: "environmental" | "social" | "governance";
@@ -24,7 +33,37 @@ interface MetricSeed {
   rollupMethod: "sum" | "weighted_average" | "latest" | "none";
 }
 
-const METRIC_DEFINITIONS: MetricSeed[] = [
+function replaceMetricFormulaCodes(
+  value: unknown,
+  replacements: ReadonlyMap<string, string>,
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const formula = { ...(value as Record<string, unknown>) };
+  const replaceDependency = (dependency: unknown): unknown => {
+    if (typeof dependency === "string") return replacements.get(dependency) ?? dependency;
+    if (Array.isArray(dependency)) return dependency.map((entry) => replaceDependency(entry));
+    return dependency;
+  };
+  for (const field of ["sources", "inputs", "numerator", "denominator"] as const) {
+    if (Object.prototype.hasOwnProperty.call(formula, field)) {
+      formula[field] = replaceDependency(formula[field]);
+    }
+  }
+  if (typeof formula.expression === "string") {
+    let expression = formula.expression;
+    for (const [legacyCode, canonicalCode] of Array.from(replacements.entries())) {
+      const escapedCode = legacyCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expression = expression.replace(
+        new RegExp(`(?<![A-Za-z0-9_])${escapedCode}(?![A-Za-z0-9_])`, "g"),
+        canonicalCode,
+      );
+    }
+    formula.expression = expression;
+  }
+  return formula;
+}
+
+export const METRIC_DEFINITIONS: MetricSeed[] = [
   // ── ENVIRONMENTAL – CORE (10) ──────────────────────────────────────────
   {
     code: "E001",
@@ -295,8 +334,10 @@ const METRIC_DEFINITIONS: MetricSeed[] = [
     inputFrequency: "monthly",
     isCore: true,
     isActive: true,
-    isDerived: true,
-    formulaJson: { type: "custom", customFn: "absence_rate", inputs: ["S004", "S001"] },
+    // The catalogue does not contain a total-working-days input. Absence days
+    // and headcount alone cannot produce the percentage described here, so
+    // keep this metric directly reportable instead of seeding a false formula.
+    isDerived: false,
     frameworkTags: ["GRI 403"],
     scoringWeight: "1",
     sortOrder: 150,
@@ -524,19 +565,21 @@ const METRIC_DEFINITIONS: MetricSeed[] = [
   {
     code: "G008",
     name: "Carbon Intensity",
-    pillar: "governance",
+    // Keep the long-lived code stable because framework mappings reference it,
+    // but classify the metric by what it measures rather than its legacy prefix.
+    pillar: "environmental",
     category: "emissions",
     description: "Total GHG emissions per employee — a normalised efficiency measure.",
     dataType: "numeric",
     unit: "tCO2e/employee",
-    inputFrequency: "annual",
+    inputFrequency: "quarterly",
     isCore: true,
     isActive: true,
     isDerived: true,
     formulaJson: { type: "ratio", numerator: "E006", denominator: "S001" },
     frameworkTags: ["TCFD", "GHG Protocol"],
     scoringWeight: "2",
-    sortOrder: 280,
+    sortOrder: 65,
     evidenceRequired: false,
     rollupMethod: "weighted_average",
   },
@@ -1091,17 +1134,29 @@ const METRIC_DEFINITIONS: MetricSeed[] = [
   },
 ];
 
-function normalizeSeedMetricName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  return normalized === "natural gas consumption" ? "gas / fuel consumption" : normalized;
-}
-
 /**
  * The original advanced catalogue and the SME starter catalogue were created
  * at different times. Ensure every metric actually enabled for a new SME is
  * represented in Metrics Library with the same name and input semantics.
  */
-const SME_DEFAULT_DEFINITIONS: MetricSeed[] = DEFAULT_METRICS.map((metric, index) => ({
+const SME_DEFAULT_FORMULAS: Record<string, object> = {
+  scope1: { type: "custom", customFn: "scope1_emissions", inputs: ["E002", "E003"] },
+  scope2: { type: "custom", customFn: "scope2_emissions", inputs: ["E001"] },
+  recycling_rate: { type: "ratio", numerator: ["E008"], denominator: "E007", scale: 100 },
+  turnover_rate: { type: "ratio", numerator: ["S002"], denominator: "S001", scale: 100 },
+  training_per_employee: { type: "ratio", numerator: ["S006"], denominator: "S001" },
+};
+
+export const SME_DEFAULT_DEFINITIONS: MetricSeed[] = DEFAULT_METRICS.map((metric, index) => {
+  // Several legacy default metrics describe calculations whose operands are
+  // not represented in the metric-definition catalogue (working days,
+  // manager counts, supplier counts, detailed travel activity, etc.). They
+  // remain calculable in the guided raw-data workflow, but their catalogue
+  // entries must be manual rather than carrying an unevaluable placeholder.
+  const formulaJson = metric.calculationType
+    ? SME_DEFAULT_FORMULAS[metric.calculationType]
+    : undefined;
+  return {
   code: `SME_DEFAULT_${String(index + 1).padStart(2, "0")}`,
   name: metric.name,
   pillar: metric.category,
@@ -1112,18 +1167,140 @@ const SME_DEFAULT_DEFINITIONS: MetricSeed[] = DEFAULT_METRICS.map((metric, index
   inputFrequency: metric.frequency,
   isCore: true,
   isActive: true,
-  isDerived: Boolean(metric.metricType && metric.metricType !== "manual"),
-  formulaJson: metric.formulaText
-    ? { type: metric.calculationType || "calculated", description: metric.formulaText }
+  isDerived: Boolean(formulaJson),
+  formulaJson: formulaJson
+    ? { ...formulaJson, ...(metric.formulaText ? { description: metric.formulaText } : {}) }
     : undefined,
   frameworkTags: [],
   scoringWeight: "1",
   sortOrder: 2000 + index,
   evidenceRequired: false,
   rollupMethod: metric.unit === "%" || metric.unit === "yes/no" ? "none" : "sum",
-}));
+  };
+});
 
-const METRIC_DEFINITION_SEED_LOCK = "simplyesg:seed:metric-definitions";
+export const ALL_STARTUP_METRIC_DEFINITION_SEEDS = [
+  ...METRIC_DEFINITIONS,
+  ...SME_DEFAULT_DEFINITIONS,
+];
+
+export type MetricFormulaCatalogueDefinition = {
+  code: string;
+  dataType: "numeric" | "text" | "boolean" | "json";
+  isActive: boolean;
+  isDerived: boolean;
+  formulaJson?: unknown;
+};
+
+export function metricDefinitionFormulaCatalogueErrors(
+  definitions: readonly MetricFormulaCatalogueDefinition[] = ALL_STARTUP_METRIC_DEFINITION_SEEDS,
+): string[] {
+  const errors: string[] = [];
+  const activeNumericCodes = new Set(
+    definitions
+      .filter((definition) => definition.isActive && definition.dataType === "numeric")
+      .map((definition) => definition.code),
+  );
+  const dependenciesByDerivedCode = new Map<string, string[]>();
+
+  for (const definition of definitions.filter((candidate) => candidate.isActive && candidate.isDerived)) {
+    if (definition.dataType !== "numeric") {
+      errors.push(`${definition.code}: derived formula target must use the numeric data type`);
+      continue;
+    }
+    const normalized = normalizeMetricFormula(definition.formulaJson);
+    if (normalized.status === "invalid") {
+      errors.push(`${definition.code}: ${normalized.error}`);
+      continue;
+    }
+    const dependencyError = metricFormulaDependencyError(normalized.formula, activeNumericCodes);
+    if (dependencyError) {
+      errors.push(`${definition.code}: ${dependencyError}`);
+      continue;
+    }
+    dependenciesByDerivedCode.set(definition.code, metricFormulaDependencies(normalized.formula));
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const cyclic = new Set<string>();
+  const visit = (code: string): void => {
+    if (visiting.has(code)) {
+      cyclic.add(code);
+      return;
+    }
+    if (visited.has(code)) return;
+    visiting.add(code);
+    for (const dependency of dependenciesByDerivedCode.get(code) ?? []) {
+      if (dependenciesByDerivedCode.has(dependency)) visit(dependency);
+      if (cyclic.has(dependency)) cyclic.add(code);
+    }
+    visiting.delete(code);
+    visited.add(code);
+  };
+  for (const code of Array.from(dependenciesByDerivedCode.keys())) visit(code);
+  for (const code of Array.from(cyclic).sort()) errors.push(`${code}: circular derived-metric dependency`);
+  return errors;
+}
+
+export function assertMetricDefinitionFormulaCatalogue(
+  definitions: readonly MetricFormulaCatalogueDefinition[] = ALL_STARTUP_METRIC_DEFINITION_SEEDS,
+): void {
+  const errors = metricDefinitionFormulaCatalogueErrors(definitions);
+  if (errors.length > 0) {
+    throw new Error(`Seeded metric formula catalogue is invalid: ${errors.join("; ")}`);
+  }
+}
+
+/**
+ * A duplicate definition must remain a distinct formula source when a formula
+ * deliberately references both it and another code that would resolve to the
+ * same canonical owner. Merging in that case would either create duplicate
+ * sources or silently collapse a numerator/denominator relationship.
+ */
+export function metricFormulaMergeProtectedCodes(
+  definitions: readonly MetricFormulaCatalogueDefinition[],
+  replacements: ReadonlyMap<string, string>,
+): Set<string> {
+  const protectedCodes = new Set<string>();
+  for (const definition of definitions.filter((candidate) => candidate.isDerived)) {
+    const normalized = normalizeMetricFormula(definition.formulaJson);
+    if (normalized.status === "invalid") continue;
+
+    const resolvedTargetCode = replacements.get(definition.code) ?? definition.code;
+    const dependenciesByResolvedCode = new Map<string, Set<string>>();
+    for (const dependency of metricFormulaDependencies(normalized.formula)) {
+      const resolvedCode = replacements.get(dependency) ?? dependency;
+      const sourceCodes = dependenciesByResolvedCode.get(resolvedCode) ?? new Set<string>();
+      sourceCodes.add(dependency);
+      dependenciesByResolvedCode.set(resolvedCode, sourceCodes);
+    }
+
+    for (const [resolvedCode, sourceCodes] of Array.from(dependenciesByResolvedCode.entries())) {
+      if (sourceCodes.size < 2 && resolvedCode !== resolvedTargetCode) continue;
+      if (replacements.has(definition.code)) protectedCodes.add(definition.code);
+      for (const sourceCode of Array.from(sourceCodes)) {
+        if (replacements.has(sourceCode)) protectedCodes.add(sourceCode);
+      }
+    }
+  }
+  return protectedCodes;
+}
+
+function metricFormulaReferencedReplacementCodes(
+  definitions: readonly MetricFormulaCatalogueDefinition[],
+  replacements: ReadonlyMap<string, string>,
+): Set<string> {
+  const referencedCodes = new Set<string>();
+  for (const definition of definitions.filter((candidate) => candidate.isDerived)) {
+    const normalized = normalizeMetricFormula(definition.formulaJson);
+    if (normalized.status === "invalid") continue;
+    for (const dependency of metricFormulaDependencies(normalized.formula)) {
+      if (replacements.has(dependency)) referencedCodes.add(dependency);
+    }
+  }
+  return referencedCodes;
+}
 
 export const REQUIRED_METRIC_DEFINITION_CODES = METRIC_DEFINITIONS.map((metric) => metric.code);
 export const REQUIRED_SME_METRIC_NAMES = SME_DEFAULT_DEFINITIONS.map((metric) => metric.name);
@@ -1132,10 +1309,10 @@ export function metricDefinitionCatalogueErrors(
   rows: Array<{ code: string; name: string }>,
 ): string[] {
   const presentCodes = new Set(rows.map((row) => row.code));
-  const presentNames = new Set(rows.map((row) => normalizeSeedMetricName(row.name)));
+  const presentNames = new Set(rows.map((row) => normalizeMetricDefinitionName(row.name)));
   const missingCodes = REQUIRED_METRIC_DEFINITION_CODES.filter((code) => !presentCodes.has(code));
   const missingSmeNames = REQUIRED_SME_METRIC_NAMES.filter(
-    (name) => !presentNames.has(normalizeSeedMetricName(name)),
+    (name) => !presentNames.has(normalizeMetricDefinitionName(name)),
   );
   const errors: string[] = [];
   if (missingCodes.length > 0) {
@@ -1143,6 +1320,18 @@ export function metricDefinitionCatalogueErrors(
   }
   if (missingSmeNames.length > 0) {
     errors.push(`missing SME starter metrics: ${missingSmeNames.join(", ")}`);
+  }
+  const codesByNormalizedName = new Map<string, string[]>();
+  for (const row of rows) {
+    const normalizedName = normalizeMetricDefinitionName(row.name);
+    const codes = codesByNormalizedName.get(normalizedName) ?? [];
+    codes.push(row.code);
+    codesByNormalizedName.set(normalizedName, codes);
+  }
+  for (const [normalizedName, codes] of Array.from(codesByNormalizedName.entries()).sort(([left], [right]) => left.localeCompare(right))) {
+    if (codes.length > 1) {
+      errors.push(`duplicate normalized metric name ${normalizedName}: ${codes.sort().join(", ")}`);
+    }
   }
   return errors;
 }
@@ -1155,14 +1344,30 @@ export function assertMetricDefinitionCatalogue(rows: Array<{ code: string; name
 }
 
 export async function seedMetricDefinitions() {
-  const { seeded, skipped } = await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${METRIC_DEFINITION_SEED_LOCK}, 0))`);
+  assertMetricDefinitionFormulaCatalogue();
+  const {
+    seeded,
+    skipped,
+    mergedDuplicateCount,
+    archivedDuplicateCount,
+    formulaProtectedDuplicateCount,
+  } = await db.transaction(async (tx) => {
+    // Startup reconciliation and live admin mutations are all catalogue
+    // writers. They must serialize on the same lock so no instance can
+    // validate or overwrite a stale catalogue snapshot.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${METRIC_DEFINITION_CATALOGUE_LOCK_KEY}, 0))`);
     let seeded = 0;
     let skipped = 0;
     const existing = await tx.select({ code: metricDefinitions.code, name: metricDefinitions.name })
       .from(metricDefinitions);
     const existingCodes = new Set(existing.map((definition) => definition.code));
-    const existingNames = new Set(existing.map((definition) => normalizeSeedMetricName(definition.name)));
+    const seedOwnerCodeByName = new Map<string, string>();
+    for (const seed of ALL_STARTUP_METRIC_DEFINITION_SEEDS) {
+      const normalizedName = normalizeMetricDefinitionName(seed.name);
+      if (!seedOwnerCodeByName.has(normalizedName)) {
+        seedOwnerCodeByName.set(normalizedName, seed.code);
+      }
+    }
 
     const seedValues = (m: MetricSeed) => ({
         code: m.code,
@@ -1187,7 +1392,6 @@ export async function seedMetricDefinitions() {
     const insertSeed = async (m: MetricSeed) => {
       await tx.insert(metricDefinitions).values(seedValues(m)).onConflictDoNothing({ target: metricDefinitions.code });
       existingCodes.add(m.code);
-      existingNames.add(normalizeSeedMetricName(m.name));
       seeded++;
     };
 
@@ -1219,28 +1423,276 @@ export async function seedMetricDefinitions() {
         },
       });
       existingCodes.add(m.code);
-      existingNames.add(normalizeSeedMetricName(m.name));
       if (existed) skipped++;
       else seeded++;
     }
 
-    // SME starter definitions can reuse a canonical catalogue entry when the
-    // user-facing metric name (including the gas/fuel alias) is already there.
+    // A canonical definition owns any overlapping SME display name. Unique SME
+    // starter names are always owned by their stable SME_DEFAULT code, even if
+    // an older release left a legacy code with the same display name. The
+    // duplicate merger below safely reparents that legacy row.
     for (const m of SME_DEFAULT_DEFINITIONS) {
-      if (existingCodes.has(m.code) || existingNames.has(normalizeSeedMetricName(m.name))) {
+      const normalizedName = normalizeMetricDefinitionName(m.name);
+      if (seedOwnerCodeByName.get(normalizedName) !== m.code) {
+        skipped++;
+        continue;
+      }
+      if (existingCodes.has(m.code)) {
+        const values = seedValues(m);
+        await tx.insert(metricDefinitions).values(values).onConflictDoUpdate({
+          target: metricDefinitions.code,
+          set: {
+            name: values.name,
+            pillar: values.pillar,
+            category: values.category,
+            description: values.description,
+            dataType: values.dataType,
+            unit: values.unit,
+            inputFrequency: values.inputFrequency,
+            isCore: values.isCore,
+            isActive: values.isActive,
+            isDerived: values.isDerived,
+            formulaJson: values.formulaJson,
+            frameworkTags: values.frameworkTags,
+            scoringWeight: values.scoringWeight,
+            sortOrder: values.sortOrder,
+            evidenceRequired: values.evidenceRequired,
+            rollupMethod: values.rollupMethod,
+          },
+        });
         skipped++;
         continue;
       }
       await insertSeed(m);
     }
 
-    const reconciled = await tx.select({ code: metricDefinitions.code, name: metricDefinitions.name })
+    // Older releases layered a second catalogue over the canonical one. Merge
+    // every normalized-name duplicate into the seed-owned row while keeping
+    // value/evidence identities intact. Rows with an unexpected natural-key
+    // collision are archived under a unique legacy name instead of discarded.
+    const catalogueBeforeMerge = await tx.select().from(metricDefinitions);
+    const definitionsByName = new Map<string, typeof catalogueBeforeMerge>();
+    for (const definition of catalogueBeforeMerge) {
+      const normalizedName = normalizeMetricDefinitionName(definition.name);
+      const group = definitionsByName.get(normalizedName) ?? [];
+      group.push(definition);
+      definitionsByName.set(normalizedName, group);
+    }
+
+    const duplicateMerges: Array<{
+      ownerId: string;
+      ownerCode: string;
+      legacyId: string;
+      legacyCode: string;
+      legacyName: string;
+    }> = [];
+    for (const [normalizedName, group] of Array.from(definitionsByName.entries())) {
+      if (group.length < 2) continue;
+      const seedOwnerCode = seedOwnerCodeByName.get(normalizedName);
+      const owner = group.find((definition) => definition.code === seedOwnerCode)
+        ?? group.slice().sort((left, right) => {
+          const activeDelta = Number(right.isActive) - Number(left.isActive);
+          if (activeDelta !== 0) return activeDelta;
+          const coreDelta = Number(right.isCore) - Number(left.isCore);
+          if (coreDelta !== 0) return coreDelta;
+          return left.code.localeCompare(right.code);
+        })[0];
+      for (const legacy of group) {
+        if (legacy.id === owner.id) continue;
+        duplicateMerges.push({
+          ownerId: owner.id,
+          ownerCode: owner.code,
+          legacyId: legacy.id,
+          legacyCode: legacy.code,
+          legacyName: legacy.name,
+        });
+      }
+    }
+
+    const candidateFormulaCodeReplacements = new Map(
+      duplicateMerges.map((merge) => [merge.legacyCode, merge.ownerCode]),
+    );
+    if (duplicateMerges.length > 0) {
+      // Candidate startup can briefly overlap the previous release. Lock every
+      // definition-reference table before formula/value conflict preflights so
+      // no writer can introduce a collision between validation and reparenting.
+      await tx.execute(sql`
+        LOCK TABLE metric_values,
+                   metric_definition_values,
+                   metric_calculation_runs,
+                   esg_targets,
+                   metric_framework_mappings
+        IN SHARE ROW EXCLUSIVE MODE
+      `);
+    }
+    const formulaProtectedCodes = metricFormulaMergeProtectedCodes(
+      catalogueBeforeMerge,
+      candidateFormulaCodeReplacements,
+    );
+    const formulaReferencedCodes = metricFormulaReferencedReplacementCodes(
+      catalogueBeforeMerge,
+      candidateFormulaCodeReplacements,
+    );
+    for (const merge of duplicateMerges) {
+      if (!formulaReferencedCodes.has(merge.legacyCode) || formulaProtectedCodes.has(merge.legacyCode)) {
+        continue;
+      }
+      const collisionResult = await tx.execute(sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM metric_definition_values AS legacy
+          JOIN metric_definition_values AS canonical
+            ON canonical.metric_definition_id = ${merge.ownerId}
+           AND canonical.business_id = legacy.business_id
+           AND canonical.site_id IS NOT DISTINCT FROM legacy.site_id
+           AND canonical.reporting_period_start = legacy.reporting_period_start
+           AND canonical.reporting_period_end = legacy.reporting_period_end
+          WHERE legacy.metric_definition_id = ${merge.legacyId}
+        ) AS collision
+      `);
+      if (Boolean((collisionResult as any).rows?.[0]?.collision)) {
+        formulaProtectedCodes.add(merge.legacyCode);
+      }
+    }
+    const formulaProtectedMerges = duplicateMerges.filter((merge) => formulaProtectedCodes.has(merge.legacyCode));
+    const mergeableDuplicates = duplicateMerges.filter((merge) => !formulaProtectedCodes.has(merge.legacyCode));
+
+    // Keep semantically distinct or value-conflicted formula sources active,
+    // but give each a unique display name so the SME catalogue is unambiguous.
+    for (const merge of formulaProtectedMerges) {
+      await tx.update(metricDefinitions)
+        .set({
+          name: `${merge.legacyName} (Legacy formula source ${merge.legacyCode})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(metricDefinitions.id, merge.legacyId));
+    }
+
+    const formulaCodeReplacements = new Map(
+      mergeableDuplicates.map((merge) => [merge.legacyCode, merge.ownerCode]),
+    );
+    if (formulaCodeReplacements.size > 0) {
+      for (const definition of catalogueBeforeMerge) {
+        if (!definition.formulaJson) continue;
+        const reconciledFormula = replaceMetricFormulaCodes(definition.formulaJson, formulaCodeReplacements);
+        if (JSON.stringify(reconciledFormula) === JSON.stringify(definition.formulaJson)) continue;
+        await tx.update(metricDefinitions)
+          .set({ formulaJson: reconciledFormula as Record<string, unknown>, updatedAt: new Date() })
+          .where(eq(metricDefinitions.id, definition.id));
+      }
+    }
+
+    let mergedDuplicateCount = 0;
+    let archivedDuplicateCount = 0;
+    for (const merge of mergeableDuplicates) {
+      await tx.execute(sql`
+        UPDATE metric_values
+        SET metric_definition_id = ${merge.ownerId}
+        WHERE metric_definition_id = ${merge.legacyId}
+      `);
+      await tx.execute(sql`
+        UPDATE metric_calculation_runs
+        SET metric_definition_id = ${merge.ownerId}
+        WHERE metric_definition_id = ${merge.legacyId}
+      `);
+      await tx.execute(sql`
+        UPDATE esg_targets
+        SET linked_metric_definition_id = ${merge.ownerId}, updated_at = NOW()
+        WHERE linked_metric_definition_id = ${merge.legacyId}
+      `);
+
+      await tx.execute(sql`
+        UPDATE metric_framework_mappings AS canonical
+        SET mapping_strength = CASE
+              WHEN canonical.mapping_strength = 'direct' OR legacy.mapping_strength = 'direct' THEN 'direct'::mapping_strength
+              WHEN canonical.mapping_strength = 'partial' OR legacy.mapping_strength = 'partial' THEN 'partial'::mapping_strength
+              ELSE 'supporting'::mapping_strength
+            END,
+            notes = COALESCE(canonical.notes, legacy.notes)
+        FROM metric_framework_mappings AS legacy
+        WHERE canonical.metric_definition_id = ${merge.ownerId}
+          AND legacy.metric_definition_id = ${merge.legacyId}
+          AND canonical.framework_requirement_id = legacy.framework_requirement_id
+      `);
+      await tx.execute(sql`
+        UPDATE metric_framework_mappings AS legacy
+        SET metric_definition_id = ${merge.ownerId}
+        WHERE legacy.metric_definition_id = ${merge.legacyId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM metric_framework_mappings AS canonical
+            WHERE canonical.metric_definition_id = ${merge.ownerId}
+              AND canonical.framework_requirement_id = legacy.framework_requirement_id
+          )
+      `);
+      await tx.execute(sql`
+        DELETE FROM metric_framework_mappings
+        WHERE metric_definition_id = ${merge.legacyId}
+      `);
+
+      await tx.execute(sql`
+        UPDATE metric_definition_values AS legacy
+        SET metric_definition_id = ${merge.ownerId}, updated_at = NOW()
+        WHERE legacy.metric_definition_id = ${merge.legacyId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM metric_definition_values AS canonical
+            WHERE canonical.metric_definition_id = ${merge.ownerId}
+              AND canonical.business_id = legacy.business_id
+              AND canonical.site_id IS NOT DISTINCT FROM legacy.site_id
+              AND canonical.reporting_period_start = legacy.reporting_period_start
+              AND canonical.reporting_period_end = legacy.reporting_period_end
+          )
+      `);
+      const remainingLegacyValues = await tx.execute(sql`
+        SELECT COUNT(*)::int AS count
+        FROM metric_definition_values
+        WHERE metric_definition_id = ${merge.legacyId}
+      `);
+      const remainingCount = Number((remainingLegacyValues as any).rows?.[0]?.count ?? 0);
+      if (remainingCount === 0) {
+        await tx.delete(metricDefinitions).where(eq(metricDefinitions.id, merge.legacyId));
+        mergedDuplicateCount++;
+      } else {
+        await tx.update(metricDefinitions)
+          .set({
+            name: `${merge.legacyName} (Legacy ${merge.legacyCode} ${merge.legacyId.slice(0, 8)})`,
+            isActive: false,
+            isCore: false,
+            updatedAt: new Date(),
+          })
+          .where(eq(metricDefinitions.id, merge.legacyId));
+        archivedDuplicateCount++;
+      }
+    }
+
+    const reconciled = await tx.select({
+      code: metricDefinitions.code,
+      name: metricDefinitions.name,
+      dataType: metricDefinitions.dataType,
+      isActive: metricDefinitions.isActive,
+      isDerived: metricDefinitions.isDerived,
+      formulaJson: metricDefinitions.formulaJson,
+    })
       .from(metricDefinitions);
     assertMetricDefinitionCatalogue(reconciled);
-    return { seeded, skipped };
+    assertMetricDefinitionFormulaCatalogue(reconciled);
+    return {
+      seeded,
+      skipped,
+      mergedDuplicateCount,
+      archivedDuplicateCount,
+      formulaProtectedDuplicateCount: formulaProtectedMerges.length,
+    };
   });
 
   if (seeded > 0 || skipped === 0) {
     console.log(`[MetricDefs] Seeded ${seeded} metric definitions (${skipped} already existed)`);
   }
+  if (mergedDuplicateCount > 0 || archivedDuplicateCount > 0 || formulaProtectedDuplicateCount > 0) {
+    console.log(
+      `[MetricDefs] Reconciled duplicate names (${mergedDuplicateCount} merged, ${archivedDuplicateCount} archived, ${formulaProtectedDuplicateCount} preserved as formula sources)`,
+    );
+  }
+  return seeded;
 }

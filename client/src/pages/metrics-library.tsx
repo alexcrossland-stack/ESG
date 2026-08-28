@@ -10,12 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, Globe } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AddMetricDialog } from "@/components/add-metric-dialog";
 import { usePermissions } from "@/lib/permissions";
-import { authFetch } from "@/lib/queryClient";
 import { buildMetricLibraryEntries, type MetricLibraryEntry } from "@/lib/metric-activation";
+import { invalidateMetricDependentQueries } from "@/lib/metric-query-invalidation";
 
 const STRENGTH_COLORS: Record<string, string> = {
   direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
@@ -24,12 +24,10 @@ const STRENGTH_COLORS: Record<string, string> = {
 };
 
 function FrameworkAlignmentPanel({ metricDefinitionId }: { metricDefinitionId: string }) {
-  const { data, isLoading } = useQuery<any>({
+  const { data, isLoading, isError } = useQuery<any>({
     queryKey: ["/api/metric-definitions", metricDefinitionId, "framework-alignment"],
     queryFn: async () => {
-      const res = await fetch(`/api/metric-definitions/${metricDefinitionId}/framework-alignment`, {
-        credentials: "include",
-      });
+      const res = await authFetch(`/api/metric-definitions/${metricDefinitionId}/framework-alignment`);
       if (!res.ok) throw new Error("Failed to fetch alignment");
       return res.json();
     },
@@ -40,6 +38,16 @@ function FrameworkAlignmentPanel({ metricDefinitionId }: { metricDefinitionId: s
       <div className="space-y-2 mt-3 pt-3 border-t border-border/50">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-16 w-full" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="mt-3 pt-3 border-t border-border/50">
+        <p className="text-xs text-destructive" role="alert">
+          Framework alignment could not be loaded. Try again.
+        </p>
       </div>
     );
   }
@@ -113,6 +121,8 @@ type MetricDefinition = {
   sortOrder: number;
   companyMetricId?: string;
   isSyntheticCustom?: boolean;
+  metricType?: string | null;
+  formulaText?: string | null;
 };
 
 const PILLAR_CONFIG = {
@@ -127,9 +137,18 @@ const FREQUENCY_LABELS: Record<string, string> = {
   annual: "Annual",
 };
 
-function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition; onToggle: (id: string) => void; isToggling: boolean }) {
+function MetricCard({ metric, onToggle, isToggling, canToggle }: { metric: MetricDefinition; onToggle: (id: string) => void; isToggling: boolean; canToggle: boolean }) {
   const [showAlignment, setShowAlignment] = useState(false);
   const pillar = PILLAR_CONFIG[metric.pillar];
+  const calculationClassification = metric.metricType === "calculated" || metric.metricType === "derived"
+    ? metric.metricType
+    : metric.isDerived
+      ? "derived"
+      : metric.formulaJson
+        ? "calculated"
+        : null;
+  const calculationDescription = metric.formulaText
+    ?? (typeof metric.formulaJson?.description === "string" ? metric.formulaJson.description : null);
 
   return (
     <div
@@ -145,14 +164,27 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
             ) : (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4" data-testid={`badge-advanced-${metric.id}`}>Optional</Badge>
             )}
-            {metric.isDerived && (
-              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-                <Zap className="w-2.5 h-2.5 mr-0.5" />Derived
+            {calculationClassification && (
+              <Badge
+                variant="secondary"
+                className="text-[10px] px-1.5 py-0 h-4"
+                data-testid={`badge-metric-classification-${metric.id}`}
+              >
+                <Zap className="w-2.5 h-2.5 mr-0.5" />
+                {calculationClassification === "derived" ? "Derived" : "Calculated"}
               </Badge>
             )}
           </div>
           {metric.description && (
             <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{metric.description}</p>
+          )}
+          {calculationClassification && calculationDescription && (
+            <p
+              className="text-[11px] text-blue-700 dark:text-blue-300 mb-2"
+              data-testid={`text-metric-formula-${metric.id}`}
+            >
+              Calculation: {calculationDescription}
+            </p>
           )}
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {metric.unit && (
@@ -189,29 +221,43 @@ function MetricCard({ metric, onToggle, isToggling }: { metric: MetricDefinition
           <Switch
             checked={metric.isActive}
             onCheckedChange={() => onToggle(metric.id)}
-            disabled={isToggling}
+            disabled={isToggling || !canToggle}
             data-testid={`toggle-metric-${metric.id}`}
             aria-label={`${metric.isActive ? "Disable" : "Enable"} ${metric.name}`}
+            title={canToggle ? undefined : "Your role has read-only access to metric activation"}
           />
         </div>
-      </div>
-      <div className="mt-3 pt-3 border-t border-border/50">
-        <p className="text-xs text-muted-foreground">
-          Use this page to browse the catalog, enable or disable metrics for your company, and add new manual metrics. Use <span className="font-medium text-foreground">Metrics</span> to review enabled company metrics and <span className="font-medium text-foreground">Enter Data</span> to add values for eligible ones.
-        </p>
       </div>
       {showAlignment && <FrameworkAlignmentPanel metricDefinitionId={metric.id} />}
     </div>
   );
 }
 
-function CategoryGroup({ category, metrics, onToggle, toggling }: { category: string; metrics: MetricDefinition[]; onToggle: (id: string) => void; toggling: Set<string> }) {
-  const [open, setOpen] = useState(true);
+function CategoryGroup({
+  pillar,
+  category,
+  metrics,
+  open,
+  onOpenChange,
+  onToggle,
+  toggling,
+  canToggle,
+}: {
+  pillar: string;
+  category: string;
+  metrics: MetricDefinition[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onToggle: (id: string) => void;
+  toggling: Set<string>;
+  canToggle: boolean;
+}) {
   const enabledCount = metrics.filter(m => m.isActive).length;
+  const testId = `${pillar}-${category}`.replace(/\s+/g, "-").toLowerCase();
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} data-testid={`group-category-${category.replace(/\s+/g, "-").toLowerCase()}`}>
-      <CollapsibleTrigger className="w-full">
+    <Collapsible open={open} onOpenChange={onOpenChange} data-testid={`group-category-${testId}`}>
+      <CollapsibleTrigger className="w-full" aria-label={`${open ? "Collapse" : "Expand"} ${category} metrics`}>
         <div className="flex items-center justify-between py-2 px-1 hover:bg-muted/50 rounded-md cursor-pointer">
           <div className="flex items-center gap-2">
             {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
@@ -223,7 +269,7 @@ function CategoryGroup({ category, metrics, onToggle, toggling }: { category: st
       <CollapsibleContent>
         <div className="space-y-2 mt-1 mb-3">
           {metrics.map(m => (
-            <MetricCard key={m.id} metric={m} onToggle={onToggle} isToggling={toggling.has(m.id)} />
+            <MetricCard key={m.id} metric={m} onToggle={onToggle} isToggling={toggling.has(m.id)} canToggle={canToggle} />
           ))}
         </div>
       </CollapsibleContent>
@@ -234,13 +280,15 @@ function CategoryGroup({ category, metrics, onToggle, toggling }: { category: st
 export default function MetricsLibraryPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { can } = usePermissions();
+  const { can, isSuperAdmin } = usePermissions();
+  const canManageMetrics = can("metrics_data_entry");
 
   const [search, setSearch] = useState("");
   const [pillarFilter, setPillarFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [toggling, setToggling] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 
   const { data: definitions = [], isLoading } = useQuery<MetricDefinition[]>({
     queryKey: ["/api/metric-definitions"],
@@ -256,9 +304,12 @@ export default function MetricsLibraryPage() {
   );
 
   const seedMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/metric-definitions/seed"),
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/metric-definitions/seed");
+      return response.json() as Promise<{ seeded: number; message: string }>;
+    },
     onSuccess: (data: { seeded: number; message: string }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/metric-definitions"] });
+      invalidateMetricDependentQueries(queryClient);
       toast({ title: "Metrics seeded", description: data?.message || "Metric library populated." });
     },
     onError: (e: Error) => toast({ title: "Seed failed", description: e.message, variant: "destructive" }),
@@ -274,21 +325,28 @@ export default function MetricsLibraryPage() {
     onMutate: (metric: MetricDefinition) => setToggling(prev => new Set([...prev, metric.id])),
     onSettled: (_, __, metric: MetricDefinition) => setToggling(prev => { const s = new Set(prev); s.delete(metric.id); return s; }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/metric-definitions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/metrics"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
+      invalidateMetricDependentQueries(queryClient);
     },
     onError: (e: Error) => toast({ title: "Toggle failed", description: e.message, variant: "destructive" }),
   });
 
   const filtered = useMemo(() => {
-    return libraryMetrics.filter(d => {
-      const matchesPillar = pillarFilter === "all" || d.pillar === pillarFilter;
-      const matchesStatus = statusFilter === "all" || (statusFilter === "active" && d.isActive) || (statusFilter === "inactive" && !d.isActive) || (statusFilter === "core" && d.isCore) || (statusFilter === "advanced" && !d.isCore);
-      const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.code.toLowerCase().includes(search.toLowerCase()) || (d.description ?? "").toLowerCase().includes(search.toLowerCase());
-      return matchesPillar && matchesStatus && matchesSearch;
-    });
+    return libraryMetrics
+      .filter(d => {
+        const matchesPillar = pillarFilter === "all" || d.pillar === pillarFilter;
+        const matchesStatus = statusFilter === "all" || (statusFilter === "active" && d.isActive) || (statusFilter === "inactive" && !d.isActive) || (statusFilter === "core" && d.isCore) || (statusFilter === "advanced" && !d.isCore);
+        const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.code.toLowerCase().includes(search.toLowerCase()) || (d.description ?? "").toLowerCase().includes(search.toLowerCase());
+        return matchesPillar && matchesStatus && matchesSearch;
+      })
+      .sort((left, right) => {
+        const enabledDelta = Number(right.isActive) - Number(left.isActive);
+        if (enabledDelta !== 0) return enabledDelta;
+        const recommendedDelta = Number(right.isCore) - Number(left.isCore);
+        if (recommendedDelta !== 0) return recommendedDelta;
+        const orderDelta = (left.sortOrder ?? Number.MAX_SAFE_INTEGER) - (right.sortOrder ?? Number.MAX_SAFE_INTEGER);
+        if (orderDelta !== 0) return orderDelta;
+        return left.name.localeCompare(right.name);
+      });
   }, [libraryMetrics, pillarFilter, statusFilter, search]);
 
   const byPillarAndCategory = useMemo(() => {
@@ -302,6 +360,21 @@ export default function MetricsLibraryPage() {
   }, [filtered]);
 
   const pillarOrder: Array<"environmental" | "social" | "governance"> = ["environmental", "social", "governance"];
+
+  const visibleCategoryKeys = useMemo(() => pillarOrder.flatMap((pillar) =>
+    Object.keys(byPillarAndCategory[pillar] ?? {}).map((category) => `${pillar}:${category}`),
+  ), [byPillarAndCategory]);
+
+  const searchIsActive = search.trim().length > 0;
+
+  const setCategoryOpen = (key: string, open: boolean) => {
+    setExpandedCategories((current) => {
+      const next = new Set(current);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   const stats = useMemo(() => ({
     total: libraryMetrics.length,
@@ -317,11 +390,13 @@ export default function MetricsLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Browse the full catalog of available ESG metric definitions. Recommended metrics are enabled for new companies by default, and you can turn any metric on or off or add a new manual metric for your company here.
+            {canManageMetrics
+              ? "Browse the ESG metric catalogue, turn metrics on or off, or add a new manual metric for your company."
+              : "Browse your company’s ESG metric catalogue and see which metrics are enabled. Activation controls are read-only for your role."}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {can("metrics_data_entry") && (
+          {canManageMetrics && (
             <Dialog open={showAdd} onOpenChange={setShowAdd}>
               <DialogTrigger asChild>
                 <Button data-testid="button-library-add-metric">
@@ -331,13 +406,13 @@ export default function MetricsLibraryPage() {
               <AddMetricDialog onClose={() => setShowAdd(false)} />
             </Dialog>
           )}
-          {libraryMetrics.length === 0 && !isLoading && (
+          {isSuperAdmin && definitions.length === 0 && !isLoading && (
             <Button
               onClick={() => seedMutation.mutate()}
               disabled={seedMutation.isPending}
               data-testid="button-seed-metrics"
             >
-              {seedMutation.isPending ? "Seeding..." : "Load Metric Library"}
+              {seedMutation.isPending ? "Loading platform library..." : "Load Platform Metric Library"}
             </Button>
           )}
         </div>
@@ -391,14 +466,44 @@ export default function MetricsLibraryPage() {
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All</SelectItem>
+            <SelectItem value="all">All metrics</SelectItem>
             <SelectItem value="core">Recommended</SelectItem>
             <SelectItem value="advanced">Optional</SelectItem>
             <SelectItem value="active">Enabled</SelectItem>
             <SelectItem value="inactive">Disabled</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2" aria-label="Metric category display controls">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setExpandedCategories(new Set(visibleCategoryKeys))}
+            disabled={visibleCategoryKeys.length === 0 || searchIsActive}
+            data-testid="button-expand-all-metric-categories"
+          >
+            Expand all
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setExpandedCategories(new Set())}
+            disabled={visibleCategoryKeys.length === 0 || searchIsActive}
+            data-testid="button-collapse-all-metric-categories"
+          >
+            Collapse all
+          </Button>
+        </div>
       </div>
+
+      <Card className="border-dashed" data-testid="metrics-library-guidance">
+        <CardContent className="py-3 text-xs text-muted-foreground">
+          {canManageMetrics
+            ? <>Start with enabled and recommended metrics. Open only the categories you need, or search for a specific metric. Use <span className="font-medium text-foreground">Metrics</span> to review active metrics and <span className="font-medium text-foreground">Enter Data</span> to add their values.</>
+            : <>Your role has read-only access to this catalogue. Open a category or search for a specific metric, then use <span className="font-medium text-foreground">Metrics</span> to review enabled company metrics.</>}
+        </CardContent>
+      </Card>
 
       {isLoading ? (
         <div className="space-y-4">
@@ -410,11 +515,10 @@ export default function MetricsLibraryPage() {
             <Leaf className="w-12 h-12 text-muted-foreground mb-4" />
             <CardTitle className="mb-2">No metrics in library yet</CardTitle>
             <p className="text-muted-foreground text-sm mb-6 max-w-md">
-              Load the metric library to access 58 pre-built ESG metrics covering environmental, social, and governance pillars.
+              {isSuperAdmin
+                ? "Load the platform metric library to make the pre-built ESG catalogue available to every company. This platform-wide action is restricted to super admins."
+                : "The platform metric library has not been loaded yet. Ask a platform super admin to make the pre-built ESG catalogue available."}
             </p>
-            <Button onClick={() => seedMutation.mutate()} disabled={seedMutation.isPending} data-testid="button-seed-metrics-empty">
-              {seedMutation.isPending ? "Loading..." : "Load Metric Library"}
-            </Button>
           </CardContent>
         </Card>
       ) : filtered.length === 0 ? (
@@ -446,18 +550,33 @@ export default function MetricsLibraryPage() {
                 </CardHeader>
                 <CardContent className="pt-4">
                   <div className="space-y-1">
-                    {Object.entries(categories).map(([category, catMetrics]) => (
-                      <CategoryGroup
-                        key={category}
-                        category={category}
-                        metrics={catMetrics}
-                        onToggle={id => {
-                          const metric = libraryMetrics.find((m) => m.id === id);
-                          if (metric) toggleMutation.mutate(metric as MetricDefinition);
-                        }}
-                        toggling={toggling}
-                      />
-                    ))}
+                    {Object.entries(categories)
+                      .sort(([leftName, leftMetrics], [rightName, rightMetrics]) => {
+                        const enabledDelta = rightMetrics.filter((metric) => metric.isActive).length - leftMetrics.filter((metric) => metric.isActive).length;
+                        if (enabledDelta !== 0) return enabledDelta;
+                        const recommendedDelta = rightMetrics.filter((metric) => metric.isCore).length - leftMetrics.filter((metric) => metric.isCore).length;
+                        if (recommendedDelta !== 0) return recommendedDelta;
+                        return leftName.localeCompare(rightName);
+                      })
+                      .map(([category, catMetrics]) => {
+                        const categoryKey = `${pillar}:${category}`;
+                        return (
+                          <CategoryGroup
+                            key={categoryKey}
+                            pillar={pillar}
+                            category={category}
+                            metrics={catMetrics}
+                            open={searchIsActive || expandedCategories.has(categoryKey)}
+                            onOpenChange={(open) => setCategoryOpen(categoryKey, open)}
+                            onToggle={id => {
+                              const metric = libraryMetrics.find((m) => m.id === id);
+                              if (metric) toggleMutation.mutate(metric as MetricDefinition);
+                            }}
+                            toggling={toggling}
+                            canToggle={canManageMetrics}
+                          />
+                        );
+                      })}
                   </div>
                 </CardContent>
               </Card>

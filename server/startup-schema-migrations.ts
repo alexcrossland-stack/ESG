@@ -83,6 +83,34 @@ export const CURRENT_EMISSION_FACTOR_DEFAULT_MIGRATIONS = [
      ALTER COLUMN factor_year SET DEFAULT 2026`,
 ] as const;
 
+export const DATA_ENTRY_PERIOD_LOCK_MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS data_entry_period_locks (
+     id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+     company_id varchar NOT NULL,
+     period text NOT NULL,
+     locked_by varchar,
+     locked_at timestamp NOT NULL DEFAULT now()
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_data_entry_period_locks_company_period_unique
+     ON data_entry_period_locks (company_id, period)`,
+  `CREATE INDEX IF NOT EXISTS idx_data_entry_period_locks_company_period
+     ON data_entry_period_locks (company_id, period)`,
+] as const;
+
+export const REQUIRED_DATA_ENTRY_PERIOD_LOCK_COLUMNS = [
+  "id",
+  "company_id",
+  "period",
+  "locked_by",
+  "locked_at",
+] as const;
+
+export const REQUIRED_DATA_ENTRY_PERIOD_LOCK_INDEXES = [
+  "data_entry_period_locks_pkey",
+  "idx_data_entry_period_locks_company_period_unique",
+  "idx_data_entry_period_locks_company_period",
+] as const;
+
 export const REQUIRED_SUPER_ADMIN_ACTION_IDENTIFIER_COLUMNS = [
   "admin_user_id",
   "target_company_id",
@@ -133,4 +161,26 @@ export function missingFrameworkRequirementResponseIndexes(
       .filter((indexName): indexName is string => typeof indexName === "string"),
   );
   return REQUIRED_FRAMEWORK_REQUIREMENT_RESPONSE_INDEXES.filter((indexName) => !present.has(indexName));
+}
+
+export function missingDataEntryPeriodLockColumns(
+  rows: Array<{ column_name?: unknown }>,
+): string[] {
+  const present = new Set(
+    rows
+      .map((row) => row.column_name)
+      .filter((column): column is string => typeof column === "string"),
+  );
+  return REQUIRED_DATA_ENTRY_PERIOD_LOCK_COLUMNS.filter((column) => !present.has(column));
+}
+
+export function missingDataEntryPeriodLockIndexes(
+  rows: Array<{ indexname?: unknown }>,
+): string[] {
+  const present = new Set(
+    rows
+      .map((row) => row.indexname)
+      .filter((indexName): indexName is string => typeof indexName === "string"),
+  );
+  return REQUIRED_DATA_ENTRY_PERIOD_LOCK_INDEXES.filter((indexName) => !present.has(indexName));
 }

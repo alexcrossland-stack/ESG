@@ -22,9 +22,16 @@ test.describe("Viewer restrictions", () => {
     });
     const metrics = await adminMetricsRes.json();
     const metricId = metrics[0]?.id ?? "00000000-0000-0000-0000-000000000000";
+    const definitionsRes = await request.get("/api/metric-definitions", {
+      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
+    });
+    expect(definitionsRes.status()).toBe(200);
+    const definitions = await definitionsRes.json();
+    const definitionId = definitions[0]?.id ?? "00000000-0000-0000-0000-000000000000";
 
     const writeEndpoints = [
       { method: "POST" as const, path: "/api/data-entry", body: { metricId, period: "2024-Q1", value: 99 } },
+      { method: "POST" as const, path: "/api/metrics", body: { name: "Viewer metric", category: "environmental" } },
       { method: "PUT" as const, path: `/api/metrics/${metricId}/target`, body: { targetValue: 100, targetYear: 2030 } },
       { method: "POST" as const, path: "/api/reports/generate", body: { reportType: "management", period: "2024-Q1" } },
       { method: "PUT" as const, path: "/api/company/settings", body: { reportingFrequency: "quarterly" } },
@@ -36,6 +43,11 @@ test.describe("Viewer restrictions", () => {
         : await request.post(path, { data: body, headers: { Authorization: `Bearer ${tenantA.viewerToken}` } });
       expect(res.status()).toBe(403);
     }
+
+    const toggleRes = await request.patch(`/api/metric-definitions/${definitionId}/toggle`, {
+      headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
+    });
+    expect(toggleRes.status()).toBe(403);
   });
 
   test("viewer can read metrics (200) but not write (403)", async ({ request }) => {
@@ -54,5 +66,22 @@ test.describe("Viewer restrictions", () => {
       headers: { Authorization: `Bearer ${tenantA.viewerToken}` },
     });
     expect(writeRes.status()).toBe(403);
+  });
+
+  test("viewer sees a read-only metric library with no creation or platform seeding controls", async ({ page }) => {
+    const { tenantA } = readSeedInfo();
+
+    await page.goto("/auth");
+    await page.evaluate((token: string) => localStorage.setItem("auth_token", token), tenantA.viewerToken);
+    await page.goto("/metrics-library");
+
+    await expect(page.getByTestId("heading-metrics-library")).toBeVisible();
+    await expect(page.getByText("Activation controls are read-only for your role.")).toBeVisible();
+    await page.getByTestId("button-expand-all-metric-categories").click();
+    const activationSwitches = page.locator("[data-testid^='toggle-metric-']");
+    expect(await activationSwitches.count()).toBeGreaterThan(0);
+    await expect(activationSwitches.first()).toBeDisabled();
+    await expect(page.getByTestId("button-library-add-metric")).toHaveCount(0);
+    await expect(page.getByTestId("button-seed-metrics")).toHaveCount(0);
   });
 });

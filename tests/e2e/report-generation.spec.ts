@@ -7,7 +7,7 @@
  *
  * @group regression
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import fs from "fs";
 
 function readSeedInfo() {
@@ -22,20 +22,40 @@ function readSeedInfo() {
   };
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const metricsRes = await request.get("/api/metrics", { headers });
+  expect(metricsRes.status()).toBe(200);
+  const metrics = await metricsRes.json() as EditableMetric[];
+  const existing = metrics.find((metric) =>
+    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  if (existing) return existing.id;
+  const createRes = await request.post("/api/metrics", {
+    headers,
+    data: {
+      name: `Report-generation fixture ${Date.now()}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    },
+  });
+  expect(createRes.status()).toBe(200);
+  const created = await createRes.json() as { id?: string };
+  expect(created.id).toBeTruthy();
+  return created.id!;
+}
+
 test.describe("REGR-RG: Report generation", () => {
   let generatedReportId: string | null = null;
 
   test.beforeAll(async ({ request }) => {
     const { tenantA } = readSeedInfo();
 
-    // Fetch the first available metric for tenant A
-    const metricsRes = await request.get("/api/metrics", {
-      headers: { Authorization: `Bearer ${tenantA.adminToken}` },
-    });
-    if (metricsRes.status() !== 200) return;
-    const metrics = await metricsRes.json() as Array<{ id: string }>;
-    if (!Array.isArray(metrics) || metrics.length === 0) return;
-    const metricId = metrics[0].id;
+    const metricId = await getOrCreateEditableMetricId(request, tenantA.adminToken);
 
     // Seed data for 2024-04 (used by first generate test)
     await request.post("/api/data-entry", {

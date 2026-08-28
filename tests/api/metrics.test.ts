@@ -42,7 +42,8 @@ async function run(tenants: SeededTenants): Promise<void> {
     form.append("period", opts.period);
     form.append("value", opts.value);
     form.append("notes", opts.notes || "");
-    form.append("dataSourceType", "evidenced");
+    // Evidenced provenance is server-owned and is applied only after the file
+    // is durably stored and linked.
     form.append("attachments", new Blob([opts.fileBody || "test evidence body"], { type: opts.fileType || "text/plain" }), opts.filename);
 
     return fetch(`${BASE_URL}/api/data-entry`, {
@@ -74,14 +75,62 @@ async function run(tenants: SeededTenants): Promise<void> {
     else pass(name);
   }
 
+  // ── 2b. Custom metric input is strict, bounded, and normalized ──────────
+  {
+    const name = "POST /api/metrics rejects blank or unsafe fields and trims a valid metric name";
+    const blankRes = await apiRequest("POST", "/api/metrics", {
+      name: "   ",
+      category: "environmental",
+    }, tenantA.adminToken);
+    const oversizedRes = await apiRequest("POST", "/api/metrics", {
+      name: "x".repeat(161),
+      category: "environmental",
+    }, tenantA.adminToken);
+    const unsupportedRes = await apiRequest("POST", "/api/metrics", {
+      name: "Attempted internal-field metric",
+      category: "environmental",
+      assignedUserId: "00000000-0000-0000-0000-000000000000",
+    }, tenantA.adminToken);
+    const trimmedName = `QA Trimmed Custom Metric ${Date.now()}`;
+    const validRes = await apiRequest("POST", "/api/metrics", {
+      name: `  ${trimmedName}  `,
+      description: "  Safely trimmed description  ",
+      category: "social",
+      unit: "  hours  ",
+      frequency: "quarterly",
+      dataOwner: "  QA Owner  ",
+    }, tenantA.adminToken);
+
+    if (blankRes.status !== 400) fail(name, `blank status=${blankRes.status}`);
+    else if (!JSON.parse(blankRes.body).error?.includes("Metric name is required")) fail(name, `blank error=${blankRes.body}`);
+    else if (oversizedRes.status !== 400) fail(name, `oversized status=${oversizedRes.status}`);
+    else if (unsupportedRes.status !== 400) fail(name, `unsupported-field status=${unsupportedRes.status}`);
+    else if (![200, 201].includes(validRes.status)) fail(name, `valid status=${validRes.status} body=${validRes.body.slice(0, 200)}`);
+    else {
+      const created = JSON.parse(validRes.body) as {
+        name?: string;
+        description?: string | null;
+        unit?: string | null;
+        dataOwner?: string | null;
+        category?: string;
+        metricType?: string | null;
+      };
+      if (created.name !== trimmedName) fail(name, `name was not trimmed: ${JSON.stringify(created.name)}`);
+      else if (created.description !== "Safely trimmed description") fail(name, `description was not trimmed: ${JSON.stringify(created.description)}`);
+      else if (created.unit !== "hours" || created.dataOwner !== "QA Owner") fail(name, "bounded optional fields were not trimmed");
+      else if (created.category !== "social" || created.metricType !== "manual") fail(name, `unexpected classification: ${JSON.stringify(created)}`);
+      else pass(name);
+    }
+  }
+
   // ── 3. Valid data-entry creates record ────────────────────────────────────
   let createdEntryId: string | null = null;
   let testMetricId: string | null = null;
   {
     const name = "POST /api/data-entry with valid payload returns 200/201 with id";
     const metricRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
-    const metrics = JSON.parse(metricRes.body) as Array<{ id: string }>;
-    testMetricId = metrics[0]?.id ?? null;
+    const metrics = JSON.parse(metricRes.body) as Array<{ id: string; enabled?: boolean; metricType?: string | null }>;
+    testMetricId = metrics.find((metric) => metric.enabled && (!metric.metricType || metric.metricType === "manual"))?.id ?? null;
     if (!testMetricId) { fail(name, "no metric id available"); }
     else {
       const res = await apiRequest("POST", "/api/data-entry", {
@@ -226,8 +275,8 @@ async function run(tenants: SeededTenants): Promise<void> {
         token: tenantA.adminToken,
         metricId: testMetricId,
         period: "2024-Q2",
-        value: "52.00",
-        notes: "Second attachment",
+        value: "51.25",
+        notes: "Multipart evidence upload test",
         filename: "metric-evidence-2.txt",
       });
 

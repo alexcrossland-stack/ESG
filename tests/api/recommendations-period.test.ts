@@ -63,6 +63,30 @@ async function readRecommendations(token: string): Promise<RecommendationsRespon
   return JSON.parse(response.body) as RecommendationsResponse;
 }
 
+type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+
+async function getOrCreateEditableMetrics(token: string, count: number): Promise<EditableMetric[]> {
+  const response = await apiRequest("GET", "/api/metrics", undefined, token);
+  assert(response.status === 200, `metric setup returned ${response.status}: ${response.body.slice(0, 300)}`);
+  const editable = (JSON.parse(response.body) as EditableMetric[]).filter((metric) =>
+    Boolean(metric.id) && metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+  while (editable.length < count) {
+    const create = await apiRequest("POST", "/api/metrics", {
+      name: `Recommendations fixture ${Date.now()} ${editable.length + 1}`,
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+      metricType: "manual",
+    }, token);
+    assert(create.status === 200, `editable metric creation returned ${create.status}: ${create.body.slice(0, 300)}`);
+    const metric = JSON.parse(create.body) as EditableMetric;
+    assert(metric.id, "editable metric creation omitted id");
+    editable.push(metric);
+  }
+  return editable.slice(0, count);
+}
+
 async function run(): Promise<void> {
   console.log("\n=== API Test: Recommendations Reporting Period ===\n");
   const { tenantA } = await seedTestTenants();
@@ -79,13 +103,7 @@ async function run(): Promise<void> {
   const period = JSON.parse(periodResponse.body) as { id?: string };
   assert(period.id, "reporting-period setup omitted id");
 
-  const metricsResponse = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
-  assert(metricsResponse.status === 200, `metric setup returned ${metricsResponse.status}`);
-  const metrics = JSON.parse(metricsResponse.body) as Array<{ id?: string; enabled?: boolean }>;
-  const enabledMetrics = metrics.filter((item) => item.enabled !== false && item.id);
-  const metric = enabledMetrics[0];
-  const siteMetric = enabledMetrics[1];
-  assert(metric?.id && siteMetric?.id, "two enabled metrics were required for the recommendation fixture");
+  const [metric, siteMetric] = await getOrCreateEditableMetrics(tenantA.adminToken, 2);
 
   const siteResponse = await apiRequest("POST", "/api/sites", {
     name: `Recommendations Boundary Site ${suffix}`,

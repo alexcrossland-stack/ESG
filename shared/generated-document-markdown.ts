@@ -1,5 +1,4 @@
-import { marked } from "marked";
-import sanitizeHtml from "sanitize-html";
+import { marked, Renderer } from "marked";
 
 type CalloutKind = "note" | "disclaimer" | null;
 
@@ -22,35 +21,6 @@ const MARKED_OPTIONS = {
   gfm: true,
   breaks: true,
 } as const;
-
-const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
-  allowedTags: [
-    ...sanitizeHtml.defaults.allowedTags,
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "hr",
-    "table",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "th",
-    "td",
-  ],
-  allowedAttributes: {
-    a: ["href", "name", "target", "rel"],
-    td: ["colspan", "rowspan"],
-    th: ["colspan", "rowspan"],
-  },
-  allowedSchemes: ["http", "https", "mailto"],
-  transformTags: {
-    a: sanitizeHtml.simpleTransform("a", { target: "_blank", rel: "noopener noreferrer" }),
-  },
-};
 
 export const GENERATED_DOCUMENT_STYLES = `
 .generated-document-content {
@@ -189,9 +159,9 @@ export const GENERATED_DOCUMENT_STYLES = `
 `;
 
 export function renderGeneratedMarkdownToHtml(markdown: string): string {
-  const compiled = String(marked.parse(markdown || "", MARKED_OPTIONS));
-  const sanitized = sanitizeHtml(compiled, SANITIZE_OPTIONS);
-  return decorateCallouts(sanitized);
+  const renderer = createSafeMarkdownRenderer();
+  const compiled = String(marked.parse(markdown || "", { ...MARKED_OPTIONS, renderer }));
+  return decorateCallouts(compiled);
 }
 
 export function buildGeneratedDocumentHtmlPage(options: {
@@ -354,8 +324,9 @@ function extractInlineRuns(tokens: any[], style: Partial<GeneratedInlineRun> = {
 
     if (token.type === "link") {
       const linkedRuns = extractInlineRuns(token.tokens || [{ type: "text", text: token.text || token.href || "" }], style);
+      const href = safeDocumentHref(token.href || "");
       linkedRuns.forEach((run) => {
-        runs.push({ ...run, href: token.href || run.href });
+        runs.push(href ? { ...run, href } : run);
       });
       continue;
     }
@@ -366,8 +337,9 @@ function extractInlineRuns(tokens: any[], style: Partial<GeneratedInlineRun> = {
     }
 
     if (token.type === "html") {
-      const text = sanitizeHtml(token.raw || token.text || "", { allowedTags: [], allowedAttributes: {} }).trim();
-      if (text) runs.push({ text, ...style });
+      // Raw HTML is deliberately unsupported. Generated documents accept
+      // Markdown only, so executable or malformed HTML is discarded rather
+      // than passed through to browser previews or exported files.
       continue;
     }
 
@@ -435,4 +407,36 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function safeDocumentHref(value: string): string | null {
+  const href = value.trim();
+  if (!href) return null;
+  if (href.startsWith("#") || href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) {
+    return href;
+  }
+  try {
+    const parsed = new URL(href);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:"
+      ? href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function createSafeMarkdownRenderer(): Renderer {
+  const renderer = new Renderer();
+
+  renderer.html = () => "";
+  renderer.image = ({ text }) => escapeHtml(text || "");
+  renderer.link = ({ href, title, tokens }) => {
+    const label = renderer.parser.parseInline(tokens);
+    const safeHref = safeDocumentHref(href);
+    if (!safeHref) return label;
+    const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer"${titleAttribute}>${label}</a>`;
+  };
+
+  return renderer;
 }

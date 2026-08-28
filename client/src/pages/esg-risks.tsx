@@ -105,7 +105,7 @@ function RiskForm({ onSave, initial }: { onSave: (data: any) => void; initial?: 
   const level = getRiskLevel(score);
 
   return (
-    <form onSubmit={handleSubmit(data => onSave({ ...data, riskScore: getRiskScore(data.likelihood, data.impact) }))} className="space-y-4">
+    <form onSubmit={handleSubmit(onSave)} className="space-y-4">
       <div className="space-y-1">
         <Label>Risk Title *</Label>
         <Input {...register("title", { required: true })} placeholder="e.g. Physical climate risk from flooding" data-testid="input-risk-title" />
