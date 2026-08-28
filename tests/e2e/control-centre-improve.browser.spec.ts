@@ -97,21 +97,19 @@ async function openMockedImprove(page: Page, role: MockRole, controlCentreData: 
   return unexpectedWrites;
 }
 
-test.describe("Simple SME Improve plan", () => {
-  test("leads with five ranked actions and progressively discloses the full workload and specialist tools", async ({ page }) => {
+test.describe("Simple SME Action plan", () => {
+  test("leads with three ranked actions and progressively discloses the full workload and specialist tools", async ({ page }) => {
     const unexpectedWrites = await openMockedImprove(page, "admin", populatedPlan);
 
-    await expect(page.getByTestId("text-improve-title")).toHaveText("Improve");
+    await expect(page.getByTestId("text-improve-title")).toHaveText("Action plan");
     await expect(page.getByTestId("improve-plan-summary")).toContainText("Organisation-wide");
     await expect(page.getByTestId("improve-plan-summary")).toContainText("42/100");
 
     const planItems = page.locator('[data-testid^="improvement-plan-item-"]');
-    await expect(planItems).toHaveCount(5);
+    await expect(planItems).toHaveCount(3);
     await expect(planItems.nth(0)).toContainText("Complete energy audit");
     await expect(planItems.nth(1)).toContainText("Finish supplier review");
     await expect(planItems.nth(2)).toContainText("Add Water use");
-    await expect(planItems.nth(3)).toContainText("Replace Electricity invoice.pdf");
-    await expect(planItems.nth(4)).toContainText("Strengthen Business travel");
 
     await expect(planItems.nth(0)).toContainText("Why this matters:");
     await expect(planItems.nth(0)).toContainText("Owner");
@@ -121,8 +119,7 @@ test.describe("Simple SME Improve plan", () => {
     await expect(planItems.nth(0)).toContainText("Overdue");
     await expect(planItems.nth(0)).toContainText("Evidence or result");
     await expect(planItems.nth(0)).toContainText("Result not yet recorded");
-    await expect(planItems.nth(4)).toContainText("Unassigned");
-    await expect(planItems.nth(4)).toContainText("Quality score: 15/100");
+    await expect(page.getByTestId("card-next-actions")).toContainText("Showing the top 3");
 
     await expect(page.getByTestId("button-bulk-complete-actions")).toHaveCount(0);
     expect(unexpectedWrites).toEqual([]);

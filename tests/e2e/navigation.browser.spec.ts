@@ -1,27 +1,17 @@
-import { test, expect, type Page } from "@playwright/test";
-import { ADMIN_STATE_FILE, VIEWER_STATE_FILE } from "./global-setup.js";
+import { expect, test } from "@playwright/test";
 
-async function openWithState(browser: import("@playwright/test").Browser, storageState: string) {
-  const context = await browser.newContext({ storageState });
-  const page = await context.newPage();
-  await page.goto("/");
-  await page.waitForLoadState("domcontentloaded");
-  if (page.url().includes("/auth") || page.url().includes("/onboarding")) {
-    test.skip(true, "Auth state not fully persisted — skip navigation browser check");
-  }
-  return { context, page };
-}
+type MockRole = "admin" | "super_admin" | "viewer";
 
 async function openWithMockRole(
   browser: import("@playwright/test").Browser,
-  role: "admin" | "super_admin",
-  nextBestActions: { url: string }[] = [],
+  role: MockRole,
+  path = "/",
 ) {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
-    const path = url.pathname;
+    const apiPath = url.pathname;
     const method = route.request().method();
     const json = (body: unknown, status = 200) => route.fulfill({
       status,
@@ -29,226 +19,186 @@ async function openWithMockRole(
       body: JSON.stringify(body),
     });
 
-    if (path === "/api/auth/me") {
+    if (apiPath === "/api/auth/me") {
       return json({
-        user: { id: `mock-${role}`, username: `${role} smoke`, email: `${role}@example.test`, role, companyId: "mock-company" },
+        user: { id: `mock-${role}`, username: `${role} user`, email: `${role}@example.test`, role, companyId: "mock-company" },
         company: { id: "mock-company", name: "Mock Company", onboardingComplete: true, lifecycleState: "active" },
         defaultLandingContext: "company",
         portfolioGroups: [],
       });
     }
-    if (path === "/api/notifications/count") return json({ count: 0 });
-    if (path === "/api/programme/status") return json({ nextBestActions });
-    if (path === "/api/recommendations") return json({ recommendations: [], total: 0, limited: false });
-    if (path === "/api/esg/roadmap") return json({ roadmap: { items: [], generatedAt: null, updatedAt: null } });
-    if (path === "/api/sites") return json([]);
-    if (path === "/api/admin/impersonation/status") return json({ isImpersonating: false });
-    if (path === "/api/activity/track" && method === "POST") return json({ ok: true });
-    if (path === "/api/dashboard") return json({});
+    if (apiPath === "/api/sites") return json([]);
+    if (apiPath === "/api/billing/status") return json({ planTier: "pro", subscriptionStatus: "active" });
+    if (apiPath.startsWith("/api/data-entry/")) return json({ metrics: [], values: [], periodLocked: false });
+    if (apiPath === "/api/reports/readiness-detail") {
+      return json({
+        esgState: "IN_PROGRESS",
+        stateLabel: "In progress",
+        stateExplanation: "Add your first figures to establish your ESG baseline.",
+        completenessPercent: 0,
+        evidenceCoveragePercent: 0,
+        measuredCount: 0,
+        derivedCount: 0,
+        estimateCount: 0,
+        missingCount: 0,
+        totalMetrics: 0,
+        filledMetrics: 0,
+        nextAction: "Add data",
+        minViableThresholdMet: false,
+        blockingFactors: [],
+        missingCategories: { missingMetrics: [], missingEvidenceCount: 0, highEstimateLoad: false, estimatedPercent: 0, policyNotPublished: false, overdueActions: 0 },
+        canGenerateConfirmed: false,
+      });
+    }
+    if (apiPath === "/api/admin/impersonation/status") return json({ isImpersonating: false });
+    if (apiPath === "/api/activity/track" && method === "POST") return json({ ok: true });
+    if (apiPath === "/api/dashboard") return json({});
+    if (apiPath === "/api/control-centre") {
+      return json({
+        summary: { overdueActions: 0, missingData: 0, expiredEvidence: 0, lowQuality: 0, unmetCompliance: 0, pendingApprovals: 0, unapprovedPolicies: 0 },
+        overdueActions: [], missingData: [], expiredEvidence: [], lowQuality: [], unmetCompliance: [], pendingApprovals: [], unapprovedPolicies: [], gapScore: 0,
+      });
+    }
     return json([]);
   });
   await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
-  await page.goto("/");
-  await page.waitForLoadState("domcontentloaded");
+  await page.goto(path);
+  await expect(page.getByTestId("primary-navigation")).toBeVisible();
   return { context, page };
 }
 
-async function ensureAdvancedOpen(page: Page) {
-  const planSection = page.getByText("Plan and improve", { exact: true });
-  if (!(await planSection.isVisible().catch(() => false))) {
-    await page.getByTestId("nav-group-esg-advanced").click();
-  }
-}
-
-function breadcrumbTestId(label: string) {
-  return "breadcrumb-" + label.toLowerCase().replace(/\s+/g, "-");
-}
-
-async function expectNavigation(page: Page, testId: string, expectedPath: RegExp, breadcrumbLabels: string[]) {
-  await page.getByTestId(testId).click();
-  await page.waitForLoadState("domcontentloaded");
-  await expect(page).toHaveURL(expectedPath);
-  await expect(page.getByTestId(testId)).toHaveAttribute("aria-current", "page");
-  for (const label of breadcrumbLabels) {
-    await expect(page.getByTestId(breadcrumbTestId(label))).toBeVisible();
-  }
-}
-
-async function expectSidebarSettingsMatchesUtility(page: Page, expectedPath: string) {
-  const settingsHref = await page.getByTestId("nav-utility-settings").getAttribute("href");
-  await expect(page.getByTestId("nav-settings-console")).toBeVisible();
-  await expect(page.getByTestId("nav-settings-console")).toHaveText(/Settings/);
-  await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", settingsHref ?? "");
-  await expect(page.getByTestId("nav-settings-console")).toHaveAttribute("href", expectedPath);
-}
-
-test.describe("Simplified SME navigation", () => {
-  test("sidebar exposes four primary jobs, Advanced, and the existing Settings destination", async ({ browser }) => {
-    const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
-
-    const topLevelLabels = await Promise.all([
-      page.getByTestId("nav-dashboard").locator("span").first().textContent(),
-      page.getByTestId("nav-measure").locator("span").first().textContent(),
-      page.getByTestId("nav-control-centre").locator("span").first().textContent(),
-      page.getByTestId("nav-reports").locator("span").first().textContent(),
-      page.getByTestId("nav-group-esg-advanced").locator("span").first().textContent(),
-    ]);
-
-    expect(topLevelLabels.map(label => (label ?? "").trim())).toEqual([
-      "Home",
-      "Measure",
-      "Improve",
-      "Share",
-      "Advanced",
-    ]);
-    await expect(page.getByTestId("nav-group-esg-setup")).toHaveCount(0);
-    await expect(page.getByTestId("nav-group-data-evidence")).toHaveCount(0);
-    await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
-    await expectSidebarSettingsMatchesUtility(page, "/settings");
-
-    await ensureAdvancedOpen(page);
-    await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
-
-    await page.getByTestId("nav-settings-console").click();
-    await page.waitForLoadState("domcontentloaded");
-    await expect(page).toHaveURL(/\/settings$/);
-
-    await context.close();
-  });
-
-  test("super admin sidebar Settings matches bottom-left settings destination", async ({ browser }) => {
-    const { context, page } = await openWithMockRole(browser, "super_admin");
-
-    await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
-    await expectSidebarSettingsMatchesUtility(page, "/settings");
-
-    await ensureAdvancedOpen(page);
-    await expect(page.getByTestId("nav-team")).toHaveAttribute("href", "/team");
-
-    await page.getByTestId("nav-settings-console").click();
-    await page.waitForLoadState("domcontentloaded");
-    await expect(page).toHaveURL(/\/settings$/);
-
-    await context.close();
-  });
-
-  test("primary jobs retain their existing routes and breadcrumbs", async ({ browser }) => {
-    const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
-
-    await expectNavigation(page, "nav-measure", /\/data-entry$/, ["Measure"]);
-    await expectNavigation(page, "nav-control-centre", /\/control-centre$/, ["Improve"]);
-    await expectNavigation(page, "nav-reports", /\/reports$/, ["Share"]);
-    await expectNavigation(page, "nav-dashboard", /\/$/, ["Home"]);
-
-    await context.close();
-  });
-
-  test("Advanced progressively exposes specialist deep links with routes and breadcrumbs intact", async ({ browser }) => {
-    const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
-
-    await ensureAdvancedOpen(page);
-    const advanced = page.getByTestId("nav-esg-advanced-items");
-    await expect(advanced.getByText("Plan and improve", { exact: true })).toBeVisible();
-    await expect(advanced.getByText("Measure and assure", { exact: true })).toBeVisible();
-    await expect(advanced.getByText("Share and coordinate", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("nav-esg-policy")).toBeVisible();
-    await expect(page.getByTestId("nav-action-tracker")).toBeVisible();
-    await expect(page.getByTestId("nav-roadmap")).toBeVisible();
-    await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
-    await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
-    await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
-    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
-    await expect(page.getByTestId("nav-frameworks")).toBeVisible();
-
-    await expectNavigation(page, "nav-esg-policy", /\/policy$/, ["Improve", "ESG Policy"]);
-    await expectNavigation(page, "nav-action-tracker", /\/actions$/, ["Improve", "Action Tracker"]);
-    await expectNavigation(page, "nav-roadmap", /\/roadmap$/, ["Improve", "Roadmap"]);
-    await expectNavigation(page, "nav-policy-generator", /\/policy-generator$/, ["Improve", "Policies", "Policy Generator"]);
-    await expectNavigation(page, "nav-policy-templates", /\/policy-templates$/, ["Improve", "Policies", "Policy Templates"]);
-    await expectNavigation(page, "nav-materiality", /\/materiality$/, ["Improve", "Materiality"]);
-    await expectNavigation(page, "nav-targets-and-actions", /\/esg-targets$/, ["Improve", "Targets and Actions"]);
-    await expectNavigation(page, "nav-risk-register", /\/esg-risks$/, ["Improve", "Risk Register"]);
-    await expectNavigation(page, "nav-metrics-library", /\/metrics-library$/, ["Measure", "Metrics Library"]);
-    await expectNavigation(page, "nav-frameworks", /\/framework-readiness$/, ["Share", "Frameworks"]);
-
-    await context.close();
-  });
-
-  test("Recommendations remains directly accessible and is discoverable in Advanced", async ({ browser }) => {
+test.describe("Simplified SME workspace navigation", () => {
+  test("shows exactly six permanent workspaces with one Help and Settings area", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin");
 
-    await ensureAdvancedOpen(page);
-    await expectNavigation(page, "nav-recommendations", /\/recommendations$/, ["Improve", "Recommendations"]);
-    await expect(page.getByTestId("page-recommendations")).toBeVisible();
+    await expect(page.getByTestId("primary-navigation").getByRole("link")).toHaveText([
+      "Overview",
+      "Data & evidence",
+      "Action plan",
+      "Reports",
+      "Questionnaires",
+      "More tools",
+    ]);
+    await expect(page.getByTestId("nav-group-esg-advanced")).toHaveCount(0);
+    await expect(page.getByText("Next", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("utility-navigation").getByRole("link", { name: "Help", exact: true })).toHaveCount(1);
+    await expect(page.getByTestId("utility-navigation").getByRole("link", { name: "Settings", exact: true })).toHaveCount(1);
+    await expect(page.getByTestId("button-open-assistant")).toHaveCount(0);
+    await expect(page.getByText("Terms of Service", { exact: true })).toHaveCount(0);
 
     await context.close();
   });
 
-  test("Policy Generator label stays single-line with NEXT badge", async ({ browser }) => {
-    const { context, page } = await openWithMockRole(browser, "admin", [{ url: "/policy-generator" }]);
-    await page.setViewportSize({ width: 1280, height: 800 });
+  test("primary links retain canonical routes and top-level pages avoid redundant breadcrumbs", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin");
+    const destinations: Array<[string, string]> = [
+      ["nav-measure", "/data-entry"],
+      ["nav-control-centre", "/control-centre"],
+      ["nav-reports", "/reports"],
+      ["nav-questionnaires", "/questionnaire"],
+      ["nav-more-tools", "/more-tools"],
+      ["nav-dashboard", "/"],
+    ];
 
-    await ensureAdvancedOpen(page);
-
-    const policyGenerator = page.getByTestId("nav-policy-generator");
-    const label = policyGenerator.getByText("Policy Generator", { exact: true });
-    const badge = policyGenerator.getByText("Next", { exact: true });
-
-    await expect(policyGenerator).toHaveCSS("align-items", "center");
-    await expect(label).toHaveCSS("white-space", "nowrap");
-    await expect(label).toHaveCSS("overflow", "hidden");
-    await expect(label).toHaveCSS("text-overflow", "ellipsis");
-    await expect.poll(
-      async () => label.evaluate(el => el.clientWidth - el.scrollWidth),
-      { message: "Policy Generator must fit without truncation beside the Next badge" },
-    ).toBeGreaterThanOrEqual(0);
-    await expect(badge).toBeVisible();
+    for (const [testId, path] of destinations) {
+      await page.getByTestId(testId).click();
+      await expect(page).toHaveURL(new RegExp(path === "/" ? "/$" : `${path}$`));
+      await expect(page.getByTestId(testId)).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("app-breadcrumbs")).toHaveCount(0);
+    }
 
     await context.close();
   });
 
-  test("Advanced retains former Data and Evidence destinations without another nested group", async ({ browser }) => {
-    const { context, page } = await openWithState(browser, ADMIN_STATE_FILE);
+  test("related deep pages keep the correct workspace highlighted", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin", "/evidence");
+    await expect(page.getByTestId("nav-measure")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("breadcrumb-data-&-evidence")).toBeVisible();
+    await expect(page.getByTestId("breadcrumb-documents")).toBeVisible();
 
-    await ensureAdvancedOpen(page);
+    await page.goto("/esg-targets");
+    await expect(page.getByTestId("nav-control-centre")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("breadcrumb-action-plan")).toBeVisible();
 
-    await expect(page.getByTestId("nav-group-data-and-metrics")).toHaveCount(0);
-    await expect(page.getByTestId("nav-metrics")).toBeVisible();
-    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
-    await expect(page.getByTestId("nav-evidence")).toBeVisible();
-    await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
-    await expectNavigation(page, "nav-esg-policy-register", /\/esg-policy-register$/, ["Improve", "Policies", "Policy Register"]);
-    await expectNavigation(page, "nav-evidence", /\/evidence$/, ["Measure", "Supporting Documents"]);
+    await page.goto("/answer-library");
+    await expect(page.getByTestId("nav-questionnaires")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("breadcrumb-questionnaires")).toBeVisible();
+
+    await page.goto("/framework-readiness");
+    await expect(page.getByTestId("nav-more-tools")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("breadcrumb-more-tools")).toBeVisible();
 
     await context.close();
   });
 
-  test("viewer keeps Measure access without edit navigation and RBAC links stay hidden", async ({ browser }) => {
-    const { context, page } = await openWithState(browser, VIEWER_STATE_FILE);
+  test("More Tools is a grouped hub and preserves admin-only visibility", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin", "/more-tools");
+
+    await expect(page.getByTestId("page-more-tools")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Frameworks & assurance" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Company & governance" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Analysis & coordination" })).toBeVisible();
+    await expect(page.getByTestId("more-tools-framework-settings")).toBeVisible();
+    await expect(page.getByTestId("more-tools-team")).toBeVisible();
+    await expect(page.getByTestId("more-tools-my-approvals")).toBeVisible();
+
+    await context.close();
+  });
+
+  test("viewer gets read-only data routing and does not see restricted tools", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "viewer", "/more-tools");
 
     await expect(page.getByTestId("nav-measure")).toHaveAttribute("href", "/metrics");
-    await expectNavigation(page, "nav-measure", /\/metrics$/, ["Measure", "Metrics"]);
-    await expect(page.getByTestId("nav-esg-advanced-items")).not.toBeVisible();
-    await ensureAdvancedOpen(page);
-
-    await expect(page.getByTestId("nav-metrics")).toHaveCount(0);
-    await expect(page.getByTestId("nav-frameworks")).toBeVisible();
-    await expect(page.getByTestId("nav-materiality")).toBeVisible();
-    await expect(page.getByTestId("nav-targets-and-actions")).toBeVisible();
-    await expect(page.getByTestId("nav-risk-register")).toBeVisible();
-    await expect(page.getByTestId("nav-policy-generator")).toBeVisible();
-    await expect(page.getByTestId("nav-policy-templates")).toBeVisible();
-    await expect(page.getByTestId("nav-roadmap")).toBeVisible();
-    await expect(page.getByTestId("nav-recommendations")).toBeVisible();
-    await expect(page.getByTestId("nav-esg-policy-register")).toBeVisible();
-    await expect(page.getByTestId("nav-metrics-library")).toBeVisible();
-    await expect(page.getByTestId("nav-questionnaires")).toBeVisible();
-    await expect(page.getByTestId("nav-team")).toHaveCount(0);
-    await expect(page.getByTestId("nav-framework-settings")).toHaveCount(0);
-    await expect(page.getByTestId("nav-my-approvals")).toHaveCount(0);
     await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
-    await expect(page.getByTestId("nav-admin-console")).toHaveCount(0);
-    await expect(page.getByTestId("nav-settings-console")).toHaveCount(0);
+    await expect(page.getByTestId("more-tools-framework-settings")).toHaveCount(0);
+    await expect(page.getByTestId("more-tools-team")).toHaveCount(0);
+    await expect(page.getByTestId("more-tools-my-approvals")).toHaveCount(0);
+    await expect(page.getByTestId("nav-utility-settings")).toBeVisible();
+
+    await context.close();
+  });
+
+  test("workspace tabs expose the main jobs before specialist detail", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin", "/data-entry");
+
+    await expect(page.getByRole("heading", { name: "Data & evidence" })).toBeVisible();
+    await expect(page.getByTestId("tab-raw-data")).toBeVisible();
+    await expect(page.getByTestId("tab-manual-entry")).toBeVisible();
+    await expect(page.getByTestId("tab-documents")).toBeVisible();
+    await expect(page.getByTestId("tab-paste-excel")).toBeVisible();
+    await page.getByTestId("tab-documents").click();
+    await expect(page).toHaveURL(/\/evidence$/);
+
+    await page.goto("/reports");
+    await expect(page.getByTestId("tab-reports-create")).toHaveAttribute("data-state", "active");
+    await page.getByTestId("tab-reports-library").click();
+    await expect(page.getByTestId("heading-report-library")).toBeVisible();
+    await page.getByTestId("tab-reports-exports").click();
+    await expect(page.getByText("Export Packs", { exact: true })).toBeVisible();
+
+    await page.goto("/questionnaire");
+    await expect(page.getByRole("heading", { name: "Questionnaires", exact: true })).toBeVisible();
+    await expect(page.getByTestId("tab-previous-questionnaires")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("button-new-questionnaire")).toBeVisible();
+    await expect(page.getByTestId("button-open-answer-library")).toBeVisible();
+
+    await context.close();
+  });
+
+  test("desktop and mobile layouts keep all core choices usable without horizontal overflow", async ({ browser }) => {
+    const { context, page } = await openWithMockRole(browser, "admin", "/more-tools");
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    for (const testId of ["nav-dashboard", "nav-measure", "nav-control-centre", "nav-reports", "nav-questionnaires", "nav-more-tools", "nav-utility-help", "nav-utility-settings", "button-logout"]) {
+      await expect(page.getByTestId(testId)).toBeVisible();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await page.setViewportSize({ width: 360, height: 740 });
+    await page.getByTestId("button-sidebar-toggle").click();
+    await expect(page.getByTestId("primary-navigation")).toBeVisible();
+    await expect(page.getByTestId("nav-more-tools")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await context.close();
   });

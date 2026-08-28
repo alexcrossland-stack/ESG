@@ -239,7 +239,7 @@ export default function ControlCentre() {
   const { data, isLoading } = useQuery<ControlCentreData>({ queryKey: ["/api/control-centre"] });
   const { can } = usePermissions();
 
-  const plan = data ? buildSmeImprovementPlan(data) : [];
+  const plan = data ? buildSmeImprovementPlan(data, 3) : [];
   const totalOpen = data ? countOpenImprovementItems(data) : 0;
   const remainingOpen = Math.max(0, totalOpen - plan.length);
 
@@ -247,9 +247,9 @@ export default function ControlCentre() {
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6" data-testid="page-control-centre">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold" data-testid="text-improve-title">Improve</h1>
+          <h1 className="text-xl font-semibold" data-testid="text-improve-title">Action plan</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            A short, prioritised plan for strengthening your ESG performance and evidence.
+            The three most useful things to do next, based on your current data, evidence and commitments.
           </p>
         </div>
         {!isLoading && data && (

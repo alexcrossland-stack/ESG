@@ -126,6 +126,8 @@ test.describe("Admin journeys", () => {
     await page.waitForTimeout(250);
     expect(complianceStatusRequests, "Free users should not trigger a failing Pro compliance request").toBe(0);
 
+    await page.getByTestId("tab-reports-exports").click();
+
     const firstTypeBtn = page.locator('[data-testid^="button-export-type-"]').first();
     const typeBtnVisible = await firstTypeBtn.isVisible({ timeout: 5000 }).catch(() => false);
     if (typeBtnVisible) {

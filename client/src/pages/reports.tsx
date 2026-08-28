@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
-import { PageGuidance } from "@/components/page-guidance";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch } from "@/lib/queryClient";
@@ -14,12 +13,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   Download, FileText, BarChart3, Clock, CheckCircle, Leaf, Users, Shield, FileDown, Send,
   Check, X, AlertTriangle, Factory, ClipboardCheck, Eye, BookOpen, PenLine, TrendingUp,
   Gauge, Scale, ArrowUpDown, MapPin, Target, AlertOctagon, Building2, Network, Sparkles, Info, FileCheck, PartyPopper,
-  Loader2,
+  Loader2, ChevronDown,
 } from "lucide-react";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { format, subMonths } from "date-fns";
@@ -1663,6 +1663,7 @@ export default function Reports() {
   const { can } = usePermissions();
   const canApprove = can("report_generation");
   const canGenerateReportFiles = can("report_generation");
+  const [reportsView, setReportsView] = useState("create");
   const { isPro } = useBillingStatus();
   const { activeSiteId, sites: allSites } = useSiteContext();
   const activeSites = allSites.filter((s: any) => s.status === "active");
@@ -2328,37 +2329,33 @@ export default function Reports() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <PageGuidance
-        pageKey="reports"
-        title="ESG Reports — what this page does"
-        summary="This is where you generate ESG reports from your data, policies, and documents. Use them for board meetings, bank or investor requests, procurement questionnaires, or to share your sustainability progress publicly."
-        goodLooksLike="At least one report generated and shared per quarter, covering the metrics and policies most relevant to your audience."
-        steps={[
-          "Choose the report template that matches your audience (board, supply chain, auditor, etc.)",
-          "Select the time period and the data you want to include",
-          "Generate the report and review it before sharing",
-          "Download as PDF or send the link to whoever needs it",
-        ]}
-      />
       <div>
         <h1 className="text-xl font-semibold flex items-center gap-2" data-testid="text-page-title">
           <Download className="w-5 h-5 text-primary" />
-          ESG Reports
+          Reports
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Generate reports to share with your board, investors, or customers
+          Create, review and export clear ESG information for the people who need it.
         </p>
       </div>
 
-      <ReportReadinessPanel
+      <Tabs value={reportsView} onValueChange={setReportsView} className="space-y-5">
+        <TabsList className="grid h-auto w-full grid-cols-3" data-testid="tabs-reports">
+          <TabsTrigger value="create" data-testid="tab-reports-create">Create</TabsTrigger>
+          <TabsTrigger value="library" data-testid="tab-reports-library">Report library</TabsTrigger>
+          <TabsTrigger value="exports" data-testid="tab-reports-exports">Exports</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="create" className="space-y-5">
+          <ReportReadinessPanel
         siteId={reportReadinessScopeParam ?? "__all__"}
         period={selectedPeriod}
         dateFrom={selectedReportPeriod.dateFrom}
         dateTo={selectedReportPeriod.dateTo}
         scopeLabel={reportReadinessScopeLabel}
-      />
+          />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
@@ -2561,23 +2558,29 @@ export default function Reports() {
 
               <Separator />
 
-              <div className="space-y-2.5">
-                <Label className="text-xs font-medium">Report Sections</Label>
-                {SECTIONS.map(({ key, label, icon: Icon }) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <Checkbox
-                      id={key}
-                      checked={(effectiveSections as any)[key]}
-                      onCheckedChange={() => toggleSection(key)}
-                      data-testid={`checkbox-${key}`}
-                    />
-                    <Label htmlFor={key} className="text-xs cursor-pointer flex items-center gap-1.5">
-                      <Icon className="w-3 h-3 text-muted-foreground" />
-                      {label}
-                    </Label>
-                  </div>
-                ))}
-              </div>
+              <details className="group rounded-md border border-border" data-testid="disclosure-report-sections">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-medium [&::-webkit-details-marker]:hidden">
+                  <span>Customise report sections <span className="font-normal text-muted-foreground">(optional)</span></span>
+                  <span className="text-muted-foreground group-open:hidden">{Object.values(effectiveSections).filter(Boolean).length} included</span>
+                  <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground transition-transform group-open:block group-open:rotate-180" />
+                </summary>
+                <div className="space-y-2.5 border-t border-border px-3 py-3">
+                  {SECTIONS.map(({ key, label, icon: Icon }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <Checkbox
+                        id={key}
+                        checked={(effectiveSections as any)[key]}
+                        onCheckedChange={() => toggleSection(key)}
+                        data-testid={`checkbox-${key}`}
+                      />
+                      <Label htmlFor={key} className="text-xs cursor-pointer flex items-center gap-1.5">
+                        <Icon className="w-3 h-3 text-muted-foreground" />
+                        {label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </details>
 
               {!can("report_generation") && (
                 <PermissionBanner
@@ -2754,9 +2757,11 @@ export default function Reports() {
             </div>
           )}
         </div>
-      </div>
+          </div>
+        </TabsContent>
 
-      <div>
+        <TabsContent value="library" className="space-y-5">
+          <div>
         <div className="flex items-center justify-between mb-3 gap-3">
           <div>
             <h2 className="text-sm font-semibold flex items-center gap-2" data-testid="heading-report-library">
@@ -3202,10 +3207,10 @@ export default function Reports() {
             </CardContent>
           </Card>
         )}
-      </div>
+          </div>
 
-      {availableHistoryFiles.length > 0 && (
-        <div>
+          {availableHistoryFiles.length > 0 && (
+            <div>
           <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
             <FileDown className="w-4 h-4" />
             Available Files
@@ -3232,10 +3237,12 @@ export default function Reports() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+            </div>
+          )}
+        </TabsContent>
 
-      <Card>
+        <TabsContent value="exports" className="space-y-5">
+          <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
             <Download className="w-4 h-4" />
@@ -3282,9 +3289,11 @@ export default function Reports() {
             </Button>
           </div>
         </CardContent>
-      </Card>
+          </Card>
 
-      <EsgExportsSection />
+          <EsgExportsSection />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

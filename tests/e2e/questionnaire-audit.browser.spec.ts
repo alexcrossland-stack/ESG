@@ -87,7 +87,9 @@ test.describe.serial("Questionnaire audit regressions", () => {
   test("create, autofill, open result, and truthfully report a partial submission", async ({ page }) => {
     await authenticate(page, adminToken);
     await page.goto("/questionnaire");
-    await expect(page.getByRole("heading", { name: "Questionnaire Autofill" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Questionnaires", exact: true })).toBeVisible();
+    await expect(page.getByTestId("tab-previous-questionnaires")).toHaveAttribute("data-state", "active");
+    await page.getByTestId("tab-ai-generator").click();
 
     await expect(page.getByTestId("response-generator-scope")).toBeVisible();
     await page.getByTestId("select-response-generator-site").click();
