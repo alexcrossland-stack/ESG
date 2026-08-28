@@ -130,6 +130,9 @@ test.describe("ESG Passport sharing access", () => {
 
     await page.getByTestId("button-update-share").click();
     await expect.poll(() => traffic.sharingRequests).toContain("POST /api/company/esg-profile/share");
+    await expect(page.locator('li[role="status"][data-state="open"]')).toHaveCount(0, {
+      timeout: 10000,
+    });
 
     await page.getByTestId("button-rotate-token").click();
     await expect.poll(() => traffic.sharingRequests).toContain("POST /api/company/esg-profile/rotate-token");

@@ -17,7 +17,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { SupportAssistant } from "@/components/support-assistant";
 import { useEffect, useRef, Component, useState, createContext, useContext, useCallback, Fragment, lazy, Suspense, type ComponentType, type LazyExoticComponent } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import NotFound from "@/pages/not-found";
@@ -25,7 +24,6 @@ import Auth from "@/pages/auth";
 import Onboarding from "@/pages/onboarding";
 import PublicProfilePage from "@/pages/public-profile";
 import { TermsPage, PrivacyPage, CookiesPage, DpaPage } from "@/pages/legal";
-import { AppFooter } from "@/components/app-footer";
 import { SiteProvider } from "@/hooks/use-site-context";
 import { getBreadcrumbs } from "@/lib/navigation";
 
@@ -73,6 +71,7 @@ const MaterialityPage = lazy(() => import("@/pages/materiality"));
 const EsgPolicyRegisterPage = lazy(() => import("@/pages/esg-policy-register"));
 const EsgTargetsPage = lazy(() => import("@/pages/esg-targets"));
 const EsgRisksPage = lazy(() => import("@/pages/esg-risks"));
+const MoreToolsPage = lazy(() => import("@/pages/more-tools"));
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -273,7 +272,7 @@ function AppBreadcrumbs() {
   const [location] = useLocation();
   const items = getBreadcrumbs(location);
 
-  if (items.length === 0) return null;
+  if (items.length <= 1) return null;
 
   return (
     <Breadcrumb data-testid="app-breadcrumbs">
@@ -516,15 +515,14 @@ function ProtectedApp() {
                   <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
                   <Route path="/esg-targets" component={EsgTargetsPage} />
                   <Route path="/esg-risks" component={EsgRisksPage} />
+                  <Route path="/more-tools" component={MoreToolsPage} />
                   <Route component={NotFound} />
                 </Switch>
               </Suspense>
             </AppErrorBoundary>
           </main>
-          <AppFooter />
         </div>
       </div>
-      <SupportAssistantErrorBoundary><SupportAssistant /></SupportAssistantErrorBoundary>
     </SidebarProvider>
     </SiteProvider>
   );

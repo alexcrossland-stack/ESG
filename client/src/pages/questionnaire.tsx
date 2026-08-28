@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { Link } from "wouter";
 import { useBillingStatus, UpgradePageGate } from "@/components/upgrade-prompt";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1444,7 +1445,7 @@ export default function QuestionnairePage() {
   const { can } = usePermissions();
   const canAccess = can("questionnaire_access");
   const [importOpen, setImportOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState(canAccess ? "generator" : "previous");
+  const [activeTab, setActiveTab] = useState("previous");
   const { isPro, isLoading: billingLoading } = useBillingStatus();
 
   if (!billingLoading && !isPro) {
@@ -1469,38 +1470,49 @@ export default function QuestionnairePage() {
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-primary" />
-            Questionnaire Autofill
+            Questionnaires
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Answer ESG questionnaires using your company data
+            Manage requests and create consistent, evidence-backed responses.
           </p>
         </div>
-        {canAccess && (
-          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="button-open-import">
-            <Upload className="w-3.5 h-3.5 mr-1.5" />
-            Import
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="outline" size="sm" asChild data-testid="button-open-answer-library">
+            <Link href="/answer-library">Answer library</Link>
           </Button>
-        )}
+          {canAccess && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="button-open-import">
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                Import
+              </Button>
+              <Button size="sm" onClick={() => setActiveTab("new")} data-testid="button-new-questionnaire">
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                New questionnaire
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <ImportQuestionnaireDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList data-testid="tabs-questionnaire">
+          <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
+            Requests
+          </TabsTrigger>
           {canAccess && (
             <TabsTrigger value="generator" data-testid="tab-ai-generator">
               <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-              AI Response Generator
+              New response
             </TabsTrigger>
           )}
           {canAccess && (
             <TabsTrigger value="new" data-testid="tab-new-questionnaire">
-              Questionnaire Builder
+              Build manually
             </TabsTrigger>
           )}
-          <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
-            History
-          </TabsTrigger>
         </TabsList>
         {canAccess && (
           <TabsContent value="generator">

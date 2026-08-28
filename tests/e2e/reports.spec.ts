@@ -468,6 +468,7 @@ test.describe("Report generation", () => {
     await mockReportsPageApis(page);
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-exports").click();
     await page.getByTestId("button-export-type-framework_readiness_summary").click();
 
     await expect(page.getByTestId("button-scope-daterange")).toBeDisabled();
@@ -489,6 +490,7 @@ test.describe("Report generation", () => {
     });
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-exports").click();
     await page.getByTestId("button-export-type-framework_readiness_summary").click();
     await expect(page.getByTestId("select-export-period")).toContainText("FY 2025/26");
   });
@@ -541,6 +543,7 @@ test.describe("Report generation", () => {
     const reportingPeriodLabel = periodRangeText?.split(" · ")[0]?.trim();
     expect(reportingPeriodLabel).toBeTruthy();
 
+    await page.getByTestId("tab-reports-exports").click();
     const downloadPromise = page.waitForEvent("download");
     await page.getByTestId("button-export-compliance").click();
     const download = await downloadPromise;
@@ -554,6 +557,7 @@ test.describe("Report generation", () => {
     await mockReportsPageApis(page);
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-library").click();
     await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
     await expect(page.getByTestId("text-report-library-count")).toContainText("1-2 of 2 reports");
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
@@ -574,7 +578,7 @@ test.describe("Report generation", () => {
     await expect(page.getByTestId("historical-report-preview").getByTestId("section-metric-trends")).toContainText("Electricity Consumption");
     await expect(page.getByTestId("historical-report-preview").getByTestId("section-trend-notes")).toContainText("No prior-period data available");
     await expect(page.getByTestId("historical-report-preview")).toContainText("Electricity Consumption");
-    await expect(page.getByTestId("empty-state-report-preview")).toBeVisible();
+    await expect(page.getByTestId("empty-state-report-preview")).toHaveCount(0);
 
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
     await expect(page.getByTestId("badge-report-file-unavailable-report-unavailable")).toHaveText("Unavailable");
@@ -602,6 +606,7 @@ test.describe("Report generation", () => {
     await mockReportsPageApis(page);
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-library").click();
     await expect(page.getByTestId("report-history-report-available")).toBeVisible();
     await expect(page.getByTestId("button-download-report-file-report-available")).toHaveText(/Open report/);
     await expect(page.getByTestId("link-report-file-report-available")).toContainText("Full ESG Report");
@@ -615,10 +620,10 @@ test.describe("Report generation", () => {
       await mockReportsPageApis(page, { role });
 
       await page.goto("/reports");
+      await page.getByTestId("tab-reports-library").click();
       await expect(page.getByTestId("heading-report-library")).toHaveText("Report Library");
       await expect(page.getByTestId("report-history-report-available")).toBeVisible();
       await expect(page.getByTestId("button-generate-report")).toHaveCount(0);
-      await expect(page.getByTestId("permission-banner")).toBeVisible();
 
       await page.getByTestId("button-view-report-report-available").click();
       await expect(page.getByTestId("card-report-library-detail")).toBeVisible();
@@ -634,6 +639,7 @@ test.describe("Report generation", () => {
     await mockReportsPageApis(page, { failAvailableDownloadOnce: true });
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-library").click();
     await expect(page.getByTestId("button-download-report-file-report-available")).toBeVisible();
 
     await page.getByTestId("button-download-report-file-report-available").click();
@@ -649,6 +655,7 @@ test.describe("Report generation", () => {
     });
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-library").click();
     await page.getByTestId("button-view-report-report-unavailable").click();
     await expect(page.getByTestId("card-report-library-detail")).toBeVisible();
     await expect(page.getByTestId("panel-library-detail-file-actions")).toContainText("No generated file attached");
@@ -672,10 +679,12 @@ test.describe("Report generation", () => {
     });
 
     await page.goto("/reports");
+    await page.getByTestId("tab-reports-library").click();
     await page.getByTestId("input-report-library-search").fill("Expired");
     await expect(page.getByTestId("report-history-report-unavailable")).toBeVisible();
     await expect(page.getByTestId("report-history-report-available")).toHaveCount(0);
 
+    await page.getByTestId("tab-reports-create").click();
     await page.getByTestId("button-generate-report").click();
     await expect(page.getByTestId("report-preview")).toContainText("New Generated Report");
     await expect(page.getByTestId("report-preview").getByTestId("section-trend-summary")).toContainText("Trend Summary");

@@ -10,6 +10,8 @@ export type NavItem = {
   href: string;
   permission?: NavPermission;
   fallbackHref?: string;
+  activeRoutes?: string[];
+  description?: string;
 };
 
 export type NavSection = {
@@ -18,32 +20,73 @@ export type NavSection = {
 };
 
 export const MAIN_NAV_TOP_LEVEL_LABELS = [
-  "Home",
-  "Measure",
-  "Improve",
-  "Share",
-  "Advanced",
+  "Overview",
+  "Data & evidence",
+  "Action plan",
+  "Reports",
+  "Questionnaires",
+  "More tools",
 ] as const;
 
 export const MEASURE_HOME_HREF = "/data-entry";
 export const IMPROVE_HOME_HREF = "/control-centre";
 export const SHARE_HOME_HREF = "/reports";
 
+export const DATA_WORKSPACE_ROUTES = [
+  "/data-entry",
+  "/metrics",
+  "/metrics-library",
+  "/evidence",
+];
+
+export const ACTION_PLAN_WORKSPACE_ROUTES = [
+  "/control-centre",
+  "/actions",
+  "/esg-targets",
+  "/esg-risks",
+  "/recommendations",
+  "/roadmap",
+  "/topics",
+  "/policy",
+  "/policy-generator",
+  "/policy-templates",
+  "/esg-policy-register",
+  "/my-tasks",
+  "/my-approvals",
+];
+
+export const QUESTIONNAIRE_WORKSPACE_ROUTES = ["/questionnaire", "/answer-library"];
+
+export const MORE_TOOLS_ROUTES = [
+  "/more-tools",
+  "/framework-readiness",
+  "/framework-settings",
+  "/compliance",
+  "/esg-profile",
+  "/materiality",
+  "/carbon-calculator",
+  "/benchmarks",
+  "/team",
+];
+
 /**
- * The default SME journey stays intentionally small. Measure falls back to the
+ * The default SME journey stays intentionally small. Data entry falls back to the
  * read-only metrics view when the user cannot enter data, so every role keeps a
  * useful primary destination without exposing an editing affordance.
  */
 export const SME_PRIMARY_NAV_ITEMS: NavItem[] = [
-  { label: "Home", href: "/" },
+  { label: "Overview", href: "/" },
   {
-    label: "Measure",
+    label: "Data & evidence",
     href: MEASURE_HOME_HREF,
     permission: "metrics_data_entry",
     fallbackHref: "/metrics",
+    activeRoutes: DATA_WORKSPACE_ROUTES,
   },
-  { label: "Improve", href: IMPROVE_HOME_HREF },
-  { label: "Share", href: SHARE_HOME_HREF },
+  { label: "Action plan", href: IMPROVE_HOME_HREF, activeRoutes: ACTION_PLAN_WORKSPACE_ROUTES },
+  { label: "Reports", href: SHARE_HOME_HREF },
+  { label: "Questionnaires", href: "/questionnaire", activeRoutes: QUESTIONNAIRE_WORKSPACE_ROUTES },
+  { label: "More tools", href: "/more-tools", activeRoutes: MORE_TOOLS_ROUTES },
 ];
 
 // Retained compatibility exports for existing route consumers and tests. The
@@ -138,6 +181,40 @@ export const ADVANCED_NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+/** Specialist destinations presented as a calm, searchable workspace instead
+ * of a second navigation tree. Keep these groups short and outcome-oriented. */
+export const MORE_TOOLS_SECTIONS: NavSection[] = [
+  {
+    label: "Frameworks & assurance",
+    items: [
+      { label: "Framework readiness", href: "/framework-readiness", description: "See how your current evidence maps to common ESG frameworks." },
+      { label: "Framework settings", href: "/framework-settings", permission: "settings_admin", description: "Choose the frameworks and requirements your company follows." },
+      { label: "Compliance", href: "/compliance", description: "Review requirement gaps and supporting information." },
+    ],
+  },
+  {
+    label: "Company & governance",
+    items: [
+      { label: "ESG profile", href: "/esg-profile", description: "Maintain a clear, shareable summary of your ESG position." },
+      { label: "Priority topics", href: "/topics", description: "Focus effort on the topics that matter most to your business." },
+      { label: "Materiality", href: "/materiality", description: "Assess business and stakeholder importance." },
+      { label: "Policy templates", href: "/policy-templates", description: "Start practical ESG policies from proven templates." },
+      { label: "Policy register", href: "/esg-policy-register", description: "Track policy ownership, status and review dates." },
+    ],
+  },
+  {
+    label: "Analysis & coordination",
+    items: [
+      { label: "Carbon estimator", href: "/carbon-calculator", description: "Create an initial emissions estimate from accessible business data." },
+      { label: "Benchmarks", href: "/benchmarks", description: "Compare performance and identify useful improvement areas." },
+      { label: "Metrics library", href: "/metrics-library", description: "Browse and configure the metrics relevant to your company." },
+      { label: "My tasks", href: "/my-tasks", description: "See work assigned to you across the ESG programme." },
+      { label: "My approvals", href: "/my-approvals", permission: "report_generation", description: "Review submitted data and decisions awaiting approval." },
+      { label: "Team", href: "/team", permission: "settings_admin", description: "Manage team access and responsibilities." },
+    ],
+  },
+];
+
 export const ESG_SETUP_ADVANCED_PRIMARY_ITEMS: NavItem[] = [
   ...FRAMEWORK_NAV_ITEMS,
   { label: "Materiality", href: "/materiality" },
@@ -182,6 +259,10 @@ export function isActive(location: string, href: string) {
   return location === href || location.startsWith(href + "/");
 }
 
+export function isNavItemActive(location: string, item: NavItem) {
+  return isGroupActive(location, item.activeRoutes ?? [item.href]);
+}
+
 export function isGroupActive(location: string, routes: string[]) {
   return routes.some(route => isActive(location, route));
 }
@@ -211,63 +292,63 @@ export function getAdminMenuRoutes(role: string | undefined) {
 }
 
 const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
-  "/": [{ label: "Home", href: "/" }],
+  "/": [{ label: "Overview", href: "/" }],
 
-  "/data-entry": [{ label: "Measure", href: MEASURE_HOME_HREF }],
-  "/metrics": [{ label: "Measure", href: MEASURE_HOME_HREF }, { label: "Metrics" }],
-  "/metrics-library": [{ label: "Measure", href: MEASURE_HOME_HREF }, { label: "Metrics Library" }],
-  "/evidence": [{ label: "Measure", href: MEASURE_HOME_HREF }, { label: "Supporting Documents" }],
-  "/carbon-calculator": [{ label: "Measure", href: MEASURE_HOME_HREF }, { label: "Carbon Estimator" }],
-  "/benchmarks": [{ label: "Measure", href: MEASURE_HOME_HREF }, { label: "Benchmarks" }],
+  "/data-entry": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }],
+  "/metrics": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }, { label: "Metrics" }],
+  "/metrics-library": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }, { label: "Metrics library" }],
+  "/evidence": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }, { label: "Documents" }],
 
-  "/control-centre": [{ label: "Improve", href: IMPROVE_HOME_HREF }],
-  "/topics": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Priority Topics" }],
-  "/roadmap": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Roadmap" }],
-  "/policy": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "ESG Policy" }],
+  "/control-centre": [{ label: "Action plan", href: IMPROVE_HOME_HREF }],
+  "/topics": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Priority topics" }],
+  "/roadmap": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Roadmap" }],
+  "/policy": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "ESG policy" }],
   "/policy-generator": [
-    { label: "Improve", href: IMPROVE_HOME_HREF },
+    { label: "Action plan", href: IMPROVE_HOME_HREF },
     { label: "Policies", href: "/policy" },
     { label: "Policy Generator" },
   ],
   "/policy-templates": [
-    { label: "Improve", href: IMPROVE_HOME_HREF },
+    { label: "Action plan", href: IMPROVE_HOME_HREF },
     { label: "Policies", href: "/policy" },
     { label: "Policy Templates" },
   ],
   "/esg-policy-register": [
-    { label: "Improve", href: IMPROVE_HOME_HREF },
+    { label: "Action plan", href: IMPROVE_HOME_HREF },
     { label: "Policies", href: "/policy" },
     { label: "Policy Register" },
   ],
-  "/materiality": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Materiality" }],
-  "/esg-targets": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Targets and Actions" }],
-  "/actions": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Action Tracker" }],
-  "/esg-risks": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Risk Register" }],
-  "/recommendations": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "Recommendations" }],
-  "/my-tasks": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "My Tasks" }],
-  "/my-approvals": [{ label: "Improve", href: IMPROVE_HOME_HREF }, { label: "My Approvals" }],
+  "/esg-targets": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Targets and actions" }],
+  "/actions": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Action tracker" }],
+  "/esg-risks": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Risk register" }],
+  "/recommendations": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Recommendations" }],
+  "/my-tasks": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "My tasks" }],
+  "/my-approvals": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "My approvals" }],
 
-  "/reports": [{ label: "Share", href: SHARE_HOME_HREF }],
-  "/esg-profile": [{ label: "Share", href: SHARE_HOME_HREF }, { label: "ESG Profile" }],
-  "/questionnaire": [{ label: "Share", href: SHARE_HOME_HREF }, { label: "Questionnaires" }],
+  "/reports": [{ label: "Reports", href: SHARE_HOME_HREF }],
+  "/questionnaire": [{ label: "Questionnaires", href: "/questionnaire" }],
   "/answer-library": [
-    { label: "Share", href: SHARE_HOME_HREF },
     { label: "Questionnaires", href: "/questionnaire" },
-    { label: "Answer Library" },
+    { label: "Answer library" },
   ],
-  "/framework-readiness": [{ label: "Share", href: SHARE_HOME_HREF }, { label: "Frameworks" }],
+  "/more-tools": [{ label: "More tools", href: "/more-tools" }],
+  "/esg-profile": [{ label: "More tools", href: "/more-tools" }, { label: "ESG profile" }],
+  "/materiality": [{ label: "More tools", href: "/more-tools" }, { label: "Materiality" }],
+  "/carbon-calculator": [{ label: "More tools", href: "/more-tools" }, { label: "Carbon estimator" }],
+  "/benchmarks": [{ label: "More tools", href: "/more-tools" }, { label: "Benchmarks" }],
+  "/framework-readiness": [{ label: "More tools", href: "/more-tools" }, { label: "Framework readiness" }],
   "/framework-settings": [
-    { label: "Share", href: SHARE_HOME_HREF },
-    { label: "Frameworks", href: "/framework-readiness" },
-    { label: "Framework Settings" },
+    { label: "More tools", href: "/more-tools" },
+    { label: "Framework readiness", href: "/framework-readiness" },
+    { label: "Framework settings" },
   ],
   "/compliance": [
-    { label: "Share", href: SHARE_HOME_HREF },
-    { label: "Frameworks", href: "/framework-readiness" },
+    { label: "More tools", href: "/more-tools" },
+    { label: "Framework readiness", href: "/framework-readiness" },
     { label: "Compliance" },
   ],
 
-  "/team": [{ label: "Settings", href: "/settings" }, { label: "Team" }],
+  "/team": [{ label: "More tools", href: "/more-tools" }, { label: "Team" }],
   "/portfolio": [{ label: "Portfolio", href: "/portfolio" }],
   "/help": [{ label: "Help", href: "/help" }],
   "/settings": [{ label: "Settings", href: "/settings" }],

@@ -172,7 +172,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            Coverage includes every active metric. The focused guided set in Measure is the quickest first step, not the full checklist.
+            Coverage includes every active metric. Guided inputs in Data &amp; evidence are the quickest first step, not the full checklist.
           </p>
         </CardContent>
       </Card>

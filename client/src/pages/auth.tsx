@@ -255,7 +255,7 @@ export default function Auth() {
               <Leaf className="w-6 h-6 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold">ESG Manager</h1>
+          <h1 className="text-2xl font-bold">SimplyESG</h1>
           <p className="text-muted-foreground text-sm">Sustainability management for growing businesses</p>
         </div>
 

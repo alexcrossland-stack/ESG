@@ -1215,7 +1215,7 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">
-            {company?.name ? `${company.name} — ESG Home` : "ESG Home"}
+            {company?.name ? `${company.name} — Overview` : "Overview"}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Your baseline, confidence and next step
