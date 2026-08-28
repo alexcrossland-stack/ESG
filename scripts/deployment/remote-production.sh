@@ -45,21 +45,31 @@ wait_for_release() {
   local expected_scheduler="${4:-running}"
   local resolve_arg="${5:-}"
   local pm2_process="${6:-}"
+  local allow_legacy_missing_sha="${7:-0}"
   local response_file
   response_file="$(mktemp)"
   for attempt in $(seq 1 45); do
-    local curl_args=(--fail --silent --show-error --max-time 15 --output "${response_file}")
+    # Private validation intentionally returns HTTP 503 while writes and the
+    # scheduler are paused. Parse and verify the health body instead of asking
+    # curl to reject the expected degraded status before Node can inspect it.
+    local curl_args=(--silent --show-error --max-time 15 --output "${response_file}")
     if [ -n "${resolve_arg}" ]; then
       curl_args+=(--resolve "${resolve_arg}")
     fi
-    if curl "${curl_args[@]}" "${url}" && HEALTH_FILE="${response_file}" EXPECTED_SHA="${expected_sha}" EXPECTED_SCHEDULER="${expected_scheduler}" "${NODE_BIN}" - <<'NODE'
+    local http_status
+    if http_status="$(curl "${curl_args[@]}" --write-out '%{http_code}' "${url}")" && HEALTH_FILE="${response_file}" HEALTH_HTTP_STATUS="${http_status}" EXPECTED_SHA="${expected_sha}" EXPECTED_SCHEDULER="${expected_scheduler}" ALLOW_LEGACY_MISSING_SHA="${allow_legacy_missing_sha}" "${NODE_BIN}" - <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.env.HEALTH_FILE, "utf8"));
+const expectedHttpStatus = process.env.EXPECTED_SCHEDULER === "stopped" ? "503" : "200";
+if (process.env.HEALTH_HTTP_STATUS !== expectedHttpStatus) process.exit(1);
 if (health.db !== "connected") process.exit(1);
 if (health.scheduler !== process.env.EXPECTED_SCHEDULER) process.exit(1);
 if (process.env.EXPECTED_SCHEDULER === "running" && health.status !== "ok") process.exit(1);
 if (process.env.EXPECTED_SCHEDULER === "stopped" && health.status !== "degraded") process.exit(1);
-if (health.releaseSha !== process.env.EXPECTED_SHA) process.exit(1);
+const exactRelease = health.releaseSha === process.env.EXPECTED_SHA;
+const allowedLegacyRelease = process.env.ALLOW_LEGACY_MISSING_SHA === "1"
+  && !Object.prototype.hasOwnProperty.call(health, "releaseSha");
+if (!exactRelease && !allowedLegacyRelease) process.exit(1);
 const timestamp = Date.parse(health.timestamp);
 if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 300000) process.exit(1);
 NODE
@@ -313,7 +323,10 @@ start_previous_release() {
   if ! assert_process_interpreter "${PROCESS_NAME}" "${PREVIOUS_INTERPRETER}" "${PREVIOUS_CWD}" "${PREVIOUS_SCRIPT}"; then
     return 1
   fi
-  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running" "" "${PROCESS_NAME}"
+  # The May 2026 legacy release predates the releaseSha health field. Its exact
+  # git cwd, script and live interpreter were already verified above; permit
+  # only an absent field here, never a mismatched or unknown release value.
+  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running" "" "${PROCESS_NAME}" "1"
 }
 
 handle_failure() {

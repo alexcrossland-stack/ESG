@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const production = await readFile(new URL("../../.github/workflows/deploy.yml", import.meta.url), "utf8");
 const staging = await readFile(new URL("../../.github/workflows/deploy-staging.yml", import.meta.url), "utf8");
@@ -19,6 +22,10 @@ const privilegedRecoveryTest = await readFile(
 const ecosystem = await readFile(new URL("../../ecosystem.config.cjs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
 const npmrc = await readFile(new URL("../../.npmrc", import.meta.url), "utf8");
+const waitForReleaseFunction = remoteDeploy.slice(
+  remoteDeploy.indexOf("wait_for_release()"),
+  remoteDeploy.indexOf("safe_candidate_startup_log_tail()"),
+);
 
 assert.match(production, /group: deploy-production\s+cancel-in-progress: false/);
 assert.match(production, /GITHUB_REF[^\n]+refs\/heads\/main/);
@@ -89,6 +96,23 @@ assert.match(remoteDeploy, /booting release candidate on private port/);
 assert.match(remoteDeploy, /DEPLOY_PORT_OVERRIDE="5001"/);
 assert.match(remoteDeploy, /DEPLOYMENT_VALIDATION="1"/);
 assert.match(remoteDeploy, /private candidate health[^\n]+"stopped"/);
+assert.match(waitForReleaseFunction, /curl_args=\(--silent --show-error/);
+assert.doesNotMatch(waitForReleaseFunction, /--fail/);
+assert.match(waitForReleaseFunction, /--write-out '%\{http_code\}'/);
+assert.match(waitForReleaseFunction, /HEALTH_HTTP_STATUS="\$\{http_status\}"/);
+assert.match(waitForReleaseFunction, /EXPECTED_SCHEDULER === "stopped" \? "503" : "200"/);
+assert.match(waitForReleaseFunction, /ALLOW_LEGACY_MISSING_SHA="\$\{allow_legacy_missing_sha\}"/);
+assert.match(waitForReleaseFunction, /!Object\.prototype\.hasOwnProperty\.call\(health, "releaseSha"\)/);
+assert.match(remoteDeploy, /previous production recovery[^\n]+"\$\{PROCESS_NAME\}" "1"/);
+assert.deepEqual(
+  remoteDeploy
+    .split("\n")
+    .filter((line) => line.includes("wait_for_release") && line.trimEnd().endsWith('"1"')),
+  [
+    '  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running" "" "${PROCESS_NAME}" "1"',
+  ],
+  "only verified previous-release recovery may use legacy missing-SHA compatibility",
+);
 assert.match(remoteDeploy, /pm2 logs "\$\{PRIVATE_PROCESS_NAME\}" --err --lines 80 --nostream/);
 assert.match(remoteDeploy, /Candidate startup diagnostic categories/);
 assert.doesNotMatch(remoteDeploy, /safe\.join\("\\n"\)/);
@@ -202,5 +226,95 @@ assert.ok(
   "super-admin identifier migration must run before its fail-closed type validation",
 );
 assert.match(preflight, /Never run the mutating test commands.*against production/i);
+
+const healthValidatorStart = waitForReleaseFunction.indexOf('const fs = require("node:fs");');
+const healthValidatorEnd = waitForReleaseFunction.indexOf("\nNODE", healthValidatorStart);
+assert.ok(healthValidatorStart >= 0 && healthValidatorEnd > healthValidatorStart);
+const healthValidator = waitForReleaseFunction.slice(healthValidatorStart, healthValidatorEnd);
+const healthFixtureDir = await mkdtemp(path.join(tmpdir(), "simplyesg-health-contract-"));
+let healthFixtureSequence = 0;
+const expectedReleaseSha = "a".repeat(40);
+const currentTimestamp = new Date().toISOString();
+
+async function validateHealthFixture(
+  body: string | Record<string, unknown>,
+  options: {
+    httpStatus: string;
+    scheduler: "running" | "stopped";
+    allowLegacyMissingSha?: boolean;
+  },
+) {
+  healthFixtureSequence += 1;
+  const fixturePath = path.join(healthFixtureDir, `health-${healthFixtureSequence}.json`);
+  await writeFile(fixturePath, typeof body === "string" ? body : JSON.stringify(body));
+  const result = spawnSync(process.execPath, ["-e", healthValidator], {
+    env: {
+      ...process.env,
+      HEALTH_FILE: fixturePath,
+      HEALTH_HTTP_STATUS: options.httpStatus,
+      EXPECTED_SHA: expectedReleaseSha,
+      EXPECTED_SCHEDULER: options.scheduler,
+      ALLOW_LEGACY_MISSING_SHA: options.allowLegacyMissingSha ? "1" : "0",
+    },
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.signal, null, `health validator terminated by ${result.signal}`);
+  return result.status;
+}
+
+try {
+  const runningHealth = {
+    status: "ok",
+    db: "connected",
+    scheduler: "running",
+    releaseSha: expectedReleaseSha,
+    timestamp: currentTimestamp,
+  };
+  const stoppedHealth = {
+    status: "degraded",
+    db: "connected",
+    scheduler: "stopped",
+    releaseSha: expectedReleaseSha,
+    timestamp: currentTimestamp,
+  };
+  const legacyHealth = {
+    status: "ok",
+    db: "connected",
+    scheduler: "running",
+    timestamp: currentTimestamp,
+  };
+
+  assert.equal(await validateHealthFixture(runningHealth, { httpStatus: "200", scheduler: "running" }), 0);
+  assert.equal(await validateHealthFixture(stoppedHealth, { httpStatus: "503", scheduler: "stopped" }), 0);
+  assert.notEqual(await validateHealthFixture(stoppedHealth, { httpStatus: "200", scheduler: "stopped" }), 0);
+  assert.notEqual(await validateHealthFixture(runningHealth, { httpStatus: "503", scheduler: "running" }), 0);
+  assert.notEqual(await validateHealthFixture(legacyHealth, { httpStatus: "200", scheduler: "running" }), 0);
+  assert.equal(
+    await validateHealthFixture(legacyHealth, {
+      httpStatus: "200",
+      scheduler: "running",
+      allowLegacyMissingSha: true,
+    }),
+    0,
+  );
+  assert.notEqual(
+    await validateHealthFixture(
+      { ...legacyHealth, releaseSha: "unknown" },
+      { httpStatus: "200", scheduler: "running", allowLegacyMissingSha: true },
+    ),
+    0,
+  );
+  assert.notEqual(
+    await validateHealthFixture(
+      { ...runningHealth, releaseSha: "b".repeat(40) },
+      { httpStatus: "200", scheduler: "running" },
+    ),
+    0,
+  );
+  assert.notEqual(await validateHealthFixture("not-json", { httpStatus: "200", scheduler: "running" }), 0);
+} finally {
+  await rm(healthFixtureDir, { recursive: true, force: true });
+}
 
 console.log("deployment safety contract tests passed");
