@@ -56,7 +56,7 @@ Each directory contains:
 - `production.env` — previous runtime configuration, mode `0600`;
 - `release.json` — previous/target SHAs, previous PM2 path/script, evidence path and backup timestamp;
 - `SHA256SUMS` — checksums for every recovery input;
-- `runtime-env.cjs`, `recovery-point.cjs` and `rollback.ecosystem.cjs` — the exact non-shell-evaluating recovery tools captured with the release.
+- `runtime-env.cjs`, `recovery-point.cjs` and `rollback.ecosystem.config.cjs` — the exact non-shell-evaluating recovery tools captured with the release.
 
 The deployment workflow automatically exercises a full restore into a disposable database before it pauses production writes. Its final recovery point is captured after PM2 stops the previous app, so the database and evidence archive share one write-paused window.
 
@@ -68,20 +68,41 @@ For a manual incident restore, first record the backup timestamp and approve los
 set -Eeuo pipefail
 backup_dir="$(tr -d '\r\n' < /root/esg-deploy-backups/latest)"
 node_bin="/root/esg-runtimes/node-v24.20.0-linux-x64/bin/node"
+rollback_config="$backup_dir/rollback.ecosystem.config.cjs"
 test -d "$backup_dir"
 test -s "$backup_dir/database.dump"
 test -s "$backup_dir/evidence.tar.gz"
 test -s "$backup_dir/production.env"
 test -x "$node_bin"
 
-pm2 stop esg
+pm2 delete esg-candidate || true
+pm2 delete esg || true
+pm2 jlist | "$node_bin" -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk).on("end", () => {
+  const blocked = new Set(["esg", "esg-candidate"]);
+  if (JSON.parse(input).some(entry => blocked.has(entry.name))) process.exit(1);
+});
+'
 RECOVERY_AUTHORITY=local-postgres-os "$node_bin" \
   "$backup_dir/recovery-point.cjs" restore "$backup_dir/production.env" "$backup_dir"
+
+# Compatibility for recovery points created before the PM2 config-name fix.
+if [ ! -s "$rollback_config" ]; then
+  legacy_rollback_config="$backup_dir/rollback.ecosystem.cjs"
+  test -f "$legacy_rollback_config"
+  test ! -L "$legacy_rollback_config"
+  install -m 600 -- "$legacy_rollback_config" "$rollback_config"
+fi
+test -f "$rollback_config"
+test ! -L "$rollback_config"
 pm2 delete esg || true
-pm2 start "$backup_dir/rollback.ecosystem.cjs" --only esg --update-env
+pm2 start "$rollback_config" --only esg --update-env
 pm2 save
 curl --fail --silent --show-error --retry 15 --retry-delay 2 http://127.0.0.1:5000/health
 ```
+
+The compatibility copy is only for older, already-verified recovery points whose manifest contains `rollback.ecosystem.cjs`. PM2 treats that historical filename as an application script; the copied `.config.cjs` suffix is required for it to load the exported `esg` process definition.
 
 The recovery helper verifies all SHA-256 checksums and the local PostgreSQL cluster identity, closes the database to the application, terminates remaining sessions, then drops and recreates the database from the create-capable archive. Recreating the database ensures objects introduced only by a failed migration cannot survive rollback and preserves database-level owner, locale, ACL, comment and configuration statements from the archive. It extracts evidence to a temporary directory, validates its manifest, and atomically restores the evidence root even if that root was removed. When a mismatched evidence root existed, it is retained with a `.failed-<timestamp>` suffix for forensic comparison.
 

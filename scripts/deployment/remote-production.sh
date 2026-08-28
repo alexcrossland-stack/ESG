@@ -44,6 +44,7 @@ wait_for_release() {
   local expected_sha="$3"
   local expected_scheduler="${4:-running}"
   local resolve_arg="${5:-}"
+  local pm2_process="${6:-}"
   local response_file
   response_file="$(mktemp)"
   for attempt in $(seq 1 45); do
@@ -71,41 +72,248 @@ NODE
     sleep 2
   done
   rm -f "${response_file}"
+  if [ "${pm2_process}" = "${PRIVATE_PROCESS_NAME}" ]; then
+    safe_candidate_startup_log_tail
+  elif [ -n "${pm2_process}" ]; then
+    safe_pm2_process_summary "${pm2_process}"
+  fi
   echo "::error::${name} did not become healthy" >&2
   return 1
+}
+
+safe_candidate_startup_log_tail() {
+  # Keep deployment diagnostics useful without copying historical production
+  # request data or unbounded PM2 output into the workflow log.
+  # JavaScript template literals must remain literal to Bash.
+  # shellcheck disable=SC2016
+  pm2 logs "${PRIVATE_PROCESS_NAME}" --err --lines 80 --nostream 2>&1 | "${NODE_BIN}" -e '
+let input = "";
+process.stdin.on("data", chunk => {
+  input = (input + chunk).slice(-65536);
+}).on("end", () => {
+  const categories = [
+    [/framework catalogue reconciliation failed/i, "framework catalogue reconciliation failed"],
+    [/required database indexes? (?:are )?missing|index reconciliation/i, "database index reconciliation failed"],
+    [/permission denied/i, "database or filesystem permission denied"],
+    [/password authentication failed/i, "database authentication failed"],
+    [/ECONNREFUSED|connection refused/i, "dependency connection refused"],
+    [/EADDRINUSE|address already in use/i, "candidate port already in use"],
+    [/out of memory|heap limit/i, "candidate memory exhaustion"],
+    [/\[Startup\] FATAL|\bFATAL\b/i, "uncategorised fatal startup error"],
+  ];
+  const matched = categories.filter(([pattern]) => pattern.test(input)).map(([, label]) => label);
+  const summary = matched.length > 0 ? [...new Set(matched)].join("; ") : "no recognised safe category";
+  process.stderr.write(`Candidate startup diagnostic categories: ${summary}\n`);
+});
+' || true
+}
+
+safe_pm2_process_summary() {
+  local name="$1"
+  # JavaScript template literals and optional chaining must remain literal to Bash.
+  # shellcheck disable=SC2016
+  pm2 jlist | PROCESS_NAME_TO_CHECK="${name}" "${NODE_BIN}" -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk).on("end", () => {
+  try {
+    const matches = JSON.parse(input).filter(entry => entry.name === process.env.PROCESS_NAME_TO_CHECK);
+    const summary = matches.map(entry => ({
+      name: entry.name,
+      status: entry.pm2_env?.status ?? null,
+      pid: entry.pid ?? null,
+      cwd: entry.pm2_env?.pm_cwd ?? null,
+      script: entry.pm2_env?.pm_exec_path ?? null,
+      interpreter: entry.pm2_env?.exec_interpreter ?? null,
+    }));
+    process.stderr.write(`PM2 process summary: ${JSON.stringify(summary)}\n`);
+  } catch {
+    process.stderr.write("PM2 process summary unavailable: invalid jlist output\n");
+    process.exitCode = 1;
+  }
+});
+' || true
 }
 
 assert_process_interpreter() {
   local name="$1"
   local expected="$2"
-  local process_pid
-  process_pid="$(pm2 jlist | PROCESS_NAME_TO_CHECK="${name}" "${NODE_BIN}" -e '
+  local expected_cwd="${3:-}"
+  local expected_script="${4:-}"
+  local process_details
+  # JavaScript template literals and optional chaining must remain literal to Bash.
+  # shellcheck disable=SC2016
+  if ! process_details="$(pm2 jlist | PROCESS_NAME_TO_CHECK="${name}" "${NODE_BIN}" -e '
 let input = "";
 process.stdin.on("data", chunk => input += chunk).on("end", () => {
-  const app = JSON.parse(input).find(entry => entry.name === process.env.PROCESS_NAME_TO_CHECK);
-  if (!app || !Number.isInteger(app.pid) || app.pid < 2) process.exit(1);
-  process.stdout.write(String(app.pid));
+  const matches = JSON.parse(input).filter(entry => entry.name === process.env.PROCESS_NAME_TO_CHECK);
+  if (matches.length !== 1) process.exit(1);
+  const app = matches[0];
+  if (app.pm2_env?.status !== "online" || !Number.isInteger(app.pid) || app.pid < 2) process.exit(1);
+  process.stdout.write(`${app.pid}\n${app.pm2_env?.pm_cwd ?? ""}\n${app.pm2_env?.pm_exec_path ?? ""}\n`);
 });
-')"
-  [[ "${process_pid}" =~ ^[0-9]+$ ]]
-  local actual
-  actual="$(readlink -f "/proc/${process_pid}/exe")"
-  test -x "${actual}"
-  test "${actual}" = "${expected}" || {
-    echo "::error::${name} is running under ${actual}, expected ${expected}" >&2
+')"; then
+    echo "::error::${name} does not have exactly one online PM2 process with a live PID" >&2
+    safe_pm2_process_summary "${name}"
     return 1
-  }
+  fi
+  local -a process_identity
+  mapfile -t process_identity <<< "${process_details}"
+  local process_pid="${process_identity[0]:-}"
+  local actual_cwd="${process_identity[1]:-}"
+  local actual_script="${process_identity[2]:-}"
+  if ! [[ "${process_pid}" =~ ^[0-9]+$ ]]; then
+    echo "::error::${name} has an invalid PM2 PID" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
+  if [ -n "${expected_cwd}" ] && [ "${actual_cwd}" != "${expected_cwd}" ]; then
+    echo "::error::${name} uses cwd ${actual_cwd}, expected ${expected_cwd}" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
+  if [ -n "${expected_script}" ] && [ "${actual_script}" != "${expected_script}" ]; then
+    echo "::error::${name} uses script ${actual_script}, expected ${expected_script}" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
+  local actual
+  if ! actual="$(readlink -f "/proc/${process_pid}/exe")"; then
+    echo "::error::${name} interpreter could not be resolved from PID ${process_pid}" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
+  if [ ! -x "${actual}" ]; then
+    echo "::error::${name} resolved interpreter is not executable: ${actual}" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
+  if [ "${actual}" != "${expected}" ]; then
+    echo "::error::${name} is running under ${actual}, expected ${expected}" >&2
+    safe_pm2_process_summary "${name}"
+    return 1
+  fi
   echo "${name} uses pinned interpreter ${expected}"
 }
 
-start_previous_release() {
-  if pm2 describe "${PROCESS_NAME}" >/dev/null 2>&1; then
-    pm2 restart "${PROCESS_NAME}"
-  else
-    DEPLOY_PROCESS_NAME="${PROCESS_NAME}" pm2 start "${BACKUP_DIR}/rollback.ecosystem.cjs" --only "${PROCESS_NAME}" --update-env
+quiesce_processes_for_recovery() {
+  local process_pids
+  # JavaScript template literals must remain literal to Bash.
+  # shellcheck disable=SC2016
+  if ! process_pids="$(pm2 jlist | PRIVATE_PROCESS_NAME="${PRIVATE_PROCESS_NAME}" PROCESS_NAME="${PROCESS_NAME}" "${NODE_BIN}" -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk).on("end", () => {
+  const names = new Set([process.env.PRIVATE_PROCESS_NAME, process.env.PROCESS_NAME]);
+  const matches = JSON.parse(input).filter(entry => names.has(entry.name));
+  for (const entry of matches) {
+    if (Number.isInteger(entry.pid) && entry.pid > 1) process.stdout.write(`${entry.pid}\n`);
+  }
+});
+')"; then
+    echo "::error::Could not identify candidate processes before recovery" >&2
+    safe_pm2_process_summary "${PRIVATE_PROCESS_NAME}"
+    safe_pm2_process_summary "${PROCESS_NAME}"
+    return 1
   fi
-  assert_process_interpreter "${PROCESS_NAME}" "${PREVIOUS_INTERPRETER}"
-  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running"
+
+  local process
+  for process in "${PRIVATE_PROCESS_NAME}" "${PROCESS_NAME}"; do
+    if pm2 describe "${process}" >/dev/null 2>&1; then
+      if ! pm2 delete "${process}" >/dev/null; then
+        echo "::error::Could not delete ${process} before recovery" >&2
+        safe_pm2_process_summary "${process}"
+        return 1
+      fi
+    fi
+  done
+
+  local process_pid
+  while IFS= read -r process_pid; do
+    [ -n "${process_pid}" ] || continue
+    if kill -0 "${process_pid}" 2>/dev/null; then
+      echo "::error::Candidate PID ${process_pid} survived PM2 deletion; refusing database recovery" >&2
+      return 1
+    fi
+  done <<< "${process_pids}"
+
+  if ! pm2 jlist | PRIVATE_PROCESS_NAME="${PRIVATE_PROCESS_NAME}" PROCESS_NAME="${PROCESS_NAME}" "${NODE_BIN}" -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk).on("end", () => {
+  const names = new Set([process.env.PRIVATE_PROCESS_NAME, process.env.PROCESS_NAME]);
+  const matches = JSON.parse(input).filter(entry => names.has(entry.name));
+  if (matches.length > 0) process.exit(1);
+});
+'; then
+    echo "::error::PM2 still contains a candidate process definition; refusing database recovery" >&2
+    safe_pm2_process_summary "${PRIVATE_PROCESS_NAME}"
+    safe_pm2_process_summary "${PROCESS_NAME}"
+    return 1
+  fi
+  echo "Candidate processes are quiescent before recovery"
+}
+
+persist_previous_release_state() {
+  local rollback_link="/root/.esg-current.rollback.${RUN_INSTANCE}"
+  if ! ln -s "${PREVIOUS_CWD}" "${rollback_link}"; then
+    echo "::error::Could not stage the previous release pointer" >&2
+    return 1
+  fi
+  if ! mv -Tf "${rollback_link}" /root/esg-current; then
+    rm -f "${rollback_link}"
+    echo "::error::Could not restore the previous release pointer" >&2
+    return 1
+  fi
+  local current_target
+  local previous_target
+  if ! current_target="$(readlink -f /root/esg-current)" || ! previous_target="$(readlink -f "${PREVIOUS_CWD}")" || [ "${current_target}" != "${previous_target}" ]; then
+    echo "::error::The restored release pointer does not resolve to ${PREVIOUS_CWD}" >&2
+    return 1
+  fi
+  if ! pm2 save >/dev/null; then
+    echo "::error::Could not persist the recovered PM2 process list" >&2
+    return 1
+  fi
+  if ! PM2_DUMP="${PM2_HOME}/dump.pm2" EXPECTED_CWD="${PREVIOUS_CWD}" EXPECTED_SCRIPT="${PREVIOUS_SCRIPT}" EXPECTED_INTERPRETER="${PREVIOUS_INTERPRETER}" PROCESS_NAME="${PROCESS_NAME}" PRIVATE_PROCESS_NAME="${PRIVATE_PROCESS_NAME}" "${NODE_BIN}" -e '
+const fs = require("node:fs");
+const rows = JSON.parse(fs.readFileSync(process.env.PM2_DUMP, "utf8"));
+const matches = rows.filter(entry => entry.name === process.env.PROCESS_NAME);
+if (matches.length !== 1) process.exit(1);
+const app = matches[0];
+if (app.status !== "online") process.exit(1);
+if (app.pm_cwd !== process.env.EXPECTED_CWD) process.exit(1);
+if (app.pm_exec_path !== process.env.EXPECTED_SCRIPT) process.exit(1);
+if (app.exec_interpreter !== process.env.EXPECTED_INTERPRETER) process.exit(1);
+if (rows.some(entry => entry.name === process.env.PRIVATE_PROCESS_NAME)) process.exit(1);
+'; then
+    echo "::error::The saved PM2 state does not match the recovered previous release" >&2
+    return 1
+  fi
+  echo "Previous release pointer and PM2 state were durably recovered"
+}
+
+start_previous_release() {
+  if [ "${BACKUP_READY}" -eq 1 ]; then
+    if pm2 describe "${PROCESS_NAME}" >/dev/null 2>&1 && ! pm2 delete "${PROCESS_NAME}" >/dev/null; then
+      safe_pm2_process_summary "${PROCESS_NAME}"
+      return 1
+    fi
+    if ! DEPLOY_PROCESS_NAME="${PROCESS_NAME}" pm2 start "${BACKUP_DIR}/rollback.ecosystem.config.cjs" --only "${PROCESS_NAME}" --update-env; then
+      safe_pm2_process_summary "${PROCESS_NAME}"
+      return 1
+    fi
+  elif pm2 describe "${PROCESS_NAME}" >/dev/null 2>&1; then
+    if ! pm2 restart "${PROCESS_NAME}"; then
+      safe_pm2_process_summary "${PROCESS_NAME}"
+      return 1
+    fi
+  else
+    echo "::error::${PROCESS_NAME} cannot be recovered before its coordinated recovery point is ready" >&2
+    safe_pm2_process_summary "${PROCESS_NAME}"
+    return 1
+  fi
+  if ! assert_process_interpreter "${PROCESS_NAME}" "${PREVIOUS_INTERPRETER}" "${PREVIOUS_CWD}" "${PREVIOUS_SCRIPT}"; then
+    return 1
+  fi
+  wait_for_release "previous production recovery" "http://127.0.0.1:5000/health" "${PREVIOUS_SHA}" "running" "" "${PROCESS_NAME}"
 }
 
 handle_failure() {
@@ -123,16 +331,20 @@ handle_failure() {
   # writes on the new release is the only safe direction. A signal in the tiny
   # lock-removal window must never restore an older database underneath it.
   if [ "${CUTOVER_COMMITTED}" -eq 1 ]; then
-    rm -f "${WRITE_LOCK_FILE:-}"
+    if ! rm -f "${WRITE_LOCK_FILE:-}"; then
+      echo "::error::CRITICAL: cutover committed but the production write lock could not be removed" >&2
+      exit 73
+    fi
     echo "::error::Cutover was already committed; the candidate remains active and was not rolled back" >&2
     exit "${exit_code}"
   fi
 
-  pm2 delete "${PRIVATE_PROCESS_NAME}" >/dev/null 2>&1
-
   if [ "${OLD_STOPPED}" -eq 1 ]; then
     if [ "${MIGRATION_STARTED}" -eq 1 ] && [ "${BACKUP_READY}" -eq 1 ]; then
-      pm2 delete "${PROCESS_NAME}" >/dev/null 2>&1
+      if ! quiesce_processes_for_recovery; then
+        echo "::error::CRITICAL: candidate processes could not be stopped; database/evidence recovery was not attempted" >&2
+        exit 69
+      fi
       DEPLOY_STAGE="restoring coordinated production recovery point"
       if ! "${NODE_BIN}" "${RECOVERY_HELPER}" restore "${CANDIDATE_DIR}/.env" "${BACKUP_DIR}"; then
         echo "::error::CRITICAL: automatic database/evidence restore failed; the previous application will remain stopped" >&2
@@ -144,10 +356,10 @@ handle_failure() {
       echo "::error::CRITICAL: the previous production release could not be restarted" >&2
       exit 71
     fi
-    rollback_link="/root/.esg-current.rollback.${RUN_INSTANCE}"
-    ln -s "${PREVIOUS_CWD}" "${rollback_link}"
-    mv -Tf "${rollback_link}" /root/esg-current
-    pm2 save >/dev/null 2>&1
+    if ! persist_previous_release_state; then
+      echo "::error::CRITICAL: the previous release is live but its release pointer or PM2 state was not persisted" >&2
+      exit 72
+    fi
   fi
 
   exit "${exit_code}"
@@ -217,6 +429,7 @@ for command in curl df flock git node pg_dump pg_restore psql createdb dropdb pm
   command -v "${command}" >/dev/null || { echo "::error::Missing required command: ${command}" >&2; exit 1; }
 done
 test -d "${PM2_HOME}"
+pm2 --version
 test -d "${BASE_REPO}/.git"
 exec 9>/root/esg-production-deploy.lock
 if ! flock -n 9; then
@@ -350,11 +563,11 @@ const { parseRuntimeEnv } = require("./runtime-env.cjs");
 const env = parseRuntimeEnv(fs.readFileSync(__dirname + "/production.env", "utf8"));
 module.exports = { apps: [{ name: "esg", script: ${JSON.stringify(process.env.PREVIOUS_SCRIPT)}, cwd: ${JSON.stringify(process.env.PREVIOUS_CWD)}, interpreter: ${JSON.stringify(process.env.PREVIOUS_INTERPRETER)}, env: { ...env, NODE_ENV: "production", RELEASE_SHA: ${JSON.stringify(process.env.PREVIOUS_SHA)} } }] };
 `;
-fs.writeFileSync(path.join(backup, "rollback.ecosystem.cjs"), content, { mode: 0o600 });
+fs.writeFileSync(path.join(backup, "rollback.ecosystem.config.cjs"), content, { mode: 0o600 });
 NODE
 (
   cd "${BACKUP_DIR}"
-  sha256sum runtime-env.cjs recovery-point.cjs rollback.ecosystem.cjs >> SHA256SUMS
+  sha256sum runtime-env.cjs recovery-point.cjs rollback.ecosystem.config.cjs >> SHA256SUMS
 )
 chmod 600 "${BACKUP_DIR}/SHA256SUMS"
 printf '%s\n' "${BACKUP_DIR}" > "${BACKUPS_ROOT}/latest"
@@ -365,8 +578,8 @@ log "${DEPLOY_STAGE}"
 MIGRATION_STARTED=1
 DEPLOY_PROCESS_NAME="${PRIVATE_PROCESS_NAME}" DEPLOY_PORT_OVERRIDE="5001" DEPLOYMENT_WRITE_LOCK_FILE="${WRITE_LOCK_FILE}" DEPLOYMENT_VALIDATION="1" \
   DEPLOY_NODE_INTERPRETER="${NODE_BIN}" pm2 start "${CANDIDATE_DIR}/ecosystem.config.cjs" --only "${PRIVATE_PROCESS_NAME}" --update-env
-assert_process_interpreter "${PRIVATE_PROCESS_NAME}" "${NODE_BIN}"
-wait_for_release "private candidate health" "http://127.0.0.1:5001/health" "${DEPLOY_SHA}" "stopped"
+assert_process_interpreter "${PRIVATE_PROCESS_NAME}" "${NODE_BIN}" "${CANDIDATE_DIR}" "${CANDIDATE_DIR}/dist/index.cjs"
+wait_for_release "private candidate health" "http://127.0.0.1:5001/health" "${DEPLOY_SHA}" "stopped" "" "${PRIVATE_PROCESS_NAME}"
 curl --fail --silent --show-error --max-time 15 --output /dev/null "http://127.0.0.1:5001/"
 
 DEPLOY_STAGE="switching production process to verified candidate"
@@ -375,15 +588,16 @@ pm2 delete "${PRIVATE_PROCESS_NAME}"
 pm2 delete "${PROCESS_NAME}"
 DEPLOY_PROCESS_NAME="${PROCESS_NAME}" DEPLOY_PORT_OVERRIDE="5000" DEPLOYMENT_WRITE_LOCK_FILE="${WRITE_LOCK_FILE}" DEPLOY_NODE_INTERPRETER="${NODE_BIN}" \
   pm2 start "${CANDIDATE_DIR}/ecosystem.config.cjs" --only "${PROCESS_NAME}" --update-env
-assert_process_interpreter "${PROCESS_NAME}" "${NODE_BIN}"
-wait_for_release "production process health" "http://127.0.0.1:5000/health" "${DEPLOY_SHA}" "running"
+assert_process_interpreter "${PROCESS_NAME}" "${NODE_BIN}" "${CANDIDATE_DIR}" "${CANDIDATE_DIR}/dist/index.cjs"
+wait_for_release "production process health" "http://127.0.0.1:5000/health" "${DEPLOY_SHA}" "running" "" "${PROCESS_NAME}"
 curl --fail --silent --show-error --max-time 15 --output /dev/null "http://127.0.0.1:5000/"
 wait_for_release \
   "local reverse-proxy health" \
   "${PUBLIC_ORIGIN}/health" \
   "${DEPLOY_SHA}" \
   "running" \
-  "www.simplyesg.co.uk:443:127.0.0.1"
+  "www.simplyesg.co.uk:443:127.0.0.1" \
+  "${PROCESS_NAME}"
 
 DEPLOY_STAGE="recording atomic release pointer"
 log "${DEPLOY_STAGE}"

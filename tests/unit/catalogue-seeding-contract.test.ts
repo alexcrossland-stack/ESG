@@ -107,6 +107,11 @@ const [schemaSource, ensureIndexesSource] = await Promise.all([
 ]);
 assert.match(schemaSource, /idx_emission_factors_country_year_name_unique/);
 assert.match(ensureIndexesSource, /CREATE UNIQUE INDEX IF NOT EXISTS idx_emission_factors_country_year_name_unique/);
+assert.match(schemaSource, /idx_mfm_unique/);
+assert.match(ensureIndexesSource, /CREATE INDEX IF NOT EXISTS idx_mfm_metric_def/);
+assert.match(ensureIndexesSource, /CREATE INDEX IF NOT EXISTS idx_mfm_req/);
+assert.match(ensureIndexesSource, /CREATE UNIQUE INDEX IF NOT EXISTS idx_mfm_unique/);
+assert.match(ensureIndexesSource, /idx_mfm_unique: \["UNIQUE INDEX", "metric_framework_mappings"/);
 assert.doesNotMatch(ensureIndexesSource, /try\s*\{\s*await seedMetricDefinitions\(\)/);
 
 console.log("catalogue seeding contract tests passed");

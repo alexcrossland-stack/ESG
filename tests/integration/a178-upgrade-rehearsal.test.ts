@@ -20,6 +20,7 @@ import {
 } from "../../server/seed-metric-definitions";
 
 const LEGACY_RELEASE_SHA = "a178ae2006be15edbf6e09eef46b0a4afa6a8f1b";
+const LEGACY_MAPPING_COUNT = 72;
 const DATABASE_URL = process.env.DATABASE_URL;
 const resetConfirmation = process.env.UPGRADE_REHEARSAL_DB_NAME;
 const cwd = process.cwd();
@@ -189,6 +190,16 @@ async function installA178Fixture(): Promise<void> {
       ALTER TABLE carbon_calculations
         ALTER COLUMN factor_year SET DEFAULT 2024;
       DROP INDEX IF EXISTS idx_emission_factors_country_year_name_unique;
+      DELETE FROM metric_framework_mappings
+      WHERE id NOT IN (
+        SELECT id
+        FROM metric_framework_mappings
+        ORDER BY metric_definition_id, framework_requirement_id
+        LIMIT ${LEGACY_MAPPING_COUNT}
+      );
+      DROP INDEX IF EXISTS idx_mfm_unique;
+      DROP INDEX IF EXISTS idx_mfm_metric_def;
+      DROP INDEX IF EXISTS idx_mfm_req;
       TRUNCATE TABLE emission_factors;
     `);
     await client.query(
@@ -202,8 +213,33 @@ async function installA178Fixture(): Promise<void> {
         (id, name, category, country, unit, factor, source_label, factor_year, version, methodology)
        VALUES
         ('legacy-stale-grid', 'Grid Electricity', 'legacy', 'UK', 'legacy-unit', 999, 'Legacy source', 2026, 1, 'Legacy stale row'),
-        ('legacy-2024-grid', 'Grid Electricity', 'electricity', 'UK', 'kgCO2e/kWh', 0.207074, 'UK Government 2024', 2024, 1, 'Legacy 2024 row')`,
+       ('legacy-2024-grid', 'Grid Electricity', 'electricity', 'UK', 'kgCO2e/kWh', 0.207074, 'UK Government 2024', 2024, 1, 'Legacy 2024 row')`,
     );
+    const mappingFixture = await client.query<{ mapping_count: string; duplicate_count: string }>(`
+      SELECT COUNT(*)::text AS mapping_count,
+             (
+               SELECT COUNT(*)::text
+               FROM (
+                 SELECT metric_definition_id, framework_requirement_id
+                 FROM metric_framework_mappings
+                 GROUP BY metric_definition_id, framework_requirement_id
+                 HAVING COUNT(*) > 1
+               ) duplicates
+             ) AS duplicate_count
+      FROM metric_framework_mappings
+    `);
+    assert.deepEqual(mappingFixture.rows, [{
+      mapping_count: String(LEGACY_MAPPING_COUNT),
+      duplicate_count: "0",
+    }]);
+    const fixtureIndexes = await client.query<{ indexname: string }>(`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'metric_framework_mappings'
+      ORDER BY indexname
+    `);
+    assert.deepEqual(fixtureIndexes.rows.map((row) => row.indexname), ["metric_framework_mappings_pkey"]);
   } finally {
     await client.end();
   }
@@ -357,6 +393,32 @@ async function validateUpgradedDatabase(): Promise<CatalogueSnapshot> {
       metricDefinitions: metricResult.rows,
       mappings: mappingResult.rows,
     }));
+    const mappingIndexes = await client.query<{ indexname: string; indexdef: string }>(`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'metric_framework_mappings'
+      ORDER BY indexname
+    `);
+    assert.deepEqual(
+      mappingIndexes.rows.map((row) => row.indexname),
+      ["idx_mfm_metric_def", "idx_mfm_req", "idx_mfm_unique", "metric_framework_mappings_pkey"],
+    );
+    const mappingConflictIndex = mappingIndexes.rows.find((row) => row.indexname === "idx_mfm_unique")?.indexdef ?? "";
+    assert.match(mappingConflictIndex, /UNIQUE INDEX/);
+    assert.match(mappingConflictIndex, /\(metric_definition_id, framework_requirement_id\)/);
+    await assert.rejects(
+      client.query(`
+        INSERT INTO metric_framework_mappings
+          (metric_definition_id, framework_requirement_id, mapping_strength, notes)
+        SELECT metric_definition_id, framework_requirement_id, mapping_strength, notes
+        FROM metric_framework_mappings
+        ORDER BY metric_definition_id, framework_requirement_id
+        LIMIT 1
+      `),
+      (error: unknown) => (error as { code?: string }).code === "23505",
+      "the framework-mapping natural key must reject duplicates",
+    );
 
     return {
       actionRow: actionResult.rows[0],
@@ -375,6 +437,8 @@ console.log(`Disposable PostgreSQL upgrade rehearsal: ${LEGACY_RELEASE_SHA} -> c
 console.log(`Target: ${parsedDatabaseUrl.hostname}:${parsedDatabaseUrl.port || "5432"}/${databaseName}`);
 
 await resetAndCreateCurrentSchema();
+const fixtureSeedBoot = await bootApplication(0);
+assert.equal(fixtureSeedBoot.status, 401);
 await installA178Fixture();
 
 const firstBoot = await bootApplication(1);

@@ -77,6 +77,10 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_metric_values_metric_def_id ON metric_values(metric_definition_id)",
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_org_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end) WHERE site_id IS NULL",
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_definition_values_business_metric_period_site_unique ON metric_definition_values(business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id) WHERE site_id IS NOT NULL",
+  // ESG Phase 2: framework catalogue reconciliation conflict targets
+  "CREATE INDEX IF NOT EXISTS idx_mfm_metric_def ON metric_framework_mappings(metric_definition_id)",
+  "CREATE INDEX IF NOT EXISTS idx_mfm_req ON metric_framework_mappings(framework_requirement_id)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_mfm_unique ON metric_framework_mappings(metric_definition_id, framework_requirement_id)",
 ];
 
 const REQUIRED_UNIQUE_INDEXES = [
@@ -85,6 +89,7 @@ const REQUIRED_UNIQUE_INDEXES = [
   "idx_metric_values_metric_period_site_unique",
   "idx_metric_definition_values_business_metric_period_org_unique",
   "idx_metric_definition_values_business_metric_period_site_unique",
+  "idx_mfm_unique",
 ];
 
 async function verifyRequiredUniqueIndexes() {
@@ -97,7 +102,8 @@ async function verifyRequiredUniqueIndexes() {
         'idx_metric_values_metric_period_org_unique',
         'idx_metric_values_metric_period_site_unique',
         'idx_metric_definition_values_business_metric_period_org_unique',
-        'idx_metric_definition_values_business_metric_period_site_unique'
+        'idx_metric_definition_values_business_metric_period_site_unique',
+        'idx_mfm_unique'
       )
   `);
   const rows = ((result as any).rows ?? []) as Array<{ indexname: string; indexdef: string }>;
@@ -116,6 +122,7 @@ async function verifyRequiredUniqueIndexes() {
     idx_metric_values_metric_period_site_unique: ["UNIQUE INDEX", "metric_values", "(metric_id, period, site_id)", "WHERE (site_id IS NOT NULL)"],
     idx_metric_definition_values_business_metric_period_org_unique: ["UNIQUE INDEX", "metric_definition_values", "(business_id, metric_definition_id, reporting_period_start, reporting_period_end)", "WHERE (site_id IS NULL)"],
     idx_metric_definition_values_business_metric_period_site_unique: ["UNIQUE INDEX", "metric_definition_values", "(business_id, metric_definition_id, reporting_period_start, reporting_period_end, site_id)", "WHERE (site_id IS NOT NULL)"],
+    idx_mfm_unique: ["UNIQUE INDEX", "metric_framework_mappings", "(metric_definition_id, framework_requirement_id)"],
   };
 
   const mismatched = Object.entries(expectedFragments)
