@@ -172,7 +172,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            Coverage includes every active metric. Guided inputs in Data &amp; evidence are the quickest first step, not the full checklist.
+            Coverage includes every active metric. Use Update data in Metrics &amp; data for a guided first step or a spreadsheet import.
           </p>
         </CardContent>
       </Card>

@@ -141,6 +141,23 @@ export type MetricValueScope =
   | { scope: "organisation" }
   | { scope: "site"; siteId: string };
 
+export const USABLE_METRIC_EVIDENCE_STATUSES = new Set<string>(["uploaded", "available", "reviewed", "approved"]);
+
+/**
+ * Evidence provides assurance only while it is in an authoritative usable
+ * state and has not passed its expiry date. Keep this aligned with the SQL
+ * predicates used by transactional metric-value writers.
+ */
+export function isUsableMetricEvidenceFile(
+  evidence: Pick<EvidenceFile, "evidenceStatus" | "expiryDate">,
+  now: Date = new Date(),
+): boolean {
+  if (!USABLE_METRIC_EVIDENCE_STATUSES.has(evidence.evidenceStatus ?? "")) return false;
+  if (!evidence.expiryDate) return true;
+  const expiryTime = new Date(evidence.expiryDate).getTime();
+  return Number.isFinite(expiryTime) && expiryTime >= now.getTime();
+}
+
 export type CanonicalCalculationMutationResult = {
   outcome: "created" | "updated" | "unchanged" | "cleared" | "missing" | "protected";
   value: MetricDefinitionValue | null;
@@ -1382,6 +1399,7 @@ export class DatabaseStorage implements IStorage {
           return existing;
         }
         const protection = await assessMetricValueProtectionWithPgClient(client as any, {
+          companyId,
           metricValueId: existing.id,
           lockForUpdate: true,
         });
@@ -1781,7 +1799,10 @@ export class DatabaseStorage implements IStorage {
       evidenceConditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
     }
     const allEvidence = await db.select().from(evidenceFiles).where(and(...evidenceConditions));
+    const now = new Date();
+    const usableEvidence = allEvidence.filter((e) => isUsableMetricEvidenceFile(e, now));
     const allMetrics = await db.select({ id: metrics.id, name: metrics.name, category: metrics.category }).from(metrics).where(eq(metrics.companyId, companyId));
+    const allMetricIds = new Set(allMetrics.map((metric) => metric.id));
 
     const metricValueConditions: any[] = [eq(metrics.companyId, companyId)];
     if (siteId !== undefined) {
@@ -1792,6 +1813,10 @@ export class DatabaseStorage implements IStorage {
       metricId: metricValues.metricId,
       period: metricValues.period,
       dataSourceType: metricValues.dataSourceType,
+      hasLegacyEvidence: sql<boolean>`EXISTS (
+        SELECT 1 FROM ${metricEvidence}
+        WHERE ${metricEvidence.metricValueId} = ${metricValues.id}
+      )`,
     }).from(metricValues)
       .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
       .where(and(...metricValueConditions));
@@ -1800,22 +1825,22 @@ export class DatabaseStorage implements IStorage {
       ? allMetricValues.filter(v => v.period === period)
       : allMetricValues;
 
-    const evidenceByMetricValue = allEvidence.filter(e => e.linkedModule === "metric_value");
+    const evidenceByMetricValue = usableEvidence.filter(e => e.linkedModule === "metric_value");
     const evidencedEntityIds = new Set(evidenceByMetricValue.map(e => e.linkedEntityId));
     const directEvidenceMetricIds = new Set(
-      allEvidence
+      usableEvidence
         .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
         .filter(Boolean)
     );
 
     const metricsWithEvidence = new Set<string>();
     for (const mv of relevantValues) {
-      if (evidencedEntityIds.has(mv.id) || mv.dataSourceType === "evidenced") {
+      if (evidencedEntityIds.has(mv.id) || mv.hasLegacyEvidence === true) {
         metricsWithEvidence.add(mv.metricId);
       }
     }
     directEvidenceMetricIds.forEach((metricId) => {
-      metricsWithEvidence.add(metricId as string);
+      if (allMetricIds.has(metricId as string)) metricsWithEvidence.add(metricId as string);
     });
 
     const metricCoverage = allMetrics.map(m => {
@@ -1831,14 +1856,21 @@ export class DatabaseStorage implements IStorage {
       };
     });
 
-    const expiredEvidence = allEvidence.filter(e => e.expiryDate && new Date(e.expiryDate) < new Date());
+    const expiredEvidence = allEvidence.filter((e) => (
+      e.evidenceStatus === "expired"
+      || Boolean(e.expiryDate && new Date(e.expiryDate).getTime() < now.getTime())
+    ));
     const periodCoverage: Record<string, number> = {};
-    allEvidence.filter(e => e.linkedPeriod).forEach(e => {
+    usableEvidence.filter(e => e.linkedPeriod).forEach(e => {
       periodCoverage[e.linkedPeriod!] = (periodCoverage[e.linkedPeriod!] || 0) + 1;
     });
 
     return {
+      // Keep the file inventory separate from assurance coverage. Pending,
+      // rejected and expired records remain real documents (and still count
+      // towards storage/plan limits), but cannot evidence a metric.
       totalEvidence: allEvidence.length,
+      usableEvidenceCount: usableEvidence.length,
       evidencedCount: metricsWithEvidence.size,
       totalMetrics: allMetrics.length,
       coveragePercent: allMetrics.length > 0 ? Math.round((metricsWithEvidence.size / allMetrics.length) * 100) : 0,
@@ -1846,9 +1878,14 @@ export class DatabaseStorage implements IStorage {
       metricCoverage,
       periodCoverage,
       byStatus: {
+        pending: allEvidence.filter(e => e.evidenceStatus === "pending").length,
         uploaded: allEvidence.filter(e => e.evidenceStatus === "uploaded").length,
+        available: allEvidence.filter(e => e.evidenceStatus === "available").length,
         reviewed: allEvidence.filter(e => e.evidenceStatus === "reviewed").length,
         approved: allEvidence.filter(e => e.evidenceStatus === "approved").length,
+        quarantined: allEvidence.filter(e => e.evidenceStatus === "quarantined").length,
+        rejected: allEvidence.filter(e => e.evidenceStatus === "rejected").length,
+        deleted: allEvidence.filter(e => e.evidenceStatus === "deleted").length,
         expired: expiredEvidence.length,
       },
     };

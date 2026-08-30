@@ -24,7 +24,10 @@ import { cn } from "@/lib/utils";
 import { EsgStatusBadge, EsgStatusCard, type EsgStatusData } from "@/components/esg-status-badge";
 import {
   buildOnboardingMetricSubmission,
+  formatOnboardingMetricPeriod,
   isEditableStarterMetric,
+  resolveOnboardingMetricPeriod,
+  resolveOnboardingReportingRange,
   selectEditableStarterMetrics,
   type LabelledOnboardingMetric,
   type MetricLabel,
@@ -279,7 +282,13 @@ export default function Onboarding() {
   } = useQuery({
     queryKey: ["/api/reports/preflight", defaultPeriod],
     queryFn: async () => {
-      const r = await fetch(`/api/reports/preflight?period=${defaultPeriod}`);
+      const reportingRange = resolveOnboardingReportingRange(defaultPeriod);
+      const params = new URLSearchParams({
+        period: defaultPeriod,
+        dateFrom: reportingRange.dateFrom,
+        dateTo: reportingRange.dateTo,
+      });
+      const r = await fetch(`/api/reports/preflight?${params.toString()}`);
       const json = await r.json();
       if (!r.ok) {
         const e = new Error(json.error || "Preflight check failed");
@@ -384,14 +393,17 @@ export default function Onboarding() {
         value.trim() !== "" && !savedMetricIds.has(metricId)
       ));
       const results = await Promise.allSettled(
-        entries.map(([metricId, value]) =>
-          dataMutation.mutateAsync(buildOnboardingMetricSubmission(
+        entries.map(([metricId, value]) => {
+          const metric = essentialMetrics.find((candidate) => candidate.id === metricId);
+          const metricPeriod = resolveOnboardingMetricPeriod(defaultPeriod, metric?.frequency);
+
+          return dataMutation.mutateAsync(buildOnboardingMetricSubmission(
             metricId,
             value,
-            defaultPeriod,
+            metricPeriod,
             dataSourceTypes[metricId] ?? "estimated",
-          ))
-        )
+          ));
+        })
       );
       const saved = entries
         .filter((_, i) => results[i].status === "fulfilled")
@@ -1042,7 +1054,7 @@ function Step4DataEntry({
         <FileText className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
         <p className="text-xs text-muted-foreground">
           Reporting year: <strong>{period}</strong> · Enter figures from an invoice, bill, payroll record, account or spreadsheet.
-          Mark each figure as actual or estimated so its confidence is preserved.
+          We use the final matching period in that year for each metric. Mark each figure as actual or estimated so its confidence is preserved.
         </p>
       </div>
 
@@ -1069,6 +1081,12 @@ function Step4DataEntry({
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div>
                   <p className="text-sm font-medium text-foreground">{m.name}</p>
+                  <p
+                    className="text-xs text-muted-foreground mt-0.5"
+                    data-testid={`text-metric-period-${m.id}`}
+                  >
+                    Period: {formatOnboardingMetricPeriod(period, m.frequency)}
+                  </p>
                   {m.helpText && (
                     <p className="text-xs text-muted-foreground mt-0.5">{m.helpText}</p>
                   )}

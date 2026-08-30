@@ -4,7 +4,7 @@
  * Tests real browser interactions for core admin workflows:
  * 1. Dashboard loads for a fully-onboarded admin (activation checklist or main content)
  * 2. Dashboard CTA "Enter data" link navigates to the data-entry page
- * 3. Admin enters a metric value via the Manual Entry tab
+ * 3. Admin opens a tracked metric and enters a value
  * 4. Admin generates an ESG report and preview or confirmation appears
  *
  * All tests use the admin storageState pre-seeded by global-setup so they run
@@ -81,7 +81,7 @@ test.describe("Admin journeys", () => {
     await context.close();
   });
 
-  test("admin enters first metric value via Manual Entry UI", async ({ browser }) => {
+  test("admin opens the first editable metric and enters a value", async ({ browser }) => {
     const { context, page } = await makeAdminContext(browser);
 
     await page.goto("/data-entry");
@@ -89,10 +89,12 @@ test.describe("Admin journeys", () => {
 
     await expect(page).not.toHaveURL(/\/auth/, { timeout: 10000 });
 
-    const manualTab = page.getByTestId("tab-manual-entry");
-    await expect(manualTab).toBeVisible({ timeout: 10000 });
-    await manualTab.click();
-    await page.waitForTimeout(1500);
+    const firstEditableMetric = page.locator('[data-testid^="button-open-metric-"]')
+      .filter({ hasText: /^(Add data|Update)$/ })
+      .first();
+    await expect(firstEditableMetric).toBeVisible({ timeout: 10000 });
+    await firstEditableMetric.click();
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible();
 
     const firstInput = page.locator('[data-testid^="input-manual-"]').first();
     await expect(firstInput).toBeVisible({ timeout: 10000 });

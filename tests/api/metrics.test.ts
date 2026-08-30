@@ -24,7 +24,7 @@ function fail(name: string, detail?: string) {
 
 async function run(tenants: SeededTenants): Promise<void> {
   const { tenantA, tenantB } = tenants;
-  const PERIOD = "2024-Q1";
+  const PERIOD = "2024-01";
   const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
 
   async function uploadMetricValueWithAttachment(opts: {
@@ -181,7 +181,7 @@ async function run(tenants: SeededTenants): Promise<void> {
       const saveRes = await uploadMetricValueWithAttachment({
         token: tenantA.adminToken,
         metricId: testMetricId,
-        period: "2024-Q2",
+        period: "2024-02",
         value: "51.25",
         notes: "Multipart evidence upload test",
         filename: "metric-evidence.txt",
@@ -223,7 +223,7 @@ async function run(tenants: SeededTenants): Promise<void> {
       const failedSave = await uploadMetricValueWithAttachment({
         token: tenantA.adminToken,
         metricId: testMetricId,
-        period: "2024-Q3",
+        period: "2024-03",
         value: "61.00",
         notes: "Should fail",
         filename: "blocked-script.sh",
@@ -237,7 +237,7 @@ async function run(tenants: SeededTenants): Promise<void> {
           fail(name, `values status=${valuesRes.status}`);
         } else {
           const values = JSON.parse(valuesRes.body) as Array<{ period: string }>;
-          const leaked = values.find((row) => row.period === "2024-Q3");
+          const leaked = values.find((row) => row.period === "2024-03");
           if (leaked) fail(name, "metric value persisted despite attachment failure");
           else pass(name);
         }
@@ -248,7 +248,7 @@ async function run(tenants: SeededTenants): Promise<void> {
   // ── 4d. Attachment metadata is present on normal reload path ─────────────
   {
     const name = "GET /api/data-entry/:period includes attachment metadata on reload";
-    const period = "2024-Q2";
+    const period = "2024-02";
     if (!multipartMetricValueId) {
       fail(name, "skipped — no multipart metric value id");
     } else {
@@ -274,7 +274,7 @@ async function run(tenants: SeededTenants): Promise<void> {
       const appendRes = await uploadMetricValueWithAttachment({
         token: tenantA.adminToken,
         metricId: testMetricId,
-        period: "2024-Q2",
+        period: "2024-02",
         value: "51.25",
         notes: "Multipart evidence upload test",
         filename: "metric-evidence-2.txt",
@@ -465,11 +465,13 @@ async function run(tenants: SeededTenants): Promise<void> {
 
   // ── 13. Data Entry exposes only active editable metrics ──────────────────
   {
-    const name = "GET /api/data-entry and bulk grid exclude inactive and calculated metrics";
+    const name = "data-entry keeps canonical cadence metrics while the monthly bulk grid excludes them";
     const suffix = Date.now();
     const manualName = `QA Editable Metric ${suffix}`;
     const calculatedName = `QA Calculated Metric ${suffix}`;
     const inactiveName = `QA Inactive Metric ${suffix}`;
+    const quarterlyName = `QA Quarterly Direct Entry Metric ${suffix}`;
+    const annualName = `QA Annual Direct Entry Metric ${suffix}`;
 
     const createManual = await apiRequest("POST", "/api/metrics", {
       name: manualName,
@@ -499,36 +501,117 @@ async function run(tenants: SeededTenants): Promise<void> {
       enabled: false,
       metricType: "manual",
     }, tenantA.adminToken);
+    const createQuarterly = await apiRequest("POST", "/api/metrics", {
+      name: quarterlyName,
+      description: "Quarterly metric should use its detail view rather than the monthly paste grid",
+      category: "environmental",
+      unit: "kg",
+      frequency: "quarterly",
+      enabled: true,
+      metricType: "manual",
+    }, tenantA.adminToken);
+    const createAnnual = await apiRequest("POST", "/api/metrics", {
+      name: annualName,
+      description: "Annual metric must use a year reporting key",
+      category: "governance",
+      unit: "count",
+      frequency: "annual",
+      enabled: true,
+      metricType: "manual",
+    }, tenantA.adminToken);
 
-    if (![200, 201].includes(createManual.status) || ![200, 201].includes(createCalculated.status) || ![200, 201].includes(createInactive.status)) {
-      fail(name, `create statuses manual=${createManual.status} calculated=${createCalculated.status} inactive=${createInactive.status}`);
+    if (![200, 201].includes(createManual.status) || ![200, 201].includes(createCalculated.status) || ![200, 201].includes(createInactive.status) || ![200, 201].includes(createQuarterly.status) || ![200, 201].includes(createAnnual.status)) {
+      fail(name, `create statuses manual=${createManual.status} calculated=${createCalculated.status} inactive=${createInactive.status} quarterly=${createQuarterly.status} annual=${createAnnual.status}`);
     } else {
+      const manualMetric = JSON.parse(createManual.body) as { id?: string };
+      const quarterlyMetric = JSON.parse(createQuarterly.body) as { id?: string };
+      const annualMetric = JSON.parse(createAnnual.body) as { id?: string };
+      if (!manualMetric.id || !quarterlyMetric.id || !annualMetric.id) {
+        fail(name, "cadence metric create response omitted an id");
+        return;
+      }
       const dataEntryRes = await apiRequest("GET", "/api/data-entry/2024-04", undefined, tenantA.adminToken);
+      const canonicalQuarterRes = await apiRequest("GET", "/api/data-entry/2024-Q2", undefined, tenantA.adminToken);
       const bulkGridRes = await apiRequest("GET", "/api/data-entry/bulk-grid?periods=2024-04&siteId=null", undefined, tenantA.adminToken);
+      const quarterlyBulkValidateRes = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+        mode: "validate",
+        siteId: null,
+        cells: [{
+          metricId: quarterlyMetric.id,
+          period: "2024-04",
+          rawValue: "12",
+          rowIndex: 0,
+          columnIndex: 0,
+        }],
+      }, tenantA.adminToken);
+      const monthlyWrongCadenceRes = await apiRequest("POST", "/api/data-entry", {
+        metricId: manualMetric.id,
+        period: "2024-Q2",
+        value: 10,
+        siteId: null,
+      }, tenantA.adminToken);
+      const quarterlyWrongCadenceRes = await apiRequest("POST", "/api/data-entry", {
+        metricId: quarterlyMetric.id,
+        period: "2024-04",
+        value: 12,
+        siteId: null,
+      }, tenantA.adminToken);
+      const quarterlyCanonicalSaveRes = await apiRequest("POST", "/api/data-entry", {
+        metricId: quarterlyMetric.id,
+        period: "2024-Q2",
+        value: 12,
+        siteId: null,
+      }, tenantA.adminToken);
+      const annualWrongCadenceRes = await apiRequest("POST", "/api/data-entry", {
+        metricId: annualMetric.id,
+        period: "2024-04",
+        value: 1,
+        siteId: null,
+      }, tenantA.adminToken);
+      const annualCanonicalSaveRes = await apiRequest("POST", "/api/data-entry", {
+        metricId: annualMetric.id,
+        period: "2024",
+        value: 1,
+        siteId: null,
+      }, tenantA.adminToken);
       const tenantBDataEntryRes = await apiRequest("GET", "/api/data-entry/2024-04", undefined, tenantB.adminToken);
 
-      if (dataEntryRes.status !== 200 || bulkGridRes.status !== 200 || tenantBDataEntryRes.status !== 200) {
-        fail(name, `statuses dataEntry=${dataEntryRes.status} bulk=${bulkGridRes.status} tenantB=${tenantBDataEntryRes.status}`);
+      if (dataEntryRes.status !== 200 || canonicalQuarterRes.status !== 200 || bulkGridRes.status !== 200 || quarterlyBulkValidateRes.status !== 200 || tenantBDataEntryRes.status !== 200) {
+        fail(name, `statuses dataEntry=${dataEntryRes.status} canonicalQuarter=${canonicalQuarterRes.status} bulk=${bulkGridRes.status} bulkValidate=${quarterlyBulkValidateRes.status} tenantB=${tenantBDataEntryRes.status}`);
       } else {
         const dataEntry = JSON.parse(dataEntryRes.body) as { metrics: Array<{ name: string; enabled?: boolean; metricType?: string | null }> };
+        const canonicalQuarter = JSON.parse(canonicalQuarterRes.body) as { metrics: Array<{ name: string; enabled?: boolean; metricType?: string | null }> };
         const bulkGrid = JSON.parse(bulkGridRes.body) as { metrics: Array<{ name: string; enabled?: boolean; metricType?: string | null; readOnly?: boolean }> };
+        const quarterlyBulkValidation = JSON.parse(quarterlyBulkValidateRes.body) as {
+          ok?: boolean;
+          cells?: Array<{ metricId?: string; status?: string; readOnly?: boolean; errors?: string[] }>;
+        };
         const tenantBDataEntry = JSON.parse(tenantBDataEntryRes.body) as { metrics: Array<{ name: string }> };
 
         const dataEntryNames = new Set(dataEntry.metrics.map((metric) => metric.name));
+        const canonicalQuarterNames = new Set(canonicalQuarter.metrics.map((metric) => metric.name));
         const bulkGridNames = new Set(bulkGrid.metrics.map((metric) => metric.name));
         const tenantBNames = new Set(tenantBDataEntry.metrics.map((metric) => metric.name));
         const badDataEntryRows = dataEntry.metrics.filter((metric) => metric.enabled === false || (metric.metricType && metric.metricType !== "manual"));
         const badBulkRows = bulkGrid.metrics.filter((metric) => metric.enabled === false || (metric.metricType && metric.metricType !== "manual") || metric.readOnly);
+        const quarterlyBulkCell = quarterlyBulkValidation.cells?.find((cell) => cell.metricId === quarterlyMetric.id);
+        const wrongCadenceResponses = [monthlyWrongCadenceRes, quarterlyWrongCadenceRes, annualWrongCadenceRes];
+        const wrongCadencePayloads = wrongCadenceResponses.map((response) => JSON.parse(response.body) as { code?: string });
 
         if (!dataEntryNames.has(manualName)) fail(name, "active manual metric missing from /api/data-entry");
+        else if (!canonicalQuarterNames.has(quarterlyName)) fail(name, "active quarterly manual metric missing from canonical-period /api/data-entry");
         else if (dataEntryNames.has(calculatedName)) fail(name, "calculated metric leaked into /api/data-entry");
         else if (dataEntryNames.has(inactiveName)) fail(name, "inactive metric leaked into /api/data-entry");
         else if (!bulkGridNames.has(manualName)) fail(name, "active manual metric missing from bulk grid");
+        else if (bulkGridNames.has(quarterlyName)) fail(name, "quarterly manual metric leaked into monthly bulk grid");
         else if (bulkGridNames.has(calculatedName)) fail(name, "calculated metric leaked into bulk grid");
         else if (bulkGridNames.has(inactiveName)) fail(name, "inactive metric leaked into bulk grid");
+        else if (quarterlyBulkValidation.ok !== false || !quarterlyBulkCell || quarterlyBulkCell.status !== "error" || quarterlyBulkCell.readOnly !== true || !quarterlyBulkCell.errors?.some((error) => error.includes("Use metric details") && error.includes("quarterly"))) fail(name, `quarterly bulk validation did not return cadence guidance: ${JSON.stringify(quarterlyBulkValidation)}`);
+        else if (wrongCadenceResponses.some((response) => response.status !== 400) || wrongCadencePayloads.some((payload) => payload.code !== "METRIC_PERIOD_FREQUENCY_MISMATCH")) fail(name, `direct entry accepted an incompatible cadence: ${wrongCadenceResponses.map((response) => `${response.status}:${response.body.slice(0, 120)}`).join(" | ")}`);
+        else if (quarterlyCanonicalSaveRes.status !== 200 || annualCanonicalSaveRes.status !== 200) fail(name, `canonical cadence saves failed quarterly=${quarterlyCanonicalSaveRes.status}:${quarterlyCanonicalSaveRes.body.slice(0, 120)} annual=${annualCanonicalSaveRes.status}:${annualCanonicalSaveRes.body.slice(0, 120)}`);
         else if (badDataEntryRows.length > 0) fail(name, `non-editable rows in /api/data-entry: ${badDataEntryRows.map((metric) => metric.name).join(", ")}`);
         else if (badBulkRows.length > 0) fail(name, `non-editable rows in bulk grid: ${badBulkRows.map((metric) => metric.name).join(", ")}`);
-        else if (tenantBNames.has(manualName) || tenantBNames.has(calculatedName) || tenantBNames.has(inactiveName)) fail(name, "tenant A metric leaked into tenant B data-entry view");
+        else if (tenantBNames.has(manualName) || tenantBNames.has(calculatedName) || tenantBNames.has(inactiveName) || tenantBNames.has(quarterlyName) || tenantBNames.has(annualName)) fail(name, "tenant A metric leaked into tenant B data-entry view");
         else pass(name);
       }
     }
@@ -537,7 +620,7 @@ async function run(tenants: SeededTenants): Promise<void> {
   // ── 14. Boolean / yes-no metrics save and report as labels ────────────────
   {
     const name = "yes/no metric values save, update, reject invalid input, and export as labels";
-    const period = "2024-05";
+    const period = "2024";
     const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
 
     if (metricsRes.status !== 200) {
@@ -601,6 +684,196 @@ async function run(tenants: SeededTenants): Promise<void> {
           else if ((readiness.missingCategories?.missingMetrics ?? []).includes(yesNoMetric.name)) fail(name, "saved No value was treated as missing by report readiness");
           else if (!readiness.filledMetrics || readiness.filledMetrics < 1) fail(name, `saved No value did not count toward report readiness: ${JSON.stringify(readiness)}`);
           else pass(name);
+        }
+      }
+    }
+  }
+
+  // ── 15. Metric history preserves typed values and site scope ───────────
+  {
+    const name = "metric history preserves No, numeric zero, and exact organisation/site scope";
+    const suffix = Date.now();
+    const booleanPeriod = "2197";
+    const numericPeriod = "2197-01";
+
+    const metricsRes = await apiRequest("GET", "/api/metrics", undefined, tenantA.adminToken);
+    const metrics = metricsRes.status === 200
+      ? JSON.parse(metricsRes.body) as Array<{ id: string; name: string }>
+      : [];
+    const booleanMetric = metrics.find((metric) => metric.name === "Anti-Bribery Policy in Place");
+    const numericMetricRes = await apiRequest("POST", "/api/metrics", {
+      name: `QA Metric History Numeric ${suffix}`,
+      description: "Numeric metric used to verify typed zero history values",
+      category: "environmental",
+      unit: "kWh",
+      frequency: "monthly",
+      enabled: true,
+    }, tenantA.adminToken);
+    const siteRes = await apiRequest("POST", "/api/sites", {
+      name: `QA Metric History Site ${suffix}`,
+      type: "office",
+      country: "GB",
+    }, tenantA.adminToken);
+
+    if (metricsRes.status !== 200) {
+      fail(name, `metrics status ${metricsRes.status}`);
+    } else if (!booleanMetric) {
+      fail(name, "missing seeded boolean metric");
+    } else if (![200, 201].includes(numericMetricRes.status)) {
+      fail(name, `numeric metric create status ${numericMetricRes.status}: ${numericMetricRes.body.slice(0, 200)}`);
+    } else if (![200, 201].includes(siteRes.status)) {
+      fail(name, `site create status ${siteRes.status}: ${siteRes.body.slice(0, 200)}`);
+    } else {
+      const numericMetric = JSON.parse(numericMetricRes.body) as { id?: string };
+      const site = JSON.parse(siteRes.body) as { id?: string };
+      if (!numericMetric.id || !site.id) {
+        fail(name, `fixture ids missing metric=${numericMetric.id ?? "none"} site=${site.id ?? "none"}`);
+      } else {
+        const saves = await Promise.all([
+          apiRequest("POST", "/api/data-entry", {
+            metricId: booleanMetric.id,
+            period: booleanPeriod,
+            value: "Yes",
+            notes: "history organisation boolean fixture",
+            siteId: null,
+          }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", {
+            metricId: booleanMetric.id,
+            period: booleanPeriod,
+            value: "No",
+            notes: "history site boolean fixture",
+            siteId: site.id,
+          }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", {
+            metricId: numericMetric.id,
+            period: numericPeriod,
+            value: 17,
+            notes: "history organisation numeric fixture",
+            siteId: null,
+          }, tenantA.adminToken),
+          apiRequest("POST", "/api/data-entry", {
+            metricId: numericMetric.id,
+            period: numericPeriod,
+            value: 0,
+            notes: "history site numeric-zero fixture",
+            siteId: site.id,
+          }, tenantA.adminToken),
+        ]);
+        const badSave = saves.find((res) => ![200, 201].includes(res.status));
+
+        if (badSave) {
+          fail(name, `fixture save status ${badSave.status}: ${badSave.body.slice(0, 200)}`);
+        } else {
+          const [
+            booleanSiteRes,
+            booleanOrgRes,
+            booleanAllRes,
+            numericSiteRes,
+            numericOrgRes,
+            numericAllRes,
+            booleanSiteHistoryRes,
+            booleanOrgHistoryRes,
+            booleanAllHistoryRes,
+            numericSiteHistoryRes,
+            numericOrgHistoryRes,
+            numericAllHistoryRes,
+          ] = await Promise.all([
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/values?siteId=${encodeURIComponent(site.id)}`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/values?siteId=null`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/values?siteId=__all__`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/values?siteId=${encodeURIComponent(site.id)}`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/values?siteId=null`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/values?siteId=__all__`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/history?siteId=${encodeURIComponent(site.id)}`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/history?siteId=null`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${booleanMetric.id}/history?siteId=__all__`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/history?siteId=${encodeURIComponent(site.id)}`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/history?siteId=null`, undefined, tenantA.adminToken),
+            apiRequest("GET", `/api/metrics/${numericMetric.id}/history?siteId=__all__`, undefined, tenantA.adminToken),
+          ]);
+          const valueResponses = [booleanSiteRes, booleanOrgRes, booleanAllRes, numericSiteRes, numericOrgRes, numericAllRes];
+          const presentedHistoryResponses = [
+            booleanSiteHistoryRes,
+            booleanOrgHistoryRes,
+            booleanAllHistoryRes,
+            numericSiteHistoryRes,
+            numericOrgHistoryRes,
+            numericAllHistoryRes,
+          ];
+          const badValuesResponse = valueResponses.find((res) => res.status !== 200);
+          const badHistoryResponse = presentedHistoryResponses.find((res) => res.status !== 200);
+
+          if (badValuesResponse) {
+            fail(name, `values status ${badValuesResponse.status}: ${badValuesResponse.body.slice(0, 200)}`);
+          } else if (badHistoryResponse) {
+            fail(name, `history status ${badHistoryResponse.status}: ${badHistoryResponse.body.slice(0, 200)}`);
+          } else {
+            type HistoryRow = {
+              period: string;
+              siteId?: string | null;
+              value: string | null;
+              valueNumeric?: string | null;
+              valueText?: string | null;
+              valueBoolean?: boolean | null;
+            };
+            type PresentedHistoryRow = HistoryRow & { displayValue: string; status: string };
+            type PresentedHistoryResponse = {
+              metric: { direction?: string | null };
+              history: PresentedHistoryRow[];
+            };
+            const parseValues = (res: { body: string }) => JSON.parse(res.body) as HistoryRow[];
+            const parsePresentedHistory = (res: { body: string }) => JSON.parse(res.body) as PresentedHistoryResponse;
+            const booleanSiteValues = parseValues(booleanSiteRes);
+            const booleanOrgValues = parseValues(booleanOrgRes);
+            const booleanAllValues = parseValues(booleanAllRes);
+            const numericSiteValues = parseValues(numericSiteRes);
+            const numericOrgValues = parseValues(numericOrgRes);
+            const numericAllValues = parseValues(numericAllRes);
+            const booleanSiteHistory = parsePresentedHistory(booleanSiteHistoryRes);
+            const booleanOrgHistory = parsePresentedHistory(booleanOrgHistoryRes);
+            const booleanAllHistory = parsePresentedHistory(booleanAllHistoryRes);
+            const numericSiteHistory = parsePresentedHistory(numericSiteHistoryRes);
+            const numericOrgHistory = parsePresentedHistory(numericOrgHistoryRes);
+            const numericAllHistory = parsePresentedHistory(numericAllHistoryRes);
+            const booleanSiteRow = booleanSiteValues.find((row) => row.period === booleanPeriod);
+            const booleanOrgRow = booleanOrgValues.find((row) => row.period === booleanPeriod);
+            const booleanAllRows = booleanAllValues.filter((row) => row.period === booleanPeriod);
+            const numericSiteRow = numericSiteValues.find((row) => row.period === numericPeriod);
+            const numericOrgRow = numericOrgValues.find((row) => row.period === numericPeriod);
+            const numericAllRows = numericAllValues.filter((row) => row.period === numericPeriod);
+            const presentedBooleanSiteRow = booleanSiteHistory.history.find((row) => row.period === booleanPeriod);
+            const presentedBooleanOrgRow = booleanOrgHistory.history.find((row) => row.period === booleanPeriod);
+            const presentedBooleanAllRows = booleanAllHistory.history.filter((row) => row.period === booleanPeriod);
+            const presentedNumericSiteRow = numericSiteHistory.history.find((row) => row.period === numericPeriod);
+            const presentedNumericOrgRow = numericOrgHistory.history.find((row) => row.period === numericPeriod);
+            const presentedNumericAllRows = numericAllHistory.history.filter((row) => row.period === numericPeriod);
+
+            if (!booleanSiteRow) fail(name, "site-scoped boolean history row missing");
+            else if (booleanSiteRow.siteId !== site.id) fail(name, `site boolean scope mismatch: ${JSON.stringify(booleanSiteRow)}`);
+            else if (booleanSiteRow.value !== null || booleanSiteRow.valueBoolean !== false || booleanSiteRow.valueText !== "No") fail(name, `No was not preserved as typed history: ${JSON.stringify(booleanSiteRow)}`);
+            else if (booleanSiteValues.some((row) => row.siteId !== site.id)) fail(name, "site boolean values leaked another scope");
+            else if (!booleanOrgRow || (booleanOrgRow.siteId !== null && booleanOrgRow.siteId !== undefined) || booleanOrgRow.valueBoolean !== true || booleanOrgRow.valueText !== "Yes") fail(name, `organisation boolean history mismatch: ${JSON.stringify(booleanOrgRow)}`);
+            else if (booleanOrgValues.some((row) => row.siteId !== null && row.siteId !== undefined)) fail(name, "organisation boolean values leaked a site scope");
+            else if (booleanAllRows.length !== 2 || !booleanAllRows.some((row) => row.siteId === site.id && row.valueBoolean === false) || !booleanAllRows.some((row) => (row.siteId === null || row.siteId === undefined) && row.valueBoolean === true)) fail(name, `all-scope boolean history mismatch: ${JSON.stringify(booleanAllRows)}`);
+            else if (!numericSiteRow) fail(name, "site-scoped numeric history row missing");
+            else if (numericSiteRow.siteId !== site.id || numericSiteRow.value === null || numericSiteRow.valueNumeric === null || numericSiteRow.valueNumeric === undefined || Number(numericSiteRow.value) !== 0 || Number(numericSiteRow.valueNumeric) !== 0) fail(name, `numeric zero was not preserved as typed history: ${JSON.stringify(numericSiteRow)}`);
+            else if (numericSiteValues.some((row) => row.siteId !== site.id)) fail(name, "site numeric values leaked another scope");
+            else if (!numericOrgRow || (numericOrgRow.siteId !== null && numericOrgRow.siteId !== undefined) || Number(numericOrgRow.value) !== 17 || Number(numericOrgRow.valueNumeric) !== 17) fail(name, `organisation numeric history mismatch: ${JSON.stringify(numericOrgRow)}`);
+            else if (numericOrgValues.some((row) => row.siteId !== null && row.siteId !== undefined)) fail(name, "organisation numeric values leaked a site scope");
+            else if (numericAllRows.length !== 2 || !numericAllRows.some((row) => row.siteId === site.id && Number(row.valueNumeric) === 0) || !numericAllRows.some((row) => (row.siteId === null || row.siteId === undefined) && Number(row.valueNumeric) === 17)) fail(name, `all-scope numeric history mismatch: ${JSON.stringify(numericAllRows)}`);
+            else if (booleanSiteHistory.metric.direction !== "compliance_yes_no") fail(name, `history metric direction mismatch: ${JSON.stringify(booleanSiteHistory.metric)}`);
+            else if (!presentedBooleanSiteRow || presentedBooleanSiteRow.siteId !== site.id || presentedBooleanSiteRow.displayValue !== "No" || presentedBooleanSiteRow.status !== "red") fail(name, `presented site No history mismatch: ${JSON.stringify(presentedBooleanSiteRow)}`);
+            else if (booleanSiteHistory.history.some((row) => row.siteId !== site.id)) fail(name, "presented site boolean history leaked another scope");
+            else if (!presentedBooleanOrgRow || (presentedBooleanOrgRow.siteId !== null && presentedBooleanOrgRow.siteId !== undefined) || presentedBooleanOrgRow.displayValue !== "Yes" || presentedBooleanOrgRow.status !== "green") fail(name, `presented organisation Yes history mismatch: ${JSON.stringify(presentedBooleanOrgRow)}`);
+            else if (booleanOrgHistory.history.some((row) => row.siteId !== null && row.siteId !== undefined)) fail(name, "presented organisation boolean history leaked a site scope");
+            else if (presentedBooleanAllRows.length !== 2 || !presentedBooleanAllRows.some((row) => row.siteId === site.id && row.displayValue === "No" && row.status === "red") || !presentedBooleanAllRows.some((row) => (row.siteId === null || row.siteId === undefined) && row.displayValue === "Yes" && row.status === "green")) fail(name, `presented all-scope boolean history mismatch: ${JSON.stringify(presentedBooleanAllRows)}`);
+            else if (!presentedNumericSiteRow || presentedNumericSiteRow.siteId !== site.id || presentedNumericSiteRow.displayValue !== "0" || presentedNumericSiteRow.status !== "amber") fail(name, `presented site numeric-zero history mismatch: ${JSON.stringify(presentedNumericSiteRow)}`);
+            else if (numericSiteHistory.history.some((row) => row.siteId !== site.id)) fail(name, "presented site numeric history leaked another scope");
+            else if (!presentedNumericOrgRow || (presentedNumericOrgRow.siteId !== null && presentedNumericOrgRow.siteId !== undefined) || presentedNumericOrgRow.displayValue !== "17" || presentedNumericOrgRow.status !== "amber") fail(name, `presented organisation numeric history mismatch: ${JSON.stringify(presentedNumericOrgRow)}`);
+            else if (numericOrgHistory.history.some((row) => row.siteId !== null && row.siteId !== undefined)) fail(name, "presented organisation numeric history leaked a site scope");
+            else if (presentedNumericAllRows.length !== 2 || !presentedNumericAllRows.some((row) => row.siteId === site.id && row.displayValue === "0" && row.status !== "missing") || !presentedNumericAllRows.some((row) => (row.siteId === null || row.siteId === undefined) && row.displayValue === "17" && row.status !== "missing")) fail(name, `presented all-scope numeric history mismatch: ${JSON.stringify(presentedNumericAllRows)}`);
+            else pass(name);
+          }
         }
       }
     }

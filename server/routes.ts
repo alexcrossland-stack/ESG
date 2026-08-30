@@ -4,7 +4,7 @@ import { createServer, type Server } from "http";
 import fs from "fs/promises";
 import path from "path";
 import session from "express-session";
-import { storage, type WorkflowEntityType } from "./storage";
+import { isUsableMetricEvidenceFile, storage, type WorkflowEntityType } from "./storage";
 import { db } from "./storage";
 import { DEFAULT_METRICS } from "./default-metrics";
 import {
@@ -1674,6 +1674,18 @@ function normalizeGuidedRawDecimal(value: unknown): string | null {
 }
 
 const GUIDED_MONTH_PERIOD_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
+
+function metricPeriodMatchesFrequency(period: string, frequency: string | null | undefined): boolean {
+  if (frequency === "quarterly") return /^\d{4}-Q[1-4]$/.test(period);
+  if (frequency === "annual") return /^\d{4}$/.test(period);
+  return GUIDED_MONTH_PERIOD_RE.test(period);
+}
+
+function metricFrequencyPeriodExample(frequency: string | null | undefined): string {
+  if (frequency === "quarterly") return "YYYY-Q1..Q4";
+  if (frequency === "annual") return "YYYY";
+  return "YYYY-MM";
+}
 
 function rawDataMutationScopeLockKey(companyId: string, period: string, siteId: string | null): string {
   return `raw_data_inputs:${companyId}:${period}:${siteId ?? "__org__"}`;
@@ -4185,6 +4197,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           code: "METRIC_NOT_EDITABLE",
         });
       }
+      if (!metricPeriodMatchesFrequency(period, metric.frequency)) {
+        const frequency = metric.frequency ?? "monthly";
+        return res.status(400).json({
+          error: `${frequency[0].toUpperCase()}${frequency.slice(1)} metrics require a ${metricFrequencyPeriodExample(frequency)} reporting period.`,
+          code: "METRIC_PERIOD_FREQUENCY_MISMATCH",
+          frequency,
+          expectedPeriodFormat: metricFrequencyPeriodExample(frequency),
+        });
+      }
       if (dataSourceType !== null && dataSourceType !== "manual" && dataSourceType !== "estimated") {
         return res.status(400).json({
           error: "dataSourceType must be manual or estimated. Evidenced provenance is set automatically after a file is stored.",
@@ -4244,12 +4265,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           storage.getEvidenceFiles(companyId, resolvedSiteId, period),
           storage.getMetricEvidence(existingForPeriod.id),
         ]);
-        const hasLinkedEvidence = canonicalEvidence.length > 0 || entityEvidence.length > 0 || periodEvidence.some((file: any) =>
-          file.metricId === metricId
-          || (file.linkedModule === "metric" && file.linkedEntityId === metricId),
-        );
+        const hasLinkedEvidence = canonicalEvidence.length > 0
+          || entityEvidence.some((file: any) => isUsableMetricEvidenceFile(file))
+          || periodEvidence.some((file: any) => (
+            isUsableMetricEvidenceFile(file)
+            && (
+              file.metricId === metricId
+              || (file.linkedModule === "metric" && file.linkedEntityId === metricId)
+            )
+          ));
+        const effectiveDataSourceType = existingForPeriod.dataSourceType === "evidenced" && !hasLinkedEvidence
+          ? "manual"
+          : existingForPeriod.dataSourceType;
         const protectionReason = getValueProtectionReason({
           ...existingForPeriod,
+          dataSourceType: effectiveDataSourceType,
           hasEvidence: hasLinkedEvidence,
         });
         if (protectionReason) {
@@ -4801,19 +4831,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     );
     const sortedValues = values.sort((a, b) => a.period.localeCompare(b.period));
     const history = sortedValues.map((v, i) => {
-      const val = v.value ? Number(v.value) : null;
-      const prev = i > 0 && sortedValues[i - 1].value ? Number(sortedValues[i - 1].value) : null;
-      const status = v.status || getTrafficLightStatus(
-        val,
-        metric.targetValue ? Number(metric.targetValue) : null,
-        metric.direction || "higher_is_better",
-        Number(metric.amberThreshold || 5),
-        Number(metric.redThreshold || 15),
-        metric.targetMin ? Number(metric.targetMin) : null,
-        metric.targetMax ? Number(metric.targetMax) : null,
-        prev
-      );
-      return { ...v, status, previousValue: prev };
+      const numericCandidate = v.valueNumeric ?? v.value;
+      const numericValue = numericCandidate !== null && numericCandidate !== undefined && numericCandidate !== ""
+        ? Number(numericCandidate)
+        : null;
+      const val = numericValue !== null && Number.isFinite(numericValue) ? numericValue : null;
+      const previousRow = i > 0 ? sortedValues[i - 1] : null;
+      const previousNumericCandidate = previousRow?.valueNumeric ?? previousRow?.value;
+      const previousNumericValue = previousNumericCandidate !== null
+        && previousNumericCandidate !== undefined
+        && previousNumericCandidate !== ""
+        ? Number(previousNumericCandidate)
+        : null;
+      const prev = previousNumericValue !== null && Number.isFinite(previousNumericValue) ? previousNumericValue : null;
+      const displayValue = formatMetricDisplayValue(v);
+      const previousDisplayValue = formatMetricDisplayValue(previousRow);
+      const typedStatus = typeof v.valueBoolean === "boolean" && metric.direction === "compliance_yes_no"
+        ? (v.valueBoolean ? "green" : "red")
+        : displayValue !== ""
+          ? "green"
+          : "missing";
+      const status = v.status || (val !== null
+        ? getTrafficLightStatus(
+            val,
+            metric.targetValue ? Number(metric.targetValue) : null,
+            metric.direction || "higher_is_better",
+            Number(metric.amberThreshold || 5),
+            Number(metric.redThreshold || 15),
+            metric.targetMin ? Number(metric.targetMin) : null,
+            metric.targetMax ? Number(metric.targetMax) : null,
+            prev,
+          )
+        : typedStatus);
+      return { ...v, displayValue, previousDisplayValue, status, previousValue: prev };
     });
     res.json({ metric, history });
   });

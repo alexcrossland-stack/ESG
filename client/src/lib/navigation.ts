@@ -69,18 +69,13 @@ export const MORE_TOOLS_ROUTES = [
   "/team",
 ];
 
-/**
- * The default SME journey stays intentionally small. Data entry falls back to the
- * read-only metrics view when the user cannot enter data, so every role keeps a
- * useful primary destination without exposing an editing affordance.
- */
+/** The unified Metrics & data workspace adapts its actions to each role, so every
+ * user shares one reliable route and read-only roles never need a fallback page. */
 export const SME_PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: "Overview", href: "/" },
   {
     label: "Data & evidence",
     href: MEASURE_HOME_HREF,
-    permission: "metrics_data_entry",
-    fallbackHref: "/metrics",
     activeRoutes: DATA_WORKSPACE_ROUTES,
   },
   { label: "Action plan", href: IMPROVE_HOME_HREF, activeRoutes: ACTION_PLAN_WORKSPACE_ROUTES },
@@ -158,8 +153,7 @@ export const ADVANCED_NAV_SECTIONS: NavSection[] = [
   {
     label: "Measure and assure",
     items: [
-      { label: "Metrics", href: "/metrics" },
-      { label: "Metrics Library", href: "/metrics-library" },
+      { label: "Metrics & data", href: "/data-entry" },
       { label: "Supporting Documents", href: "/evidence" },
       { label: "Carbon Estimator", href: "/carbon-calculator" },
       { label: "Benchmarks", href: "/benchmarks" },
@@ -207,7 +201,6 @@ export const MORE_TOOLS_SECTIONS: NavSection[] = [
     items: [
       { label: "Carbon estimator", href: "/carbon-calculator", description: "Create an initial emissions estimate from accessible business data." },
       { label: "Benchmarks", href: "/benchmarks", description: "Compare performance and identify useful improvement areas." },
-      { label: "Metrics library", href: "/metrics-library", description: "Browse and configure the metrics relevant to your company." },
       { label: "My tasks", href: "/my-tasks", description: "See work assigned to you across the ESG programme." },
       { label: "My approvals", href: "/my-approvals", permission: "report_generation", description: "Review submitted data and decisions awaiting approval." },
       { label: "Team", href: "/team", permission: "settings_admin", description: "Manage team access and responsibilities." },
@@ -233,9 +226,8 @@ export const ESG_SETUP_ADVANCED_SUPPORT_ITEMS: NavItem[] = [
 ];
 
 export const DATA_AND_METRICS_ITEMS: NavItem[] = [
-  { label: "Metrics", href: "/metrics" },
-  { label: "Metrics Library", href: "/metrics-library" },
-  { label: "Enter Data", href: "/data-entry", permission: "metrics_data_entry" },
+  { label: "Metrics & data", href: "/data-entry" },
+  { label: "Documents", href: "/evidence" },
   { label: "Policy Register", href: "/esg-policy-register" },
 ];
 
@@ -255,8 +247,9 @@ export const ADVANCED_NAV_ITEMS = ADVANCED_NAV_SECTIONS.flatMap(section => secti
 export const ADVANCED_NAV_ROUTES = ADVANCED_NAV_ITEMS.map(item => item.href);
 
 export function isActive(location: string, href: string) {
-  if (href === "/") return location === "/";
-  return location === href || location.startsWith(href + "/");
+  const [pathname] = location.split(/[?#]/);
+  if (href === "/") return pathname === "/";
+  return pathname === href || pathname.startsWith(href + "/");
 }
 
 export function isNavItemActive(location: string, item: NavItem) {

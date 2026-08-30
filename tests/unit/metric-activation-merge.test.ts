@@ -54,7 +54,15 @@ assert.equal(canonical[0]?.definitionId, definition.id);
 assert.equal(canonical[0]?.id, calculatedCompanyMetric.id);
 assert.equal(canonical[0]?.metricType, "calculated");
 assert.equal(canonical[0]?.formulaText, calculatedCompanyMetric.formulaText);
+assert.equal(canonical[0]?.frequency, "quarterly");
+assert.equal(canonical[0]?.evidenceRequired, false);
 assert.equal(canonical[0]?.missingCompanyMetric, false);
+
+const evidenceRequiredCanonical = buildCanonicalEnabledMetrics(
+  [{ ...definition, evidenceRequired: true }],
+  [calculatedCompanyMetric],
+);
+assert.equal(evidenceRequiredCanonical[0]?.evidenceRequired, true, "definition evidence policy must survive company merging");
 
 const disabledLibrary = buildMetricLibraryEntries(
   [{ ...definition, isActive: true }],

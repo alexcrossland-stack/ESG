@@ -130,6 +130,7 @@ async function run() {
   const provenanceTriggerName = `test_provenance_lock_${process.pid}`;
   const provenanceFunctionName = `test_provenance_lock_fn_${process.pid}`;
   const provenanceFilename = `mutation-provenance-lock-${process.pid}.txt`;
+  const guidedEvidencePeriod = "2088-05";
   let provenanceTriggerInstalled = false;
   const metricIds: string[] = [];
   const definitionIds: string[] = [];
@@ -345,6 +346,187 @@ async function run() {
     expectStatus(await apiRequest("DELETE", `/api/evidence/${secondDirectFileId}`, undefined, token), 409, "submitted direct evidence deletion");
     await client.query("UPDATE metric_values SET workflow_status = 'draft' WHERE id = $1", [directValueId]);
     expectStatus(await apiRequest("DELETE", `/api/evidence/${secondDirectFileId}`, undefined, token), 200, "direct evidence delete after revision");
+
+    // Guided recalculation follows the same usable-evidence policy as direct
+    // and bulk entry. Rejected or expired files must not strand a stale
+    // evidenced provenance label, while usable and legacy evidence still
+    // protect the metric value.
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "10" },
+      period: guidedEvidencePeriod,
+      siteId: primarySiteId,
+    }, token), 200, "guided evidence baseline raw input");
+    const guidedBaselineRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(guidedEvidencePeriod)}`,
+      { siteId: primarySiteId },
+      token,
+    );
+    expectStatus(guidedBaselineRecalc, 200, "guided evidence baseline recalculation");
+    const guidedBaselineBody = body<{
+      guidedMetricSync?: {
+        synced?: Array<{ inputName?: string; metricId?: string }>;
+      };
+    }>(guidedBaselineRecalc);
+    const guidedElectricityMetricId = guidedBaselineBody.guidedMetricSync?.synced
+      ?.find((entry) => entry.inputName === "electricity_kwh")?.metricId;
+    assert.ok(guidedElectricityMetricId, "guided baseline did not sync the electricity metric");
+    const guidedBaselineValue = (await client.query<{ id: string; value: string }>(
+      `SELECT mv.id, mv.value_numeric::text AS value
+       FROM metric_values mv
+       WHERE mv.metric_id = $1 AND mv.period = $2 AND mv.site_id = $3`,
+      [guidedElectricityMetricId, guidedEvidencePeriod, primarySiteId],
+    )).rows[0];
+    assert.ok(guidedBaselineValue?.id, "guided baseline metric value missing");
+    assert.equal(Number(guidedBaselineValue.value), 10);
+
+    const guidedEvidenceUpload = new FormData();
+    guidedEvidenceUpload.append("metricId", guidedElectricityMetricId);
+    guidedEvidenceUpload.append("period", guidedEvidencePeriod);
+    guidedEvidenceUpload.append("siteId", primarySiteId);
+    guidedEvidenceUpload.append("value", "10");
+    guidedEvidenceUpload.append("notes", "guided evidence lifecycle");
+    guidedEvidenceUpload.append(
+      "attachments",
+      new Blob(["guided evidence"], { type: "text/plain" }),
+      "guided-evidence.txt",
+    );
+    const guidedEvidenceUploaded = await apiMultipartRequest("POST", "/api/data-entry", guidedEvidenceUpload, token);
+    expectStatus(guidedEvidenceUploaded, 200, "guided evidence upload");
+    const guidedEvidenceUploadBody = body<{
+      newlyCreatedAttachments?: Array<{ id?: string }>;
+      attachments?: Array<{ id?: string }>;
+    }>(guidedEvidenceUploaded);
+    const guidedEvidenceFileId = guidedEvidenceUploadBody.newlyCreatedAttachments?.[0]?.id
+      ?? guidedEvidenceUploadBody.attachments?.[0]?.id;
+    assert.ok(guidedEvidenceFileId, "guided evidence upload omitted attachment id");
+
+    expectStatus(await apiRequest("PUT", `/api/evidence/${guidedEvidenceFileId}`, {
+      evidenceStatus: "rejected",
+    }, token), 200, "reject guided evidence");
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "20" },
+      period: guidedEvidencePeriod,
+      siteId: primarySiteId,
+    }, token), 200, "raw update behind rejected guided evidence");
+    const rejectedEvidenceRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(guidedEvidencePeriod)}`,
+      { siteId: primarySiteId },
+      token,
+    );
+    expectStatus(rejectedEvidenceRecalc, 200, "rejected guided evidence recalculation");
+    const rejectedEvidenceBody = body<{
+      guidedMetricSync?: {
+        synced?: Array<{ metricId?: string }>;
+        skippedProtected?: Array<{ metricId?: string }>;
+      };
+    }>(rejectedEvidenceRecalc);
+    assert.ok(
+      rejectedEvidenceBody.guidedMetricSync?.synced?.some((entry) => entry.metricId === guidedElectricityMetricId),
+      "rejected evidence incorrectly blocked guided sync",
+    );
+    assert.ok(
+      !rejectedEvidenceBody.guidedMetricSync?.skippedProtected?.some((entry) => entry.metricId === guidedElectricityMetricId),
+      "rejected evidence was reported as protected",
+    );
+    let guidedValueState = (await client.query<{ value: string; source: string }>(
+      `SELECT value_numeric::text AS value, data_source_type::text AS source
+       FROM metric_values WHERE id = $1`,
+      [guidedBaselineValue.id],
+    )).rows[0];
+    assert.equal(Number(guidedValueState?.value), 20);
+    assert.equal(guidedValueState?.source, "manual", "stale evidenced provenance was not normalized after rejection");
+
+    expectStatus(await apiRequest("PUT", `/api/evidence/${guidedEvidenceFileId}`, {
+      evidenceStatus: "available",
+    }, token), 200, "make guided evidence usable");
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "30" },
+      period: guidedEvidencePeriod,
+      siteId: primarySiteId,
+    }, token), 200, "raw update behind usable guided evidence");
+    const usableEvidenceRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(guidedEvidencePeriod)}`,
+      { siteId: primarySiteId },
+      token,
+    );
+    expectStatus(usableEvidenceRecalc, 200, "usable guided evidence recalculation");
+    assert.ok(
+      body<{ guidedMetricSync?: { skippedProtected?: Array<{ metricId?: string; reason?: string }> } }>(usableEvidenceRecalc)
+        .guidedMetricSync?.skippedProtected?.some((entry) =>
+          entry.metricId === guidedElectricityMetricId && entry.reason === "evidenced"),
+      "usable evidence did not protect guided sync",
+    );
+    guidedValueState = (await client.query<{ value: string; source: string }>(
+      `SELECT value_numeric::text AS value, data_source_type::text AS source
+       FROM metric_values WHERE id = $1`,
+      [guidedBaselineValue.id],
+    )).rows[0];
+    assert.equal(Number(guidedValueState?.value), 20, "usable evidence allowed guided overwrite");
+
+    expectStatus(await apiRequest("PUT", `/api/evidence/${guidedEvidenceFileId}`, {
+      expiryDate: "2000-01-01T00:00:00.000Z",
+    }, token), 200, "expire guided evidence");
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "40" },
+      period: guidedEvidencePeriod,
+      siteId: primarySiteId,
+    }, token), 200, "raw update behind expired guided evidence");
+    const expiredEvidenceRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(guidedEvidencePeriod)}`,
+      { siteId: primarySiteId },
+      token,
+    );
+    expectStatus(expiredEvidenceRecalc, 200, "expired guided evidence recalculation");
+    assert.ok(
+      body<{ guidedMetricSync?: { synced?: Array<{ metricId?: string }> } }>(expiredEvidenceRecalc)
+        .guidedMetricSync?.synced?.some((entry) => entry.metricId === guidedElectricityMetricId),
+      "expired evidence incorrectly blocked guided sync",
+    );
+    guidedValueState = (await client.query<{ value: string; source: string }>(
+      `SELECT value_numeric::text AS value, data_source_type::text AS source
+       FROM metric_values WHERE id = $1`,
+      [guidedBaselineValue.id],
+    )).rows[0];
+    assert.equal(Number(guidedValueState?.value), 40);
+    assert.equal(guidedValueState?.source, "manual", "expired evidence left stale evidenced provenance");
+
+    const guidedLegacyEvidence = await apiRequest("POST", "/api/metric-evidence", {
+      metricValueId: guidedBaselineValue.id,
+      fileName: "guided-legacy-evidence.pdf",
+      fileUrl: "https://example.com/guided-legacy-evidence.pdf",
+    }, token);
+    expectStatus(guidedLegacyEvidence, 201, "attach guided legacy evidence");
+    const guidedLegacyEvidenceId = body<{ id: string }>(guidedLegacyEvidence).id;
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "50" },
+      period: guidedEvidencePeriod,
+      siteId: primarySiteId,
+    }, token), 200, "raw update behind guided legacy evidence");
+    const legacyEvidenceRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(guidedEvidencePeriod)}`,
+      { siteId: primarySiteId },
+      token,
+    );
+    expectStatus(legacyEvidenceRecalc, 200, "guided legacy evidence recalculation");
+    assert.ok(
+      body<{ guidedMetricSync?: { skippedProtected?: Array<{ metricId?: string; reason?: string }> } }>(legacyEvidenceRecalc)
+        .guidedMetricSync?.skippedProtected?.some((entry) =>
+          entry.metricId === guidedElectricityMetricId && entry.reason === "evidenced"),
+      "legacy metric_evidence did not protect guided sync",
+    );
+    guidedValueState = (await client.query<{ value: string; source: string }>(
+      `SELECT value_numeric::text AS value, data_source_type::text AS source
+       FROM metric_values WHERE id = $1`,
+      [guidedBaselineValue.id],
+    )).rows[0];
+    assert.equal(Number(guidedValueState?.value), 40, "legacy evidence allowed guided overwrite");
+    expectStatus(await apiRequest("DELETE", `/api/metric-evidence/${guidedLegacyEvidenceId}`, undefined, token), 200, "guided legacy evidence cleanup");
+    expectStatus(await apiRequest("DELETE", `/api/evidence/${guidedEvidenceFileId}`, undefined, token), 200, "guided expired evidence cleanup");
 
     // If a period lock wins after the file is already durable but before the
     // source label is promoted, retain both successful writes and surface an
@@ -750,6 +932,30 @@ async function run() {
       await client.query(
         "DELETE FROM data_entry_period_locks WHERE company_id = $1 AND period = '2088-04'",
         [tenantA.companyId],
+      );
+      await client.query(
+        `DELETE FROM metric_evidence
+         WHERE metric_value_id IN (
+           SELECT mv.id
+           FROM metric_values mv
+           JOIN metrics m ON m.id = mv.metric_id
+           WHERE m.company_id = $1 AND mv.period = $2 AND mv.site_id = $3
+         )`,
+        [tenantA.companyId, guidedEvidencePeriod, siteIds[0] ?? null],
+      );
+      await client.query(
+        "DELETE FROM evidence_files WHERE company_id = $1 AND linked_period = $2 AND site_id = $3",
+        [tenantA.companyId, guidedEvidencePeriod, siteIds[0] ?? null],
+      );
+      await client.query(
+        `DELETE FROM metric_values mv
+         USING metrics m
+         WHERE mv.metric_id = m.id AND m.company_id = $1 AND mv.period = $2 AND mv.site_id = $3`,
+        [tenantA.companyId, guidedEvidencePeriod, siteIds[0] ?? null],
+      );
+      await client.query(
+        "DELETE FROM raw_data_inputs WHERE company_id = $1 AND period = $2 AND site_id = $3",
+        [tenantA.companyId, guidedEvidencePeriod, siteIds[0] ?? null],
       );
       await client.query(
         `DELETE FROM metric_evidence

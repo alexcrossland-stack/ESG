@@ -52,11 +52,14 @@ function run() {
     ]);
   });
 
-  check("Data workspace preserves the viewer-safe metrics fallback", () => {
+  check("Data workspace uses one role-safe route and preserves compatibility routes", () => {
     const dataWorkspace = SME_PRIMARY_NAV_ITEMS[1];
-    assert.equal(dataWorkspace.permission, "metrics_data_entry");
-    assert.equal(dataWorkspace.fallbackHref, "/metrics");
+    assert.equal(dataWorkspace.href, "/data-entry");
+    assert.equal(dataWorkspace.permission, undefined);
+    assert.equal(dataWorkspace.fallbackHref, undefined);
     assert.deepEqual(dataWorkspace.activeRoutes, DATA_WORKSPACE_ROUTES);
+    assert.equal(DATA_WORKSPACE_ROUTES.includes("/metrics"), true);
+    assert.equal(DATA_WORKSPACE_ROUTES.includes("/metrics-library"), true);
   });
 
   check("Workspace highlighting follows related specialist routes", () => {
@@ -67,6 +70,7 @@ function run() {
 
     assert.equal(isNavItemActive("/evidence", data), true);
     assert.equal(isNavItemActive("/metrics/abc", data), true);
+    assert.equal(isNavItemActive("/data-entry?manage=metrics", data), true);
     assert.equal(isNavItemActive("/esg-targets", action), true);
     assert.equal(isNavItemActive("/answer-library", questionnaires), true);
     assert.equal(isNavItemActive("/framework-readiness", more), true);
@@ -95,13 +99,13 @@ function run() {
       "/esg-policy-register",
       "/carbon-calculator",
       "/benchmarks",
-      "/metrics-library",
       "/my-tasks",
       "/my-approvals",
       "/team",
     ]) {
       assert.equal(items.some(item => item.href === route), true, route + " should remain reachable");
     }
+    assert.equal(items.some(item => item.href === "/metrics-library"), false, "metric management belongs inside Metrics & data");
     assert.equal(items.find(item => item.href === "/team")?.permission, "settings_admin");
     assert.equal(items.find(item => item.href === "/framework-settings")?.permission, "settings_admin");
     assert.equal(items.find(item => item.href === "/my-approvals")?.permission, "report_generation");

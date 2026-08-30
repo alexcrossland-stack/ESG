@@ -59,10 +59,12 @@ export type CanonicalEnabledMetric = {
   description?: string | null;
   unit?: string | null;
   dataType?: string | null;
+  frequency?: string | null;
   metricType: string;
   direction?: string | null;
   helpText?: string | null;
   formulaText?: string | null;
+  evidenceRequired: boolean;
   missingCompanyMetric: boolean;
   source: "definition" | "company" | "merged";
 };
@@ -90,11 +92,13 @@ function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEn
     description: definition.description ?? null,
     unit: definition.unit ?? null,
     dataType: definition.dataType ?? "numeric",
+    frequency: definition.inputFrequency ?? "monthly",
     metricType: definition.metricType
       ?? (definition.isDerived ? "derived" : (definition.formulaJson ? "calculated" : "manual")),
     direction: "higher_is_better",
     helpText: definition.description ?? null,
     formulaText: definition.formulaText ?? null,
+    evidenceRequired: Boolean(definition.evidenceRequired),
     missingCompanyMetric: true,
     source: "definition",
   };
@@ -110,10 +114,15 @@ function buildCompanyCandidate(metric: CompanyMetricLike): CanonicalEnabledMetri
     description: metric.description ?? null,
     unit: metric.unit ?? null,
     dataType: metric.dataType ?? null,
+    // Keep an absent company cadence unset so a matched catalogue definition
+    // can remain authoritative. Synthetic company-only metrics receive their
+    // monthly fallback through the library candidate.
+    frequency: metric.frequency ?? null,
     metricType: metric.metricType ?? "manual",
     direction: metric.direction ?? "higher_is_better",
     helpText: metric.helpText ?? null,
     formulaText: metric.formulaText ?? null,
+    evidenceRequired: false,
     missingCompanyMetric: false,
     source: "company",
   };
@@ -139,10 +148,12 @@ function mergeCandidates(
     description: base.description ?? extra.description ?? null,
     unit: base.unit ?? extra.unit ?? null,
     dataType: base.dataType ?? extra.dataType ?? "numeric",
+    frequency: base.frequency ?? extra.frequency ?? "monthly",
     metricType: base.metricType ?? extra.metricType ?? "manual",
     direction: base.direction ?? extra.direction ?? "higher_is_better",
     helpText: base.helpText ?? extra.helpText ?? null,
     formulaText: base.formulaText ?? extra.formulaText ?? null,
+    evidenceRequired: base.evidenceRequired || extra.evidenceRequired,
     missingCompanyMetric: base.missingCompanyMetric && extra.missingCompanyMetric,
     source: existing.source === incoming.source ? existing.source : "merged",
   };

@@ -1660,7 +1660,7 @@ export default function Dashboard() {
             <div className="pt-2 border-t border-border">
               <Link href="/data-entry">
                 <Button size="sm" variant="outline" className="w-full text-xs" data-testid="link-enter-data">
-                  Enter Data
+                  Open metrics &amp; data
                 </Button>
               </Link>
             </div>
@@ -1734,7 +1734,7 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-data-entry">
                       <div className="flex items-center gap-2 text-sm">
                         <ClipboardList className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span>{needData} metrics need data</span>
+                        <span>{needData} metrics need updating</span>
                       </div>
                       {needData > 0 && <Badge variant="secondary" className="text-xs">{needData}</Badge>}
                     </div>
@@ -2130,7 +2130,7 @@ function ActionPlanBanner({ company }: { company: any }) {
               Create first policy
             </Button>
           </Link>
-          <Link href="/metrics">
+          <Link href="/data-entry">
             <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid="button-action-plan-view-metrics">
               View metrics
             </Button>

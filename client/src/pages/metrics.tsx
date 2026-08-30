@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { authFetch } from "@/lib/queryClient";
 import { buildCanonicalEnabledMetrics } from "@/lib/metric-activation";
+import { resolveMetricWorkspaceStatus } from "@/lib/metrics-data-workspace";
+import { formatMetricDisplayValue } from "@shared/data-entry-metrics";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,8 @@ type MetricSummary = {
   direction: string;
   latestValue: number | null;
   previousValue: number | null;
+  latestDisplayValue: string | null;
+  previousDisplayValue: string | null;
   status: string;
   percentChange: number | null;
   target: number | null;
@@ -55,6 +59,10 @@ type CompanyMetric = {
 type MetricValueRow = {
   period: string;
   value: string | number | null;
+  valueNumeric?: string | number | null;
+  valueText?: string | null;
+  valueBoolean?: boolean | null;
+  valueJson?: unknown;
   status?: string | null;
   percentChange?: string | number | null;
 };
@@ -130,17 +138,34 @@ function TrendArrow({ percentChange, direction }: { percentChange: number | null
   );
 }
 
-function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null; onClose: () => void }) {
+function numericMetricValue(value: MetricValueRow | null | undefined): number | null {
+  if (!value) return null;
+  const candidate = value.valueNumeric ?? value.value;
+  if (candidate === null || candidate === undefined || candidate === "") return null;
+  const numeric = Number(candidate);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function MetricDetailDialog({
+  metric,
+  scopeSiteId,
+  selectedPeriod,
+}: {
+  metric: MetricSummary | null;
+  scopeSiteId: string;
+  selectedPeriod: string | null;
+}) {
+  const encodedScope = encodeURIComponent(scopeSiteId);
   const { data: historyData } = useQuery<any>({
-    queryKey: ["/api/metrics", metric?.id, "history"],
+    queryKey: ["/api/metrics", metric?.id, "history", scopeSiteId],
     queryFn: () => {
-        return authFetch(`/api/metrics/${metric?.id}/history?siteId=__all__`).then(r => r.json());
+        return authFetch(`/api/metrics/${metric?.id}/history?siteId=${encodedScope}`).then(r => r.json());
       },
     enabled: !!metric?.id,
   });
   const { data: evidence = [] } = useQuery<MetricEvidenceFile[]>({
-    queryKey: ["/api/metrics", metric?.id, "evidence"],
-    queryFn: () => authFetch(`/api/metrics/${metric?.id}/evidence?siteId=__all__`).then(r => r.json()),
+    queryKey: ["/api/metrics", metric?.id, "evidence", scopeSiteId],
+    queryFn: () => authFetch(`/api/metrics/${metric?.id}/evidence?siteId=${encodedScope}`).then(r => r.json()),
     enabled: !!metric?.id,
   });
 
@@ -151,7 +176,7 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
   const history = historyData?.history || [];
   const chartData = history.map((h: any) => ({
     period: h.period?.replace(/^\d{4}-/, ""),
-    value: h.value ? Number(h.value) : null,
+    value: numericMetricValue(h),
   }));
 
   return (
@@ -181,15 +206,17 @@ function MetricDetailDialog({ metric, onClose }: { metric: MetricSummary | null;
 
         <div className="grid grid-cols-3 gap-3">
           <div className="p-3 bg-muted/50 rounded-md text-center">
-            <p className="text-xs text-muted-foreground">Current</p>
+            <p className="text-xs text-muted-foreground">
+              {selectedPeriod ? `Selected (${selectedPeriod})` : "Latest"}
+            </p>
             <p className="text-lg font-bold" data-testid="text-current-value">
-              {metric.latestValue != null ? metric.latestValue.toLocaleString() : "—"}
+              {metric.latestDisplayValue || "—"}
             </p>
           </div>
           <div className="p-3 bg-muted/50 rounded-md text-center">
             <p className="text-xs text-muted-foreground">Previous</p>
-            <p className="text-lg font-bold">
-              {metric.previousValue != null ? metric.previousValue.toLocaleString() : "—"}
+            <p className="text-lg font-bold" data-testid="text-previous-value">
+              {metric.previousDisplayValue || "—"}
             </p>
           </div>
           <div className="p-3 bg-muted/50 rounded-md text-center">
@@ -294,7 +321,7 @@ function MetricRow({ metric, onClick }: { metric: MetricSummary; onClick: () => 
       <div className="flex items-center gap-2 sm:gap-4 shrink-0">
         <div className="text-right">
           <p className="text-sm font-bold">
-            {metric.latestValue != null ? metric.latestValue.toLocaleString() : "—"}
+            {metric.latestDisplayValue || "—"}
           </p>
           <p className="text-xs text-muted-foreground">{metric.unit || ""}</p>
         </div>
@@ -308,6 +335,13 @@ function MetricRow({ metric, onClick }: { metric: MetricSummary; onClick: () => 
 }
 
 export default function Metrics() {
+  const [, setLocation] = useLocation();
+  const searchString = useSearch();
+  const searchParams = new URLSearchParams(searchString);
+  const requestedMetricId = searchParams.get("metric");
+  const requestedPeriod = searchParams.get("period");
+  const requestedMetricPeriod = searchParams.get("metricPeriod") || requestedPeriod;
+  const requestedSiteId = searchParams.get("siteId") || "__all__";
   const [selectedMetric, setSelectedMetric] = useState<MetricSummary | null>(null);
   const [activeTab, setActiveTab] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -327,8 +361,8 @@ export default function Metrics() {
   const enabledMetricsWithRows = enabledMetrics.filter((metric) => metric.id);
   const historyQueries = useQueries({
     queries: enabledMetricsWithRows.map((metric) => ({
-      queryKey: ["/api/metrics", metric.id, "values"],
-      queryFn: () => authFetch(`/api/metrics/${metric.id}/values?siteId=__all__`).then((r) => r.json() as Promise<MetricValueRow[]>),
+      queryKey: ["/api/metrics", metric.id, "values", requestedSiteId],
+      queryFn: () => authFetch(`/api/metrics/${metric.id}/values?siteId=${encodeURIComponent(requestedSiteId)}`).then((r) => r.json() as Promise<MetricValueRow[]>),
       staleTime: 60_000,
     })),
   });
@@ -347,11 +381,19 @@ export default function Metrics() {
   }
 
   const metrics: MetricSummary[] = enabledMetrics.map((metric) => {
-    const values = metric.id ? (historyByMetricId.get(metric.id) || []) : [];
-    const latest = values[0];
-    const previous = values[1];
-    const latestValue = latest?.value !== null && latest?.value !== undefined ? Number(latest.value) : null;
-    const previousValue = previous?.value !== null && previous?.value !== undefined ? Number(previous.value) : null;
+    const values = metric.id
+      ? [...(historyByMetricId.get(metric.id) || [])].sort((a, b) => b.period.localeCompare(a.period))
+      : [];
+    const latest = requestedMetricPeriod
+      ? values.find((value) => value.period === requestedMetricPeriod)
+      : values[0];
+    const previous = requestedMetricPeriod
+      ? values.find((value) => value.period < requestedMetricPeriod)
+      : values[1];
+    const latestValue = numericMetricValue(latest);
+    const previousValue = numericMetricValue(previous);
+    const latestDisplayValue = latest ? formatMetricDisplayValue(latest) || null : null;
+    const previousDisplayValue = previous ? formatMetricDisplayValue(previous) || null : null;
     const computedPercentChange = latest?.percentChange !== null && latest?.percentChange !== undefined
       ? Number(latest.percentChange)
       : (latestValue !== null && previousValue !== null && previousValue !== 0
@@ -366,17 +408,20 @@ export default function Metrics() {
       direction: metric.direction || "higher_is_better",
       latestValue,
       previousValue,
-      status: latest?.status || (latestValue !== null ? "green" : "missing"),
+      latestDisplayValue,
+      previousDisplayValue,
+      status: resolveMetricWorkspaceStatus(metric.direction, latest),
       percentChange: computedPercentChange,
       target: null,
       helpText: metric.helpText,
       formulaText: metric.formulaText,
       trend: values.slice(0, 6).reverse().map((value) => ({
         period: value.period,
-        value: value.value !== null && value.value !== undefined ? Number(value.value) : null,
+        value: numericMetricValue(value),
       })),
     };
   });
+  const activeMetricDetail = selectedMetric || metrics.find((metric) => metric.id === requestedMetricId) || null;
 
   const statusCounts = metrics.reduce(
     (acc, metric) => {
@@ -392,18 +437,30 @@ export default function Metrics() {
   if (statusFilter !== "all") filtered = filtered.filter(m => m.status === statusFilter);
   if (typeFilter !== "all") filtered = filtered.filter(m => m.metricType === typeFilter);
 
+  const dataEntryParams = new URLSearchParams();
+  if (requestedPeriod) dataEntryParams.set("period", requestedPeriod);
+  if (searchParams.has("siteId")) dataEntryParams.set("siteId", requestedSiteId);
+  const dataEntryHref = `/data-entry${dataEntryParams.toString() ? `?${dataEntryParams.toString()}` : ""}`;
+  const closeRequestedMetric = () => {
+    setSelectedMetric(null);
+    if (!requestedMetricId) return;
+    const nextParams = new URLSearchParams(searchString);
+    nextParams.delete("metric");
+    setLocation(`/metrics${nextParams.toString() ? `?${nextParams.toString()}` : ""}`, { replace: true });
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
       <PageGuidance
         pageKey="metrics"
         title="Metrics — what this page does"
-        summary="This page shows the ESG metrics your company is currently tracking. Use Metrics Library to enable or disable metrics and add manual metrics. Use Enter Data to add figures for eligible enabled metrics each period."
+        summary="Metrics & data shows what your company tracks, what needs updating and which values need evidence. Use Manage metrics to change the metric set."
         goodLooksLike="At least 5–10 metrics enabled across environmental, social, and governance categories, with data entered for the current and previous 3 months."
         steps={[
           "Review the metrics your company is currently tracking",
           "Pay attention to 'calculated' metrics — these auto-update when you enter raw data",
-          "Go to Enter Data to log values for the current period",
-          "Use Metrics Library to browse the wider catalog of available definitions",
+          "Open Metrics & data to log values for the current period",
+          "Choose Manage metrics to browse the wider catalogue of available definitions",
         ]}
       />
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -417,6 +474,11 @@ export default function Metrics() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href={dataEntryHref}>
+            <Button variant="outline" size="sm" data-testid="button-back-to-metrics-data-history">
+              Back to Metrics &amp; data
+            </Button>
+          </Link>
           <Badge variant="secondary" data-testid="badge-metric-count">{metrics.length} metrics</Badge>
         </div>
       </div>
@@ -482,12 +544,12 @@ export default function Metrics() {
               <p className="text-xs text-muted-foreground mt-1">Metrics are the individual measurements that make up your ESG score — things like carbon emissions, headcount, and whether policies are in place.</p>
             </div>
             <p className="text-xs text-muted-foreground">
-              Open Metrics Library to enable the metrics relevant to your business, add a custom manual metric, or complete onboarding to have recommended metrics pre-selected for your industry.
+              Choose Manage metrics to enable the measurements relevant to your business, add a custom manual metric, or complete onboarding to have recommended metrics pre-selected for your industry.
             </p>
             <div className="flex items-center justify-center gap-2">
-              <Link href="/metrics-library">
+              <Link href="/data-entry?manage=metrics">
                 <Button size="sm" variant="outline" data-testid="button-metrics-empty-library">
-                  Open Metrics Library
+                  Manage metrics
                 </Button>
               </Link>
               <Link href="/onboarding">
@@ -508,8 +570,18 @@ export default function Metrics() {
         )}
       </div>
 
-      <Dialog open={!!selectedMetric} onOpenChange={open => !open && setSelectedMetric(null)}>
-        <MetricDetailDialog metric={selectedMetric} onClose={() => setSelectedMetric(null)} />
+      <Dialog
+        open={!!activeMetricDetail}
+        onOpenChange={(open) => {
+          if (open) return;
+          closeRequestedMetric();
+        }}
+      >
+        <MetricDetailDialog
+          metric={activeMetricDetail}
+          scopeSiteId={requestedSiteId}
+          selectedPeriod={requestedMetricPeriod}
+        />
       </Dialog>
     </div>
   );

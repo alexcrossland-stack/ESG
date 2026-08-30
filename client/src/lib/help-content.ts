@@ -186,8 +186,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Your first three actions",
         items: [
           "Check the activation checklist on your dashboard. It shows exactly what is still missing to get your account fully set up.",
-          "Go to Data and Evidence > Enter Data and add your first data point — for example, your electricity usage for last month. Even a rough figure is fine for now.",
-          "Go to Data and Evidence > Evidence and upload one supporting document — for example, a recent utility bill or invoice. This builds your evidence trail from day one.",
+          "Open Data & evidence, choose Update data, then use Guided entry to add your first data point — for example, your electricity usage for last month. Even a rough figure is fine for now.",
+          "Open Data & evidence > Documents and upload one supporting document — for example, a recent utility bill or invoice. This builds your evidence trail from day one.",
         ],
       },
       {
@@ -221,9 +221,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "steps",
         heading: "How to add a data point",
         items: [
-          "Click 'Data and Evidence' in the sidebar, then click 'Enter Data'.",
-          "You will see a list of your active metrics grouped by category (Environmental, Social, Governance). Click on any metric to expand it.",
-          "Select the reporting period — for example, 'January 2024' for a monthly metric or 'Q1 2024' for a quarterly one.",
+          "Click 'Data & evidence' in the sidebar. Metrics & data opens with the reporting period and site controls at the top.",
+          "Use the Needs update filter to find a missing or rejected value, then choose 'Add data' or 'Update' on that metric.",
+          "Select the reporting month that contains the value. Quarterly and annual metrics automatically use the matching quarter or year.",
           "Type the value in the input field. Check the unit shown — for electricity this is kWh, for employees it is a headcount number.",
           "Add a note if helpful (for example, 'From invoice ref INV-001').",
           "Click 'Save'. The value is saved immediately.",
@@ -237,7 +237,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         type: "text",
         heading: "What happens after you save",
-        content: "Your dashboard score updates to reflect the new data. If your metric has a target set, the value is compared against the target automatically. You can upload a supporting document (such as the bill or invoice) by clicking 'Upload evidence' on the same page.",
+        content: "Your dashboard score updates to reflect the new data. If your metric has a target set, the value is compared against the target automatically. You can attach a supporting document (such as the bill or invoice) in the metric detail.",
       },
       {
         type: "callout",
@@ -279,7 +279,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "steps",
         heading: "How to upload an evidence file",
         items: [
-          "Go to Data and Evidence > Evidence in the sidebar.",
+          "Go to Data & evidence > Documents in the sidebar.",
           "Click 'Upload Evidence'.",
           "Choose the file from your computer. Accepted formats: PDF, Word (DOCX), Excel (XLSX), PNG, JPG. Maximum size: 25 MB.",
           "Add a title and optional description so you can find it easily later.",
@@ -318,8 +318,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "steps",
         heading: "How to edit a value",
         items: [
-          "Go to Data and Evidence > Enter Data.",
-          "Find the metric you want to update and click to expand it.",
+          "Go to Data & evidence > Metrics & data.",
+          "Find the metric you want to change and choose 'Update'.",
           "Select the period that contains the value you want to change.",
           "The current saved value appears in the input field. Type the corrected figure.",
           "Update the note if needed to explain the change.",
@@ -487,9 +487,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "list",
         heading: "Common reasons for incomplete sections",
         items: [
-          "No data entered yet: You have not added any values for the metrics in that section. Go to Data and Evidence > Enter Data and add values for the missing metrics.",
+          "No data entered yet: You have not added any values for the metrics in that section. Go to Data & evidence > Metrics & data, select Needs update, and add the missing values.",
           "Data is in draft status: Values saved as Draft are not counted in the score. Submit the values to include them.",
-          "Metrics are not active: If a metric is turned off, it does not contribute to the score. Go to Data and Evidence > Metrics and turn on the metrics you want to track.",
+          "Metrics are not active: If a metric is turned off, it does not contribute to the score. Go to Data & evidence > Metrics & data > Manage metrics and turn on the metrics you want to track.",
           "The reporting period has changed: If a new period has begun (for example, a new month or quarter), data from the previous period does not count for the current one. Add data for the new period.",
           "Topics are not selected: Some metrics are only visible if the related ESG topic is selected. Go to ESG Setup > Topics and make sure the relevant topics are turned on.",
         ],
@@ -526,7 +526,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         items: [
           "Add data for metrics that currently show no value. Each metric with a value counts towards your completeness score — this is the biggest driver of improvement.",
           "Upload evidence for the data you have entered. Evidence files increase your data quality score and make your data more credible to auditors.",
-          "Set targets for your most important metrics. Go to Data and Evidence > Metrics, open a metric, and add a target value.",
+          "Set targets for your most important metrics. Go to Data & evidence > Metrics & data > Manage metrics, open a metric, and add a target value.",
           "Add a policy if you do not have one yet. Go to ESG Setup > Policy Generator or Policy Templates and create an ESG policy.",
           "Assign data owners to your metrics. Each metric assigned to a named person contributes to your maturity score.",
           "Review any outstanding actions in ESG Setup > Advanced > Targets and Actions and mark completed ones as done.",
@@ -935,16 +935,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
         type: "list",
         heading: "Common reasons",
         items: [
-          "No data has been entered yet: Your score is calculated from data you submit. If no data has been saved, the score cannot be calculated. Go to Enter Data and add your first values.",
-          "Data is saved as Draft: Draft values do not count towards your score. Find the data in Enter Data and change the status from Draft to Submitted.",
-          "No metrics are active: If all your metrics are turned off, there is nothing to score. Go to Metrics and check that at least some metrics are set to active.",
+          "No data has been entered yet: Your score is calculated from data you submit. If no data has been saved, the score cannot be calculated. Open Metrics & data, select Needs update, and add your first values.",
+          "Data is saved as Draft: Draft values do not count towards your score. Find the metric in Metrics & data and change the status from Draft to Submitted.",
+          "No metrics are active: If all your metrics are turned off, there is nothing to score. Open Metrics & data > Manage metrics and check that at least some metrics are active.",
           "The setup wizard is not complete: Your score only shows after you have completed the setup wizard. Go to the dashboard and complete any remaining steps in the activation checklist.",
         ],
       },
       {
         type: "callout",
         tone: "tip",
-        content: "The quickest way to get a score showing is to add data for just one metric. Go to Enter Data, pick any active metric, add a value for the current period, and click Save.",
+        content: "The quickest way to get a score showing is to add data for just one metric. Open Metrics & data, choose Add data on a missing metric, enter a value for the current period, and click Save.",
       },
       {
         type: "text",

@@ -53,7 +53,7 @@ type ExistingMetricValue = {
   hasEvidence: boolean;
 };
 
-type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled"> & {
+type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled" | "frequency"> & {
   dataType: string;
   readOnly: boolean;
 };
@@ -153,6 +153,17 @@ function parseStoredValue(value: string | null | undefined, valueText?: string |
   if (raw === null || raw === undefined || raw === "") return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getExistingValueProtectionReason(existing: ExistingMetricValue | undefined): ValueProtectionReason | null {
+  if (!existing) return null;
+  const effectiveDataSourceType = existing.dataSourceType === "evidenced" && !existing.hasEvidence
+    ? "manual"
+    : existing.dataSourceType;
+  return getValueProtectionReason({
+    ...existing,
+    dataSourceType: effectiveDataSourceType,
+  });
 }
 
 type NormalizedBulkValue = {
@@ -279,6 +290,7 @@ async function loadCompanyMetrics(companyId: string): Promise<BulkGridMetric[]> 
     category: metric.category,
     unit: metric.unit,
     metricType: metric.metricType,
+    frequency: metric.frequency ?? "monthly",
     enabled: Boolean(metric.enabled),
     dataType: resolveMetricDataType(metric, definitionDataTypeByMetricName.get(normalizeMetricName(metric.name))),
     readOnly: false,
@@ -314,6 +326,8 @@ async function loadMetricValues(
           FROM ${evidenceFiles}
           WHERE ${evidenceFiles.companyId} = ${companyId}
             AND ${evidenceFiles.siteId} IS NOT DISTINCT FROM ${metricValues.siteId}
+            AND ${evidenceFiles.evidenceStatus} IN ('uploaded', 'available', 'reviewed', 'approved')
+            AND (${evidenceFiles.expiryDate} IS NULL OR ${evidenceFiles.expiryDate} >= NOW())
             AND (
               (${evidenceFiles.linkedModule} = 'metric_value' AND ${evidenceFiles.linkedEntityId} = ${metricValues.id})
               OR (
@@ -389,6 +403,9 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
   const companyMetrics = await loadCompanyMetrics(companyId);
   const eligibleMetrics = companyMetrics
     .filter(isActiveEditableDataEntryMetric)
+    // The paste grid is intentionally month-column based. Quarterly and annual
+    // metrics use their canonical period in the metric detail editor instead.
+    .filter((metric) => !metric.frequency || metric.frequency === "monthly")
     .sort((a, b) => {
       if (a.category !== b.category) return a.category.localeCompare(b.category);
       return a.name.localeCompare(b.name);
@@ -399,6 +416,7 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
       category: metric.category,
       unit: metric.unit,
       metricType: metric.metricType,
+      frequency: metric.frequency,
       enabled: Boolean(metric.enabled),
       dataType: metric.dataType,
       readOnly: false,
@@ -479,14 +497,22 @@ export async function validateBulkMetricPaste(params: {
       : undefined;
     const errors: string[] = [];
     const warnings: string[] = [];
-    const readOnly = Boolean(metric && (!metric.enabled || (metric.metricType && metric.metricType !== "manual")));
+    const readOnly = Boolean(metric && (
+      !metric.enabled
+      || (metric.metricType && metric.metricType !== "manual")
+      || (metric.frequency && metric.frequency !== "monthly")
+    ));
     const locked = Boolean(existing?.locked) || lockedPeriods.has(cell.period);
-    const protectionReason = getValueProtectionReason(existing);
+    const protectionReason = getExistingValueProtectionReason(existing);
     const protectedValue = protectionReason !== null && protectionReason !== "locked";
 
     if (!metric) errors.push("Unknown metric");
     if (!validPeriod) errors.push("Invalid reporting period");
-    if (readOnly) errors.push("This cell is read-only");
+    if (readOnly) {
+      errors.push(metric?.frequency && metric.frequency !== "monthly"
+        ? `Use metric details to update this ${metric.frequency} metric`
+        : "This cell is read-only");
+    }
     if (locked) errors.push("This reporting period is locked");
     if (protectedValue && protectionReason) errors.push(protectedValueMessage("This value", protectionReason));
     if (seenKeys.has(currentKey)) {
@@ -648,7 +674,7 @@ export async function commitBulkMetricPaste(params: {
     const changedKeys = new Set(changedCells.map((cell) => cellKey(cell.metricId, cell.period)));
     const protectedRows = currentRows
       .filter((row) => changedKeys.has(cellKey(row.metricId, row.period)))
-      .map((row) => ({ row, reason: getValueProtectionReason(row) }))
+      .map((row) => ({ row, reason: getExistingValueProtectionReason(row) }))
       .filter((entry): entry is { row: ExistingMetricValue; reason: ValueProtectionReason } => entry.reason !== null);
     if (protectedRows.length > 0) {
       const first = protectedRows[0];
@@ -707,13 +733,14 @@ export async function commitBulkMetricPaste(params: {
             data_source_type = EXCLUDED.data_source_type
           WHERE metric_values.locked = false
             AND COALESCE(metric_values.workflow_status::text, 'draft') = 'draft'
-            AND COALESCE(metric_values.data_source_type::text, 'manual') <> 'evidenced'
             AND metric_values.reviewed_by IS NULL
             AND metric_values.reviewed_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM evidence_files ef
               WHERE ef.company_id = ${companyId}
                 AND ef.site_id IS NOT DISTINCT FROM metric_values.site_id
+                AND ef.evidence_status IN ('uploaded', 'available', 'reviewed', 'approved')
+                AND (ef.expiry_date IS NULL OR ef.expiry_date >= NOW())
                 AND (
                   (ef.linked_module = 'metric_value' AND ef.linked_entity_id = metric_values.id)
                   OR (
@@ -772,13 +799,14 @@ export async function commitBulkMetricPaste(params: {
             data_source_type = EXCLUDED.data_source_type
           WHERE metric_values.locked = false
             AND COALESCE(metric_values.workflow_status::text, 'draft') = 'draft'
-            AND COALESCE(metric_values.data_source_type::text, 'manual') <> 'evidenced'
             AND metric_values.reviewed_by IS NULL
             AND metric_values.reviewed_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM evidence_files ef
               WHERE ef.company_id = ${companyId}
                 AND ef.site_id IS NOT DISTINCT FROM metric_values.site_id
+                AND ef.evidence_status IN ('uploaded', 'available', 'reviewed', 'approved')
+                AND (ef.expiry_date IS NULL OR ef.expiry_date >= NOW())
                 AND (
                   (ef.linked_module = 'metric_value' AND ef.linked_entity_id = metric_values.id)
                   OR (

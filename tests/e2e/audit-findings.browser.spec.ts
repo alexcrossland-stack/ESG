@@ -1,7 +1,14 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { seedTestTenants } from "../fixtures/seed.js";
 
 let isolatedAdminToken = "";
+
+async function openGuidedEntry(page: Page) {
+  await page.getByTestId("button-update-data").click();
+  await expect(page.getByTestId("menu-update-data")).toBeVisible();
+  await page.getByTestId("action-guided-entry").click();
+  await expect(page.getByTestId("panel-guided-entry")).toBeVisible();
+}
 
 test.describe.serial("Audit finding regressions", () => {
   test.beforeAll(async () => {
@@ -21,6 +28,7 @@ test.describe.serial("Audit finding regressions", () => {
     await expect(page.getByTestId("progress-sme-data-confidence")).toContainText("0%");
 
     await page.getByTestId("nav-enter-data").click();
+    await openGuidedEntry(page);
     await expect(page.getByTestId("input-raw-electricity_kwh")).toBeVisible();
     await page.getByTestId("input-raw-electricity_kwh").fill("12500");
     await page.getByTestId("input-raw-employee_headcount").fill("40");
@@ -58,6 +66,7 @@ test.describe.serial("Audit finding regressions", () => {
     expect(readiness.filledMetrics || 0).toBeGreaterThanOrEqual(2);
 
     await page.getByTestId("nav-enter-data").click();
+    await openGuidedEntry(page);
     await expect(page.getByTestId("input-raw-electricity_kwh")).toHaveValue("12500");
     await page.getByTestId("input-raw-electricity_kwh").clear();
     await page.getByTestId("input-raw-employee_headcount").clear();
@@ -88,6 +97,7 @@ test.describe.serial("Audit finding regressions", () => {
       });
     });
     await page.goto("/data-entry");
+    await openGuidedEntry(page);
     await expect(page.getByTestId("input-raw-electricity_kwh")).toBeVisible();
     await page.getByTestId("input-raw-electricity_kwh").fill("321");
 

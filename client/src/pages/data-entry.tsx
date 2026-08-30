@@ -13,7 +13,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -22,6 +27,7 @@ import {
   Upload, Download, FileSpreadsheet, Table, Eye,
   Send, Check, X, FileCheck, Loader2, ArrowRight, Sparkles, Pencil,
   Paperclip, Trash2, ExternalLink, FileText, Globe, MapPin, ChevronDown,
+  ArrowLeft, Search, Settings2,
 } from "lucide-react";
 import { format, subMonths } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
@@ -35,7 +41,7 @@ import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { ValueSourceBadge } from "@/components/value-source-badge";
-import { useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
@@ -45,6 +51,7 @@ import { formatMetricDisplayValue, isBooleanMetricDataType, isEditableDataEntryM
 import {
   INLINE_METRIC_EVIDENCE_LABELS,
   getInlineMetricEvidenceState,
+  isUsableMetricEvidence,
   type InlineMetricEvidenceState,
 } from "@/lib/metric-evidence-state";
 import { buildGuidedRawDataMutation } from "@/lib/guided-raw-data-mutation";
@@ -59,6 +66,13 @@ import {
   type WorkflowSubmitResponse,
 } from "@/lib/workflow-outcomes";
 import { GUIDED_RAW_INPUT_NAME_SET } from "@shared/guided-raw-inputs";
+import { MetricsLibraryContent } from "@/pages/metrics-library";
+import {
+  classifyMetricDataState,
+  resolveMetricWorkspacePeriod,
+  summarizeMetricDataStates,
+  type MetricDataWorkspaceState,
+} from "@/lib/metrics-data-workspace";
 
 const RAW_DATA_FIELDS = {
   environmental: [
@@ -95,6 +109,23 @@ const RAW_DATA_FIELDS = {
 
 const GUIDED_RAW_DATA_INPUT_KEYS = GUIDED_RAW_INPUT_NAME_SET;
 
+type DataWorkspaceMode = "overview" | "manual" | "raw" | "paste" | "manage";
+
+function resolveInitialWorkspaceMode(searchParams: URLSearchParams): DataWorkspaceMode {
+  const requestedMode = searchParams.get("mode");
+  if (searchParams.get("manage") === "metrics" || requestedMode === "manage") return "manage";
+  if (requestedMode === "guided" || requestedMode === "raw") return "raw";
+  if (requestedMode === "import" || requestedMode === "paste") return "paste";
+  if (
+    requestedMode === "manual"
+    || searchParams.has("metric")
+    || searchParams.has("metricId")
+    || searchParams.get("focus") === "evidence"
+    || searchParams.get("highlight") === "estimated"
+  ) return "manual";
+  return "overview";
+}
+
 const SME_STARTER_INPUT_KEYS = new Set([
   "electricity_kwh",
   "gas_kwh",
@@ -125,13 +156,21 @@ const CATEGORY_ICONS = {
 
 type MetricDefinitionActivation = {
   id: string;
+  code?: string | null;
   name: string;
   pillar: "environmental" | "social" | "governance";
+  category?: string | null;
   description?: string | null;
   unit?: string | null;
+  dataType?: string | null;
+  inputFrequency?: string | null;
+  isCore?: boolean | null;
   isActive: boolean;
   isDerived?: boolean;
   formulaJson?: Record<string, unknown> | null;
+  metricType?: string | null;
+  formulaText?: string | null;
+  evidenceRequired?: boolean | null;
 };
 
 type EvidenceAttachment = {
@@ -144,6 +183,7 @@ type EvidenceAttachment = {
   linkedEntityId: string | null;
   linkedPeriod: string | null;
   evidenceStatus: string | null;
+  expiryDate?: string | null;
   uploadedAt: string | null;
 };
 
@@ -153,6 +193,16 @@ function formatAttachmentSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function unavailableEvidenceLabel(evidence: EvidenceAttachment): string | null {
+  if (isUsableMetricEvidence(evidence)) return null;
+  if (evidence.expiryDate) {
+    const expiry = new Date(evidence.expiryDate);
+    if (!Number.isNaN(expiry.getTime()) && expiry.getTime() < Date.now()) return "Expired";
+  }
+  const status = evidence.evidenceStatus?.trim();
+  return status ? `${status.charAt(0).toUpperCase()}${status.slice(1).toLowerCase()}` : "Unavailable";
 }
 
 function QualityBadge({ score, metricId }: { score: number; metricId: string }) {
@@ -208,7 +258,9 @@ export default function DataEntry() {
   const searchParams = new URLSearchParams(searchString);
   const highlightEstimated = searchParams.get("highlight") === "estimated";
   const focusEvidence = searchParams.get("focus") === "evidence";
-  const focusedMetricId = searchParams.get("metricId");
+  const focusedMetricId = searchParams.get("metricId") || searchParams.get("metric");
+  const requestedPeriod = searchParams.get("period");
+  const requestedSiteScope = searchParams.get("siteId");
   const canApprove = can("report_generation");
   const canEdit = can("metrics_data_entry");
   const periods = generatePeriods();
@@ -216,10 +268,17 @@ export default function DataEntry() {
   const invalidateReadinessQueries = () => {
     invalidateEsgReadinessQueries(queryClient);
   };
-  const [selectedPeriod, setSelectedPeriod] = useState(periods[0]);
+  const [selectedPeriod, setSelectedPeriod] = useState(
+    requestedPeriod && periods.includes(requestedPeriod) ? requestedPeriod : periods[0],
+  );
+  const selectedQuarterPeriod = resolveMetricWorkspacePeriod(selectedPeriod, "quarterly");
+  const selectedAnnualPeriod = resolveMetricWorkspacePeriod(selectedPeriod, "annual");
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
   const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState(focusEvidence ? "manual" : "raw");
+  const [activeTab, setActiveTab] = useState<DataWorkspaceMode>(() => resolveInitialWorkspaceMode(searchParams));
+  const [metricSearch, setMetricSearch] = useState("");
+  const [metricStatusFilter, setMetricStatusFilter] = useState<MetricDataWorkspaceState | "all">("all");
+  const [focusedEntryMetricId, setFocusedEntryMetricId] = useState<string | null>(focusedMetricId);
   const [showAllInputs, setShowAllInputs] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
@@ -247,11 +306,33 @@ export default function DataEntry() {
     enabled: !sitesLoading,
   });
 
-  const { data: evidenceFiles = [] } = useQuery<EvidenceAttachment[]>({
+  const { data: monthlyEvidenceFiles = [], isLoading: monthlyEvidenceLoading } = useQuery<EvidenceAttachment[]>({
     queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("period", selectedPeriod);
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
+      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+    },
+    enabled: !sitesLoading,
+  });
+
+  const { data: quarterlyEvidenceFiles = [], isLoading: quarterlyEvidenceLoading } = useQuery<EvidenceAttachment[]>({
+    queryKey: ["/api/evidence", selectedQuarterPeriod, selectedScopeKey],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("period", selectedQuarterPeriod);
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
+      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+    },
+    enabled: !sitesLoading,
+  });
+
+  const { data: annualEvidenceFiles = [], isLoading: annualEvidenceLoading } = useQuery<EvidenceAttachment[]>({
+    queryKey: ["/api/evidence", selectedAnnualPeriod, selectedScopeKey],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("period", selectedAnnualPeriod);
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
       return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
     },
@@ -269,6 +350,11 @@ export default function DataEntry() {
   const { data: metricDefinitions = [], isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
     queryKey: ["/api/metric-definitions"],
     queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
+  });
+
+  const { data: companyMetrics = [], isLoading: companyMetricsLoading } = useQuery<any[]>({
+    queryKey: ["/api/metrics"],
+    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
   });
 
   const activeReportingPeriod = reportingPeriods.find((rp: any) => rp.id === selectedReportingPeriodId);
@@ -296,6 +382,28 @@ export default function DataEntry() {
     enabled: !sitesLoading,
   });
 
+  const { data: quarterlyEntryData, isLoading: quarterlyEntryLoading } = useQuery<any>({
+    queryKey: ["/api/data-entry", selectedQuarterPeriod, selectedScopeKey],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
+      const qs = params.toString();
+      return authFetch(`/api/data-entry/${selectedQuarterPeriod}${qs ? `?${qs}` : ""}`).then((r) => r.json());
+    },
+    enabled: !sitesLoading,
+  });
+
+  const { data: annualEntryData, isLoading: annualEntryLoading } = useQuery<any>({
+    queryKey: ["/api/data-entry", selectedAnnualPeriod, selectedScopeKey],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (hasActiveSites) params.set("siteId", selectedScopeParam);
+      const qs = params.toString();
+      return authFetch(`/api/data-entry/${selectedAnnualPeriod}${qs ? `?${qs}` : ""}`).then((r) => r.json());
+    },
+    enabled: !sitesLoading,
+  });
+
   useEffect(() => {
     if (rawData && Array.isArray(rawData)) {
       const inputs: Record<string, string> = {};
@@ -307,21 +415,48 @@ export default function DataEntry() {
   }, [rawData]);
 
   useEffect(() => {
-    if (entryData?.values) {
+    const periodValues = [entryData, quarterlyEntryData, annualEntryData].flatMap((data) => data?.values || []);
+    const metricPeriodsById = new Map(
+      buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics)
+        .filter((metric) => metric.id)
+        .map((metric) => [metric.id as string, resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType)]),
+    );
+    const selectedMetricPeriodValues = periodValues.filter((value: any) => (
+      metricPeriodsById.get(value.metricId) === value.period
+    ));
+    if (selectedMetricPeriodValues.length > 0) {
       const vals: Record<string, { value: string; notes: string }> = {};
       const dsTypes: Record<string, string> = {};
-      entryData.values.forEach((v: any) => {
+      selectedMetricPeriodValues.forEach((v: any) => {
         vals[v.metricId] = { value: formatMetricDisplayValue(v), notes: v.notes || "" };
         if (v.dataSourceType) dsTypes[v.metricId] = v.dataSourceType;
       });
       setManualValues(vals);
       setManualDataSourceTypes(dsTypes);
+    } else {
+      setManualValues({});
+      setManualDataSourceTypes({});
     }
-  }, [entryData]);
+  }, [entryData, quarterlyEntryData, annualEntryData, metricDefinitions, companyMetrics, selectedPeriod]);
 
   useEffect(() => {
-    if (focusEvidence) setActiveTab("manual");
-  }, [focusEvidence]);
+    const requestedMode = resolveInitialWorkspaceMode(searchParams);
+    setActiveTab(requestedMode);
+    if (requestedMode === "manual") setFocusedEntryMetricId(focusedMetricId);
+    else if (requestedMode === "overview") setFocusedEntryMetricId(null);
+    if (requestedPeriod && periods.includes(requestedPeriod)) setSelectedPeriod(requestedPeriod);
+  }, [focusedMetricId, searchString]);
+
+  useEffect(() => {
+    if (!requestedSiteScope || sitesLoading) return;
+    if (requestedSiteScope === "__org__" || requestedSiteScope === "null") {
+      if (activeSiteId !== null) setActiveSiteId(null);
+      return;
+    }
+    if (activeSites.some((site: any) => site.id === requestedSiteScope) && activeSiteId !== requestedSiteScope) {
+      setActiveSiteId(requestedSiteScope);
+    }
+  }, [activeSiteId, activeSites, requestedSiteScope, setActiveSiteId, sitesLoading]);
 
   const activation = useActivationState();
 
@@ -352,7 +487,7 @@ export default function DataEntry() {
     mutationFn: () => apiRequest("POST", `/api/metrics/recalculate/${selectedPeriod}`, { siteId: selectedScopeSiteId }).then(r => r.json()),
     onSuccess: (data: any) => {
       setRecalcResults(data.updated || []);
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       invalidateReadinessQueries();
       const protectedCount = (data.guidedMetricSync?.skippedProtected?.length || 0)
         + (data.guidedMetricSync?.skippedLocked?.length || 0)
@@ -392,15 +527,15 @@ export default function DataEntry() {
       }).then((response) => response.json());
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
-      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
       invalidateReadinessQueries();
     },
     onError: (error: ApiRequestError) => {
       if (error.code === "EVIDENCE_PROVENANCE_PARTIAL_SUCCESS" && error.partialSuccess) {
-        queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
-        queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+        queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
         queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
         invalidateReadinessQueries();
         toast({
@@ -411,8 +546,8 @@ export default function DataEntry() {
         return;
       }
       if (error.code === "ATTACHMENT_PARTIAL_SUCCESS" && error.partialSuccess) {
-        queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
-        queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+        queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
         queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
         invalidateReadinessQueries();
         toast({
@@ -433,9 +568,9 @@ export default function DataEntry() {
   const deleteEvidenceMutation = useMutation({
     mutationFn: (evidenceId: string) => apiRequest("DELETE", `/api/evidence/${evidenceId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey] });
+      queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       invalidateReadinessQueries();
       toast({ title: "Evidence removed" });
     },
@@ -485,7 +620,7 @@ export default function DataEntry() {
       apiRequest("POST", "/api/data-entry", { ...estimate, period: selectedPeriod, dataSourceType: "estimated", siteId: selectedScopeSiteId }),
     onSuccess: (_, vars) => {
       setAcceptedEstimates(prev => new Set([...Array.from(prev), vars.metricId]));
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       invalidateReadinessQueries();
     },
     onError: () => toast({ title: "Could not save estimate", variant: "destructive" }),
@@ -499,7 +634,7 @@ export default function DataEntry() {
       setEditingEstimate(null);
       setEditEstimateValue("");
       setEditSaveAsActual(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       invalidateReadinessQueries();
       toast({ title: "Value saved", description: vars.saveAsActual ? "Saved as actual data." : "Saved as edited estimate." });
     },
@@ -526,7 +661,7 @@ export default function DataEntry() {
   const lockMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/data-entry/${selectedPeriod}/lock`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       toast({ title: `Period ${selectedPeriod} locked` });
     },
     onError: (error: unknown) => {
@@ -547,7 +682,7 @@ export default function DataEntry() {
       return combineWorkflowSubmitResponses(items.length, [result]);
     },
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       invalidateReadinessQueries();
       const notice = workflowSubmitNotice(result);
@@ -576,7 +711,7 @@ export default function DataEntry() {
       }>;
     },
     onSuccess: (result, { action }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       invalidateReadinessQueries();
       const notice = workflowReviewNotice(result, action);
@@ -596,7 +731,7 @@ export default function DataEntry() {
     mutationFn: (item: DataEntryWorkflowItem) =>
       apiRequest("POST", "/api/workflow/revise", item).then((response) => response.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry", selectedPeriod] });
+      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/raw-data", selectedPeriod] });
       invalidateReadinessQueries();
       toast({ title: "Revision started", description: "Correct the rejected item, save it, then submit it again." });
@@ -645,7 +780,7 @@ export default function DataEntry() {
     await recalcMutation.mutateAsync();
   };
 
-  const handleSaveManual = async (metricKey: string, metricId: string) => {
+  const handleSaveManual = async (metricKey: string, metricId: string, metricPeriod: string) => {
     const val = manualValues[metricKey];
     if (!val?.value) return;
     const selectedSourceType = manualDataSourceTypes[metricKey] || "manual";
@@ -657,7 +792,7 @@ export default function DataEntry() {
     try {
       await saveManualMutation.mutateAsync({
         metricId,
-        period: selectedPeriod,
+        period: metricPeriod,
         value: val.value,
         notes: val.notes,
         dataSourceType,
@@ -684,7 +819,7 @@ export default function DataEntry() {
     }
     const isFirstData = !activation.hasAddedData;
     if (isFirstData) {
-      trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: selectedPeriod, source: "manual" });
+      trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: metricPeriod, source: "manual" });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/status"] });
     }
     toast({
@@ -697,27 +832,50 @@ export default function DataEntry() {
     });
   };
 
-  const metrics = entryData?.metrics || [];
-  const existingValues = entryData?.values || [];
+  const monthlyExistingValues = entryData?.values || [];
+  const existingValues = [
+    ...monthlyExistingValues,
+    ...(quarterlyEntryData?.values || []),
+    ...(annualEntryData?.values || []),
+  ];
+  const evidenceFiles = [
+    ...monthlyEvidenceFiles,
+    ...quarterlyEvidenceFiles,
+    ...annualEvidenceFiles,
+  ];
   const isSelectedScopeValue = (value: any) =>
     selectedScopeSiteId === null
       ? value?.siteId === null || value?.siteId === undefined
       : value?.siteId === selectedScopeSiteId;
-  const scopedExistingValues = existingValues.filter(isSelectedScopeValue);
-  const isLocked = Boolean(entryData?.periodLocked) || scopedExistingValues.some((v: any) => v.locked);
+  const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics);
+  const selectedMetricPeriodsById = new Map(
+    allEnabledMetrics
+      .filter((metric) => metric.id)
+      .map((metric) => [
+        metric.id as string,
+        resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType),
+      ]),
+  );
+  const scopedExistingValues = existingValues.filter((value: any) => (
+    isSelectedScopeValue(value) && selectedMetricPeriodsById.get(value.metricId) === value.period
+  ));
+  const scopedMonthlyExistingValues = monthlyExistingValues.filter(isSelectedScopeValue);
+  const isLocked = Boolean(entryData?.periodLocked) || scopedMonthlyExistingValues.some((v: any) => v.locked);
   const workflowCounts = summarizeDataEntryWorkflow(scopedExistingValues, rawData || []);
   const draftWorkflowItems = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["draft"]);
   const submittedWorkflowItems = selectDataEntryWorkflowItems(scopedExistingValues, rawData || [], ["submitted"]);
-  const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, metrics);
   const canonicalEvidenceMetrics = buildCanonicalEvidenceMetrics(allEnabledMetrics, evidenceCoverage?.metricCoverage || []);
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && isEditableDataEntryMetricType(metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
-  const visibleManualMetrics = eligibleMetrics;
   const editDisabled = isLocked || !canEdit || isReportingPeriodLocked;
-  const getMetricEvidence = (metricValueId?: string, metricId?: string | null) =>
+  const getMetricEvidence = (metricValueId: string | undefined, metricId: string | null | undefined, metricPeriod: string) =>
     evidenceFiles.filter((file: any) => (
       (metricValueId && file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId) ||
-      (metricId && (file.metricId === metricId || (file.linkedModule === "metric" && file.linkedEntityId === metricId)))
+      (
+        metricId
+        && file.linkedPeriod === metricPeriod
+        && (file.metricId === metricId || (file.linkedModule === "metric" && file.linkedEntityId === metricId))
+      )
     ));
   const queueMetricAttachments = (metricKey: string, files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -732,17 +890,77 @@ export default function DataEntry() {
       [metricKey]: (prev[metricKey] || []).filter((_, fileIndex) => fileIndex !== index),
     }));
   };
+  const focusedManualMetrics = focusedEntryMetricId
+    ? allEnabledMetrics.filter((metric: any) => (
+        metric.id === focusedEntryMetricId
+        || metric.definitionId === focusedEntryMetricId
+        || metric.key === focusedEntryMetricId
+      ))
+    : [];
+  const unresolvedFocusedDefinition = focusedEntryMetricId && focusedManualMetrics.length === 0
+    ? metricDefinitions.find((definition) => definition.id === focusedEntryMetricId) || null
+    : null;
+  const visibleManualMetrics = focusedEntryMetricId ? focusedManualMetrics : eligibleMetrics;
+  const focusedHistoryMetric = focusedEntryMetricId
+    ? focusedManualMetrics.find((metric: any) => metric.id) || null
+    : null;
+  const focusedHistoryMetricId = focusedHistoryMetric?.id || null;
+  const focusedHistoryPeriod = focusedHistoryMetric
+    ? resolveMetricWorkspacePeriod(selectedPeriod, focusedHistoryMetric.frequency, focusedHistoryMetric.metricType)
+    : selectedPeriod;
+  const metricWorkspaceRows = allEnabledMetrics.map((metric: any) => {
+    const metricId = metric.id || metric.metricId || null;
+    const metricKey = metricId || metric.key || metric.name;
+    const metricPeriod = resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType);
+    const metricValue = metricId
+      ? existingValues.find((value: any) => value.metricId === metricId && value.period === metricPeriod && isSelectedScopeValue(value))
+      : undefined;
+    const attachedEvidence = getMetricEvidence(metricValue?.id, metricId, metricPeriod);
+    const usableEvidence = attachedEvidence.filter((file) => isUsableMetricEvidence(file));
+    const displayValue = metricValue ? formatMetricDisplayValue(metricValue) : "";
+    const isEligible = isMetricEntryEligible(metric);
+    // Calculated/derived outputs do not require duplicate output-row evidence;
+    // their editable source rows carry the assurance requirements instead.
+    const evidenceRequiredForWorkspace = isEligible && Boolean(metric.evidenceRequired);
+    const state = classifyMetricDataState({
+      value: displayValue,
+      evidenceCount: usableEvidence.length,
+      evidenceRequired: evidenceRequiredForWorkspace,
+      requiresCorrection: normalizeDataEntryWorkflowStatus(metricValue?.workflowStatus) === "rejected",
+    });
+    return { metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state };
+  });
+  const metricWorkspaceSummary = summarizeMetricDataStates(metricWorkspaceRows.map((row) => row.state));
+  const normalizedMetricSearch = metricSearch.trim().toLowerCase();
+  const filteredMetricWorkspaceRows = metricWorkspaceRows.filter((row) => {
+    const matchesSearch = !normalizedMetricSearch
+      || row.metric.name.toLowerCase().includes(normalizedMetricSearch)
+      || (row.metric.description || "").toLowerCase().includes(normalizedMetricSearch);
+    const matchesStatus = metricStatusFilter === "all" || row.state === metricStatusFilter;
+    return matchesSearch && matchesStatus;
+  });
   const evidenceFocusStates = visibleManualMetrics.flatMap((metric: any) => {
+    if (!metric.evidenceRequired) return [];
     const metricId = metric.id || metric.metricId || null;
     if (!metricId) return [];
-    const metricValue = existingValues.find((value: any) => value.metricId === metricId && isSelectedScopeValue(value));
+    const metricPeriod = resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType);
+    const metricValue = existingValues.find((value: any) => value.metricId === metricId && value.period === metricPeriod && isSelectedScopeValue(value));
     if (!metricValue || formatMetricDisplayValue(metricValue) === "") return [];
-    return [getInlineMetricEvidenceState(getMetricEvidence(metricValue.id, metricId))];
+    return [getInlineMetricEvidenceState(getMetricEvidence(metricValue.id, metricId, metricPeriod))];
   });
   const evidenceFocusGapCount = evidenceFocusStates.filter(state => state === "missing").length;
   const evidenceFocusLinkedCount = evidenceFocusStates.length - evidenceFocusGapCount;
 
-  const isLoading = rawLoading || entryLoading || definitionsLoading || sitesLoading;
+  const isLoading = rawLoading
+    || entryLoading
+    || quarterlyEntryLoading
+    || annualEntryLoading
+    || monthlyEvidenceLoading
+    || quarterlyEvidenceLoading
+    || annualEvidenceLoading
+    || definitionsLoading
+    || companyMetricsLoading
+    || sitesLoading;
   if (isLoading) {
     return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>;
   }
@@ -753,19 +971,41 @@ export default function DataEntry() {
     const value = rawInputs[field.key];
     return value !== undefined && value !== null && value !== "";
   }).length;
-  const filledTrackedMetricCount = existingValues.filter((value: any) => (
-    isSelectedScopeValue(value) && value.value !== null && value.value !== undefined
-  )).length;
+  const filledTrackedMetricCount = metricWorkspaceRows.filter((row) => row.displayValue !== "").length;
+  const returnToMetricsOverview = () => {
+    setFocusedEntryMetricId(null);
+    setActiveTab("overview");
+    setLocation(`/data-entry?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`, { replace: true });
+  };
+  const navigateToWorkspaceMode = (mode: Exclude<DataWorkspaceMode, "overview">, metricId?: string) => {
+    const params = new URLSearchParams({ period: selectedPeriod, siteId: selectedScopeKey });
+    if (mode === "manage") params.set("manage", "metrics");
+    else if (mode === "raw") params.set("mode", "guided");
+    else if (mode === "paste") params.set("mode", "import");
+    else if (metricId) params.set("metric", metricId);
+    else params.set("mode", "manual");
+    setFocusedEntryMetricId(metricId ?? null);
+    setActiveTab(mode);
+    setLocation(`/data-entry?${params.toString()}`);
+  };
+  const changeWorkspacePeriod = (period: string) => {
+    setSelectedPeriod(period);
+    const params = new URLSearchParams(searchString);
+    params.set("period", period);
+    params.set("siteId", selectedScopeKey);
+    setLocation(`/data-entry?${params.toString()}`, { replace: true });
+  };
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
+          <p className="text-xs font-medium text-muted-foreground">Data &amp; evidence</p>
           <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-primary" />
-            Data &amp; evidence
+            Metrics &amp; data
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Build your ESG baseline from information already held in bills, payroll and business records.
+            See what needs updating, add figures and keep the evidence behind every result.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -775,7 +1015,7 @@ export default function DataEntry() {
               Read Only
             </Badge>
           )}
-          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+          {activeTab !== "manage" && <Select value={selectedPeriod} onValueChange={changeWorkspacePeriod}>
             <SelectTrigger className="w-36" data-testid="select-period">
               <SelectValue />
             </SelectTrigger>
@@ -784,11 +1024,35 @@ export default function DataEntry() {
                 <SelectItem key={p} value={p}>{p}</SelectItem>
               ))}
             </SelectContent>
-          </Select>
+          </Select>}
         </div>
       </div>
 
-      {hasActiveSites && (
+      <nav
+        className="grid h-auto w-full grid-cols-2 rounded-lg bg-muted p-1"
+        aria-label="Data and evidence workspace"
+      >
+        <Link
+          href={`/data-entry?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}
+          aria-current="page"
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm"
+          onClick={returnToMetricsOverview}
+          data-testid="tab-metrics-data"
+        >
+          <ClipboardList className="h-4 w-4" />
+          Metrics &amp; data
+        </Link>
+        <Link
+          href={`/evidence?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+          data-testid="tab-documents"
+        >
+          <FileCheck className="h-4 w-4" />
+          Documents
+        </Link>
+      </nav>
+
+      {activeTab !== "manage" && hasActiveSites && (
         <div className="rounded-md border border-primary/20 bg-primary/5 p-3" data-testid="data-entry-site-scope-panel">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-0.5">
@@ -804,6 +1068,10 @@ export default function DataEntry() {
               value={selectedScopeKey}
               onValueChange={(value) => {
                 setActiveSiteId(value === "__org__" ? null : value);
+                const params = new URLSearchParams(searchString);
+                params.set("period", selectedPeriod);
+                params.set("siteId", value);
+                setLocation(`/data-entry?${params.toString()}`, { replace: true });
                 setManualValues({});
                 setManualDataSourceTypes({});
                 setRawInputs({});
@@ -865,7 +1133,7 @@ export default function DataEntry() {
         </Alert>
       )}
 
-      <details className="group rounded-md border border-border bg-card" data-testid="disclosure-period-review-controls">
+      {activeTab !== "manage" && <details className="group rounded-md border border-border bg-card" data-testid="disclosure-period-review-controls">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm [&::-webkit-details-marker]:hidden">
           <span>
             <span className="font-medium">Period and review controls</span>
@@ -880,13 +1148,12 @@ export default function DataEntry() {
               variant={highlightEstimated ? "secondary" : "outline"}
               className="h-8 text-xs gap-1.5"
               onClick={() => {
-                if (highlightEstimated) {
-                  window.history.replaceState({}, "", "/data-entry");
-                } else {
-                  window.history.replaceState({}, "", "/data-entry?highlight=estimated");
-                }
-                window.dispatchEvent(new PopStateEvent("popstate"));
-                window.location.reload();
+                const nextParams = new URLSearchParams(searchString);
+                nextParams.set("period", selectedPeriod);
+                nextParams.set("siteId", selectedScopeKey);
+                if (highlightEstimated) nextParams.delete("highlight");
+                else nextParams.set("highlight", "estimated");
+                setLocation(`/data-entry?${nextParams.toString()}`, { replace: true });
               }}
               data-testid="button-review-estimates"
             >
@@ -926,7 +1193,7 @@ export default function DataEntry() {
           {evidenceCoverage && (
             <Badge variant="outline" className="text-xs gap-1" data-testid="badge-evidence-summary">
               <FileCheck className="w-3 h-3" />
-              {canonicalEvidenceMetrics.filter((m) => m.hasEvidence).length}/{allEnabledMetrics.length} enabled metrics evidenced
+              All-time evidence: {canonicalEvidenceMetrics.filter((m) => m.hasEvidence).length}/{allEnabledMetrics.length} enabled metrics
             </Badge>
           )}
           {workflowCounts.total > 0 && (
@@ -993,13 +1260,13 @@ export default function DataEntry() {
             </>
           )}
         </div>
-      </details>
+      </details>}
 
-      {highlightEstimated && Object.keys(pendingEstimates).length === 0 && !fetchEstimatesMutation.isPending && !estimateBannerDismissed && (
+      {activeTab !== "manage" && highlightEstimated && Object.keys(pendingEstimates).length === 0 && !fetchEstimatesMutation.isPending && !estimateBannerDismissed && (
         <Alert className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800" data-testid="banner-highlight-estimated">
           <Sparkles className="w-4 h-4 text-amber-600" />
           <AlertDescription className="flex items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Review your estimated values</p>
               <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Fields with estimated data are highlighted below. Replace them with actual figures, or load new estimates for any remaining empty fields.</p>
             </div>
@@ -1034,7 +1301,7 @@ export default function DataEntry() {
         </Alert>
       )}
 
-      {Object.keys(pendingEstimates).length > 0 && !estimateBannerDismissed && (
+      {activeTab !== "manage" && Object.keys(pendingEstimates).length > 0 && !estimateBannerDismissed && (
         <details className="group rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20" data-testid="card-estimate-prefill">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
             <div className="flex min-w-0 items-center gap-2">
@@ -1229,41 +1496,239 @@ export default function DataEntry() {
         </details>
       )}
 
-      {!canEdit && (
+      {activeTab !== "manage" && !canEdit && (
         <PermissionBanner
           module="metrics_data_entry"
-          action="enter or edit data"
+          customMessage="Your role can review metrics, values and evidence here, but cannot update them."
           testId="banner-data-entry-permission"
         />
       )}
 
-      {canEdit && (
+      {activeTab !== "manage" && canEdit && (
         <OwnershipHint owner="Finance, Operations, or HR — depending on the metric" action="Data entry" />
       )}
 
       <CarbonImportDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} period={selectedPeriod} />
 
-      <Tabs value={activeTab} onValueChange={value => value === "documents" ? setLocation("/evidence") : setActiveTab(value)}>
-        <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-4">
-          <TabsTrigger value="raw" className="min-h-11 whitespace-normal px-2 py-2 text-center leading-tight" data-testid="tab-raw-data">
-            <Calculator className="hidden w-3.5 h-3.5 sm:block" />
-            Guided inputs
-          </TabsTrigger>
-          <TabsTrigger value="manual" className="min-h-11 whitespace-normal px-2 py-2 text-center leading-tight" data-testid="tab-manual-entry">
-            <ClipboardList className="hidden w-3.5 h-3.5 sm:block" />
-            Tracked metrics
-          </TabsTrigger>
-          <TabsTrigger value="documents" className="min-h-11 whitespace-normal px-2 py-2 text-center leading-tight" data-testid="tab-documents">
-            <FileCheck className="hidden w-3.5 h-3.5 sm:block" />
-            Documents
-          </TabsTrigger>
-          <TabsTrigger value="paste" className="min-h-11 whitespace-normal px-2 py-2 text-center leading-tight" data-testid="tab-paste-excel">
-            <FileSpreadsheet className="hidden w-3.5 h-3.5 sm:block" />
-            Spreadsheet import
-          </TabsTrigger>
-        </TabsList>
+      <div>
+        {activeTab === "overview" && <section className="space-y-4">
+          <Card data-testid="metrics-data-overview">
+            <CardHeader className="gap-4 pb-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-1">
+                <CardTitle className="text-base">What needs updating?</CardTitle>
+                <CardDescription data-testid="metrics-data-summary">
+                  {metricWorkspaceSummary.complete} of {metricWorkspaceSummary.total} complete · {metricWorkspaceSummary.needsData} need updating · {metricWorkspaceSummary.needsEvidence} need evidence
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {canEdit && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button data-testid="button-update-data">
+                        Update data
+                        <ChevronDown className="ml-2 h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-64" data-testid="menu-update-data">
+                      <DropdownMenuItem
+                        className="items-start gap-3 py-3"
+                        onSelect={() => navigateToWorkspaceMode("raw")}
+                        data-testid="action-guided-entry"
+                      >
+                        <Calculator className="mt-0.5 h-4 w-4 text-primary" />
+                        <span>
+                          <span className="block font-medium" data-testid="tab-raw-data">Guided entry</span>
+                          <span className="block text-xs text-muted-foreground">Use bills, payroll and records to update related metrics.</span>
+                        </span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="items-start gap-3 py-3"
+                        onSelect={() => navigateToWorkspaceMode("paste")}
+                        data-testid="action-spreadsheet-import"
+                      >
+                        <FileSpreadsheet className="mt-0.5 h-4 w-4 text-primary" />
+                        <span>
+                          <span className="block font-medium" data-testid="tab-paste-excel">Import spreadsheet</span>
+                          <span className="block text-xs text-muted-foreground">Paste a table or upload a prepared CSV file.</span>
+                        </span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigateToWorkspaceMode("manage")}
+                  data-testid="button-manage-metrics"
+                >
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  {canEdit ? "Manage metrics" : "View metric set"}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Metric completion filters">
+                {([
+                  { key: "all", label: "All", value: metricWorkspaceSummary.total },
+                  { key: "needs-data", label: "Needs update", value: metricWorkspaceSummary.needsData },
+                  { key: "needs-evidence", label: "Needs evidence", value: metricWorkspaceSummary.needsEvidence },
+                  { key: "complete", label: "Complete", value: metricWorkspaceSummary.complete },
+                ] as const).map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${metricStatusFilter === item.key ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}
+                    onClick={() => setMetricStatusFilter(item.key)}
+                    aria-pressed={metricStatusFilter === item.key}
+                    data-testid={`filter-metrics-${item.key}`}
+                  >
+                    <span className="block text-lg font-semibold">{item.value}</span>
+                    <span className="block text-xs text-muted-foreground">{item.label}</span>
+                  </button>
+                ))}
+              </div>
 
-        <TabsContent value="paste" className="mt-4 space-y-4">
+              <div className="relative">
+                <Label htmlFor="metrics-data-search" className="sr-only">Search tracked metrics</Label>
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="metrics-data-search"
+                  value={metricSearch}
+                  onChange={(event) => setMetricSearch(event.target.value)}
+                  placeholder="Search tracked metrics"
+                  className="pl-9"
+                  data-testid="input-search-tracked-metrics"
+                />
+              </div>
+
+              <div className="space-y-5">
+                {(["environmental", "social", "governance"] as const).map((category) => {
+                  const categoryRows = filteredMetricWorkspaceRows.filter((row) => row.metric.category === category);
+                  if (categoryRows.length === 0) return null;
+                  const config = CATEGORY_ICONS[category];
+                  const Icon = config.icon;
+                  return (
+                    <section key={category} className="space-y-2" aria-labelledby={`metrics-data-${category}`}>
+                      <div className="flex items-center gap-2 px-1">
+                        <div className={`rounded-md p-1.5 ${config.bg}`}><Icon className={`h-3.5 w-3.5 ${config.color}`} /></div>
+                        <h2 id={`metrics-data-${category}`} className="text-sm font-semibold">{config.label}</h2>
+                        <span className="text-xs text-muted-foreground">{categoryRows.length}</span>
+                      </div>
+                      <div className="divide-y rounded-lg border bg-card">
+                        {categoryRows.map(({ metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state }) => {
+                          const isEligible = isMetricEntryEligible(metric);
+                          const stateLabel = state === "needs-data" ? "Needs update" : state === "needs-evidence" ? "Needs evidence" : "Complete";
+                          const stateClass = state === "needs-data"
+                            ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+                            : state === "needs-evidence"
+                              ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300";
+                          return (
+                            <div
+                              key={metricKey}
+                              className="grid gap-3 p-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
+                              data-testid={`metric-data-row-${metricKey}`}
+                            >
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-sm font-medium">{metric.name}</p>
+                                  {!isEligible && (
+                                    <Badge variant="secondary" className="text-[10px]">
+                                      <Calculator className="mr-1 h-3 w-3" />
+                                      {metric.metricType === "derived" ? "Derived" : "Calculated"}
+                                    </Badge>
+                                  )}
+                                  {metricValue?.dataSourceType === "estimated" && <ValueSourceBadge source="estimated" />}
+                                  {metric.frequency && metric.frequency !== "monthly" && (
+                                    <Badge variant="outline" className="text-[10px] capitalize">{metric.frequency}</Badge>
+                                  )}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  {displayValue !== "" ? `${displayValue}${metric.unit ? ` ${metric.unit}` : ""}` : `No value for ${metricPeriod}`}
+                                </p>
+                                {!isEligible && metric.formulaText && (
+                                  <p className="truncate text-[11px] text-muted-foreground">Calculated from: {metric.formulaText}</p>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                                <Badge variant="outline" className={`text-[10px] ${stateClass}`} data-testid={`metric-data-state-${metricKey}`}>
+                                  {stateLabel}
+                                </Badge>
+                                {usableEvidence.length > 0 ? (
+                                  <Badge variant="outline" className="text-[10px] text-emerald-700 dark:text-emerald-300">
+                                    <FileCheck className="mr-1 h-3 w-3" /> Evidence attached
+                                  </Badge>
+                                ) : attachedEvidence.length > 0 && metric.evidenceRequired ? (
+                                  <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-300">
+                                    <AlertCircle className="mr-1 h-3 w-3" /> Evidence needs replacing
+                                  </Badge>
+                                ) : !isEligible && displayValue !== "" ? (
+                                  <Badge variant="outline" className="text-[10px] text-blue-700 dark:text-blue-300">
+                                    <Calculator className="mr-1 h-3 w-3" /> Source inputs used
+                                  </Badge>
+                                ) : displayValue !== "" && metric.evidenceRequired ? (
+                                  <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                                    <Paperclip className="mr-1 h-3 w-3" /> Evidence needed
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              {metricId ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={state === "needs-data" && canEdit ? "default" : "outline"}
+                                  onClick={() => navigateToWorkspaceMode("manual", metricId)}
+                                  data-testid={`button-open-metric-${metricKey}`}
+                                >
+                                  {!isEligible ? "View calculation" : !canEdit ? "View" : displayValue !== "" ? "Update" : "Add data"}
+                                </Button>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px]">Awaiting setup</Badge>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+
+              {filteredMetricWorkspaceRows.length === 0 && (
+                <EmptyState
+                  icon={metricWorkspaceSummary.total === 0 ? Settings2 : Search}
+                  title={metricWorkspaceSummary.total === 0 ? "Choose the metrics that matter" : "No metrics match"}
+                  description={metricWorkspaceSummary.total === 0
+                    ? "Start with the recommended set for your business, then add or remove metrics whenever your requirements change."
+                    : "Try another search or choose a different completion filter."}
+                  actionLabel={metricWorkspaceSummary.total === 0 ? "Choose metrics" : "Clear filters"}
+                  onAction={() => {
+                    if (metricWorkspaceSummary.total === 0) navigateToWorkspaceMode("manage");
+                    else {
+                      setMetricSearch("");
+                      setMetricStatusFilter("all");
+                    }
+                  }}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </section>}
+
+        {activeTab === "manage" && <section data-testid="panel-manage-metrics">
+          <MetricsLibraryContent embedded onBack={returnToMetricsOverview} />
+        </section>}
+
+        {activeTab === "paste" && <section className="space-y-4" data-testid="panel-spreadsheet-import">
+          <div className="flex flex-wrap items-start gap-3 rounded-lg border bg-card p-4">
+            <Button type="button" variant="ghost" size="sm" onClick={returnToMetricsOverview} data-testid="button-back-from-spreadsheet-import">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back
+            </Button>
+            <div>
+              <h2 className="font-semibold">Import spreadsheet</h2>
+              <p className="text-sm text-muted-foreground">Update several metrics at once, with a review before anything is saved.</p>
+            </div>
+          </div>
           {canEdit ? (
             <>
               <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1281,7 +1746,7 @@ export default function DataEntry() {
                     feature="CSV Import"
                     size="sm"
                     variant="outline"
-                    valueMessage="Import a full year of ESG data from Excel or CSV in one upload — no manual field entry."
+                    valueMessage="Import a full year from CSV, or paste values from Excel — no row-by-row entry."
                     data-testid="button-import-upgrade"
                   >
                     Upload CSV file
@@ -1296,9 +1761,18 @@ export default function DataEntry() {
               <p className="text-sm text-muted-foreground">You do not have permission to paste data.</p>
             </div>
           )}
-        </TabsContent>
+        </section>}
 
-        <TabsContent value="raw" className="mt-4 space-y-4">
+        {activeTab === "raw" && <section className="space-y-4" data-testid="panel-guided-entry">
+          <div className="flex flex-wrap items-start gap-3 rounded-lg border bg-card p-4">
+            <Button type="button" variant="ghost" size="sm" onClick={returnToMetricsOverview} data-testid="button-back-from-guided-entry">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back
+            </Button>
+            <div>
+              <h2 className="font-semibold">Guided entry</h2>
+              <p className="text-sm text-muted-foreground">Add familiar business figures and let SimplyESG update the related metrics.</p>
+            </div>
+          </div>
           <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/50 p-3 sm:flex-row sm:items-center">
             <div className="flex-1">
               <p className="text-sm font-medium">Guided calculation inputs</p>
@@ -1443,14 +1917,14 @@ export default function DataEntry() {
               <div className="flex items-center gap-2 min-w-0">
                 <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <p className="text-sm text-blue-800 dark:text-blue-200 leading-snug">
-                  Data saved. Add evidence from the relevant row in Tracked metrics so the file stays linked to the exact value and period.
+                  Data saved. Return to Metrics &amp; data and open the relevant row so the evidence stays linked to the exact value and period.
                 </p>
               </div>
               <Button
                 size="sm"
                 variant="outline"
                 className="shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
-                onClick={() => setActiveTab("manual")}
+                onClick={() => navigateToWorkspaceMode("manual")}
                 data-testid="button-open-manual-entry-for-evidence"
               >
                 Open metric rows <ArrowRight className="w-3.5 h-3.5 ml-1" />
@@ -1486,16 +1960,38 @@ export default function DataEntry() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
+        </section>}
 
-        <TabsContent value="manual" className="mt-4 space-y-4">
-          <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
+        {activeTab === "manual" && <section className="space-y-4" data-testid="panel-manual-metric-entry">
+          <div className="flex flex-wrap items-start gap-3 rounded-lg border bg-card p-4">
+            <Button type="button" variant="ghost" size="sm" onClick={returnToMetricsOverview} data-testid="button-back-from-manual-entry">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back
+            </Button>
+            <div className="min-w-0 flex-1">
+              <h2 className="font-semibold" data-testid="heading-metric-details">
+                {focusedEntryMetricId ? "Metric details" : "Enter metric values"}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {focusedEntryMetricId
+                  ? "Review this metric, its value and linked evidence for the selected period."
+                  : "Enter a value directly when it is not updated through guided inputs."}
+              </p>
+            </div>
+            {focusedHistoryMetricId && (
+              <Link href={`/metrics?metric=${encodeURIComponent(focusedHistoryMetricId)}&period=${encodeURIComponent(selectedPeriod)}&metricPeriod=${encodeURIComponent(focusedHistoryPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}>
+                <Button type="button" variant="outline" size="sm" data-testid="button-view-metric-history">
+                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> History &amp; trend
+                </Button>
+              </Link>
+            )}
+          </div>
+          {canEdit && visibleManualMetrics.some(isMetricEntryEligible) && <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
             <Sparkles className="w-4 h-4 text-emerald-600" />
             <AlertDescription className="text-sm">
               <span className="font-medium text-emerald-800 dark:text-emerald-300">You can start with estimates.</span>{" "}
               <span className="text-emerald-700 dark:text-emerald-400">Set &ldquo;Type of data&rdquo; to <strong>Estimated</strong> when you don&apos;t have an exact figure yet. You can replace it with an actual value later — every data point improves your baseline.</span>
             </AlertDescription>
-          </Alert>
+          </Alert>}
 
           {isLocked && (
             <Alert>
@@ -1508,13 +2004,15 @@ export default function DataEntry() {
 
           <div className="flex items-center justify-between gap-3 p-3 bg-muted/50 rounded-md border border-border" data-testid="manual-metric-summary">
             <div>
-              <p className="text-sm font-medium">Enabled metric coverage</p>
+              <p className="text-sm font-medium">{focusedEntryMetricId ? "Selected metric" : "Direct-entry metrics"}</p>
               <p className="text-xs text-muted-foreground">
-                {visibleManualMetrics.length} active editable metrics accept direct data entry. Calculated and derived metrics remain available in reporting and summary views.
+                {focusedEntryMetricId
+                  ? "Values, evidence, workflow state and calculation details stay together here."
+                  : `${visibleManualMetrics.length} enabled metrics accept direct data entry. Calculated and derived results remain read-only.`}
               </p>
             </div>
             <Badge variant="outline" className="text-xs" data-testid="badge-enabled-metric-denominator">
-              {visibleManualMetrics.length} editable
+              {focusedEntryMetricId ? `${visibleManualMetrics.length} selected` : `${visibleManualMetrics.length} editable`}
             </Badge>
           </div>
 
@@ -1544,19 +2042,29 @@ export default function DataEntry() {
                   {catMetrics.map((metric: any) => {
                     const metricId = metric.id || metric.metricId || null;
                     const metricKey = metricId || metric.key || metric.name;
+                    const metricPeriod = resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType);
                     const isEligible = isMetricEntryEligible(metric);
                     const localVal = manualValues[metricKey] || { value: "", notes: "" };
                     const hasValue = localVal.value && localVal.value !== "";
                     const isBooleanMetric = isBooleanMetricDataType(metric.dataType);
-                    const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId && isSelectedScopeValue(v)) : undefined;
+                    const metricValue = metricId ? existingValues.find((v: any) => v.metricId === metricId && v.period === metricPeriod && isSelectedScopeValue(v)) : undefined;
                     const metricWorkflowStatus = normalizeDataEntryWorkflowStatus(metricValue?.workflowStatus);
                     const metricWorkflowLocked = Boolean(metricValue) && metricWorkflowStatus !== "draft";
-                    const rowEditDisabled = editDisabled || metricWorkflowLocked;
+                    const metricPeriodData = metricPeriod === selectedAnnualPeriod
+                      ? annualEntryData
+                      : metricPeriod === selectedQuarterPeriod
+                        ? quarterlyEntryData
+                        : entryData;
+                    const rowEditDisabled = Boolean(metricPeriodData?.periodLocked)
+                      || Boolean(metricValue?.locked)
+                      || !canEdit
+                      || isReportingPeriodLocked
+                      || metricWorkflowLocked;
                     const metricPriority = getManualMetricPriority(metric.name);
                     const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
                     const isCurrentlyEstimated = currentSourceType === "estimated";
-                    const attachedEvidence = getMetricEvidence(metricValue?.id, metricId);
+                    const attachedEvidence = getMetricEvidence(metricValue?.id, metricId, metricPeriod);
                     const queuedAttachments = pendingAttachments[metricKey] || [];
                     const evidenceState = getInlineMetricEvidenceState(attachedEvidence);
                     const isFocusedEvidenceRow = focusEvidence
@@ -1575,6 +2083,7 @@ export default function DataEntry() {
                           <div className="flex flex-wrap items-center gap-2">
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
+                            <Badge variant="outline" className="text-[10px]">{metricPeriod}</Badge>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${mpc.color}`} data-testid={`badge-priority-metric-${metricKey}`}>{mpc.label}</span>
                             {!isEligible && (
                               <Badge variant="secondary" className="text-[10px]" data-testid={`badge-ineligible-${metricKey}`}>
@@ -1583,12 +2092,17 @@ export default function DataEntry() {
                             )}
                             <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
                             <DataSourceBadge type={metricValue?.dataSourceType} />
-                            {(hasValue || attachedEvidence.length > 0) && (
+                            {isEligible && (hasValue || attachedEvidence.length > 0) && (
                               <InlineMetricEvidenceBadge state={evidenceState} metricKey={metricKey} />
+                            )}
+                            {!isEligible && hasValue && (
+                              <Badge variant="outline" className="text-[10px] text-blue-700 dark:text-blue-300" data-testid={`badge-calculation-sources-${metricKey}`}>
+                                <Calculator className="mr-1 h-3 w-3" /> Source inputs used
+                              </Badge>
                             )}
                             {hasValue && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
                             {metricValue?.workflowStatus && isEligible && <WorkflowBadge status={metricWorkflowStatus} size="sm" />}
-                            {metricWorkflowStatus === "rejected" && metricValue?.id && !editDisabled && (
+                            {metricWorkflowStatus === "rejected" && metricValue?.id && !rowEditDisabled && (
                               <Button
                                 type="button"
                                 variant="outline"
@@ -1607,7 +2121,7 @@ export default function DataEntry() {
                                 metricId={metricKey}
                               />
                             )}
-                            {metricId && (
+                            {metricId && isEligible && (
                               <SourceBadge
                                 entityType="metric"
                                 entityId={metricId}
@@ -1619,9 +2133,15 @@ export default function DataEntry() {
                               />
                             )}
                           </div>
-                          {metricId && <EvidenceSuggestions metricId={metricId} category={metric.category} siteId={selectedScopeSiteId} />}
+                          {metricId && isEligible && <EvidenceSuggestions metricId={metricId} category={metric.category} siteId={selectedScopeSiteId} />}
                           {metric.helpText && (
                             <p className="text-xs text-muted-foreground">{metric.helpText}</p>
+                          )}
+                          {!isEligible && metric.formulaText && (
+                            <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-200" data-testid={`calculation-detail-${metricKey}`}>
+                              <span className="font-medium">How it is calculated: </span>
+                              {metric.formulaText}
+                            </div>
                           )}
                           {metricWorkflowStatus === "rejected" && metricValue?.reviewComment && (
                             <p className="text-xs text-destructive" data-testid={`text-rejection-metric-${metricKey}`}>
@@ -1631,7 +2151,7 @@ export default function DataEntry() {
                           {!isEligible && (
                             <p className="text-[11px] text-muted-foreground" data-testid={`hint-ineligible-${metricKey}`}>
                               {metric.missingCompanyMetric
-                                ? "This metric is enabled in Metrics Library, but the company metric record is missing. It stays visible here so your enabled metric set remains consistent."
+                                ? "This metric is enabled in Manage metrics, but the company metric record is still synchronising. It stays visible so your tracked set remains consistent."
                                 : "This metric is enabled for your company and included in your reporting set, but it updates automatically from raw data or other metrics instead of direct manual entry."}
                             </p>
                           )}
@@ -1641,7 +2161,7 @@ export default function DataEntry() {
                             </p>
                           )}
                           <InlineGuidanceTrigger metricName={metric.name} />
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {isEligible ? <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Value</Label>
                               {isBooleanMetric ? (
@@ -1710,9 +2230,19 @@ export default function DataEntry() {
                                 </SelectContent>
                               </Select>
                             </div>
-                          </div>
-                          <div className="space-y-2">
-                            <div className="space-y-1">
+                          </div> : (
+                            <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border bg-muted/40 p-3" data-testid={`calculated-value-${metricKey}`}>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Calculated result for {metricPeriod}</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                  {localVal.value || "Not calculated yet"}{localVal.value && metric.unit ? ` ${metric.unit}` : ""}
+                                </p>
+                              </div>
+                              <Badge variant="secondary" className="text-xs">Read only</Badge>
+                            </div>
+                          )}
+                          {(isEligible || attachedEvidence.length > 0) && <div className="space-y-2">
+                            {isEligible && <div className="space-y-1">
                               <div className="flex items-center justify-between gap-2">
                                 <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                   <Paperclip className="w-3 h-3" />
@@ -1754,7 +2284,7 @@ export default function DataEntry() {
                               <p className="text-[11px] text-muted-foreground">
                                 Add one or more supporting files. They’ll upload and link to this metric when you save.
                               </p>
-                            </div>
+                            </div>}
 
                             {queuedAttachments.length > 0 && (
                               <div className="space-y-1">
@@ -1797,6 +2327,11 @@ export default function DataEntry() {
                                     <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
                                     <span className="flex-1 truncate font-medium">{evidence.filename}</span>
                                     <span className="shrink-0 text-muted-foreground">{evidence.fileType || "file"}</span>
+                                    {unavailableEvidenceLabel(evidence) && (
+                                      <Badge variant="outline" className="text-[10px] capitalize text-amber-700 dark:text-amber-300">
+                                        {unavailableEvidenceLabel(evidence)}
+                                      </Badge>
+                                    )}
                                     {evidence.fileUrl && (
                                       <a href={evidence.fileUrl} target="_blank" rel="noopener noreferrer">
                                         <Button type="button" size="icon" variant="ghost" className="h-5 w-5" data-testid={`button-open-evidence-${metricKey}-${evidence.id}`}>
@@ -1821,14 +2356,14 @@ export default function DataEntry() {
                                 ))}
                               </div>
                             )}
-                          </div>
+                          </div>}
                         </div>
-                        {!rowEditDisabled && (
+                        {!rowEditDisabled && isEligible && (
                           <div className="flex items-end">
                             <Button
                               size="sm"
                               variant={hasValue ? "secondary" : "default"}
-                              onClick={() => metricId && handleSaveManual(metricKey, metricId)}
+                              onClick={() => metricId && handleSaveManual(metricKey, metricId, metricPeriod)}
                               disabled={saveManualMutation.isPending || !metricId || !localVal.value || !isEligible}
                               data-testid={`button-save-manual-${metricKey}`}
                             >
@@ -1848,8 +2383,12 @@ export default function DataEntry() {
           {visibleManualMetrics.length === 0 && (
             <EmptyState
               icon={ClipboardList}
-              title="No editable metrics configured"
-              description="Your company hasn't enabled any manual metrics yet. Use Metrics Library to turn on editable metrics you want to track."
+              title={unresolvedFocusedDefinition ? "Enable this metric first" : "No direct-entry metrics configured"}
+              description={unresolvedFocusedDefinition
+                ? `${unresolvedFocusedDefinition.name} is in the metric catalogue but is not currently enabled for your company.`
+                : "Your company hasn't enabled any manual metrics yet. Return to Metrics & data and use Manage metrics to choose what you want to track."}
+              actionLabel={unresolvedFocusedDefinition && canEdit ? "Manage metrics" : undefined}
+              onAction={unresolvedFocusedDefinition && canEdit ? () => navigateToWorkspaceMode("manage") : undefined}
             />
           )}
 
@@ -1864,8 +2403,8 @@ export default function DataEntry() {
             />
           )}
 
-        </TabsContent>
-      </Tabs>
+        </section>}
+      </div>
     </div>
   );
 }
@@ -1880,15 +2419,22 @@ const TEMPLATE_OPTIONS = [
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { activeSiteId, activeSites } = useSiteContext();
+  const [, setLocation] = useLocation();
+  const searchString = useSearch();
+  const { activeSiteId, activeSites, setActiveSiteId } = useSiteContext();
   const isMultiSite = activeSites.length >= 1;
   const [selectedSiteId, setSelectedSiteId] = useState<string>(activeSiteId || "");
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [parsedResult, setParsedResult] = useState<any>(null);
   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
   const [importResult, setImportResult] = useState<any>(null);
+  const [importedSiteId, setImportedSiteId] = useState<string | null | undefined>(undefined);
   const [selectedTemplate, setSelectedTemplate] = useState("all");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) setSelectedSiteId(activeSiteId || "");
+  }, [activeSiteId, open]);
 
   const parseMutation = useMutation({
     mutationFn: async (data: { format: string; content: string; siteId?: string | null }) => {
@@ -1905,17 +2451,18 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
   const confirmMutation = useMutation({
     mutationFn: async () => {
-      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
       const res = await apiRequest("POST", "/api/raw-data/import/confirm", {
         mappings,
         rows: parsedResult?.rows || [],
         period,
-        siteId: resolvedSiteId,
+        siteId: isMultiSite ? selectedSiteId : (activeSiteId || null),
       });
       return res.json();
     },
     onSuccess: (data: any) => {
+      const resolvedImportedSiteId = isMultiSite ? selectedSiteId : activeSiteId;
       setImportResult(data);
+      setImportedSiteId(resolvedImportedSiteId || null);
       setStep("result");
       qc.invalidateQueries({ queryKey: ["/api/raw-data"] });
       qc.invalidateQueries({ queryKey: ["/api/data-entry"] });
@@ -1936,8 +2483,11 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     const reader = new FileReader();
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
-      const resolvedSiteId = isMultiSite ? (selectedSiteId || null) : (activeSiteId || null);
-      parseMutation.mutate({ format: "csv", content: base64, siteId: resolvedSiteId });
+      parseMutation.mutate({
+        format: "csv",
+        content: base64,
+        siteId: isMultiSite ? selectedSiteId : (activeSiteId || null),
+      });
     };
     reader.readAsArrayBuffer(file);
     if (fileRef.current) fileRef.current.value = "";
@@ -1962,10 +2512,18 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
   };
 
   const handleClose = () => {
+    if (step === "result" && importedSiteId !== undefined && importedSiteId !== activeSiteId) {
+      setActiveSiteId(importedSiteId);
+      const params = new URLSearchParams(searchString);
+      params.set("period", period);
+      params.set("siteId", importedSiteId || "__org__");
+      setLocation(`/data-entry?${params.toString()}`, { replace: true });
+    }
     setStep("upload");
     setParsedResult(null);
     setMappings([]);
     setImportResult(null);
+    setImportedSiteId(undefined);
     onClose();
   };
 
@@ -1981,17 +2539,17 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="w-4 h-4" />
-            Import Carbon / Raw Data
+            Upload a CSV file
           </DialogTitle>
         </DialogHeader>
 
         {step === "upload" && (
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">Upload a CSV file with your raw operational data. Column names will be automatically mapped to input fields.</p>
+            <p className="text-sm text-muted-foreground">Upload a CSV of operational figures such as energy, travel or workforce data. We map the columns for you and show a review before saving.</p>
 
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Download a template to get started</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {TEMPLATE_OPTIONS.map(tmpl => (
                   <button
                     key={tmpl.key}
@@ -2010,7 +2568,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
               </div>
             </div>
 
-            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+            <div className="rounded-lg border-2 border-dashed p-4 text-center sm:p-8">
               <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-sm text-muted-foreground mb-3">Drop a CSV file here</p>
               <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={parseMutation.isPending || (isMultiSite && !selectedSiteId)} data-testid="button-import-choose-file">
@@ -2043,18 +2601,20 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
         {step === "preview" && parsedResult && (
           <div className="space-y-4">
-            <p className="text-sm font-medium">{parsedResult.rows?.length || 0} rows parsed, {parsedResult.columns?.length || 0} columns detected</p>
+            <p className="text-sm font-medium">
+              {parsedResult.rows?.length || 0} {(parsedResult.rows?.length || 0) === 1 ? "row" : "rows"} parsed, {parsedResult.columns?.length || 0} {(parsedResult.columns?.length || 0) === 1 ? "column" : "columns"} detected
+            </p>
 
             <div className="space-y-2">
               <Label className="text-xs font-medium">Column Mappings</Label>
               {mappings.map((m, i) => {
                 const confidence = parsedResult.mappings?.[i]?.confidence || 0;
                 return (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <span className="w-40 truncate font-medium">{m.column}</span>
-                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                  <div key={i} className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-[10rem_auto_12rem_auto] sm:items-center">
+                    <span className="min-w-0 truncate font-medium">{m.column}</span>
+                    <ArrowRight className="hidden h-3 w-3 shrink-0 text-muted-foreground sm:block" />
                     <Select value={m.inputKey || "__skip__"} onValueChange={(v) => updateMapping(i, v === "__skip__" ? null : v)}>
-                      <SelectTrigger className="w-48 h-8 text-xs" data-testid={`select-mapping-${i}`}>
+                      <SelectTrigger className="h-8 w-full text-xs" data-testid={`select-mapping-${i}`}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -2064,7 +2624,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
                         ))}
                       </SelectContent>
                     </Select>
-                    <Badge variant={confidence >= 70 ? "default" : confidence >= 40 ? "secondary" : "outline"} className="text-[10px]">
+                    <Badge variant={confidence >= 70 ? "default" : confidence >= 40 ? "secondary" : "outline"} className="w-fit text-[10px]">
                       {confidence}%
                     </Badge>
                   </div>
@@ -2103,7 +2663,9 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
                 data-testid="button-confirm-import"
               >
                 {confirmMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Check className="w-4 h-4 mr-1.5" />}
-                {confirmMutation.isPending ? "Importing..." : `Import ${mappings.filter(m => m.inputKey).length} columns`}
+                {confirmMutation.isPending
+                  ? "Importing..."
+                  : `Import ${mappings.filter(m => m.inputKey).length} ${mappings.filter(m => m.inputKey).length === 1 ? "column" : "columns"}`}
               </Button>
             </DialogFooter>
           </div>

@@ -143,7 +143,11 @@ async function createSite(token: string, name: string): Promise<string> {
   return response.id;
 }
 
-async function createMetric(token: string, name: string): Promise<string> {
+async function createMetric(
+  token: string,
+  name: string,
+  frequency: "monthly" | "quarterly" | "annual",
+): Promise<string> {
   const response = parseJson<{ id: string }>(await apiRequest(
     "POST",
     "/api/metrics",
@@ -151,6 +155,7 @@ async function createMetric(token: string, name: string): Promise<string> {
       name,
       category: "environmental",
       unit: "kWh",
+      frequency,
       enabled: true,
       metricType: "manual",
       direction: "lower_is_better",
@@ -316,9 +321,16 @@ async function run() {
     const activeSiteId = await createSite(tenantA.adminToken, `Boundary Active Site ${suffix}`);
     siteIds.push(archivedSiteId, activeSiteId);
 
-    const legacyMetricId = await createMetric(tenantA.adminToken, `Boundary Legacy Metric ${suffix}`);
-    const periodMetricId = await createMetric(tenantA.adminToken, `Boundary Period Metric ${suffix}`);
-    metricIds.push(legacyMetricId, periodMetricId);
+    const legacyMetricId = await createMetric(
+      tenantA.adminToken,
+      `Boundary Legacy Metric ${suffix}`,
+      "annual",
+    );
+    const periodMetricName = `Boundary Period Metric ${suffix}`;
+    const periodMonthlyMetricId = await createMetric(tenantA.adminToken, periodMetricName, "monthly");
+    const periodQuarterlyMetricId = await createMetric(tenantA.adminToken, periodMetricName, "quarterly");
+    const periodAnnualMetricId = await createMetric(tenantA.adminToken, periodMetricName, "annual");
+    metricIds.push(legacyMetricId, periodMonthlyMetricId, periodQuarterlyMetricId, periodAnnualMetricId);
 
     const boundaryPeriod = "2196";
     let missingEvidenceBeforeArchive = 0;
@@ -507,7 +519,7 @@ async function run() {
 
     await approveLegacyValue({
       token: tenantA.adminToken,
-      metricId: periodMetricId,
+      metricId: periodMonthlyMetricId,
       period: "2195-02",
       siteId: null,
       value: 50,
@@ -552,14 +564,14 @@ async function run() {
 
     await approveLegacyValue({
       token: tenantA.adminToken,
-      metricId: periodMetricId,
+      metricId: periodQuarterlyMetricId,
       period: "2195-Q1",
       siteId: null,
       value: 150,
     });
     await approveLegacyValue({
       token: tenantA.adminToken,
-      metricId: periodMetricId,
+      metricId: periodAnnualMetricId,
       period: "2195",
       siteId: null,
       value: 600,

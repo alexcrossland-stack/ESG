@@ -13,7 +13,12 @@ function readSeedInfo() {
   };
 }
 
-type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+type EditableMetric = {
+  id: string;
+  enabled?: boolean | null;
+  metricType?: string | null;
+  frequency?: string | null;
+};
 
 async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
   const headers = { Authorization: `Bearer ${token}` };
@@ -21,7 +26,9 @@ async function getOrCreateEditableMetricId(request: APIRequestContext, token: st
   expect(metricsRes.status()).toBe(200);
   const metrics = await metricsRes.json() as EditableMetric[];
   const existing = metrics.find((metric) =>
-    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+    metric.enabled !== false
+    && (!metric.metricType || metric.metricType === "manual")
+    && (!metric.frequency || metric.frequency === "monthly"));
   if (existing) return existing.id;
   const createRes = await request.post("/api/metrics", {
     headers,
@@ -49,7 +56,7 @@ test.describe("Metric entry flow", () => {
     const submitRes = await request.post("/api/data-entry", {
       data: {
         metricId,
-        period: "2024-Q1",
+        period: "2024-01",
         value: 42.5,
         notes: "E2E test entry",
       },
@@ -67,7 +74,7 @@ test.describe("Metric entry flow", () => {
     });
     expect(valuesRes.status()).toBe(200);
     const values = await valuesRes.json();
-    const our = (values as Array<{ period: string; value: number }>).find((v) => v.period === "2024-Q1");
+    const our = (values as Array<{ period: string; value: number }>).find((v) => v.period === "2024-01");
     expect(our).toBeTruthy();
   });
 

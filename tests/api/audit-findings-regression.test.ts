@@ -210,6 +210,14 @@ async function run() {
     assert.ok(electricityValueId, "electricity metric value row missing");
     assert.ok(headcountMetricId, "headcount metric row missing");
 
+    const evidencedMappedFile = await client.query<{ id: string }>(
+      `INSERT INTO evidence_files (
+         company_id, filename, metric_id, linked_module, linked_entity_id,
+         linked_period, evidence_status, site_id
+       ) VALUES ($1, 'guided-approved-evidence.txt', $2, 'metric_value', $3, $4, 'uploaded', NULL)
+       RETURNING id`,
+      [tenantA.companyId, electricityMetricId, electricityValueId, period],
+    );
     await client.query(
       `UPDATE metric_values
        SET data_source_type = 'evidenced', workflow_status = 'approved', notes = 'Approved electricity evidence'
@@ -249,13 +257,45 @@ async function run() {
     assert.equal(protectedValue.rows[0]?.workflow_status, "approved");
     assert.equal(protectedValue.rows[0]?.notes, "Approved electricity evidence");
 
+    await client.query("DELETE FROM evidence_files WHERE id = $1", [evidencedMappedFile.rows[0]?.id]);
     await client.query(
       `UPDATE metric_values
-       SET data_source_type = 'manual', workflow_status = 'draft', notes = NULL,
+       SET data_source_type = 'evidenced', workflow_status = 'draft', notes = NULL,
            reviewed_by = NULL, reviewed_at = NULL, review_comment = NULL
        WHERE metric_id = $1 AND period = $2 AND site_id IS NULL`,
       [electricityMetricId, period],
     );
+    expectStatus(await apiRequest("POST", "/api/raw-data", {
+      inputs: { electricity_kwh: "13550" }, period, siteId: null,
+    }, token), 200, "raw update behind stale evidenced provenance");
+    const staleEvidenceRecalc = await apiRequest(
+      "POST",
+      `/api/metrics/recalculate/${encodeURIComponent(period)}`,
+      { siteId: null },
+      token,
+    );
+    expectStatus(staleEvidenceRecalc, 200, "stale evidenced provenance recalculation");
+    const staleEvidenceBody = JSON.parse(staleEvidenceRecalc.body) as {
+      guidedMetricSync?: {
+        synced?: Array<{ metricId?: string }>;
+        skippedProtected?: Array<{ metricId?: string }>;
+      };
+    };
+    assert.ok(
+      staleEvidenceBody.guidedMetricSync?.synced?.some((entry) => entry.metricId === electricityMetricId),
+      "stale evidenced provenance without usable evidence must remain mutable",
+    );
+    assert.ok(
+      !staleEvidenceBody.guidedMetricSync?.skippedProtected?.some((entry) => entry.metricId === electricityMetricId),
+      "stale evidenced provenance was incorrectly reported as protected",
+    );
+    const staleEvidenceValue = await client.query<{ value: string; data_source_type: string }>(
+      `SELECT value::text, data_source_type::text
+       FROM metric_values WHERE id = $1`,
+      [electricityValueId],
+    );
+    assert.equal(Number(staleEvidenceValue.rows[0]?.value), 13550);
+    assert.equal(staleEvidenceValue.rows[0]?.data_source_type, "manual", "stale evidenced provenance was not normalized");
 
     const manualLinkedEvidence = await client.query<{ id: string }>(
       `INSERT INTO evidence_files (
@@ -287,7 +327,7 @@ async function run() {
       "SELECT value::text FROM metric_values WHERE id = $1",
       [electricityValueId],
     );
-    assert.equal(Number(manualAfterLinkedEvidence.rows[0]?.value), 13000);
+    assert.equal(Number(manualAfterLinkedEvidence.rows[0]?.value), 13550);
     await client.query("DELETE FROM evidence_files WHERE id = $1", [manualLinkedEvidence.rows[0]?.id]);
 
     await client.query(
@@ -318,7 +358,7 @@ async function run() {
       "SELECT value::text FROM metric_values WHERE id = $1",
       [electricityValueId],
     );
-    assert.equal(Number(manualAfterReview.rows[0]?.value), 13000);
+    assert.equal(Number(manualAfterReview.rows[0]?.value), 13550);
     await client.query(
       "UPDATE metric_values SET reviewed_by = NULL, reviewed_at = NULL, review_comment = NULL WHERE id = $1",
       [electricityValueId],

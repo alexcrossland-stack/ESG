@@ -68,15 +68,17 @@ test.describe("Viewer restrictions", () => {
     expect(writeRes.status()).toBe(403);
   });
 
-  test("viewer sees a read-only metric library with no creation or platform seeding controls", async ({ page }) => {
+  test("viewer sees read-only metric management with no creation or platform seeding controls", async ({ page }) => {
     const { tenantA } = readSeedInfo();
 
     await page.goto("/auth");
     await page.evaluate((token: string) => localStorage.setItem("auth_token", token), tenantA.viewerToken);
     await page.goto("/metrics-library");
 
-    await expect(page.getByTestId("heading-metrics-library")).toBeVisible();
-    await expect(page.getByText("Activation controls are read-only for your role.")).toBeVisible();
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Manage metrics" })).toBeVisible();
+    await expect(page.getByText(/Your role has read-only access to this catalogue\./)).toBeVisible();
     await page.getByTestId("button-expand-all-metric-categories").click();
     const activationSwitches = page.locator("[data-testid^='toggle-metric-']");
     expect(await activationSwitches.count()).toBeGreaterThan(0);

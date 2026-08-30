@@ -9,7 +9,7 @@ import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, Globe } from "lucide-react";
+import { ArrowLeft, Search, Leaf, Users, Shield, Clock, FileCheck, ChevronDown, ChevronRight, Zap, Globe } from "lucide-react";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AddMetricDialog } from "@/components/add-metric-dialog";
@@ -277,7 +277,12 @@ function CategoryGroup({
   );
 }
 
-export default function MetricsLibraryPage() {
+export type MetricsLibraryPageProps = {
+  embedded?: boolean;
+  onBack?: () => void;
+};
+
+export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibraryPageProps = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can, isSuperAdmin } = usePermissions();
@@ -384,39 +389,72 @@ export default function MetricsLibraryPage() {
     derived: libraryMetrics.filter(d => d.isDerived).length,
   }), [libraryMetrics]);
 
-  return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {canManageMetrics
-              ? "Browse the ESG metric catalogue, turn metrics on or off, or add a new manual metric for your company."
-              : "Browse your company’s ESG metric catalogue and see which metrics are enabled. Activation controls are read-only for your role."}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {canManageMetrics && (
-            <Dialog open={showAdd} onOpenChange={setShowAdd}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-library-add-metric">
-                  Add Manual Metric
-                </Button>
-              </DialogTrigger>
-              <AddMetricDialog onClose={() => setShowAdd(false)} />
-            </Dialog>
-          )}
-          {isSuperAdmin && definitions.length === 0 && !isLoading && (
-            <Button
-              onClick={() => seedMutation.mutate()}
-              disabled={seedMutation.isPending}
-              data-testid="button-seed-metrics"
-            >
-              {seedMutation.isPending ? "Loading platform library..." : "Load Platform Metric Library"}
+  const managementActions = (
+    <div className="flex items-center gap-2">
+      {canManageMetrics && (
+        <Dialog open={showAdd} onOpenChange={setShowAdd}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-library-add-metric">
+              Add Manual Metric
             </Button>
-          )}
+          </DialogTrigger>
+          <AddMetricDialog onClose={() => setShowAdd(false)} />
+        </Dialog>
+      )}
+      {isSuperAdmin && definitions.length === 0 && !isLoading && (
+        <Button
+          onClick={() => seedMutation.mutate()}
+          disabled={seedMutation.isPending}
+          data-testid="button-seed-metrics"
+        >
+          {seedMutation.isPending ? "Loading platform library..." : "Load Platform Metric Library"}
+        </Button>
+      )}
+    </div>
+  );
+
+  return (
+    <div
+      className={embedded ? "space-y-6" : "p-6 space-y-6 max-w-6xl mx-auto"}
+      data-testid={embedded ? "metrics-library-embedded" : undefined}
+    >
+      {embedded ? (
+        <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="metrics-library-embedded-actions">
+          <div className="flex items-start gap-2">
+            {onBack && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onBack}
+                data-testid="button-back-to-metrics-data"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back
+              </Button>
+            )}
+            <div>
+              <h2 className="font-semibold">Manage metrics</h2>
+              <p className="text-sm text-muted-foreground">
+                Choose the recommended, optional or custom metrics your company tracks.
+              </p>
+            </div>
+          </div>
+          {managementActions}
         </div>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold" data-testid="heading-metrics-library">Metrics Library</h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              {canManageMetrics
+                ? "Browse the ESG metric catalogue, turn metrics on or off, or add a new manual metric for your company."
+                : "Browse your company’s ESG metric catalogue and see which metrics are enabled. Activation controls are read-only for your role."}
+            </p>
+          </div>
+          {managementActions}
+        </div>
+      )}
 
       {libraryMetrics.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="stats-summary">
@@ -500,8 +538,8 @@ export default function MetricsLibraryPage() {
       <Card className="border-dashed" data-testid="metrics-library-guidance">
         <CardContent className="py-3 text-xs text-muted-foreground">
           {canManageMetrics
-            ? <>Start with enabled and recommended metrics. Open only the categories you need, or search for a specific metric. Use <span className="font-medium text-foreground">Metrics</span> to review active metrics and <span className="font-medium text-foreground">Enter Data</span> to add their values.</>
-            : <>Your role has read-only access to this catalogue. Open a category or search for a specific metric, then use <span className="font-medium text-foreground">Metrics</span> to review enabled company metrics.</>}
+            ? <>Start with enabled and recommended metrics. Open only the categories you need, or search for a specific metric. Return to <span className="font-medium text-foreground">Metrics &amp; data</span> to review and update the set you have enabled.</>
+            : <>Your role has read-only access to this catalogue. Open a category or search for a specific metric, then return to <span className="font-medium text-foreground">Metrics &amp; data</span> to review enabled company metrics.</>}
         </CardContent>
       </Card>
 
@@ -586,4 +624,8 @@ export default function MetricsLibraryPage() {
       )}
     </div>
   );
+}
+
+export default function MetricsLibraryPage() {
+  return <MetricsLibraryContent />;
 }
