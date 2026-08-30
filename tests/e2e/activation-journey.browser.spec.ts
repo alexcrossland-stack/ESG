@@ -115,6 +115,8 @@ test.describe("First-time Activation Journey", () => {
     await page.getByTestId("button-wizard-next").click();
 
     await expect(page.getByTestId("step-baseline-ready")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("heading", { name: "Your starter ESG baseline is set" })).toBeVisible();
+    await expect(page.getByTestId("step-baseline-ready")).toContainText("You captured 1 priority metric");
     await page.getByTestId("button-wizard-complete").click();
 
     await page.waitForURL(

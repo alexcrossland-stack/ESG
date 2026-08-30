@@ -22,6 +22,41 @@ export type OnboardingMetricSubmission = {
   dataSourceType: "manual" | "estimated";
 };
 
+export type OnboardingReportingRange = {
+  dateFrom: string;
+  dateTo: string;
+};
+
+export function resolveOnboardingReportingRange(reportingYear: string): OnboardingReportingRange {
+  const year = reportingYear.trim();
+  return {
+    dateFrom: `${year}-01-01`,
+    dateTo: `${year}-12-31`,
+  };
+}
+
+export function resolveOnboardingMetricPeriod(
+  reportingYear: string,
+  frequency?: string | null,
+): string {
+  const year = reportingYear.trim();
+
+  if (frequency === "annual") return year;
+  if (frequency === "quarterly") return `${year}-Q4`;
+  return `${year}-12`;
+}
+
+export function formatOnboardingMetricPeriod(
+  reportingYear: string,
+  frequency?: string | null,
+): string {
+  const year = reportingYear.trim();
+
+  if (frequency === "annual") return year;
+  if (frequency === "quarterly") return `Q4 ${year}`;
+  return `December ${year}`;
+}
+
 export function isEditableStarterMetric(metric: OnboardingMetric): boolean {
   return !metric.metricType || metric.metricType === "manual";
 }

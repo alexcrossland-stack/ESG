@@ -76,7 +76,7 @@ test.describe("Evidence audit workflow", () => {
     }
 
     await expect(page.getByTestId("panel-measure-evidence-focus")).toBeVisible();
-    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible();
     await expect(page).toHaveURL(/\/data-entry\?focus=evidence$/);
     const editableRow = page.locator('[data-testid^="manual-row-"]')
       .filter({ has: page.locator('[data-testid^="button-save-manual-"]') })
@@ -117,7 +117,7 @@ test.describe("Evidence audit workflow", () => {
 
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
-    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible();
     const refreshedRow = page.locator('[data-testid^="manual-row-"]').filter({
       hasText: metricName,
     }).first();
@@ -189,7 +189,7 @@ test.describe("Evidence audit workflow", () => {
     }
 
     await expect(page.getByTestId("panel-measure-evidence-focus")).toContainText("read-only");
-    await expect(page.getByTestId("tab-manual-entry")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible();
     await expect(page.getByTestId("banner-data-entry-permission")).toBeVisible();
     await expect(page.locator('[data-testid^="button-attach-evidence-"]').first()).toBeDisabled();
     await expect(page.getByTestId("button-lock-period-header")).toHaveCount(0);

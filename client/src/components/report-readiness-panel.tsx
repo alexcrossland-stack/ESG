@@ -318,7 +318,7 @@ export function ReportReadinessPanel({
               {missingCategories.policyNotPublished && (
                 <MissingItem
                   text="ESG policy is not published — draft exists but hasn't been approved"
-                  href="/policy"
+                  href="/policies?tab=register"
                   linkLabel="Review policy"
                 />
               )}

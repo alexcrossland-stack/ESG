@@ -18,7 +18,7 @@ test.describe("Viewer UI restrictions", () => {
       }
     });
 
-    await page.goto("/data-entry");
+    await page.goto("/data-entry?mode=manual");
     await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
@@ -28,11 +28,7 @@ test.describe("Viewer UI restrictions", () => {
       return;
     }
 
-    const manualTab = page.getByTestId("tab-manual-entry");
-    if (await manualTab.isVisible()) {
-      await manualTab.click();
-      await page.waitForTimeout(1500);
-    }
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible({ timeout: 10000 });
 
     const saveButtons = page.locator('[data-testid^="button-save-manual-"]');
     const count = await saveButtons.count();
@@ -51,7 +47,7 @@ test.describe("Viewer UI restrictions", () => {
     const context = await browser.newContext({ storageState: ADMIN_STATE_FILE });
     const page = await context.newPage();
 
-    await page.goto("/data-entry");
+    await page.goto("/data-entry?mode=manual");
     await page.waitForLoadState("domcontentloaded");
 
     const url = page.url();
@@ -61,9 +57,7 @@ test.describe("Viewer UI restrictions", () => {
       return;
     }
 
-    const manualTab = page.getByTestId("tab-manual-entry");
-    await expect(manualTab).toBeVisible({ timeout: 10000 });
-    await manualTab.click();
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible({ timeout: 10000 });
 
     await page.waitForSelector('[data-testid^="button-save-manual-"]', { timeout: 10000 });
 

@@ -406,7 +406,7 @@ function PostWizardPanel() {
       icon: ClipboardList,
       title: "Create your first policy",
       desc: "Set out your commitment with a simple written ESG policy.",
-      href: "/policy",
+      href: "/policies?tab=templates",
       testId: "post-wizard-action-policy",
     },
   ];
@@ -1340,7 +1340,7 @@ export default function Dashboard() {
                 <span>
                   Policy review {pr.status === "overdue" ? "overdue" : pr.status === "urgent" ? "due within 30 days" : "upcoming"} ({new Date(pr.reviewDate).toLocaleDateString()})
                 </span>
-                <Link href="/policy"><Button variant="ghost" size="sm" className="text-xs h-6 ml-2" data-testid="link-review-policy">Review</Button></Link>
+                <Link href="/policies?tab=register"><Button variant="ghost" size="sm" className="text-xs h-6 ml-2" data-testid="link-review-policy">Review</Button></Link>
               </AlertDescription>
             </Alert>
           ))}
@@ -1660,7 +1660,7 @@ export default function Dashboard() {
             <div className="pt-2 border-t border-border">
               <Link href="/data-entry">
                 <Button size="sm" variant="outline" className="w-full text-xs" data-testid="link-enter-data">
-                  Enter Data
+                  Open metrics &amp; data
                 </Button>
               </Link>
             </div>
@@ -1734,7 +1734,7 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between p-2 rounded hover:bg-muted/50 cursor-pointer" data-testid="link-quick-action-data-entry">
                       <div className="flex items-center gap-2 text-sm">
                         <ClipboardList className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span>{needData} metrics need data</span>
+                        <span>{needData} metrics need updating</span>
                       </div>
                       {needData > 0 && <Badge variant="secondary" className="text-xs">{needData}</Badge>}
                     </div>
@@ -2125,12 +2125,12 @@ function ActionPlanBanner({ company }: { company: any }) {
           )}
         </div>
         <div className="flex gap-2 mt-2">
-          <Link href="/policy-generator">
+          <Link href="/policies?tab=templates">
             <Button size="sm" variant="outline" className="h-7 text-xs" data-testid="button-action-plan-create-policy">
               Create first policy
             </Button>
           </Link>
-          <Link href="/metrics">
+          <Link href="/data-entry">
             <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid="button-action-plan-view-metrics">
               View metrics
             </Button>

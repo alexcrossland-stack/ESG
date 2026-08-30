@@ -29,6 +29,14 @@ async function openWithMockRole(
     }
     if (apiPath === "/api/sites") return json([]);
     if (apiPath === "/api/billing/status") return json({ planTier: "pro", subscriptionStatus: "active" });
+    if (apiPath === "/api/data-entry/bulk-grid") {
+      return json({
+        periods: (url.searchParams.get("periods") || "").split(",").filter(Boolean),
+        metrics: [],
+        values: [],
+        lockedPeriods: [],
+      });
+    }
     if (apiPath.startsWith("/api/data-entry/")) return json({ metrics: [], values: [], periodLocked: false });
     if (apiPath === "/api/reports/readiness-detail") {
       return json({
@@ -68,12 +76,13 @@ async function openWithMockRole(
 }
 
 test.describe("Simplified SME workspace navigation", () => {
-  test("shows exactly six permanent workspaces with one Help and Settings area", async ({ browser }) => {
+  test("shows exactly seven permanent workspaces with Policies in the daily workflow", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin");
 
     await expect(page.getByTestId("primary-navigation").getByRole("link")).toHaveText([
       "Overview",
       "Data & evidence",
+      "Policies",
       "Action plan",
       "Reports",
       "Questionnaires",
@@ -93,6 +102,7 @@ test.describe("Simplified SME workspace navigation", () => {
     const { context, page } = await openWithMockRole(browser, "admin");
     const destinations: Array<[string, string]> = [
       ["nav-measure", "/data-entry"],
+      ["nav-policies", "/policies"],
       ["nav-control-centre", "/control-centre"],
       ["nav-reports", "/reports"],
       ["nav-questionnaires", "/questionnaire"],
@@ -120,6 +130,12 @@ test.describe("Simplified SME workspace navigation", () => {
     await expect(page.getByTestId("nav-control-centre")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("breadcrumb-action-plan")).toBeVisible();
 
+    for (const path of ["/policy", "/policy-generator"]) {
+      await page.goto(path);
+      await expect(page.getByTestId("nav-policies")).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("breadcrumb-policies")).toBeVisible();
+    }
+
     await page.goto("/answer-library");
     await expect(page.getByTestId("nav-questionnaires")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("breadcrumb-questionnaires")).toBeVisible();
@@ -141,6 +157,9 @@ test.describe("Simplified SME workspace navigation", () => {
     await expect(page.getByTestId("more-tools-framework-settings")).toBeVisible();
     await expect(page.getByTestId("more-tools-team")).toBeVisible();
     await expect(page.getByTestId("more-tools-my-approvals")).toBeVisible();
+    await expect(page.getByTestId("more-tools-metrics-library")).toHaveCount(0);
+    await expect(page.getByText("Policy templates", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Policy register", { exact: true })).toHaveCount(0);
 
     await context.close();
   });
@@ -148,8 +167,9 @@ test.describe("Simplified SME workspace navigation", () => {
   test("viewer gets read-only data routing and does not see restricted tools", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "viewer", "/more-tools");
 
-    await expect(page.getByTestId("nav-measure")).toHaveAttribute("href", "/metrics");
-    await expect(page.getByTestId("nav-enter-data")).toHaveCount(0);
+    await expect(page.getByTestId("nav-measure")).toHaveAttribute("href", "/data-entry");
+    await expect(page.getByTestId("nav-enter-data")).toBeVisible();
+    await expect(page.getByTestId("nav-policies")).toHaveAttribute("href", "/policies");
     await expect(page.getByTestId("more-tools-framework-settings")).toHaveCount(0);
     await expect(page.getByTestId("more-tools-team")).toHaveCount(0);
     await expect(page.getByTestId("more-tools-my-approvals")).toHaveCount(0);
@@ -158,16 +178,41 @@ test.describe("Simplified SME workspace navigation", () => {
     await context.close();
   });
 
-  test("workspace tabs expose the main jobs before specialist detail", async ({ browser }) => {
+  test("Metrics & data unifies the metric list, update methods and metric management", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin", "/data-entry");
 
-    await expect(page.getByRole("heading", { name: "Data & evidence" })).toBeVisible();
-    await expect(page.getByTestId("tab-raw-data")).toBeVisible();
-    await expect(page.getByTestId("tab-manual-entry")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    const workspaceNavigation = page.getByRole("navigation", { name: "Data and evidence workspace" });
+    await expect(workspaceNavigation.getByRole("link")).toHaveCount(2);
+    await expect(page.getByTestId("tab-metrics-data")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("tab-documents")).not.toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("tab-documents")).toBeVisible();
-    await expect(page.getByTestId("tab-paste-excel")).toBeVisible();
+    await expect(page.getByTestId("metrics-data-overview")).toBeVisible();
+    await expect(page.getByTestId("metrics-data-summary")).toBeVisible();
+
+    await page.getByTestId("button-update-data").click();
+    await expect(page.getByTestId("action-guided-entry")).toBeVisible();
+    await expect(page.getByTestId("action-spreadsheet-import")).toBeVisible();
+    await page.getByTestId("action-guided-entry").click();
+    await expect(page.getByTestId("panel-guided-entry")).toBeVisible();
+    await page.getByTestId("button-back-from-guided-entry").click();
+    await expect(page.getByTestId("metrics-data-overview")).toBeVisible();
+
+    await page.getByTestId("button-update-data").click();
+    await page.getByTestId("action-spreadsheet-import").click();
+    await expect(page.getByTestId("panel-spreadsheet-import")).toBeVisible();
+    await page.getByTestId("button-back-from-spreadsheet-import").click();
+
+    await page.getByTestId("button-manage-metrics").click();
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
+    await expect(page.getByTestId("metrics-library-embedded")).toBeVisible();
+    await expect(page.getByTestId("nav-measure")).toHaveAttribute("aria-current", "page");
+    await page.getByTestId("button-back-to-metrics-data").click();
+    await expect(page.getByTestId("metrics-data-overview")).toBeVisible();
+
     await page.getByTestId("tab-documents").click();
-    await expect(page).toHaveURL(/\/evidence$/);
+    await expect(page).toHaveURL(/\/evidence\?period=\d{4}-\d{2}&siteId=__org__$/);
+    await expect(page.getByTestId("tab-documents")).toHaveAttribute("aria-current", "page");
 
     await page.goto("/reports");
     await expect(page.getByTestId("tab-reports-create")).toHaveAttribute("data-state", "active");
@@ -189,7 +234,7 @@ test.describe("Simplified SME workspace navigation", () => {
     const { context, page } = await openWithMockRole(browser, "admin", "/more-tools");
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    for (const testId of ["nav-dashboard", "nav-measure", "nav-control-centre", "nav-reports", "nav-questionnaires", "nav-more-tools", "nav-utility-help", "nav-utility-settings", "button-logout"]) {
+    for (const testId of ["nav-dashboard", "nav-measure", "nav-policies", "nav-control-centre", "nav-reports", "nav-questionnaires", "nav-more-tools", "nav-utility-help", "nav-utility-settings", "button-logout"]) {
       await expect(page.getByTestId(testId)).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -197,6 +242,7 @@ test.describe("Simplified SME workspace navigation", () => {
     await page.setViewportSize({ width: 360, height: 740 });
     await page.getByTestId("button-sidebar-toggle").click();
     await expect(page.getByTestId("primary-navigation")).toBeVisible();
+    await expect(page.getByTestId("nav-policies")).toBeVisible();
     await expect(page.getByTestId("nav-more-tools")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 

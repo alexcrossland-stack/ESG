@@ -502,6 +502,11 @@ async function run() {
     expectStatus(await apiRequest("PUT", `/api/generated-policies/${generated.rows[0].id}`, {
       status: "approved", approvedAt: "2000-01-01T00:00:00.000Z", versionNumber: 99,
     }, tenantA.adminToken), 400, "generated policy audit-field mass assignment");
+    const disabledPolicyApproval = await client.query(
+      "UPDATE company_settings SET require_approval_policies = false WHERE company_id = $1",
+      [tenantA.companyId],
+    );
+    assert.ok((disabledPolicyApproval.rowCount ?? 0) > 0, "tenant A company settings fixture missing");
     expectStatus(await apiRequest("PUT", `/api/generated-policies/${generated.rows[0].id}`, { status: "approved" }, tenantA.adminToken), 200, "server-managed policy approval");
     const approved = await client.query<{ company_id: string; approved_at: Date | null; version_number: number }>(
       "SELECT company_id, approved_at, version_number FROM generated_policies WHERE id = $1", [generated.rows[0].id],
@@ -509,6 +514,10 @@ async function run() {
     assert.equal(approved.rows[0].company_id, tenantA.companyId);
     assert.ok(approved.rows[0].approved_at);
     assert.equal(approved.rows[0].version_number, 2);
+    await client.query(
+      "UPDATE company_settings SET require_approval_policies = true WHERE company_id = $1",
+      [tenantA.companyId],
+    );
     expectStatus(await apiRequest("PUT", `/api/generated-policies/${generated.rows[0].id}`, { title: "foreign update" }, tenantB.adminToken), 404, "cross-tenant generated policy update");
 
     expectStatus(await apiRequest("PUT", `/api/metrics/${ownMetricId}/admin`, {

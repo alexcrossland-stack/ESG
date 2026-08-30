@@ -120,6 +120,8 @@ export async function assessMetricValueProtection(
           FROM ${evidenceFiles}
           WHERE ${evidenceFiles.companyId} = ${options.companyId}
             AND ${evidenceFiles.siteId} IS NOT DISTINCT FROM ${metricValues.siteId}
+            AND ${evidenceFiles.evidenceStatus} IN ('uploaded', 'available', 'reviewed', 'approved')
+            AND (${evidenceFiles.expiryDate} IS NULL OR ${evidenceFiles.expiryDate} >= NOW())
             AND (
               (${evidenceFiles.linkedModule} = 'metric_value' AND ${evidenceFiles.linkedEntityId} = ${metricValues.id})
               OR (
@@ -151,10 +153,13 @@ export async function assessMetricValueProtection(
   if (!value) return null;
 
   const hasEvidence = value.hasEvidence === true;
+  const normalizedValue = value.dataSourceType === "evidenced" && !hasEvidence
+    ? { ...value, dataSourceType: "manual" }
+    : value;
   return {
-    value,
+    value: normalizedValue,
     hasEvidence,
-    reason: getValueProtectionReason({ ...value, hasEvidence }),
+    reason: getValueProtectionReason({ ...normalizedValue, hasEvidence }),
   };
 }
 
@@ -185,6 +190,8 @@ export async function assessMetricValueProtectionWithPgClient(
             FROM evidence_files ef
             WHERE ef.company_id = m.company_id
               AND ef.site_id IS NOT DISTINCT FROM mv.site_id
+              AND ef.evidence_status IN ('uploaded', 'available', 'reviewed', 'approved')
+              AND (ef.expiry_date IS NULL OR ef.expiry_date >= NOW())
               AND (
                 (ef.linked_module = 'metric_value' AND ef.linked_entity_id = mv.id)
                 OR (
@@ -213,9 +220,12 @@ export async function assessMetricValueProtectionWithPgClient(
   if (!value) return null;
 
   const hasEvidence = value.hasEvidence === true;
+  const normalizedValue = value.dataSourceType === "evidenced" && !hasEvidence
+    ? { ...value, dataSourceType: "manual" }
+    : value;
   return {
-    value,
+    value: normalizedValue,
     hasEvidence,
-    reason: getValueProtectionReason({ ...value, hasEvidence }),
+    reason: getValueProtectionReason({ ...normalizedValue, hasEvidence }),
   };
 }

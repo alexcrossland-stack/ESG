@@ -174,7 +174,8 @@ test.describe("Browser-connected core ESG flow", () => {
     await page.goto("/data-entry");
     await expect(page.getByTestId("data-entry-site-scope-panel")).toBeVisible({ timeout: 15000 });
     await chooseOption(page, "select-data-entry-site-scope", siteAName);
-    await page.getByTestId("tab-manual-entry").click();
+    await page.getByTestId(`button-open-metric-${metricId}`).click();
+    await expect(page.getByTestId("panel-manual-metric-entry")).toBeVisible();
 
     const metricRow = page.getByTestId(`manual-row-${metricId}`);
     await expect(metricRow).toBeVisible({ timeout: 15000 });

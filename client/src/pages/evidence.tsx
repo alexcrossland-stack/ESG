@@ -21,12 +21,12 @@ import { EsgTooltip } from "@/components/esg-tooltip";
 import {
   FileCheck, Upload, AlertTriangle, CheckCircle, Clock,
   Trash2, Eye, FileText, PieChart,
-  XCircle, ArrowRight, Filter, Link2Off,
+  XCircle, ArrowRight, Filter, Link2Off, ClipboardList,
 } from "lucide-react";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { authFetch } from "@/lib/queryClient";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import { resolveApiError } from "@/lib/errorResolver";
 
 type MetricDefinitionActivation = {
@@ -54,10 +54,16 @@ type CompanyMetric = {
 };
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
+  pending: { label: "Pending", icon: Clock, className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+  available: { label: "Available", icon: FileCheck, className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
   uploaded: { label: "Uploaded", icon: Upload, className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300" },
   reviewed: { label: "Reviewed", icon: Eye, className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" },
   approved: { label: "Approved", icon: CheckCircle, className: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" },
+  quarantined: { label: "Quarantined", icon: AlertTriangle, className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
+  rejected: { label: "Rejected", icon: XCircle, className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
+  deleted: { label: "Deleted", icon: Trash2, className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
   expired: { label: "Expired", icon: AlertTriangle, className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
+  unknown: { label: "Unknown", icon: AlertTriangle, className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
 };
 
 const MODULE_LABELS: Record<string, string> = {
@@ -84,11 +90,15 @@ function formatAttachmentSize(size?: number | null) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EvidenceStatusBadge({ status }: { status: string }) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.uploaded;
+function EvidenceStatusBadge({ status }: { status?: string | null }) {
+  const normalizedStatus = status?.trim().toLowerCase() || "unknown";
+  const config = STATUS_CONFIG[normalizedStatus] || {
+    ...STATUS_CONFIG.unknown,
+    label: status?.trim() || STATUS_CONFIG.unknown.label,
+  };
   const Icon = config.icon;
   return (
-    <Badge variant="outline" className={`${config.className} text-xs py-0 h-5 px-1.5 gap-1 font-medium border-0`} data-testid={`badge-evidence-${status}`}>
+    <Badge variant="outline" className={`${config.className} text-xs py-0 h-5 px-1.5 gap-1 font-medium border-0`} data-testid={`badge-evidence-${normalizedStatus}`}>
       <Icon className="w-3 h-3" />
       {config.label}
     </Badge>
@@ -104,7 +114,13 @@ export function DataSourceBadge({ type }: { type?: string | null }) {
   );
 }
 
-function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
+function UploadEvidenceDialog({
+  disabled,
+  defaultSiteScope,
+}: {
+  disabled?: boolean;
+  defaultSiteScope?: string;
+}) {
   const { toast } = useToast();
   const { activeSiteId, activeSites } = useSiteContext();
   const [open, setOpen] = useState(false);
@@ -113,7 +129,8 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
   const [period, setPeriod] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
-  const [selectedSiteScope, setSelectedSiteScope] = useState(activeSiteId || "__org__");
+  const resolvedDefaultSiteScope = defaultSiteScope || activeSiteId || "__org__";
+  const [selectedSiteScope, setSelectedSiteScope] = useState(resolvedDefaultSiteScope);
 
   const { data: metrics = [] } = useQuery<CompanyMetric[]>({
     queryKey: ["/api/metrics"],
@@ -130,12 +147,12 @@ function UploadEvidenceDialog({ disabled }: { disabled?: boolean }) {
     setPeriod("");
     setNotes("");
     setTags("");
-    setSelectedSiteScope(activeSiteId || "__org__");
+    setSelectedSiteScope(resolvedDefaultSiteScope);
   };
 
   useEffect(() => {
-    if (open) setSelectedSiteScope(activeSiteId || "__org__");
-  }, [activeSiteId, open]);
+    if (open) setSelectedSiteScope(resolvedDefaultSiteScope);
+  }, [open, resolvedDefaultSiteScope]);
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -456,9 +473,13 @@ type EvidenceListItem = {
 function EvidenceManagementView({
   viewSiteId,
   setViewSiteId,
+  periodFilter,
+  setPeriodFilter,
 }: {
   viewSiteId: string;
   setViewSiteId: (v: string) => void;
+  periodFilter: string;
+  setPeriodFilter: (v: string) => void;
 }) {
   const { sites } = useSiteContext();
   const { isAdmin, isApprover } = usePermissions();
@@ -467,7 +488,6 @@ function EvidenceManagementView({
   const resolvedSiteId = viewSiteId === "__all__" ? undefined : viewSiteId === "__org__" ? null : viewSiteId;
   const viewedSite = resolvedSiteId ? sites.find((s: any) => s.id === resolvedSiteId) : null;
   const [metricFilter, setMetricFilter] = useState("__all__");
-  const [periodFilter, setPeriodFilter] = useState("__all__");
   const [companyFilter, setCompanyFilter] = useState("__all__");
   const [showOrphansOnly, setShowOrphansOnly] = useState("false");
 
@@ -494,8 +514,10 @@ function EvidenceManagementView({
   }, [files]);
 
   const periodOptions = useMemo(() => {
-    return Array.from(new Set(files.map((file) => file.resolvedLinkedPeriod).filter(Boolean) as string[])).sort().reverse();
-  }, [files]);
+    const periods = new Set(files.map((file) => file.resolvedLinkedPeriod).filter(Boolean) as string[]);
+    if (periodFilter !== "__all__") periods.add(periodFilter);
+    return Array.from(periods).sort().reverse();
+  }, [files, periodFilter]);
 
   const companyOptions = useMemo(() => {
     return Array.from(new Set(files.map((file) => file.companyName).filter(Boolean) as string[])).sort();
@@ -697,7 +719,7 @@ function EvidenceManagementView({
                   <div className="flex items-center gap-2 flex-wrap">
                     <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                     <span className="font-medium text-sm truncate" data-testid={`text-evidence-filename-${f.id}`}>{f.filename}</span>
-                    <EvidenceStatusBadge status={isExpired(f) ? "expired" : (f.evidenceStatus || "uploaded")} />
+                    <EvidenceStatusBadge status={isExpired(f) ? "expired" : f.evidenceStatus} />
                     {f.companyName && (
                       <Badge variant="secondary" className="text-xs">{f.companyName}</Badge>
                     )}
@@ -810,20 +832,53 @@ export default function Evidence() {
   const { can } = usePermissions();
   const { isPro } = useBillingStatus();
   const { activeSiteId, sites } = useSiteContext();
+  const searchString = useSearch();
+  const searchParams = new URLSearchParams(searchString);
+  const requestedPeriod = searchParams.get("period");
+  const requestedSiteScope = searchParams.get("siteId");
+  const normalizedRequestedSiteScope = requestedSiteScope === "null" ? "__org__" : requestedSiteScope;
   const { data: coverage } = useQuery<any>({ queryKey: ["/api/evidence/coverage"] });
   const fileCount = coverage?.totalEvidence ?? 0;
 
-  const [viewSiteId, setViewSiteId] = useState<string>(activeSiteId || "__org__");
+  const [viewSiteId, setViewSiteId] = useState<string>(normalizedRequestedSiteScope || activeSiteId || "__org__");
+  const [viewPeriod, setViewPeriod] = useState<string>(requestedPeriod || "__all__");
 
   useEffect(() => {
-    setViewSiteId(activeSiteId || "__org__");
-  }, [activeSiteId]);
+    setViewSiteId(normalizedRequestedSiteScope || activeSiteId || "__org__");
+    setViewPeriod(requestedPeriod || "__all__");
+  }, [activeSiteId, normalizedRequestedSiteScope, requestedPeriod]);
 
   const resolvedViewSite = viewSiteId === "__all__" || viewSiteId === "__org__" ? undefined : sites.find((s: any) => s.id === viewSiteId);
   const isArchivedView = resolvedViewSite?.status === "archived";
+  const returnSiteScope = viewSiteId === "__all__" ? "__org__" : viewSiteId;
+  const returnQuery = new URLSearchParams({ siteId: returnSiteScope });
+  if (viewPeriod !== "__all__") returnQuery.set("period", viewPeriod);
+  const metricsDataHref = `/data-entry?${returnQuery.toString()}`;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <nav
+        className="grid h-auto w-full grid-cols-2 rounded-lg bg-muted p-1"
+        aria-label="Data and evidence workspace"
+      >
+        <Link
+          href={metricsDataHref}
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+          data-testid="tab-metrics-data"
+        >
+          <ClipboardList className="h-4 w-4" />
+          Metrics &amp; data
+        </Link>
+        <Link
+          href="/evidence"
+          aria-current="page"
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm"
+          data-testid="tab-documents"
+        >
+          <FileCheck className="h-4 w-4" />
+          Documents
+        </Link>
+      </nav>
       <PageGuidance
         pageKey="evidence"
         title="Supporting Documents — what this page does"
@@ -838,7 +893,7 @@ export default function Evidence() {
       />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Supporting Documents <EsgTooltip term="evidence" /></h1>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Documents <EsgTooltip term="evidence" /></h1>
           <p className="text-sm text-muted-foreground mt-1">Review linked evidence by metric and reporting period</p>
         </div>
         {isArchivedView && (
@@ -847,7 +902,9 @@ export default function Evidence() {
           </Badge>
         )}
         {can("metrics_data_entry") && !isArchivedView && (
-          <UploadEvidenceDialog />
+          <UploadEvidenceDialog
+            defaultSiteScope={viewSiteId === "__all__" ? (activeSiteId || "__org__") : viewSiteId}
+          />
         )}
       </div>
 
@@ -877,6 +934,8 @@ export default function Evidence() {
           <EvidenceManagementView
             viewSiteId={viewSiteId}
             setViewSiteId={setViewSiteId}
+            periodFilter={viewPeriod}
+            setPeriodFilter={setViewPeriod}
           />
         </TabsContent>
         <TabsContent value="coverage" className="mt-4">

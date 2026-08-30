@@ -22,7 +22,12 @@ function readSeedInfo() {
   };
 }
 
-type EditableMetric = { id: string; enabled?: boolean | null; metricType?: string | null };
+type EditableMetric = {
+  id: string;
+  enabled?: boolean | null;
+  metricType?: string | null;
+  frequency?: string | null;
+};
 
 async function getOrCreateEditableMetricId(request: APIRequestContext, token: string): Promise<string> {
   const headers = { Authorization: `Bearer ${token}` };
@@ -30,7 +35,9 @@ async function getOrCreateEditableMetricId(request: APIRequestContext, token: st
   expect(metricsRes.status()).toBe(200);
   const metrics = await metricsRes.json() as EditableMetric[];
   const existing = metrics.find((metric) =>
-    metric.enabled !== false && (!metric.metricType || metric.metricType === "manual"));
+    metric.enabled !== false
+    && (!metric.metricType || metric.metricType === "manual")
+    && (!metric.frequency || metric.frequency === "monthly"));
   if (existing) return existing.id;
 
   const createRes = await request.post("/api/metrics", {
@@ -53,7 +60,7 @@ async function getOrCreateEditableMetricId(request: APIRequestContext, token: st
 
 test.describe("REGR-FM: First metric entry and persistence", () => {
   let sharedMetricId: string | null = null;
-  const period = `2025-Q${Date.now() % 4 + 1}`;
+  const period = `2025-${String(Date.now() % 12 + 1).padStart(2, "0")}`;
 
   test("GET /api/metrics returns at least one metric for admin", async ({ request }) => {
     const { tenantA } = readSeedInfo();

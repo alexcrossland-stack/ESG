@@ -82,6 +82,19 @@ async function run() {
     );
     const metricId = metricResult.rows[0]?.id;
     assert.ok(metricId, "tenant electricity metric is required");
+    const quarterlyMetricResult = await observer.query<{ id: string }>(
+      `SELECT id
+       FROM metrics
+       WHERE company_id = $1
+         AND frequency = 'quarterly'
+         AND metric_type = 'manual'
+         AND enabled = true
+       ORDER BY id
+       LIMIT 1`,
+      [tenantA.companyId],
+    );
+    const quarterlyMetricId = quarterlyMetricResult.rows[0]?.id;
+    assert.ok(quarterlyMetricId, "an enabled quarterly manual metric is required");
     const travelMetricResult = await observer.query<{ id: string }>(
       `SELECT id
        FROM metrics
@@ -183,7 +196,7 @@ async function run() {
     assert.equal(Number(freshMetricState.rows[0]?.metric_value), 222, "the next run must calculate from the newest committed raw input");
 
     expectStatus(await apiRequest("POST", "/api/data-entry", {
-      metricId,
+      metricId: quarterlyMetricId,
       period: "2097-Q4",
       value: 88,
       siteId: null,
@@ -446,7 +459,7 @@ async function run() {
     assert.equal(JSON.parse(annualRead.body).periodLocked, true, "an annual period must report locked when any month is locked");
     expectStatus(await apiRequest("GET", "/api/data-entry/2098-3", undefined, tenantA.adminToken), 400, "invalid read period");
     expectStatus(await apiRequest("POST", "/api/data-entry", {
-      metricId,
+      metricId: quarterlyMetricId,
       period: "2098-Q1",
       value: 606,
       siteId: null,

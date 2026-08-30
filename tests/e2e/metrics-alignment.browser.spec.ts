@@ -8,7 +8,7 @@ function readSeedInfo() {
 }
 
 test.describe("Metrics surface alignment", () => {
-  test("metrics page is the active metric view and metrics library hosts activation and creation controls", async ({ page }) => {
+  test("bare metrics and library routes resolve to the unified workspace while a metric query opens history", async ({ page }) => {
     const { tenantA } = readSeedInfo();
 
     await page.goto("/auth");
@@ -17,13 +17,34 @@ test.describe("Metrics surface alignment", () => {
     }, tenantA.adminToken);
 
     await page.goto("/metrics");
-    await expect(page.getByRole("heading", { name: "Metrics" })).toBeVisible();
+    await expect(page).toHaveURL(/\/data-entry$/);
+    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    const metricId = await page.evaluate(async () => {
+      const token = localStorage.getItem("auth_token");
+      const response = await fetch("/api/metrics", { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) throw new Error(`metrics status ${response.status}`);
+      const metrics = await response.json() as Array<{ id: string; enabled?: boolean }>;
+      const metric = metrics.find((candidate) => candidate.enabled !== false);
+      if (!metric) throw new Error("expected at least one enabled metric");
+      return metric.id;
+    });
+
+    await page.goto(`/metrics?metric=${encodeURIComponent(metricId)}&period=2026-08&metricPeriod=2026-08&siteId=__org__`);
+    await expect(page).toHaveURL(new RegExp(`/metrics\\?metric=${metricId}`));
+    await expect(page.locator("h1").filter({ hasText: /^Metrics$/ })).toBeVisible();
     await expect(page.getByText("Metrics — what this page does")).toBeVisible();
-    await expect(page.locator("[data-testid='button-add-custom-metric']")).toHaveCount(0);
+    await expect(page.getByTestId("button-back-to-metrics-data-history")).toBeVisible();
+    await expect(page.getByTestId("badge-metric-count")).toBeVisible();
+    await expect.poll(async () => page.locator("[data-testid^='metric-row-']").count()).toBeGreaterThan(0);
+    await expect(page.getByTestId("panel-manage-metrics")).toHaveCount(0);
+    await expect(page.getByTestId("button-library-add-metric")).toHaveCount(0);
 
     await page.goto("/metrics-library");
-    await expect(page.getByRole("heading", { name: "Metrics Library" })).toBeVisible();
-    await expect(page.locator("[data-testid='button-library-add-metric']")).toHaveCount(1);
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
+    await expect(page.getByTestId("button-back-to-metrics-data")).toBeVisible();
+    await expect(page.getByTestId("heading-metrics-library")).toHaveCount(0);
+    await expect(page.getByTestId("button-library-add-metric")).toHaveCount(1);
     await expect(page.locator("[data-testid^='button-enter-value-']")).toHaveCount(0);
 
     await page.getByTestId("button-expand-all-metric-categories").click();
@@ -42,6 +63,8 @@ test.describe("Metrics surface alignment", () => {
     await page.goto("/auth");
     await page.evaluate((token: string) => localStorage.setItem("auth_token", token), tenantA.adminToken);
     await page.goto("/metrics-library");
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
 
     await page.getByTestId("button-library-add-metric").click();
     await page.getByTestId("input-metric-name").fill("   ");
@@ -86,6 +109,8 @@ test.describe("Metrics surface alignment", () => {
     await page.goto("/auth");
     await page.evaluate((token: string) => localStorage.setItem("auth_token", token), tenantA.adminToken);
     await page.goto("/metrics-library");
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
     await page.getByTestId("button-expand-all-metric-categories").click();
 
     const metricCard = page.locator("[data-testid^='card-metric-']").filter({
@@ -98,7 +123,7 @@ test.describe("Metrics surface alignment", () => {
     }
   });
 
-  test("enabled metric count matches Metrics rows and Enter Data denominator", async ({ page }) => {
+  test("enabled metric count matches scoped history rows and Enter Data denominator", async ({ page }) => {
     const { tenantA } = readSeedInfo();
 
     await page.goto("/auth");
@@ -107,30 +132,42 @@ test.describe("Metrics surface alignment", () => {
     }, tenantA.adminToken);
 
     await page.goto("/metrics-library");
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
     await expect(page.locator("[data-testid='stat-active']")).toBeVisible();
     const enabledLibraryCount = Number((await page.locator("[data-testid='stat-active']").textContent()) || "0");
-    const editableMetricCount = await page.evaluate(async () => {
+    const { editableMetricCount, historyMetricId } = await page.evaluate(async () => {
       const token = localStorage.getItem("auth_token");
-      const res = await fetch("/api/data-entry/2024-01", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`data-entry status ${res.status}`);
-      const body = await res.json() as { metrics?: Array<{ metricType?: string | null; enabled?: boolean | null }> };
-      return (body.metrics || []).filter((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual")).length;
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const [entryResponse, metricsResponse] = await Promise.all([
+        fetch("/api/data-entry/2024-01", { headers }),
+        fetch("/api/metrics", { headers }),
+      ]);
+      if (!entryResponse.ok) throw new Error(`data-entry status ${entryResponse.status}`);
+      if (!metricsResponse.ok) throw new Error(`metrics status ${metricsResponse.status}`);
+      const body = await entryResponse.json() as { metrics?: Array<{ metricType?: string | null; enabled?: boolean | null }> };
+      const metrics = await metricsResponse.json() as Array<{ id: string; enabled?: boolean | null }>;
+      const enabledMetric = metrics.find((metric) => metric.enabled !== false);
+      if (!enabledMetric) throw new Error("expected an enabled metric for history routing");
+      return {
+        editableMetricCount: (body.metrics || []).filter((metric) => metric.enabled !== false && (!metric.metricType || metric.metricType === "manual")).length,
+        historyMetricId: enabledMetric.id,
+      };
     });
 
-    await page.goto("/metrics");
-    await expect(page.locator("[data-testid='badge-metric-count']")).toBeVisible();
-    const metricsBadgeText = (await page.locator("[data-testid='badge-metric-count']").textContent()) || "";
+    await page.goto(`/metrics?metric=${encodeURIComponent(historyMetricId)}&period=2024-01&metricPeriod=2024-01&siteId=__org__`);
+    await expect(page).toHaveURL(new RegExp(`/metrics\\?metric=${historyMetricId}`));
+    await expect(page.locator("h1").filter({ hasText: /^Metrics$/ })).toBeVisible();
+    await expect(page.getByTestId("button-back-to-metrics-data-history")).toBeVisible();
+    await expect(page.getByTestId("badge-metric-count")).toBeVisible();
+    const metricsBadgeText = (await page.getByTestId("badge-metric-count").textContent()) || "";
     const metricsBadgeCount = Number(metricsBadgeText.split(" ")[0] || "0");
     expect(metricsBadgeCount).toBe(enabledLibraryCount);
     await expect(page.locator("[data-testid^='metric-row-']")).toHaveCount(enabledLibraryCount);
-    const metricNames = await page.locator("[data-testid^='metric-row-'] .font-medium").allTextContents();
+    const metricNames = await page.locator("[data-testid^='metric-row-'] p.truncate.font-medium").allTextContents();
     expect(new Set(metricNames).size).toBe(metricNames.length);
 
-    await page.goto("/data-entry");
-    await expect(page.getByTestId("raw-field-electricity_kwh")).toBeVisible();
-    await page.getByTestId("tab-manual-entry").click();
+    await page.goto("/data-entry?mode=manual");
     await expect(page.locator("[data-testid='badge-enabled-metric-denominator']")).toBeVisible();
     const denominatorText = (await page.locator("[data-testid='badge-enabled-metric-denominator']").textContent()) || "";
     const denominator = Number(denominatorText.split(" ")[0] || "0");
@@ -160,7 +197,9 @@ test.describe("Metrics surface alignment", () => {
     }, tenantA.adminToken);
 
     await page.goto("/metrics-library");
-    await expect(page.getByRole("heading", { name: "Metrics Library" })).toBeVisible();
+    await expect(page).toHaveURL(/\/data-entry\?manage=metrics$/);
+    await expect(page.getByTestId("panel-manage-metrics")).toBeVisible();
+    await expect(page.getByTestId("heading-metrics-library")).toHaveCount(0);
     const categoryGroups = page.locator("[data-testid^='group-category-']");
     await expect(categoryGroups.first()).toBeVisible();
     await expect(page.locator("[data-testid^='group-category-'][data-state='open']")).toHaveCount(0);
@@ -198,7 +237,10 @@ test.describe("Metrics surface alignment", () => {
     await page.keyboard.press("Escape");
 
     await page.goto("/policy-templates");
-    await expect(page.getByRole("heading", { name: "Policy Templates" })).toBeVisible();
+    await expect(page).toHaveURL(/\/policies\?tab=templates$/);
+    await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
+    await expect(page.getByTestId("tab-policy-templates")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Template library", exact: true })).toBeVisible();
 
     expect(accessibilityWarnings).toEqual([]);
   });

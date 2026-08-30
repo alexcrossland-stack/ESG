@@ -141,6 +141,23 @@ export type MetricValueScope =
   | { scope: "organisation" }
   | { scope: "site"; siteId: string };
 
+export const USABLE_METRIC_EVIDENCE_STATUSES = new Set<string>(["uploaded", "available", "reviewed", "approved"]);
+
+/**
+ * Evidence provides assurance only while it is in an authoritative usable
+ * state and has not passed its expiry date. Keep this aligned with the SQL
+ * predicates used by transactional metric-value writers.
+ */
+export function isUsableMetricEvidenceFile(
+  evidence: Pick<EvidenceFile, "evidenceStatus" | "expiryDate">,
+  now: Date = new Date(),
+): boolean {
+  if (!USABLE_METRIC_EVIDENCE_STATUSES.has(evidence.evidenceStatus ?? "")) return false;
+  if (!evidence.expiryDate) return true;
+  const expiryTime = new Date(evidence.expiryDate).getTime();
+  return Number.isFinite(expiryTime) && expiryTime >= now.getTime();
+}
+
 export type CanonicalCalculationMutationResult = {
   outcome: "created" | "updated" | "unchanged" | "cleared" | "missing" | "protected";
   value: MetricDefinitionValue | null;
@@ -289,9 +306,9 @@ export interface WorkflowBulkReviewResult {
 }
 
 export type WorkflowReviseResult =
-  | { outcome: "revised"; entityType: "metric_value" | "raw_data"; entityId: string; status: "draft" }
-  | { outcome: "not_rejected"; entityType: "metric_value" | "raw_data"; entityId: string; currentStatus: WorkflowStatus }
-  | { outcome: "not_found"; entityType: "metric_value" | "raw_data"; entityId: string };
+  | { outcome: "revised"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string; status: "draft" }
+  | { outcome: "not_rejected"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string; currentStatus: WorkflowStatus }
+  | { outcome: "not_found"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string };
 
 const { Pool } = pg;
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -761,7 +778,12 @@ export interface IStorage {
     id: string,
     companyId: string,
     data: Partial<GeneratedPolicy>,
-    options?: { approveTransition?: boolean },
+    options?: {
+      approveTransition?: boolean;
+      approvedBy?: string;
+      expectedStatus?: GeneratedPolicy["status"];
+      expectedWorkflowStatus?: GeneratedPolicy["workflowStatus"];
+    },
   ): Promise<GeneratedPolicy | undefined>;
   deleteGeneratedPolicy(id: string): Promise<void>;
 
@@ -774,7 +796,7 @@ export interface IStorage {
   submitWorkflowEntities(entityType: WorkflowEntityType, entityIds: string[], companyId: string, userId: string): Promise<WorkflowSubmitResult>;
   reviewWorkflowEntity(entityType: WorkflowEntityType, entityId: string, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowReviewResult>;
   bulkReviewWorkflowEntities(items: Array<{ entityType: WorkflowEntityType; entityId: string }>, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowBulkReviewResult>;
-  reviseWorkflowEntity(entityType: "metric_value" | "raw_data", entityId: string, companyId: string, userId: string): Promise<WorkflowReviseResult>;
+  reviseWorkflowEntity(entityType: "metric_value" | "raw_data" | "generated_policy", entityId: string, companyId: string, userId: string): Promise<WorkflowReviseResult>;
   getWorkflowPendingItems(companyId: string): Promise<any>;
 
   // Task Ownership
@@ -1382,6 +1404,7 @@ export class DatabaseStorage implements IStorage {
           return existing;
         }
         const protection = await assessMetricValueProtectionWithPgClient(client as any, {
+          companyId,
           metricValueId: existing.id,
           lockForUpdate: true,
         });
@@ -1781,7 +1804,10 @@ export class DatabaseStorage implements IStorage {
       evidenceConditions.push(siteId === null ? isNull(evidenceFiles.siteId) : eq(evidenceFiles.siteId, siteId));
     }
     const allEvidence = await db.select().from(evidenceFiles).where(and(...evidenceConditions));
+    const now = new Date();
+    const usableEvidence = allEvidence.filter((e) => isUsableMetricEvidenceFile(e, now));
     const allMetrics = await db.select({ id: metrics.id, name: metrics.name, category: metrics.category }).from(metrics).where(eq(metrics.companyId, companyId));
+    const allMetricIds = new Set(allMetrics.map((metric) => metric.id));
 
     const metricValueConditions: any[] = [eq(metrics.companyId, companyId)];
     if (siteId !== undefined) {
@@ -1792,6 +1818,10 @@ export class DatabaseStorage implements IStorage {
       metricId: metricValues.metricId,
       period: metricValues.period,
       dataSourceType: metricValues.dataSourceType,
+      hasLegacyEvidence: sql<boolean>`EXISTS (
+        SELECT 1 FROM ${metricEvidence}
+        WHERE ${metricEvidence.metricValueId} = ${metricValues.id}
+      )`,
     }).from(metricValues)
       .innerJoin(metrics, eq(metricValues.metricId, metrics.id))
       .where(and(...metricValueConditions));
@@ -1800,22 +1830,22 @@ export class DatabaseStorage implements IStorage {
       ? allMetricValues.filter(v => v.period === period)
       : allMetricValues;
 
-    const evidenceByMetricValue = allEvidence.filter(e => e.linkedModule === "metric_value");
+    const evidenceByMetricValue = usableEvidence.filter(e => e.linkedModule === "metric_value");
     const evidencedEntityIds = new Set(evidenceByMetricValue.map(e => e.linkedEntityId));
     const directEvidenceMetricIds = new Set(
-      allEvidence
+      usableEvidence
         .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
         .filter(Boolean)
     );
 
     const metricsWithEvidence = new Set<string>();
     for (const mv of relevantValues) {
-      if (evidencedEntityIds.has(mv.id) || mv.dataSourceType === "evidenced") {
+      if (evidencedEntityIds.has(mv.id) || mv.hasLegacyEvidence === true) {
         metricsWithEvidence.add(mv.metricId);
       }
     }
     directEvidenceMetricIds.forEach((metricId) => {
-      metricsWithEvidence.add(metricId as string);
+      if (allMetricIds.has(metricId as string)) metricsWithEvidence.add(metricId as string);
     });
 
     const metricCoverage = allMetrics.map(m => {
@@ -1831,14 +1861,21 @@ export class DatabaseStorage implements IStorage {
       };
     });
 
-    const expiredEvidence = allEvidence.filter(e => e.expiryDate && new Date(e.expiryDate) < new Date());
+    const expiredEvidence = allEvidence.filter((e) => (
+      e.evidenceStatus === "expired"
+      || Boolean(e.expiryDate && new Date(e.expiryDate).getTime() < now.getTime())
+    ));
     const periodCoverage: Record<string, number> = {};
-    allEvidence.filter(e => e.linkedPeriod).forEach(e => {
+    usableEvidence.filter(e => e.linkedPeriod).forEach(e => {
       periodCoverage[e.linkedPeriod!] = (periodCoverage[e.linkedPeriod!] || 0) + 1;
     });
 
     return {
+      // Keep the file inventory separate from assurance coverage. Pending,
+      // rejected and expired records remain real documents (and still count
+      // towards storage/plan limits), but cannot evidence a metric.
       totalEvidence: allEvidence.length,
+      usableEvidenceCount: usableEvidence.length,
       evidencedCount: metricsWithEvidence.size,
       totalMetrics: allMetrics.length,
       coveragePercent: allMetrics.length > 0 ? Math.round((metricsWithEvidence.size / allMetrics.length) * 100) : 0,
@@ -1846,9 +1883,14 @@ export class DatabaseStorage implements IStorage {
       metricCoverage,
       periodCoverage,
       byStatus: {
+        pending: allEvidence.filter(e => e.evidenceStatus === "pending").length,
         uploaded: allEvidence.filter(e => e.evidenceStatus === "uploaded").length,
+        available: allEvidence.filter(e => e.evidenceStatus === "available").length,
         reviewed: allEvidence.filter(e => e.evidenceStatus === "reviewed").length,
         approved: allEvidence.filter(e => e.evidenceStatus === "approved").length,
+        quarantined: allEvidence.filter(e => e.evidenceStatus === "quarantined").length,
+        rejected: allEvidence.filter(e => e.evidenceStatus === "rejected").length,
+        deleted: allEvidence.filter(e => e.evidenceStatus === "deleted").length,
         expired: expiredEvidence.length,
       },
     };
@@ -2459,17 +2501,36 @@ export class DatabaseStorage implements IStorage {
     id: string,
     companyId: string,
     data: Partial<GeneratedPolicy>,
-    options?: { approveTransition?: boolean },
+    options?: {
+      approveTransition?: boolean;
+      approvedBy?: string;
+      expectedStatus?: GeneratedPolicy["status"];
+      expectedWorkflowStatus?: GeneratedPolicy["workflowStatus"];
+    },
   ) {
     const mutable = pickMutableFields(data, GENERATED_POLICY_MUTABLE_FIELDS) as Partial<GeneratedPolicy>;
     const serverManaged = options?.approveTransition
       ? {
           approvedAt: new Date(),
+          workflowStatus: "approved" as const,
+          reviewedBy: options.approvedBy ?? null,
+          reviewedAt: new Date(),
+          reviewComment: null,
           versionNumber: sql`coalesce(${generatedPolicies.versionNumber}, 0) + 1`,
         }
       : {};
+    const conditions = [
+      eq(generatedPolicies.id, id),
+      eq(generatedPolicies.companyId, companyId),
+    ];
+    if (options?.expectedStatus !== undefined) {
+      conditions.push(sql`coalesce(${generatedPolicies.status}, 'draft') = ${options.expectedStatus ?? "draft"}`);
+    }
+    if (options?.expectedWorkflowStatus !== undefined) {
+      conditions.push(sql`coalesce(${generatedPolicies.workflowStatus}, 'draft') = ${options.expectedWorkflowStatus ?? "draft"}`);
+    }
     const [r] = await db.update(generatedPolicies).set({ ...mutable, ...serverManaged, updatedAt: new Date() })
-      .where(and(eq(generatedPolicies.id, id), eq(generatedPolicies.companyId, companyId)))
+      .where(and(...conditions))
       .returning();
     return r;
   }
@@ -2625,9 +2686,12 @@ export class DatabaseStorage implements IStorage {
       }
 
       const status = action === "approve" ? "approved" : "rejected";
+      const generatedPolicyApprovalFields = entityType === "generated_policy" && action === "approve"
+        ? ", status = 'approved', approved_at = NOW(), version_number = COALESCE(version_number, 0) + 1"
+        : "";
       const updated = await client.query(
         `UPDATE ${workflowTable(entityType)}
-         SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+         SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4${generatedPolicyApprovalFields}
          WHERE id = $1 AND workflow_status = 'submitted'`,
         [entityId, status, userId, comment?.trim() || null],
       );
@@ -2710,9 +2774,12 @@ export class DatabaseStorage implements IStorage {
           continue;
         }
 
+        const generatedPolicyApprovalFields = item.entityType === "generated_policy" && action === "approve"
+          ? ", status = 'approved', approved_at = NOW(), version_number = COALESCE(version_number, 0) + 1"
+          : "";
         const updated = await client.query(
           `UPDATE ${workflowTable(item.entityType)}
-           SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+           SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4${generatedPolicyApprovalFields}
            WHERE id = $1 AND workflow_status = 'submitted'`,
           [item.entityId, status, userId, comment?.trim() || null],
         );
@@ -2748,7 +2815,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async reviseWorkflowEntity(
-    entityType: "metric_value" | "raw_data",
+    entityType: "metric_value" | "raw_data" | "generated_policy",
     entityId: string,
     companyId: string,
     userId: string,
@@ -2762,17 +2829,25 @@ export class DatabaseStorage implements IStorage {
         await client.query("COMMIT");
         return { outcome: "not_found", entityType, entityId };
       }
-      if (currentStatus !== "rejected") {
+      const canRevise = currentStatus === "rejected"
+        || (entityType === "generated_policy" && currentStatus === "approved");
+      if (!canRevise) {
         await client.query("COMMIT");
         return { outcome: "not_rejected", entityType, entityId, currentStatus };
       }
 
+      const generatedPolicyRevisionFields = entityType === "generated_policy"
+        ? ", status = 'draft', approved_at = NULL"
+        : "";
+      const clearPriorApprovalComment = entityType === "generated_policy" && currentStatus === "approved"
+        ? ", review_comment = NULL"
+        : "";
       const updated = await client.query(
         `UPDATE ${workflowTable(entityType)}
          SET workflow_status = 'draft', submitted_by = NULL, submitted_at = NULL,
-             reviewed_by = NULL, reviewed_at = NULL
-         WHERE id = $1 AND workflow_status = 'rejected'`,
-        [entityId],
+             reviewed_by = NULL, reviewed_at = NULL${clearPriorApprovalComment}${generatedPolicyRevisionFields}
+         WHERE id = $1 AND workflow_status = $2`,
+        [entityId, currentStatus],
       );
       if (updated.rowCount !== 1) {
         throw new Error(`Workflow revise transition was not applied for ${entityType}:${entityId}`);
@@ -2783,7 +2858,7 @@ export class DatabaseStorage implements IStorage {
         action: `Workflow revision started: ${entityType}`,
         entityType,
         entityId,
-        details: { outcome: "success", transition: { from: "rejected", to: "draft" } },
+        details: { outcome: "success", transition: { from: currentStatus, to: "draft" } },
       });
       await client.query("COMMIT");
       return { outcome: "revised", entityType, entityId, status: "draft" };
@@ -2903,7 +2978,7 @@ export class DatabaseStorage implements IStorage {
       tasks.push({
         entityType: "policy", entityId: (r as any).id, title: "ESG Policy",
         dueDate: dueDate?.toISOString() || null, status: "review_due",
-        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/policy",
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/policies?tab=register",
       });
     }
 

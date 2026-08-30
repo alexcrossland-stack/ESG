@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect, useLocation, Link } from "wouter";
+import { Switch, Route, Redirect, useLocation, useSearch, Link } from "wouter";
 import { queryClient, authFetch, StepUpRequiredError } from "./lib/queryClient";
 import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -32,13 +32,12 @@ const ControlCentre = lazy(() => import("@/pages/control-centre"));
 const Policy = lazy(() => import("@/pages/policy"));
 const Topics = lazy(() => import("@/pages/topics"));
 const Metrics = lazy(() => import("@/pages/metrics"));
-const MetricsLibrary = lazy(() => import("@/pages/metrics-library"));
 const DataEntry = lazy(() => import("@/pages/data-entry"));
 const Actions = lazy(() => import("@/pages/actions"));
 const Evidence = lazy(() => import("@/pages/evidence"));
 const Reports = lazy(() => import("@/pages/reports"));
 const PolicyGenerator = lazy(() => import("@/pages/policy-generator"));
-const PolicyTemplatesPage = lazy(() => import("@/pages/policy-templates"));
+const PoliciesPage = lazy(() => import("@/pages/policies"));
 const CarbonCalculator = lazy(() => import("@/pages/carbon-calculator"));
 const Settings = lazy(() => import("@/pages/settings"));
 const QuestionnairePage = lazy(() => import("@/pages/questionnaire"));
@@ -68,10 +67,30 @@ const FrameworkReadinessPage = lazy(() => import("@/pages/framework-readiness"))
 const PortfolioPage = lazy(() => import("@/pages/portfolio"));
 const CreateCompanyPage = lazy(() => import("@/pages/create-company"));
 const MaterialityPage = lazy(() => import("@/pages/materiality"));
-const EsgPolicyRegisterPage = lazy(() => import("@/pages/esg-policy-register"));
 const EsgTargetsPage = lazy(() => import("@/pages/esg-targets"));
 const EsgRisksPage = lazy(() => import("@/pages/esg-risks"));
 const MoreToolsPage = lazy(() => import("@/pages/more-tools"));
+
+function MetricHistoryRoute() {
+  const search = useSearch();
+  const params = new URLSearchParams(search);
+  if (params.get("metric")) return <Metrics />;
+
+  const workspaceParams = new URLSearchParams();
+  const period = params.get("period");
+  const siteId = params.get("siteId");
+  if (period) workspaceParams.set("period", period);
+  if (siteId) workspaceParams.set("siteId", siteId);
+  const query = workspaceParams.toString();
+  return <Redirect to={`/data-entry${query ? `?${query}` : ""}`} replace />;
+}
+
+function LegacyPolicyWorkspaceRedirect({ tab }: { tab: "register" | "templates" }) {
+  const search = useSearch();
+  const params = new URLSearchParams(search);
+  params.set("tab", tab);
+  return <Redirect to={`/policies?${params.toString()}`} replace />;
+}
 
 // ============================================================
 // GLOBAL STEP-UP AUTHENTICATION CONTEXT
@@ -471,16 +490,17 @@ function ProtectedApp() {
                 <Switch>
                   <Route path="/" component={Dashboard} />
                   <Route path="/control-centre" component={ControlCentre} />
-                  <Route path="/policy" component={Policy} />
+                  <Route path="/policy"><Policy /></Route>
                   <Route path="/topics" component={Topics} />
-                  <Route path="/metrics" component={Metrics} />
-                  <Route path="/metrics-library" component={MetricsLibrary} />
+                  <Route path="/metrics" component={MetricHistoryRoute} />
+                  <Route path="/metrics-library"><Redirect to="/data-entry?manage=metrics" replace /></Route>
                   <Route path="/data-entry" component={DataEntry} />
                   <Route path="/actions" component={Actions} />
                   <Route path="/evidence" component={Evidence} />
                   <Route path="/reports" component={Reports} />
                   <Route path="/policy-generator" component={PolicyGenerator} />
-                  <Route path="/policy-templates" component={PolicyTemplatesPage} />
+                  <Route path="/policies" component={PoliciesPage} />
+                  <Route path="/policy-templates"><LegacyPolicyWorkspaceRedirect tab="templates" /></Route>
                   <Route path="/carbon-calculator" component={CarbonCalculator} />
                   <Route path="/settings" component={Settings} />
                   <Route path="/questionnaire" component={QuestionnairePage} />
@@ -512,7 +532,7 @@ function ProtectedApp() {
                   <Route path="/portfolio" component={PortfolioPage} />
                   <Route path="/create-company" component={CreateCompanyPage} />
                   <Route path="/materiality" component={MaterialityPage} />
-                  <Route path="/esg-policy-register" component={EsgPolicyRegisterPage} />
+                  <Route path="/esg-policy-register"><LegacyPolicyWorkspaceRedirect tab="register" /></Route>
                   <Route path="/esg-targets" component={EsgTargetsPage} />
                   <Route path="/esg-risks" component={EsgRisksPage} />
                   <Route path="/more-tools" component={MoreToolsPage} />

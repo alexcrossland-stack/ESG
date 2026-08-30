@@ -9,7 +9,22 @@ export type InlineMetricEvidenceState = keyof typeof INLINE_METRIC_EVIDENCE_LABE
 
 type EvidenceWithStatus = {
   evidenceStatus?: string | null;
+  expiryDate?: string | Date | null;
 };
+
+const USABLE_EVIDENCE_STATUSES = new Set(["uploaded", "available", "reviewed", "approved"]);
+
+/** Match the server assurance policy: only available files in an authoritative usable status provide coverage. */
+export function isUsableMetricEvidence(
+  evidence: EvidenceWithStatus,
+  now: Date = new Date(),
+): boolean {
+  const status = evidence.evidenceStatus?.trim().toLowerCase() || "";
+  if (!USABLE_EVIDENCE_STATUSES.has(status)) return false;
+  if (!evidence.expiryDate) return true;
+  const expiry = evidence.expiryDate instanceof Date ? evidence.expiryDate : new Date(evidence.expiryDate);
+  return Number.isFinite(expiry.getTime()) && expiry.getTime() >= now.getTime();
+}
 
 /**
  * Resolve the strongest assurance state exposed by the evidence API.
@@ -19,10 +34,11 @@ type EvidenceWithStatus = {
 export function getInlineMetricEvidenceState(
   evidence: readonly EvidenceWithStatus[],
 ): InlineMetricEvidenceState {
-  if (evidence.length === 0) return "missing";
+  const usableEvidence = evidence.filter((item) => isUsableMetricEvidence(item));
+  if (usableEvidence.length === 0) return "missing";
 
   const statuses = new Set(
-    evidence.map(item => item.evidenceStatus?.trim().toLowerCase()).filter(Boolean),
+    usableEvidence.map(item => item.evidenceStatus?.trim().toLowerCase()).filter(Boolean),
   );
 
   if (statuses.has("approved")) return "evidence_backed";

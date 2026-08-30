@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import { getTrafficLightStatus } from "./calculations";
 import { getScoreReadiness } from "./score-readiness";
 import { resolveCompanyReportingContext } from "./reporting-context";
+import { getPolicyPortfolioStatus } from "./policy-portfolio";
 
 export interface CompletenessScore {
   score: number;
@@ -305,8 +306,10 @@ export async function scorePerformance(
 }
 
 export async function scoreManagementMaturity(companyId: string): Promise<ManagementMaturityScore> {
-  const [policy, metrics, actions, evidenceFiles] = await Promise.all([
+  const [policy, generatedPolicies, policyRecords, metrics, actions, evidenceFiles] = await Promise.all([
     storage.getPolicy(companyId),
+    storage.getGeneratedPolicies(companyId),
+    storage.getPolicyRecords(companyId),
     storage.getMetrics(companyId),
     storage.getActionPlans(companyId),
     storage.getEvidenceFiles(companyId),
@@ -315,13 +318,20 @@ export async function scoreManagementMaturity(companyId: string): Promise<Manage
   const enabledMetrics = metrics.filter(m => m.enabled);
   const gaps: string[] = [];
 
-  const hasPolicyPublished = policy?.status === "published";
-  const policyReviewDate = policy?.reviewDate ? new Date(policy.reviewDate) : null;
-  const policyOverdue = policyReviewDate ? policyReviewDate < new Date() : false;
+  const policyPortfolio = getPolicyPortfolioStatus({
+    legacyPolicy: policy,
+    generatedPolicies,
+    policyRecords,
+  });
+  const hasPolicyPublished = policyPortfolio.published;
+  const policyOverdue = policyPortfolio.reviewDates.some((reviewDate) => reviewDate < new Date());
+  const nextPolicyReviewDate = policyPortfolio.reviewDates
+    .filter((reviewDate) => reviewDate >= new Date())
+    .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
   let policiesScore = 0;
   let policiesDetail = "";
 
-  if (!policy) {
+  if (!policyPortfolio.hasAny) {
     policiesScore = 0;
     policiesDetail = "No ESG policy exists yet";
     gaps.push("Create and publish an ESG policy");
@@ -427,13 +437,15 @@ export async function scoreManagementMaturity(companyId: string): Promise<Manage
     gaps.push("Upload evidence files (bills, certificates, reports) to support your ESG data");
   }
 
-  const policyReviewOk = hasPolicyPublished && policyReviewDate && policyReviewDate > new Date();
+  const policyReviewOk = hasPolicyPublished && policyPortfolio.reviewDates.length > 0 && !policyOverdue;
   let reviewScore = 0;
   let reviewDetail = "";
 
   if (policyReviewOk) {
     reviewScore = 100;
-    reviewDetail = `Policy review cycle is current (next review: ${policyReviewDate!.toLocaleDateString()})`;
+    reviewDetail = nextPolicyReviewDate
+      ? `Policy review cycle is current (next review: ${nextPolicyReviewDate.toLocaleDateString()})`
+      : "Policy review cycle is current";
   } else if (hasPolicyPublished && policyOverdue) {
     reviewScore = 30;
     reviewDetail = "Policy review is overdue — update your review date";

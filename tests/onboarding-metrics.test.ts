@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import {
   buildOnboardingMetricSubmission,
+  formatOnboardingMetricPeriod,
+  resolveOnboardingMetricPeriod,
+  resolveOnboardingReportingRange,
   selectEditableStarterMetrics,
   type LabelledOnboardingMetric,
 } from "../client/src/lib/onboarding-metrics";
@@ -16,6 +19,17 @@ const actualSubmission = buildOnboardingMetricSubmission(uuid, "1,250", "2025", 
 assert.equal(actualSubmission.period, "2025", "onboarding must preserve the selected reporting-year boundary");
 assert.equal(actualSubmission.dataSourceType, "manual", "confirmed actual figures must retain their source quality");
 assert.match(actualSubmission.notes, /actual figure/, "actual source quality should be visible in the audit note");
+
+assert.equal(resolveOnboardingMetricPeriod("2025", "monthly"), "2025-12");
+assert.equal(resolveOnboardingMetricPeriod("2025", "quarterly"), "2025-Q4");
+assert.equal(resolveOnboardingMetricPeriod("2025", "annual"), "2025");
+assert.equal(resolveOnboardingMetricPeriod("2025", null), "2025-12", "missing legacy cadence should use the platform's monthly default");
+assert.equal(formatOnboardingMetricPeriod("2025", "monthly"), "December 2025");
+assert.equal(formatOnboardingMetricPeriod("2025", "quarterly"), "Q4 2025");
+assert.deepEqual(resolveOnboardingReportingRange("2025"), {
+  dateFrom: "2025-01-01",
+  dateTo: "2025-12-31",
+});
 
 const metrics: LabelledOnboardingMetric[] = [
   {

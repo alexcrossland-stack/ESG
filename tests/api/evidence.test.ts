@@ -36,8 +36,13 @@ async function run(tenants: SeededTenants): Promise<void> {
     name: string;
     enabled?: boolean;
     metricType?: string;
+    frequency?: string | null;
   }>;
-  const firstMetric = metrics.find((metric) => metric.enabled === true && metric.metricType === "manual");
+  const firstMetric = metrics.find((metric) => (
+    metric.enabled === true
+    && metric.metricType === "manual"
+    && (!metric.frequency || metric.frequency === "monthly")
+  ));
   if (!firstMetric?.id) {
     fail("seed metrics available for evidence tests", "no enabled manual editable metric");
     return;
@@ -168,6 +173,200 @@ async function run(tenants: SeededTenants): Promise<void> {
     if (res.status === 500) fail(name, "server error");
     else if (![200, 404].includes(res.status)) fail(name, `status=${res.status}`);
     else pass(name, `status=${res.status}`);
+  }
+
+  {
+    const name = "only usable evidence counts and protects direct or spreadsheet updates";
+    const coveragePeriod = "2099-12";
+    const form = new FormData();
+    form.append("metricId", firstMetric.id);
+    form.append("period", coveragePeriod);
+    form.append("value", "1");
+    form.append("attachments", new Blob(["coverage policy evidence"], { type: "text/plain" }), "coverage-policy.txt");
+    const uploadRes = await apiMultipartRequest("POST", "/api/data-entry", form, tenantA.adminToken);
+
+    if (uploadRes.status !== 200) {
+      fail(name, `upload status=${uploadRes.status} body=${uploadRes.body.slice(0, 160)}`);
+    } else {
+      const evidenceId = (JSON.parse(uploadRes.body) as { newlyCreatedAttachments?: Array<{ id?: string }> })
+        .newlyCreatedAttachments?.[0]?.id;
+      const readCoverage = async () => {
+        const res = await apiRequest(
+          "GET",
+          `/api/evidence/coverage?period=${encodeURIComponent(coveragePeriod)}`,
+          undefined,
+          tenantA.adminToken,
+        );
+        if (res.status !== 200) throw new Error(`coverage status=${res.status} body=${res.body.slice(0, 160)}`);
+        return JSON.parse(res.body) as {
+          totalEvidence: number;
+          usableEvidenceCount: number;
+          expiredCount: number;
+          metricCoverage: Array<{ metricId: string; hasEvidence: boolean }>;
+        };
+      };
+      const metricIsCovered = (coverage: Awaited<ReturnType<typeof readCoverage>>) => (
+        coverage.metricCoverage.find((metric) => metric.metricId === firstMetric.id)?.hasEvidence === true
+      );
+
+      try {
+        if (!evidenceId) throw new Error("upload response missing evidence id");
+        const uploadedCoverage = await readCoverage();
+        if (uploadedCoverage.totalEvidence !== 1 || uploadedCoverage.usableEvidenceCount !== 1 || !metricIsCovered(uploadedCoverage)) {
+          throw new Error(`uploaded file not counted: ${JSON.stringify(uploadedCoverage)}`);
+        }
+        const uploadedDirectUpdate = await apiRequest("POST", "/api/data-entry", {
+          metricId: firstMetric.id,
+          period: coveragePeriod,
+          value: 2,
+          siteId: null,
+        }, tenantA.adminToken);
+        if (uploadedDirectUpdate.status !== 409) {
+          throw new Error(`usable uploaded evidence did not protect direct entry: ${uploadedDirectUpdate.status}:${uploadedDirectUpdate.body.slice(0, 160)}`);
+        }
+
+        const pendingRes = await apiRequest("PUT", `/api/evidence/${evidenceId}`, { evidenceStatus: "pending" }, tenantA.adminToken);
+        if (pendingRes.status !== 200) throw new Error(`pending update status=${pendingRes.status}`);
+        const pendingCoverage = await readCoverage();
+        if (pendingCoverage.totalEvidence !== 1 || pendingCoverage.usableEvidenceCount !== 0 || metricIsCovered(pendingCoverage)) {
+          throw new Error(`pending file counted: ${JSON.stringify(pendingCoverage)}`);
+        }
+        const pendingBulkUpdate = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+          mode: "commit",
+          siteId: null,
+          cells: [{ metricId: firstMetric.id, period: coveragePeriod, rawValue: "2" }],
+        }, tenantA.adminToken);
+        const pendingBulkBody = pendingBulkUpdate.status === 200
+          ? JSON.parse(pendingBulkUpdate.body) as { committed?: boolean; ok?: boolean }
+          : null;
+        if (pendingBulkUpdate.status !== 200 || pendingBulkBody?.committed !== true || pendingBulkBody.ok !== true) {
+          throw new Error(`pending evidence blocked spreadsheet update: ${pendingBulkUpdate.status}:${pendingBulkUpdate.body.slice(0, 200)}`);
+        }
+
+        const availableRes = await apiRequest("PUT", `/api/evidence/${evidenceId}`, { evidenceStatus: "available" }, tenantA.adminToken);
+        if (availableRes.status !== 200) throw new Error(`available update status=${availableRes.status}`);
+        const availableCoverage = await readCoverage();
+        if (availableCoverage.totalEvidence !== 1 || availableCoverage.usableEvidenceCount !== 1 || !metricIsCovered(availableCoverage)) {
+          throw new Error(`available file not counted: ${JSON.stringify(availableCoverage)}`);
+        }
+        const availableBulkPreview = await apiRequest("POST", "/api/data-entry/bulk-upsert", {
+          mode: "validate",
+          siteId: null,
+          cells: [{ metricId: firstMetric.id, period: coveragePeriod, rawValue: "3" }],
+        }, tenantA.adminToken);
+        const availableBulkBody = availableBulkPreview.status === 200
+          ? JSON.parse(availableBulkPreview.body) as { ok?: boolean; cells?: Array<{ protected?: boolean; status?: string }> }
+          : null;
+        if (availableBulkPreview.status !== 200 || availableBulkBody?.ok !== false || availableBulkBody.cells?.[0]?.protected !== true || availableBulkBody.cells?.[0]?.status !== "error") {
+          throw new Error(`usable available evidence did not protect spreadsheet update: ${availableBulkPreview.status}:${availableBulkPreview.body.slice(0, 200)}`);
+        }
+
+        const rejectedRes = await apiRequest("PUT", `/api/evidence/${evidenceId}`, { evidenceStatus: "rejected" }, tenantA.adminToken);
+        if (rejectedRes.status !== 200) throw new Error(`rejected update status=${rejectedRes.status}`);
+        const rejectedDirectUpdate = await apiRequest("POST", "/api/data-entry", {
+          metricId: firstMetric.id,
+          period: coveragePeriod,
+          value: 3,
+          siteId: null,
+        }, tenantA.adminToken);
+        if (rejectedDirectUpdate.status !== 200) {
+          throw new Error(`rejected evidence blocked direct correction: ${rejectedDirectUpdate.status}:${rejectedDirectUpdate.body.slice(0, 200)}`);
+        }
+
+        const restoreAvailableRes = await apiRequest("PUT", `/api/evidence/${evidenceId}`, { evidenceStatus: "available" }, tenantA.adminToken);
+        if (restoreAvailableRes.status !== 200) throw new Error(`available restore status=${restoreAvailableRes.status}`);
+
+        const expiryRes = await apiRequest(
+          "PUT",
+          `/api/evidence/${evidenceId}`,
+          { expiryDate: "2000-01-01T00:00:00.000Z" },
+          tenantA.adminToken,
+        );
+        if (expiryRes.status !== 200) throw new Error(`expiry update status=${expiryRes.status}`);
+        const expiredCoverage = await readCoverage();
+        if (expiredCoverage.totalEvidence !== 1 || expiredCoverage.usableEvidenceCount !== 0 || metricIsCovered(expiredCoverage) || expiredCoverage.expiredCount !== 1) {
+          throw new Error(`expired file counted: ${JSON.stringify(expiredCoverage)}`);
+        }
+        const expiredDirectUpdate = await apiRequest("POST", "/api/data-entry", {
+          metricId: firstMetric.id,
+          period: coveragePeriod,
+          value: 4,
+          siteId: null,
+        }, tenantA.adminToken);
+        if (expiredDirectUpdate.status !== 200) {
+          throw new Error(`expired evidence blocked direct correction: ${expiredDirectUpdate.status}:${expiredDirectUpdate.body.slice(0, 200)}`);
+        }
+        pass(name);
+      } catch (error: any) {
+        fail(name, error?.message || String(error));
+      } finally {
+        if (evidenceId) {
+          await apiRequest("DELETE", `/api/evidence/${evidenceId}`, undefined, tenantA.adminToken);
+        }
+      }
+    }
+  }
+
+  {
+    const name = "legacy metric_evidence remains authoritative for coverage and value protection";
+    const legacyPeriod = "2099-11";
+    const valueRes = await apiRequest("POST", "/api/data-entry", {
+      metricId: firstMetric.id,
+      period: legacyPeriod,
+      value: 7,
+      siteId: null,
+    }, tenantA.adminToken);
+    if (valueRes.status !== 200) {
+      fail(name, `value status=${valueRes.status} body=${valueRes.body.slice(0, 180)}`);
+    } else {
+      const metricValueId = (JSON.parse(valueRes.body) as { id?: string }).id;
+      const evidenceRes = metricValueId
+        ? await apiRequest("POST", "/api/metric-evidence", {
+            metricValueId,
+            fileName: "legacy-coverage-source.txt",
+            fileUrl: "https://example.invalid/legacy-coverage-source.txt",
+            fileType: "text/plain",
+          }, tenantA.adminToken)
+        : null;
+      const legacyEvidenceId = evidenceRes && evidenceRes.status === 201
+        ? (JSON.parse(evidenceRes.body) as { id?: string }).id
+        : undefined;
+      try {
+        if (!metricValueId) throw new Error("value response omitted id");
+        if (!evidenceRes || evidenceRes.status !== 201 || !legacyEvidenceId) {
+          throw new Error(`legacy evidence create failed: ${evidenceRes?.status ?? "none"}:${evidenceRes?.body.slice(0, 180) ?? ""}`);
+        }
+        const coverageRes = await apiRequest(
+          "GET",
+          `/api/evidence/coverage?period=${encodeURIComponent(legacyPeriod)}`,
+          undefined,
+          tenantA.adminToken,
+        );
+        if (coverageRes.status !== 200) throw new Error(`coverage status=${coverageRes.status}`);
+        const coverage = JSON.parse(coverageRes.body) as {
+          metricCoverage?: Array<{ metricId: string; hasEvidence: boolean }>;
+        };
+        if (coverage.metricCoverage?.find((metric) => metric.metricId === firstMetric.id)?.hasEvidence !== true) {
+          throw new Error(`legacy attachment missing from coverage: ${coverageRes.body.slice(0, 300)}`);
+        }
+        const protectedUpdate = await apiRequest("POST", "/api/data-entry", {
+          metricId: firstMetric.id,
+          period: legacyPeriod,
+          value: 8,
+          siteId: null,
+        }, tenantA.adminToken);
+        if (protectedUpdate.status !== 409) {
+          throw new Error(`legacy attachment did not protect value: ${protectedUpdate.status}:${protectedUpdate.body.slice(0, 160)}`);
+        }
+        pass(name);
+      } catch (error: any) {
+        fail(name, error?.message || String(error));
+      } finally {
+        if (legacyEvidenceId) {
+          await apiRequest("DELETE", `/api/metric-evidence/${legacyEvidenceId}`, undefined, tenantA.adminToken);
+        }
+      }
+    }
   }
 
   // ── 10. Company isolation: Tenant A list contains no Tenant B company data ─
