@@ -306,9 +306,9 @@ export interface WorkflowBulkReviewResult {
 }
 
 export type WorkflowReviseResult =
-  | { outcome: "revised"; entityType: "metric_value" | "raw_data"; entityId: string; status: "draft" }
-  | { outcome: "not_rejected"; entityType: "metric_value" | "raw_data"; entityId: string; currentStatus: WorkflowStatus }
-  | { outcome: "not_found"; entityType: "metric_value" | "raw_data"; entityId: string };
+  | { outcome: "revised"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string; status: "draft" }
+  | { outcome: "not_rejected"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string; currentStatus: WorkflowStatus }
+  | { outcome: "not_found"; entityType: "metric_value" | "raw_data" | "generated_policy"; entityId: string };
 
 const { Pool } = pg;
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -778,7 +778,12 @@ export interface IStorage {
     id: string,
     companyId: string,
     data: Partial<GeneratedPolicy>,
-    options?: { approveTransition?: boolean },
+    options?: {
+      approveTransition?: boolean;
+      approvedBy?: string;
+      expectedStatus?: GeneratedPolicy["status"];
+      expectedWorkflowStatus?: GeneratedPolicy["workflowStatus"];
+    },
   ): Promise<GeneratedPolicy | undefined>;
   deleteGeneratedPolicy(id: string): Promise<void>;
 
@@ -791,7 +796,7 @@ export interface IStorage {
   submitWorkflowEntities(entityType: WorkflowEntityType, entityIds: string[], companyId: string, userId: string): Promise<WorkflowSubmitResult>;
   reviewWorkflowEntity(entityType: WorkflowEntityType, entityId: string, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowReviewResult>;
   bulkReviewWorkflowEntities(items: Array<{ entityType: WorkflowEntityType; entityId: string }>, action: "approve" | "reject", companyId: string, userId: string, comment?: string): Promise<WorkflowBulkReviewResult>;
-  reviseWorkflowEntity(entityType: "metric_value" | "raw_data", entityId: string, companyId: string, userId: string): Promise<WorkflowReviseResult>;
+  reviseWorkflowEntity(entityType: "metric_value" | "raw_data" | "generated_policy", entityId: string, companyId: string, userId: string): Promise<WorkflowReviseResult>;
   getWorkflowPendingItems(companyId: string): Promise<any>;
 
   // Task Ownership
@@ -2496,17 +2501,36 @@ export class DatabaseStorage implements IStorage {
     id: string,
     companyId: string,
     data: Partial<GeneratedPolicy>,
-    options?: { approveTransition?: boolean },
+    options?: {
+      approveTransition?: boolean;
+      approvedBy?: string;
+      expectedStatus?: GeneratedPolicy["status"];
+      expectedWorkflowStatus?: GeneratedPolicy["workflowStatus"];
+    },
   ) {
     const mutable = pickMutableFields(data, GENERATED_POLICY_MUTABLE_FIELDS) as Partial<GeneratedPolicy>;
     const serverManaged = options?.approveTransition
       ? {
           approvedAt: new Date(),
+          workflowStatus: "approved" as const,
+          reviewedBy: options.approvedBy ?? null,
+          reviewedAt: new Date(),
+          reviewComment: null,
           versionNumber: sql`coalesce(${generatedPolicies.versionNumber}, 0) + 1`,
         }
       : {};
+    const conditions = [
+      eq(generatedPolicies.id, id),
+      eq(generatedPolicies.companyId, companyId),
+    ];
+    if (options?.expectedStatus !== undefined) {
+      conditions.push(sql`coalesce(${generatedPolicies.status}, 'draft') = ${options.expectedStatus ?? "draft"}`);
+    }
+    if (options?.expectedWorkflowStatus !== undefined) {
+      conditions.push(sql`coalesce(${generatedPolicies.workflowStatus}, 'draft') = ${options.expectedWorkflowStatus ?? "draft"}`);
+    }
     const [r] = await db.update(generatedPolicies).set({ ...mutable, ...serverManaged, updatedAt: new Date() })
-      .where(and(eq(generatedPolicies.id, id), eq(generatedPolicies.companyId, companyId)))
+      .where(and(...conditions))
       .returning();
     return r;
   }
@@ -2662,9 +2686,12 @@ export class DatabaseStorage implements IStorage {
       }
 
       const status = action === "approve" ? "approved" : "rejected";
+      const generatedPolicyApprovalFields = entityType === "generated_policy" && action === "approve"
+        ? ", status = 'approved', approved_at = NOW(), version_number = COALESCE(version_number, 0) + 1"
+        : "";
       const updated = await client.query(
         `UPDATE ${workflowTable(entityType)}
-         SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+         SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4${generatedPolicyApprovalFields}
          WHERE id = $1 AND workflow_status = 'submitted'`,
         [entityId, status, userId, comment?.trim() || null],
       );
@@ -2747,9 +2774,12 @@ export class DatabaseStorage implements IStorage {
           continue;
         }
 
+        const generatedPolicyApprovalFields = item.entityType === "generated_policy" && action === "approve"
+          ? ", status = 'approved', approved_at = NOW(), version_number = COALESCE(version_number, 0) + 1"
+          : "";
         const updated = await client.query(
           `UPDATE ${workflowTable(item.entityType)}
-           SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4
+           SET workflow_status = $2, reviewed_by = $3, reviewed_at = NOW(), review_comment = $4${generatedPolicyApprovalFields}
            WHERE id = $1 AND workflow_status = 'submitted'`,
           [item.entityId, status, userId, comment?.trim() || null],
         );
@@ -2785,7 +2815,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async reviseWorkflowEntity(
-    entityType: "metric_value" | "raw_data",
+    entityType: "metric_value" | "raw_data" | "generated_policy",
     entityId: string,
     companyId: string,
     userId: string,
@@ -2799,17 +2829,25 @@ export class DatabaseStorage implements IStorage {
         await client.query("COMMIT");
         return { outcome: "not_found", entityType, entityId };
       }
-      if (currentStatus !== "rejected") {
+      const canRevise = currentStatus === "rejected"
+        || (entityType === "generated_policy" && currentStatus === "approved");
+      if (!canRevise) {
         await client.query("COMMIT");
         return { outcome: "not_rejected", entityType, entityId, currentStatus };
       }
 
+      const generatedPolicyRevisionFields = entityType === "generated_policy"
+        ? ", status = 'draft', approved_at = NULL"
+        : "";
+      const clearPriorApprovalComment = entityType === "generated_policy" && currentStatus === "approved"
+        ? ", review_comment = NULL"
+        : "";
       const updated = await client.query(
         `UPDATE ${workflowTable(entityType)}
          SET workflow_status = 'draft', submitted_by = NULL, submitted_at = NULL,
-             reviewed_by = NULL, reviewed_at = NULL
-         WHERE id = $1 AND workflow_status = 'rejected'`,
-        [entityId],
+             reviewed_by = NULL, reviewed_at = NULL${clearPriorApprovalComment}${generatedPolicyRevisionFields}
+         WHERE id = $1 AND workflow_status = $2`,
+        [entityId, currentStatus],
       );
       if (updated.rowCount !== 1) {
         throw new Error(`Workflow revise transition was not applied for ${entityType}:${entityId}`);
@@ -2820,7 +2858,7 @@ export class DatabaseStorage implements IStorage {
         action: `Workflow revision started: ${entityType}`,
         entityType,
         entityId,
-        details: { outcome: "success", transition: { from: "rejected", to: "draft" } },
+        details: { outcome: "success", transition: { from: currentStatus, to: "draft" } },
       });
       await client.query("COMMIT");
       return { outcome: "revised", entityType, entityId, status: "draft" };
@@ -2940,7 +2978,7 @@ export class DatabaseStorage implements IStorage {
       tasks.push({
         entityType: "policy", entityId: (r as any).id, title: "ESG Policy",
         dueDate: dueDate?.toISOString() || null, status: "review_due",
-        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/policy",
+        isOverdue: dueDate ? dueDate < now : false, linkUrl: "/policies?tab=register",
       });
     }
 

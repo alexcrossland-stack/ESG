@@ -85,7 +85,7 @@ const OPEN_WORK_AREAS: Array<{
     key: "unapprovedPolicies",
     label: "Policies to approve",
     description: "Draft company commitments that still need approval.",
-    href: "/policy-templates",
+    href: "/policies?tab=register",
     icon: FileText,
   },
 ];

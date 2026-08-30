@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useState, type ChangeEvent, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,9 +12,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Users, Edit, Trash2, Shield } from "lucide-react";
+import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Edit, Trash2, Shield } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
+import { usePermissions } from "@/lib/permissions";
+import { Link } from "wouter";
 
 type PolicyAttachment = {
   id: string;
@@ -47,6 +48,15 @@ type GovernanceAssignment = {
   ownerName: string | null;
   ownerTitle: string | null;
   responsibilities: string | null;
+};
+
+type LegacyPolicyResponse = {
+  policy: {
+    id: string;
+    status: "draft" | "published" | null;
+    reviewDate: string | null;
+  } | null;
+  latestVersion: { versionNumber: number } | null;
 };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; badge: any }> = {
@@ -264,13 +274,15 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
   );
 }
 
-function GovernanceAssignmentCard({ area, label, assignment, onSave }: {
+function GovernanceAssignmentCard({ area, label, assignment, onSave, canEdit }: {
   area: string;
   label: string;
   assignment?: GovernanceAssignment;
   onSave: (data: any) => void;
+  canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const assignedOwnerName = assignment?.ownerName?.trim() || null;
   const { register, handleSubmit } = useForm({
     defaultValues: {
       ownerName: assignment?.ownerName ?? "",
@@ -287,7 +299,7 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave }: {
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-purple-500" />
               <span className="text-sm font-medium">{label}</span>
-              {assignment?.ownerName && <Badge variant="secondary" className="text-xs">{assignment.ownerName}</Badge>}
+              {assignedOwnerName && <Badge variant="secondary" className="text-xs">{assignedOwnerName}</Badge>}
             </div>
             {assignment?.ownerTitle && (
               <p className="text-xs text-muted-foreground mt-1">{assignment.ownerTitle}</p>
@@ -296,13 +308,16 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave }: {
               <p className="text-xs text-muted-foreground mt-1">{assignment.responsibilities}</p>
             )}
           </div>
-          <Button
-            variant="ghost" size="sm"
-            onClick={() => setEditing(!editing)}
-            data-testid={`button-edit-governance-${area}`}
-          >
-            <Edit className="w-3.5 h-3.5" />
-          </Button>
+          {canEdit && (
+            <Button
+              variant="ghost" size="sm"
+              onClick={() => setEditing(!editing)}
+              aria-label={`Edit ${label} governance owner`}
+              data-testid={`button-edit-governance-${area}`}
+            >
+              <Edit className="w-3.5 h-3.5" />
+            </Button>
+          )}
         </div>
         {editing && (
           <form onSubmit={handleSubmit(data => { onSave(data); setEditing(false); })} className="mt-4 space-y-3 border-t border-border pt-3">
@@ -329,14 +344,25 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave }: {
   );
 }
 
-export default function EsgPolicyRegisterPage() {
+export function PolicyRegisterWorkspace({
+  embedded = false,
+  draftsSection,
+}: {
+  embedded?: boolean;
+  draftsSection?: ReactNode;
+} = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const canManagePolicies = can("policy_editing");
   const [showDialog, setShowDialog] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
 
   const { data: policies = [], isLoading: policiesLoading } = useQuery<PolicyRecord[]>({
     queryKey: ["/api/policy-records"],
+  });
+  const { data: legacyPolicyData, isLoading: legacyPolicyLoading } = useQuery<LegacyPolicyResponse>({
+    queryKey: ["/api/policy"],
   });
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery<GovernanceAssignment[]>({
     queryKey: ["/api/governance-assignments"],
@@ -379,9 +405,16 @@ export default function EsgPolicyRegisterPage() {
     onError: () => toast({ title: "Save failed", variant: "destructive" }),
   });
 
+  const legacyPolicy = legacyPolicyData?.policy ?? null;
   const overduePolicies = policies.filter(p => p.status !== "retired" && isOverdue(p.reviewDate));
   const upcomingPolicies = policies.filter(p => p.status !== "retired" && !isOverdue(p.reviewDate) && isUpcoming(p.reviewDate));
-  const assignedAreas = new Set(assignments.map(a => a.area));
+  const overduePolicyCount = overduePolicies.length + (legacyPolicy && isOverdue(legacyPolicy.reviewDate) ? 1 : 0);
+  const upcomingPolicyCount = upcomingPolicies.length + (legacyPolicy && isUpcoming(legacyPolicy.reviewDate) ? 1 : 0);
+  const assignedAreas = new Set(
+    assignments
+      .filter((assignment) => Boolean(assignment.ownerName?.trim()))
+      .map((assignment) => assignment.area),
+  );
   const govCompleteness = Math.round((assignedAreas.size / GOVERNANCE_AREAS.length) * 100);
 
   const handleSave = (data: any) => {
@@ -392,9 +425,9 @@ export default function EsgPolicyRegisterPage() {
     }
   };
 
-  if (policiesLoading || assignmentsLoading) {
+  if (policiesLoading || legacyPolicyLoading || assignmentsLoading) {
     return (
-      <div className="p-6 space-y-4">
+      <div className={embedded ? "space-y-4" : "p-6 space-y-4"}>
         <Skeleton className="h-8 w-48" />
         <div className="grid grid-cols-1 gap-3">
           {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}
@@ -404,64 +437,76 @@ export default function EsgPolicyRegisterPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
+    <div className={embedded ? "space-y-8" : "p-6 space-y-8 max-w-5xl mx-auto"} data-testid="policy-register-workspace">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
+          {embedded ? (
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <FileText className="w-4 h-4 text-primary" />
+              Registered policies
+            </h2>
+          ) : (
+            <h1 className="text-xl font-semibold flex items-center gap-2">
             <FileText className="w-5 h-5 text-primary" />
             Policy Register
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Track policies, owners, review dates and governance area assignments</p>
+            </h1>
+          )}
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {embedded
+              ? "Your formally adopted and externally maintained policies, with owners and review dates."
+              : "Track policies, owners, review dates and governance area assignments"}
+          </p>
         </div>
-        <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
-
-          <DialogTrigger asChild>
-            <Button size="sm" data-testid="button-add-policy">
-              <Plus className="w-4 h-4 mr-1" /> Add Policy
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>{editingPolicy ? "Edit Policy" : "Add Policy"}</DialogTitle>
-            </DialogHeader>
-            <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} />
-          </DialogContent>
-        </Dialog>
+        {canManagePolicies && (
+          <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-add-policy">
+                <Plus className="w-4 h-4 mr-1" /> Add existing policy
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>{editingPolicy ? "Edit Policy" : "Add existing policy"}</DialogTitle>
+              </DialogHeader>
+              <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} />
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       <PageGuidance
         pageKey="esg-policy-register"
         title="What is the Policy Register?"
-        summary="The Policy Register is a central record of all your ESG-related policies — from environmental management to health & safety, diversity, and data privacy. It tracks who owns each policy, when it was last reviewed, and when the next review is due. The Governance tab lets you assign board members or managers to specific ESG responsibility areas."
+        summary="The Policy Register is a central record of all your ESG-related policies — from environmental management to health & safety, diversity, and data privacy. It tracks who owns each policy, when it was last reviewed, and when the next review is due. Governance ownership below records accountability for each ESG area."
         goodLooksLike="Every relevant ESG policy is listed with an active owner and a review date no more than 12 months out. Overdue reviews are resolved promptly, and governance roles are assigned to named individuals rather than job titles alone."
         steps={[
-          "Click 'Add Policy' to create a new record for each ESG-related policy your business has.",
+          "Click 'Add existing policy' to create a record for each ESG-related policy your business has.",
           "Set the policy type (e.g. Environmental, H&S, Diversity) and assign a named owner.",
           "Add the effective date and next review date so nothing slips through the cracks.",
           "Optionally add the policy document using a document link, a direct file upload, or both.",
-          "Switch to the Governance tab to assign board or management accountability for each ESG area.",
+          "Use Governance ownership below to assign board or management accountability for each ESG area.",
           "Review and update the register at least annually or after major organisational changes.",
         ]}
       />
 
-      {(overduePolicies.length > 0 || upcomingPolicies.length > 0) && (
+      {(overduePolicyCount > 0 || upcomingPolicyCount > 0) && (
         <div className="flex flex-wrap gap-3">
-          {overduePolicies.length > 0 && (
+          {overduePolicyCount > 0 && (
             <Card className="flex-1 min-w-56 border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20">
               <CardContent className="p-3 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-red-500" />
                 <span className="text-sm font-medium text-red-700 dark:text-red-400">
-                  {overduePolicies.length} overdue review{overduePolicies.length > 1 ? "s" : ""}
+                  {overduePolicyCount} overdue review{overduePolicyCount > 1 ? "s" : ""}
                 </span>
               </CardContent>
             </Card>
           )}
-          {upcomingPolicies.length > 0 && (
+          {upcomingPolicyCount > 0 && (
             <Card className="flex-1 min-w-56 border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20">
               <CardContent className="p-3 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-amber-500" />
                 <span className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                  {upcomingPolicies.length} review{upcomingPolicies.length > 1 ? "s" : ""} due within 90 days
+                  {upcomingPolicyCount} review{upcomingPolicyCount > 1 ? "s" : ""} due within 90 days
                 </span>
               </CardContent>
             </Card>
@@ -469,21 +514,38 @@ export default function EsgPolicyRegisterPage() {
         </div>
       )}
 
-      <Tabs defaultValue="policies">
-        <TabsList>
-          <TabsTrigger value="policies" data-testid="tab-policies">Policies ({policies.length})</TabsTrigger>
-          <TabsTrigger value="governance" data-testid="tab-governance">
-            Governance Ownership
-            <Badge variant="secondary" className="ml-2 text-xs">{govCompleteness}%</Badge>
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="policies" className="mt-4 space-y-3">
-          {policies.length === 0 ? (
+      <section className="space-y-3" aria-label="Registered policies" data-testid="registered-policy-list">
+          {legacyPolicy && (
+            <Card data-testid="core-esg-policy-card" className="border border-primary/20 bg-primary/[0.025]">
+              <CardContent className="p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">Company ESG policy</span>
+                      <Badge variant={legacyPolicy.status === "published" ? "default" : "secondary"}>
+                        {legacyPolicy.status === "published" ? "Published" : "Draft"}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">Built-in policy</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Version {legacyPolicyData?.latestVersion?.versionNumber ?? 0}
+                      {legacyPolicy.reviewDate ? ` · Review ${new Date(legacyPolicy.reviewDate).toLocaleDateString()}` : " · Review date not set"}
+                    </p>
+                  </div>
+                  <Button asChild size="sm" variant="outline" data-testid="button-open-core-policy">
+                    <Link href="/policies?tab=register&policy=company">Open policy</Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {policies.length === 0 && !legacyPolicy ? (
             <Card>
               <CardContent className="py-12 text-center">
                 <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
-                <p className="text-sm text-muted-foreground">No policies yet. Add your first policy to get started.</p>
+                <p className="text-sm text-muted-foreground">
+                  {canManagePolicies ? "No policies yet. Add your first policy to get started." : "No registered policies yet."}
+                </p>
               </CardContent>
             </Card>
           ) : (
@@ -544,7 +606,7 @@ export default function EsgPolicyRegisterPage() {
                           </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      {canManagePolicies && <div className="flex items-center gap-1 shrink-0">
                         <Button
                           variant="ghost" size="icon" className="w-7 h-7"
                           onClick={() => { setEditingPolicy(policy); setShowDialog(true); }}
@@ -554,21 +616,32 @@ export default function EsgPolicyRegisterPage() {
                         </Button>
                         <Button
                           variant="ghost" size="icon" className="w-7 h-7 text-destructive hover:text-destructive"
-                          onClick={() => deleteMutation.mutate(policy.id)}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${policy.title}? This cannot be undone.`)) {
+                              deleteMutation.mutate(policy.id);
+                            }
+                          }}
+                          aria-label={`Delete ${policy.title}`}
                           data-testid={`button-delete-policy-${policy.id}`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
-                      </div>
+                      </div>}
                     </div>
                   </CardContent>
                 </Card>
               );
             })
           )}
-        </TabsContent>
+      </section>
 
-        <TabsContent value="governance" className="mt-4 space-y-4">
+      {draftsSection}
+
+      <section className="space-y-4" aria-labelledby="governance-ownership-heading" data-testid="governance-ownership-section">
+          <div>
+            <h2 id="governance-ownership-heading" className="text-base font-semibold">Governance ownership</h2>
+            <p className="mt-0.5 text-sm text-muted-foreground">Name the people accountable for each company-wide ESG area.</p>
+          </div>
           <div className="flex items-center gap-3 p-3 rounded-md border border-border bg-muted/30">
             <CheckCircle className={`w-5 h-5 ${govCompleteness === 100 ? "text-green-500" : govCompleteness >= 60 ? "text-amber-500" : "text-red-500"}`} />
             <div className="flex-1">
@@ -584,11 +657,15 @@ export default function EsgPolicyRegisterPage() {
                 label={label}
                 assignment={assignments.find(a => a.area === area)}
                 onSave={(data) => govMutation.mutate({ area, data })}
+                canEdit={canManagePolicies}
               />
             ))}
           </div>
-        </TabsContent>
-      </Tabs>
+      </section>
     </div>
   );
+}
+
+export default function EsgPolicyRegisterPage() {
+  return <PolicyRegisterWorkspace />;
 }

@@ -105,6 +105,7 @@ import { classifyValueSource } from "@shared/value-source";
 import { clearGuidedRawInputsFromMetrics } from "./raw-data-metric-sync";
 import { recalculateGuidedPeriod } from "./guided-recalculation";
 import { getConfiguredEmissionFactors } from "./emission-factor-resolution";
+import { getPolicyPortfolioStatus } from "./policy-portfolio";
 import {
   acquirePeriodMutationLocks,
   dataEntryPeriodMonths,
@@ -3266,11 +3267,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const [metrics, evidenceList, reportsList, policiesList, questList, hasData] = await Promise.all([
+      const [metrics, evidenceList, reportsList, legacyPolicy, generatedPoliciesList, policyRecordsList, questList, hasData] = await Promise.all([
         storage.getMetrics(companyId),
         storage.getEvidenceFiles(companyId),
         storage.getReportRuns(companyId),
         storage.getPolicy(companyId),
+        storage.getGeneratedPolicies(companyId),
+        storage.getPolicyRecords(companyId),
         storage.getQuestionnaires(companyId),
         storage.hasAnyData(companyId),
       ]);
@@ -3282,8 +3285,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const step4Complete = hasData;
       const step5Complete = evidenceList.length > 0;
       const hasReport = reportsList.length > 0;
-      const hasPolicy = !!(policiesList);
-      const hasPolicyContent = hasPolicy;
+      const hasPolicyContent = getPolicyPortfolioStatus({
+        legacyPolicy,
+        generatedPolicies: generatedPoliciesList,
+        policyRecords: policyRecordsList,
+      }).hasAny;
       const hasQuestionnaire = questList.some((q: any) => q.status !== "draft");
       const step6Complete = hasReport || hasPolicyContent || hasQuestionnaire;
 
@@ -3615,7 +3621,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const recommendedPolicies = orderedTopics
         .filter((t: string) => POLICY_MAP[t])
         .slice(0, 3)
-        .map((t: string) => ({ topic: t, name: POLICY_MAP[t], url: "/policy-generator" }));
+        .map((t: string) => ({ topic: t, name: POLICY_MAP[t], url: "/policies?tab=templates" }));
 
       const METRIC_INFO: Record<string, { name: string; desc: string }> = {
         electricity: { name: "Electricity Consumption", desc: "Track electricity usage in kWh monthly" },
@@ -3795,12 +3801,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Policy routes
   app.get("/api/policy", requireAuth, async (req, res) => {
     const companyId = (req.session as any).companyId;
-    let policy = await storage.getPolicy(companyId);
-    if (!policy) {
-      policy = await storage.createPolicy(companyId);
-    }
-    const latestVersion = await storage.getLatestPolicyVersion(policy.id);
-    const versions = await storage.getPolicyVersions(policy.id);
+    const policy = await storage.getPolicy(companyId);
+    const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
+    const versions = policy ? await storage.getPolicyVersions(policy.id) : [];
     res.json({ policy, latestVersion, versions });
   });
 
@@ -5660,10 +5663,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const actions = await storage.getActionPlans(companyId);
       const now = new Date();
       const overdueActions = actions.filter(a => a.dueDate && new Date(a.dueDate) < now && a.status !== "complete");
-      const policy = await storage.getPolicy(companyId);
+      const [policy, generatedPoliciesForReviews, policyRecordsForReviews] = await Promise.all([
+        storage.getPolicy(companyId),
+        storage.getGeneratedPolicies(companyId),
+        storage.getPolicyRecords(companyId),
+      ]);
       const upcomingPolicyReviews: { reviewDate: string; status: string }[] = [];
-      if (policy?.reviewDate) {
-        const rd = new Date(policy.reviewDate);
+      const policyReviewDates = getPolicyPortfolioStatus({
+        legacyPolicy: policy,
+        generatedPolicies: generatedPoliciesForReviews,
+        policyRecords: policyRecordsForReviews,
+      }).reviewDates;
+      for (const rd of policyReviewDates) {
         const daysUntil = Math.ceil((rd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
         if (daysUntil <= 90) {
           upcomingPolicyReviews.push({ reviewDate: rd.toISOString(), status: daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "urgent" : "upcoming" });
@@ -6633,9 +6644,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? "Organisation-wide records only"
           : selectedSiteName ? `Site: ${selectedSiteName}` : "Selected site";
 
-      const [esgStatus, policy, actions, allMetrics, rawEvidenceFiles, activeReadinessSites] = await Promise.all([
+      const [
+        esgStatus,
+        policy,
+        generatedPoliciesForReadiness,
+        policyRecordsForReadiness,
+        actions,
+        allMetrics,
+        rawEvidenceFiles,
+        activeReadinessSites,
+      ] = await Promise.all([
         evaluateEsgStatus(companyId, period, siteId, { dateFrom, dateTo }),
         storage.getPolicy(companyId).catch(() => null),
+        storage.getGeneratedPolicies(companyId).catch(() => []),
+        storage.getPolicyRecords(companyId).catch(() => []),
         storage.getActionPlans(companyId).catch(() => []),
         storage.getMetrics(companyId),
         storage.getEvidenceFiles(companyId, siteId, dateFrom || dateTo ? undefined : period),
@@ -6667,7 +6689,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : 0;
 
       // Policy status
-      const policyNotPublished = !policy || policy.workflowStatus !== "published";
+      const policyNotPublished = !getPolicyPortfolioStatus({
+        legacyPolicy: policy,
+        generatedPolicies: generatedPoliciesForReadiness,
+        policyRecords: policyRecordsForReadiness,
+      }).published;
 
       // Overdue actions
       const now = new Date();
@@ -6855,6 +6881,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const policy = await storage.getPolicy(companyId);
       const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
+      const generatedPoliciesForReport = await storage.getGeneratedPolicies(companyId);
+      const publishedGeneratedPolicy = generatedPoliciesForReport.find((item: any) => item.status === "published");
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
@@ -7123,14 +7151,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         items: actions,
       };
 
-      const policyContent = latestVersion?.content;
+      const policyContent = publishedGeneratedPolicy?.content ?? latestVersion?.content;
       const policySummary = policyContent ? {
         purpose: policyContent.purpose || null,
         environmentalCommitments: policyContent.environmentalCommitments || null,
         socialCommitments: policyContent.socialCommitments || null,
         governanceCommitments: policyContent.governanceCommitments || null,
         rolesAndResponsibilities: policyContent.rolesAndResponsibilities || null,
-        workflowStatus: policy?.status || "draft",
+        workflowStatus: publishedGeneratedPolicy?.status || policy?.status || "draft",
       } : null;
 
       const companySettings = await storage.getCompanySettings(companyId);
@@ -7639,35 +7667,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const policy = await storage.getPolicy(companyId);
-    if (policy?.reviewDate) {
-      const reviewDate = new Date(policy.reviewDate);
-      const daysUntil = Math.ceil((reviewDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      if (daysUntil <= 90) {
-        const key = `policy_review:${policy.id}`;
-        const existing = await storage.getNotificationBySourceKey(key, companyId);
-        if (!existing) {
-          const severity = daysUntil < 0 ? "critical" : daysUntil <= 30 ? "warning" : "info";
-          const label = daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "due within 30 days" : "upcoming";
-          await storage.createNotification({
-            companyId, type: "policy_review",
-            title: `Policy review ${label}`,
-            message: `Your ESG policy review is ${label} (${reviewDate.toLocaleDateString()}).`,
-            severity, linkedModule: "policy", linkedEntityId: policy.id,
-            linkUrl: "/policy", dueDate: reviewDate, autoGenerated: true, sourceKey: key,
-          });
-          created++;
+    if (policy) {
+      const key = `policy_review:${policy.id}`;
+      if (policy.status !== "published" || !policy.reviewDate) {
+        await storage.deleteNotificationsBySourceKey(key, companyId);
+      } else {
+        const reviewDate = new Date(policy.reviewDate);
+        const daysUntil = Math.ceil((reviewDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (Number.isFinite(daysUntil) && daysUntil <= 90) {
+          let existing = await storage.getNotificationBySourceKey(key, companyId);
+          if (existing?.dueDate && new Date(existing.dueDate).getTime() !== reviewDate.getTime()) {
+            await storage.deleteNotificationsBySourceKey(key, companyId);
+            existing = undefined;
+          }
+          if (!existing) {
+            const severity = daysUntil < 0 ? "critical" : daysUntil <= 30 ? "warning" : "info";
+            const label = daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "due within 30 days" : "upcoming";
+            await storage.createNotification({
+              companyId, type: "policy_review",
+              title: `Policy review ${label}`,
+              message: `Your ESG policy review is ${label} (${reviewDate.toLocaleDateString()}).`,
+              severity, linkedModule: "policy", linkedEntityId: policy.id,
+              linkUrl: "/policies?tab=register", dueDate: reviewDate, autoGenerated: true, sourceKey: key,
+            });
+            created++;
+          }
+        } else {
+          await storage.deleteNotificationsBySourceKey(key, companyId);
         }
       }
     }
 
     const generatedPoliciesData = await storage.getGeneratedPolicies(companyId);
     for (const gp of generatedPoliciesData) {
-      if (gp.reviewDate) {
+      const key = `policy_template_review:${gp.id}`;
+      const adopted = gp.workflowStatus === "approved"
+        && (gp.status === "approved" || gp.status === "published");
+      if (adopted && gp.reviewDate) {
         const reviewDate = new Date(gp.reviewDate);
         const daysUntil = Math.ceil((reviewDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        if (daysUntil <= 90) {
-          const key = `policy_template_review:${gp.id}`;
-          const existing = await storage.getNotificationBySourceKey(key, companyId);
+        if (Number.isFinite(daysUntil) && daysUntil <= 90) {
+          let existing = await storage.getNotificationBySourceKey(key, companyId);
+          if (existing?.dueDate && new Date(existing.dueDate).getTime() !== reviewDate.getTime()) {
+            await storage.deleteNotificationsBySourceKey(key, companyId);
+            existing = undefined;
+          }
           if (!existing) {
             const severity = daysUntil < 0 ? "critical" : daysUntil <= 30 ? "warning" : "info";
             const label = daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "due within 30 days" : "upcoming";
@@ -7676,11 +7720,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               title: `Policy review ${label}: ${gp.templateSlug}`,
               message: `Review is ${label} (${reviewDate.toLocaleDateString()}).`,
               severity, linkedModule: "generated_policy", linkedEntityId: gp.id,
-              linkUrl: "/policy-templates", dueDate: reviewDate, autoGenerated: true, sourceKey: key,
+              linkUrl: `/policies?tab=register&policy=${encodeURIComponent(gp.id)}`, dueDate: reviewDate, autoGenerated: true, sourceKey: key,
             });
             created++;
           }
+        } else {
+          await storage.deleteNotificationsBySourceKey(key, companyId);
         }
+      } else {
+        await storage.deleteNotificationsBySourceKey(key, companyId);
       }
     }
 
@@ -7853,6 +7901,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
       }
+    }
+
+    const registeredPoliciesData = await storage.getPolicyRecords(companyId);
+    for (const registeredPolicy of registeredPoliciesData) {
+      const key = `policy_record_review:${registeredPolicy.id}`;
+      if (!registeredPolicy.reviewDate || registeredPolicy.status !== "active") {
+        await storage.deleteNotificationsBySourceKey(key, companyId);
+        continue;
+      }
+      const reviewDate = new Date(registeredPolicy.reviewDate);
+      const daysUntil = Math.ceil((reviewDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      if (!Number.isFinite(daysUntil) || daysUntil > 90) {
+        await storage.deleteNotificationsBySourceKey(key, companyId);
+        continue;
+      }
+      let existing = await storage.getNotificationBySourceKey(key, companyId);
+      if (existing?.dueDate && new Date(existing.dueDate).getTime() !== reviewDate.getTime()) {
+        await storage.deleteNotificationsBySourceKey(key, companyId);
+        existing = undefined;
+      }
+      if (existing) continue;
+      const severity = daysUntil < 0 ? "critical" : daysUntil <= 30 ? "warning" : "info";
+      const label = daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "due within 30 days" : "upcoming";
+      await storage.createNotification({
+        companyId,
+        type: "policy_review",
+        title: `Policy review ${label}: ${registeredPolicy.title}`,
+        message: `Review is ${label} (${reviewDate.toLocaleDateString()}).`,
+        severity,
+        linkedModule: "policy_record",
+        linkedEntityId: registeredPolicy.id,
+        linkUrl: "/policies?tab=register",
+        dueDate: reviewDate,
+        autoGenerated: true,
+        sourceKey: key,
+      });
+      created++;
     }
 
     return created;
@@ -8283,6 +8368,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       const policy = await storage.getPolicy(companyId);
       const latestVersion = policy ? await storage.getLatestPolicyVersion(policy.id) : null;
+      const generatedPoliciesForContext = await storage.getGeneratedPolicies(companyId);
+      const publishedGeneratedPolicyForContext = generatedPoliciesForContext.find((item: any) => item.status === "published");
       const topics = await storage.getMaterialTopics(companyId);
       const allMetrics = await storage.getMetrics(companyId);
       const actions = await storage.getActionPlans(companyId);
@@ -8310,7 +8397,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      const context = buildCompanyContext(company, latestVersion?.content, topics, metricData, actions, carbonCalcs);
+      const context = buildCompanyContext(
+        company,
+        publishedGeneratedPolicyForContext?.content ?? latestVersion?.content,
+        topics,
+        metricData,
+        actions,
+        carbonCalcs,
+      );
 
       const updatedQuestions = [];
       for (const q of questions) {
@@ -8479,6 +8573,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const tone = answers.tone?.includes("Audit") ? "audit_ready" as const : "simple_sme" as const;
       const slug = req.params.slug;
+      const reviewDate = new Date();
+      switch (template.defaultReviewCycle) {
+        case "quarterly":
+          reviewDate.setUTCMonth(reviewDate.getUTCMonth() + 3);
+          break;
+        case "bi-annual":
+          reviewDate.setUTCMonth(reviewDate.getUTCMonth() + 6);
+          break;
+        case "every-2-years":
+          reviewDate.setUTCFullYear(reviewDate.getUTCFullYear() + 2);
+          break;
+        default:
+          reviewDate.setUTCFullYear(reviewDate.getUTCFullYear() + 1);
+      }
       const generatedPolicy = await storage.createGeneratedPolicy({
         companyId,
         templateId: template.id,
@@ -8488,7 +8596,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         questionnaireAnswers: answers,
         policyOwner: answers.policyOwner || null,
         approver: answers.approver || null,
-        reviewDate: null,
+        reviewDate,
         versionNumber: 1,
         tone,
         workflowStatus: "draft",
@@ -8549,13 +8657,89 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!parsed.success) return res.status(400).json(apiValidationError(parsed.error));
       const policy = await storage.getGeneratedPolicy(req.params.id);
       if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const workflowSettings = await storage.getCompanySettings(companyId);
+      const approvalRequired = workflowSettings?.requireApprovalPolicies !== false;
+      const currentStatus = policy.status ?? "draft";
+      const currentWorkflowStatus = policy.workflowStatus ?? "draft";
+      const requestedStatus = parsed.data.status ?? currentStatus;
+      const workflowApproved = currentWorkflowStatus === "approved";
+      if (currentWorkflowStatus === "submitted" || currentWorkflowStatus === "rejected") {
+        return res.status(409).json({
+          error: currentWorkflowStatus === "submitted"
+            ? "This policy is awaiting review and cannot be changed"
+            : "Start a revision before changing a rejected policy",
+          code: "POLICY_WORKFLOW_LOCKED",
+        });
+      }
+      if (
+        approvalRequired &&
+        (requestedStatus === "approved" || requestedStatus === "published") &&
+        !workflowApproved
+      ) {
+        return res.status(409).json({
+          error: "This policy must be approved through the review workflow before it can be finalised",
+          code: "POLICY_APPROVAL_REQUIRED",
+        });
+      }
+      if (
+        requestedStatus === "published"
+        && currentStatus !== "approved"
+        && currentStatus !== "published"
+      ) {
+        return res.status(409).json({
+          error: "Approve this policy before publishing it",
+          code: "POLICY_APPROVAL_REQUIRED",
+        });
+      }
+      if (
+        requestedStatus !== currentStatus
+        && (
+          requestedStatus === "draft"
+          || currentStatus === "published"
+          || (currentStatus === "approved" && requestedStatus !== "published")
+        )
+      ) {
+        return res.status(409).json({
+          error: "Start a new revision before moving an approved or published policy backwards",
+          code: "POLICY_REVISION_REQUIRED",
+        });
+      }
+      const allowedForwardTransition = requestedStatus === currentStatus
+        || (currentStatus === "draft" && requestedStatus === "approved" && (!approvalRequired || workflowApproved))
+        || (currentStatus === "approved" && requestedStatus === "published" && workflowApproved);
+      if (!allowedForwardTransition) {
+        return res.status(409).json({
+          error: "This policy status transition is not allowed",
+          code: "POLICY_STATUS_TRANSITION_INVALID",
+        });
+      }
+      const changesProtectedContent = Object.keys(parsed.data).some((field) => field !== "status");
+      if (workflowSettings?.autoLockApproved !== false && workflowApproved && changesProtectedContent) {
+        return res.status(409).json({
+          error: "Approved policies are locked. Start a revision before changing policy content",
+          code: "POLICY_LOCKED",
+        });
+      }
 
       const updated = await storage.updateGeneratedPolicy(
         String(req.params.id),
         companyId,
         parsed.data,
-        { approveTransition: parsed.data.status === "approved" && policy.status !== "approved" },
+        {
+          approveTransition: requestedStatus === "approved" && currentStatus === "draft" && !workflowApproved,
+          approvedBy: userId,
+          expectedStatus: currentStatus,
+          expectedWorkflowStatus: currentWorkflowStatus,
+        },
       );
+      if (!updated) {
+        return res.status(409).json({
+          error: "This policy changed while you were editing it. Reload it and try again",
+          code: "POLICY_STATE_CHANGED",
+        });
+      }
 
       await storage.createAuditLog({
         companyId, userId,
@@ -8577,6 +8761,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const policy = await storage.getGeneratedPolicy(req.params.id);
       if (!policy || policy.companyId !== companyId) return res.status(404).json({ error: "Not found" });
       await storage.deleteGeneratedPolicy(req.params.id);
+      await storage.deleteNotificationsBySourceKey(`policy_template_review:${policy.id}`, companyId);
       res.json({ ok: true });
     } catch (e: any) {
       sendServerError(res, e);
@@ -8843,11 +9028,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
   const workflowReviseSchema = z.object({
-    entityType: z.enum(["metric_value", "raw_data"]),
+    entityType: z.enum(["metric_value", "raw_data", "generated_policy"]),
     entityId: workflowEntityIdSchema,
   }).strict();
 
-  app.post("/api/workflow/submit", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+  const workflowSubmitPermissionByEntity: Record<WorkflowEntityType, ProvisioningAction> = {
+    metric_value: "enter_metric_data",
+    raw_data: "enter_metric_data",
+    report: "generate_report",
+    generated_policy: "manage_policies",
+    questionnaire_question: "manage_questionnaires",
+  };
+
+  app.post("/api/workflow/submit", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
@@ -8861,6 +9054,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             entityType: parsed.data.entityType,
             entityId,
           }));
+      const user = await storage.getUser(userId);
+      const unauthorizedItem = items.find((item) => {
+        const requiredAction = workflowSubmitPermissionByEntity[item.entityType as WorkflowEntityType];
+        return !user || (!isPlatformSuperAdmin(user) && !hasProvisioningPermission(user.role, requiredAction));
+      });
+      if (unauthorizedItem) {
+        return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
+      }
       const result = await storage.submitWorkflowItems(items as Array<{
         entityType: WorkflowEntityType;
         entityId: string;
@@ -8936,13 +9137,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/workflow/revise", requireAuth, requireProvisioningPermission("enter_metric_data"), async (req, res) => {
+  app.post("/api/workflow/revise", requireAuth, async (req, res) => {
     try {
       const companyId = (req.session as any).companyId;
       const userId = (req.session as any).userId;
       const parsed = workflowReviseSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid workflow revision", fields: parsed.error.flatten().fieldErrors });
+      }
+      const user = await storage.getUser(userId);
+      const requiredAction = workflowSubmitPermissionByEntity[parsed.data.entityType];
+      if (!user || (!isPlatformSuperAdmin(user) && !hasProvisioningPermission(user.role, requiredAction))) {
+        return res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED" });
       }
       const result = await storage.reviseWorkflowEntity(
         parsed.data.entityType,
@@ -8955,7 +9161,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (result.outcome === "not_rejected") {
         return res.status(409).json({
-          error: "Only rejected workflow items can be revised",
+          error: parsed.data.entityType === "generated_policy"
+            ? "Only rejected or approved policies can start a revision"
+            : "Only rejected workflow items can be revised",
           currentStatus: result.currentStatus,
         });
       }
@@ -10018,7 +10226,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const genPolicies = await storage.getGeneratedPolicies(companyId);
       const unapprovedPolicies = genPolicies
         .filter((p: any) => p.workflowStatus !== "approved")
-        .map((p: any) => ({ id: p.id, name: p.templateId || "Policy", status: p.workflowStatus, linkUrl: "/policy-templates" }));
+        .map((p: any) => ({
+          id: p.id,
+          name: p.templateId || "Policy",
+          status: p.workflowStatus,
+          linkUrl: `/policies?tab=register&policy=${encodeURIComponent(p.id)}`,
+        }));
 
       let unmetCompliance: any[] = [];
       try {
@@ -10202,7 +10415,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           id: String(id++), type: "draft_policies",
           title: `Review and approve ${draftPolicies.length} draft polic${draftPolicies.length > 1 ? "ies" : "y"}`,
           description: `You have ${draftPolicies.length} AI-generated polic${draftPolicies.length > 1 ? "ies" : "y"} in draft state. Review and approve them to strengthen your ESG governance posture.`,
-          impact: "medium", category: "governance", actionUrl: "/policy-templates",
+          impact: "medium", category: "governance", actionUrl: "/policies?tab=register",
         });
       }
 
@@ -10245,6 +10458,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reports = await storage.getReportRuns(companyId);
       const policy = await storage.getPolicy(companyId);
       const generatedPolicies = await storage.getGeneratedPolicies(companyId);
+      const policyRecordsForStatus = await storage.getPolicyRecords(companyId);
 
       const linkedEntityIds = new Set(
         evidenceFiles
@@ -10258,9 +10472,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
       const evidenceCoveragePercent = totalCoverageItems > 0 ? Math.round((coveredItems / totalCoverageItems) * 100) : 0;
 
-      const adoptedPolicies = generatedPolicies.filter((p: any) => p.workflowStatus === "approved").length;
-      const publishedPolicy = policy?.status === "published" ? 1 : 0;
-      const policiesAdoptedCount = adoptedPolicies + publishedPolicy;
+      const policiesAdoptedCount = getPolicyPortfolioStatus({
+        legacyPolicy: policy,
+        generatedPolicies,
+        policyRecords: policyRecordsForStatus,
+      }).adoptedCount;
       const recommendedPoliciesCount = Math.max(3, policiesAdoptedCount);
 
       const maturityLevel = company.esgMaturity || null;
@@ -10292,7 +10508,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         nextBestActions.push({ label: "Complete your ESG profile and maturity assessment", url: "/onboarding", priority: "high" });
       }
       if (policiesAdoptedCount === 0) {
-        nextBestActions.push({ label: "Create your first ESG policy", url: "/policy-generator", priority: "high" });
+        nextBestActions.push({ label: "Create your first ESG policy", url: "/policies?tab=templates", priority: "high" });
       }
       if (enabledMetrics.length === 0) {
         nextBestActions.push({ label: "Activate your ESG metrics", url: "/metrics", priority: "high" });
@@ -12022,6 +12238,13 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
 
       const generatedPols = await storage.getGeneratedPolicies(companyId);
+      const legacyPolicy = await storage.getPolicy(companyId);
+      const registeredPolicies = await storage.getPolicyRecords(companyId);
+      const allPolicies = [
+        ...generatedPols.filter((policy) => policy.workflowStatus !== "archived"),
+        ...registeredPolicies.filter((policy) => policy.status !== "retired"),
+        ...(legacyPolicy ? [legacyPolicy] : []),
+      ];
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter(m => m.enabled);
       const reports = await storage.getReportRuns(companyId);
@@ -12029,14 +12252,15 @@ Use the live data above to give accurate, specific advice. If you don't have inf
 
       const linkedEntityIds = new Set(
         evidenceFiles
+          .filter((e) => isUsableMetricEvidenceFile(e))
           .filter((e: any) => e.linkedModule && e.linkedEntityId)
           .map((e: any) => e.linkedEntityId)
       );
-      const policiesWithEvidence = generatedPols.filter((p: any) => linkedEntityIds.has(p.id)).length;
+      const policiesWithEvidence = allPolicies.filter((policy: any) => linkedEntityIds.has(policy.id)).length;
       const metricsWithEvidence = enabledMetrics.filter(m => linkedEntityIds.has(m.id)).length;
       const reportsWithEvidence = reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
 
-      const totalPolicies = generatedPols.length;
+      const totalPolicies = allPolicies.length;
       const totalMetrics = enabledMetrics.length;
       const totalReports = reports.length;
       const totalItems = totalPolicies + totalMetrics + totalReports;
@@ -12062,10 +12286,19 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const companyId = (req.session as any).companyId;
 
       const generatedPols = await storage.getGeneratedPolicies(companyId);
-      const policiesAdopted = generatedPols.filter((p: any) => p.workflowStatus === "approved").length;
       const policy = await storage.getPolicy(companyId);
-      const publishedPolicy = policy?.status === "published" ? 1 : 0;
-      const totalPoliciesAdopted = policiesAdopted + publishedPolicy;
+      const registeredPolicies = await storage.getPolicyRecords(companyId);
+      const policyPortfolio = getPolicyPortfolioStatus({
+        legacyPolicy: policy,
+        generatedPolicies: generatedPols,
+        policyRecords: registeredPolicies,
+      });
+      const totalPoliciesAdopted = policyPortfolio.adoptedCount;
+      const allPolicies = [
+        ...generatedPols.filter((policyItem) => policyItem.workflowStatus !== "archived"),
+        ...registeredPolicies.filter((policyItem) => policyItem.status !== "retired"),
+        ...(policy ? [policy] : []),
+      ];
 
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = allMetrics.filter(m => m.enabled);
@@ -12078,13 +12311,14 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       const evidenceFiles = await storage.getEvidenceFiles(companyId);
       const linkedEntityIds = new Set(
         evidenceFiles
+          .filter((e) => isUsableMetricEvidenceFile(e))
           .filter((e: any) => e.linkedModule && e.linkedEntityId)
           .map((e: any) => e.linkedEntityId)
       );
       const reports = await storage.getReportRuns(companyId);
-      const totalItems = generatedPols.length + enabledMetrics.length + reports.length;
+      const totalItems = allPolicies.length + enabledMetrics.length + reports.length;
       const coveredItems =
-        generatedPols.filter((p: any) => linkedEntityIds.has(p.id)).length +
+        allPolicies.filter((policyItem: any) => linkedEntityIds.has(policyItem.id)).length +
         enabledMetrics.filter(m => linkedEntityIds.has(m.id)).length +
         reports.filter((r: any) => linkedEntityIds.has(r.id)).length;
       const evidenceCoverage = totalItems > 0 ? Math.round((coveredItems / totalItems) * 100) : 0;
@@ -13258,15 +13492,21 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       let esgReadiness: any = null;
       try {
         const { evaluateEsgStatus } = await import("./esg-status");
-        const [esgStatus, policy, actions] = await Promise.all([
+        const [esgStatus, policy, generatedPoliciesForReadiness, policyRecordsForReadiness, actions] = await Promise.all([
           evaluateEsgStatus(companyId),
           storage.getPolicy(companyId).catch(() => null),
+          storage.getGeneratedPolicies(companyId).catch(() => []),
+          storage.getPolicyRecords(companyId).catch(() => []),
           storage.getActionPlans(companyId).catch(() => []),
         ]);
 
         const estimatedPercent = esgStatus.totalMetrics > 0
           ? Math.round((esgStatus.estimateCount / esgStatus.totalMetrics) * 100) : 0;
-        const policyNotPublished = !policy || (policy as any).workflowStatus !== "published";
+        const policyNotPublished = !getPolicyPortfolioStatus({
+          legacyPolicy: policy,
+          generatedPolicies: generatedPoliciesForReadiness,
+          policyRecords: policyRecordsForReadiness,
+        }).published;
         const now = new Date();
         const overdueActions = (Array.isArray(actions) ? actions : []).filter((a: any) =>
           a.status !== "complete" && a.status !== "completed" && a.dueDate && new Date(a.dueDate) < now
@@ -14780,6 +15020,7 @@ Include all 12 months. Make the progression realistic: start with quick wins and
         await removeEvidenceFileIfPresent(companyId, attachment.id, attachment.filename);
       }
       await storage.deletePolicyRecord(req.params.id, companyId);
+      await storage.deleteNotificationsBySourceKey(`policy_record_review:${req.params.id}`, companyId);
       res.json({ success: true });
     } catch (e: any) {
       sendServerError(res, e);

@@ -353,7 +353,7 @@ function RequirementCompletionDialog({
         ? risks.filter((item) => item.riskScore != null)
         : [];
   const sourcePage = requirement.requirementType === "policy"
-    ? "/esg-policy-register"
+    ? "/policies?tab=register"
     : requirement.requirementType === "target"
       ? "/esg-targets"
       : "/esg-risks";

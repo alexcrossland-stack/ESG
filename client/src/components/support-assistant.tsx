@@ -16,6 +16,7 @@ const PAGE_LABELS: Record<string, string> = {
   "/": "Dashboard",
   "/metrics": "Metrics",
   "/data-entry": "Data Entry",
+  "/policies": "Policies",
   "/policy": "ESG Policy",
   "/policy-templates": "Policy Templates",
   "/policy-generator": "Policy Generator",
@@ -59,7 +60,8 @@ export function SupportAssistant() {
   const { isPro, isLoading: billingLoading } = useBillingStatus();
   const { activeSiteId } = useSiteContext();
 
-  const pageLabel = PAGE_LABELS[location] || "Platform";
+  const currentPath = location.split("?")[0];
+  const pageLabel = PAGE_LABELS[currentPath] || "Platform";
 
   useEffect(() => {
     if (open && !minimised) {

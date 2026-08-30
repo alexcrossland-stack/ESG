@@ -5,6 +5,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileQuestion,
+  FileText,
   HelpCircle,
   LayoutDashboard,
   Leaf,
@@ -42,6 +43,7 @@ import { getRoleLabel, usePermissions } from "@/lib/permissions";
 const PRIMARY_ICON_BY_LABEL: Record<string, LucideIcon> = {
   Overview: LayoutDashboard,
   "Data & evidence": UploadCloud,
+  Policies: FileText,
   "Action plan": Target,
   Reports: BarChart3,
   Questionnaires: FileQuestion,
@@ -51,6 +53,7 @@ const PRIMARY_ICON_BY_LABEL: Record<string, LucideIcon> = {
 const PRIMARY_TEST_ID_BY_LABEL: Record<string, string> = {
   Overview: "nav-dashboard",
   "Data & evidence": "nav-measure",
+  Policies: "nav-policies",
   "Action plan": "nav-control-centre",
   Reports: "nav-reports",
   Questionnaires: "nav-questionnaires",

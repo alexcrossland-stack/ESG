@@ -21,6 +21,7 @@ import {
 } from "./startup-schema-migrations";
 import { redactResponseForLog } from "./log-redaction";
 import { existsSync } from "node:fs";
+import { reconcileLegacyGeneratedPolicyWorkflowStates } from "./policy-workflow-reconciliation";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -561,6 +562,15 @@ app.use((req, res, next) => {
     await seedCurrentEmissionFactors();
   } catch (e: any) {
     console.error("[Startup] FATAL: Emission factor catalogue reconciliation failed");
+    console.error("[Startup] FATAL:", e.message ?? e);
+    process.exit(1);
+  }
+
+  try {
+    const reconciledPolicyCount = await reconcileLegacyGeneratedPolicyWorkflowStates();
+    console.log(`[Startup] Generated policy workflow reconciliation complete (${reconciledPolicyCount} repaired)`);
+  } catch (e: any) {
+    console.error("[Startup] FATAL: Could not reconcile legacy generated policy workflow states");
     console.error("[Startup] FATAL:", e.message ?? e);
     process.exit(1);
   }

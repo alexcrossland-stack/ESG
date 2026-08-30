@@ -28,7 +28,7 @@ const SECTIONS = [
   { key: "reviewCycle", label: "Review Cycle", placeholder: "When and how often will this policy be reviewed?" },
 ];
 
-export default function Policy() {
+export default function Policy({ embedded = false }: { embedded?: boolean } = {}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -118,7 +118,7 @@ export default function Policy() {
   const emptySections = SECTIONS.filter(s => !editContent[s.key]?.trim());
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
+    <div className={embedded ? "space-y-6" : "p-6 space-y-6 max-w-4xl mx-auto"} data-testid="core-policy-editor">
       <PageGuidance
         pageKey="policy"
         title="ESG Policy — what this page does"
@@ -209,7 +209,7 @@ export default function Policy() {
                 <Button
                   size="sm"
                   className="shrink-0"
-                  onClick={() => setLocation("/policy-templates")}
+                  onClick={() => setLocation("/policies?tab=templates")}
                   data-testid="button-policy-templates"
                 >
                   <Sparkles className="w-3.5 h-3.5 mr-1.5" />

@@ -76,7 +76,7 @@ const data: ControlCentreData = {
       id: "policy-draft",
       name: "Responsible sourcing policy",
       status: "pending_review",
-      linkUrl: "/policy-templates",
+      linkUrl: "/policies?tab=register&policy=policy-draft",
     },
   ],
   summary: {
@@ -127,6 +127,11 @@ assert.deepEqual(
     "pendingApprovals",
     "unapprovedPolicies",
   ],
+);
+assert.equal(
+  fullPlan.at(-1)?.href,
+  "/policies?tab=register&policy=policy-draft",
+  "generated policy work opens the matching draft in the unified register",
 );
 assert.equal(fullPlan.at(-1)?.evidenceOrResult, "Current state: Pending Review");
 assert.equal(countOpenImprovementItems(data), 8);

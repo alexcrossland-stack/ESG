@@ -86,12 +86,45 @@ async function insertRawData(
   return id;
 }
 
+async function insertGeneratedPolicy(
+  client: Client,
+  companyId: string,
+  templateId: string,
+  templateSlug: string,
+  title: string,
+) {
+  const id = randomUUID();
+  createdIds.push(id);
+  await client.query(
+    `INSERT INTO generated_policies
+       (id, company_id, template_id, template_slug, title, status, content, workflow_status)
+     VALUES ($1, $2, $3, $4, $5, 'draft', '{}'::jsonb, 'draft')`,
+    [id, companyId, templateId, templateSlug, title],
+  );
+  return id;
+}
+
 async function statusOf(client: Client, table: "metric_values" | "raw_data_inputs", id: string) {
   const result = await client.query<{ workflow_status: string; review_comment: string | null }>(
     `SELECT workflow_status, review_comment FROM ${table} WHERE id = $1`,
     [id],
   );
   assert.equal(result.rows.length, 1, `${table}:${id} missing`);
+  return result.rows[0];
+}
+
+async function generatedPolicyStatusOf(client: Client, id: string) {
+  const result = await client.query<{
+    workflow_status: string;
+    status: string;
+    approved_at: Date | null;
+    version_number: number;
+    review_comment: string | null;
+  }>(
+    "SELECT workflow_status, status, approved_at, version_number, review_comment FROM generated_policies WHERE id = $1",
+    [id],
+  );
+  assert.equal(result.rows.length, 1, `generated_policies:${id} missing`);
   return result.rows[0];
 }
 
@@ -107,6 +140,10 @@ async function main() {
       [tenants.tenantA.companyId],
     )).rows[0]?.id;
     assert.ok(tenantAMetric, "tenant A metric fixture missing");
+    const policyTemplate = (await client.query<{ id: string; slug: string }>(
+      "SELECT id, slug FROM policy_templates WHERE COALESCE(enabled, true) = true ORDER BY slug LIMIT 1",
+    )).rows[0];
+    assert.ok(policyTemplate, "policy template fixture missing");
 
     const invalidDraft = await insertMetricValue(client, tenantAMetric, "draft", "01");
     const submitDraft = await insertMetricValue(client, tenantAMetric, "draft", "02");
@@ -129,6 +166,42 @@ async function main() {
     const invalidMixedRawDraft = await insertRawData(client, tenants.tenantA.companyId, "draft", "14");
     const concurrentMixedMetricDraft = await insertMetricValue(client, tenantAMetric, "draft", "15");
     const concurrentMixedRawDraft = await insertRawData(client, tenants.tenantA.companyId, "draft", "15");
+    const generatedPolicyDraft = await insertGeneratedPolicy(
+      client,
+      tenants.tenantA.companyId,
+      policyTemplate.id,
+      policyTemplate.slug,
+      `Workflow policy ${randomUUID()}`,
+    );
+    const mixedPermissionMetricDraft = await insertMetricValue(client, tenantAMetric, "draft", "16");
+    const mixedPermissionPolicyDraft = await insertGeneratedPolicy(
+      client,
+      tenants.tenantA.companyId,
+      policyTemplate.id,
+      policyTemplate.slug,
+      `Mixed workflow policy ${randomUUID()}`,
+    );
+    const rejectedPolicyDraft = await insertGeneratedPolicy(
+      client,
+      tenants.tenantA.companyId,
+      policyTemplate.id,
+      policyTemplate.slug,
+      `Rejected workflow policy ${randomUUID()}`,
+    );
+    const approvedPolicyRevision = await insertGeneratedPolicy(
+      client,
+      tenants.tenantA.companyId,
+      policyTemplate.id,
+      policyTemplate.slug,
+      `Approved workflow policy ${randomUUID()}`,
+    );
+    const directApprovalPolicy = await insertGeneratedPolicy(
+      client,
+      tenants.tenantA.companyId,
+      policyTemplate.id,
+      policyTemplate.slug,
+      `Direct approval policy ${randomUUID()}`,
+    );
     const missingId = randomUUID();
 
     await check("submit validates every ID before changing any row", async () => {
@@ -163,6 +236,219 @@ async function main() {
       }, tenants.tenantA.contributorToken);
       assert.equal(contributorReview.status, 403, contributorReview.body);
       assert.equal((await statusOf(client, "metric_values", submitSubmitted)).workflow_status, "submitted");
+    });
+
+    await check("generated policy submission requires policy-management permission", async () => {
+      const prematureApproval = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        status: "approved",
+      }, tenants.tenantA.adminToken);
+      assert.equal(prematureApproval.status, 409, prematureApproval.body);
+
+      const contributorSubmit = await apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [generatedPolicyDraft],
+      }, tenants.tenantA.contributorToken);
+      assert.equal(contributorSubmit.status, 403, contributorSubmit.body);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).workflow_status, "draft");
+
+      const viewerSubmit = await apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [generatedPolicyDraft],
+      }, tenants.tenantA.viewerToken);
+      assert.equal(viewerSubmit.status, 403, viewerSubmit.body);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).workflow_status, "draft");
+
+      const adminSubmit = json<SubmitResult>(await apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [generatedPolicyDraft],
+      }, tenants.tenantA.adminToken));
+      assert.equal(adminSubmit.submitted, 1);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).workflow_status, "submitted");
+
+      const submittedEdit = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        content: { purpose: "Changed after submission" },
+      }, tenants.tenantA.adminToken);
+      assert.equal(submittedEdit.status, 409, submittedEdit.body);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).workflow_status, "submitted");
+
+      const approval = await apiRequest("POST", "/api/workflow/review", {
+        entityType: "generated_policy",
+        entityId: generatedPolicyDraft,
+        action: "approve",
+      }, tenants.tenantA.adminToken);
+      assert.equal(approval.status, 200, approval.body);
+      const approved = await generatedPolicyStatusOf(client, generatedPolicyDraft);
+      assert.equal(approved.workflow_status, "approved");
+      assert.equal(approved.status, "approved");
+      assert.ok(approved.approved_at);
+      assert.equal(approved.version_number, 2);
+
+      const lockedEdit = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        title: "Attempted locked edit",
+      }, tenants.tenantA.adminToken);
+      assert.equal(lockedEdit.status, 409, lockedEdit.body);
+
+      const unsafeStatusReset = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        status: "draft",
+      }, tenants.tenantA.adminToken);
+      assert.equal(unsafeStatusReset.status, 409, unsafeStatusReset.body);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).workflow_status, "approved");
+
+      const publish = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        status: "published",
+      }, tenants.tenantA.adminToken);
+      assert.equal(publish.status, 200, publish.body);
+      assert.equal((await generatedPolicyStatusOf(client, generatedPolicyDraft)).status, "published");
+    });
+
+    await check("published generated policies require a controlled revision before further editing", async () => {
+      const publishedEdit = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        content: { purpose: "Changed after publication" },
+      }, tenants.tenantA.adminToken);
+      assert.equal(publishedEdit.status, 409, publishedEdit.body);
+
+      const revision = await apiRequest("POST", "/api/workflow/revise", {
+        entityType: "generated_policy",
+        entityId: generatedPolicyDraft,
+      }, tenants.tenantA.adminToken);
+      assert.equal(revision.status, 200, revision.body);
+      const reopened = await generatedPolicyStatusOf(client, generatedPolicyDraft);
+      assert.equal(reopened.workflow_status, "draft");
+      assert.equal(reopened.status, "draft");
+
+      const edit = await apiRequest("PUT", `/api/generated-policies/${generatedPolicyDraft}`, {
+        content: { purpose: "Controlled version update" },
+      }, tenants.tenantA.adminToken);
+      assert.equal(edit.status, 200, edit.body);
+    });
+
+    await check("approved generated policies can also start a controlled new revision", async () => {
+      const submit = await apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [approvedPolicyRevision],
+      }, tenants.tenantA.adminToken);
+      assert.equal(submit.status, 200, submit.body);
+      const approval = await apiRequest("POST", "/api/workflow/review", {
+        entityType: "generated_policy",
+        entityId: approvedPolicyRevision,
+        action: "approve",
+      }, tenants.tenantA.adminToken);
+      assert.equal(approval.status, 200, approval.body);
+      assert.equal((await generatedPolicyStatusOf(client, approvedPolicyRevision)).status, "approved");
+
+      const revision = await apiRequest("POST", "/api/workflow/revise", {
+        entityType: "generated_policy",
+        entityId: approvedPolicyRevision,
+      }, tenants.tenantA.adminToken);
+      assert.equal(revision.status, 200, revision.body);
+      const reopened = await generatedPolicyStatusOf(client, approvedPolicyRevision);
+      assert.equal(reopened.workflow_status, "draft");
+      assert.equal(reopened.status, "draft");
+    });
+
+    await check("direct approval synchronizes workflow state and locks content when review is disabled", async () => {
+      const settings = await apiRequest("PUT", "/api/company/settings", {
+        requireApprovalPolicies: false,
+        autoLockApproved: true,
+      }, tenants.tenantA.adminToken);
+      assert.equal(settings.status, 200, settings.body);
+      try {
+        const approval = await apiRequest("PUT", `/api/generated-policies/${directApprovalPolicy}`, {
+          status: "approved",
+        }, tenants.tenantA.adminToken);
+        assert.equal(approval.status, 200, approval.body);
+
+        const approved = await generatedPolicyStatusOf(client, directApprovalPolicy);
+        assert.equal(approved.status, "approved");
+        assert.equal(approved.workflow_status, "approved");
+        assert.ok(approved.approved_at);
+        assert.equal(approved.version_number, 2);
+
+        const submit = json<SubmitResult>(await apiRequest("POST", "/api/workflow/submit", {
+          entityType: "generated_policy",
+          entityIds: [directApprovalPolicy],
+        }, tenants.tenantA.adminToken));
+        assert.equal(submit.submitted, 0);
+        assert.equal(submit.alreadyApproved, 1);
+
+        const unsafeEdit = await apiRequest("PUT", `/api/generated-policies/${directApprovalPolicy}`, {
+          title: "Unsafe direct approval edit",
+        }, tenants.tenantA.adminToken);
+        assert.equal(unsafeEdit.status, 409, unsafeEdit.body);
+      } finally {
+        await apiRequest("PUT", "/api/company/settings", {
+          requireApprovalPolicies: true,
+          autoLockApproved: true,
+        }, tenants.tenantA.adminToken);
+      }
+    });
+
+    await check("mixed submission rejects atomically when one entity is unauthorized", async () => {
+      const response = await apiRequest("POST", "/api/workflow/submit", {
+        items: [
+          { entityType: "metric_value", entityId: mixedPermissionMetricDraft },
+          { entityType: "generated_policy", entityId: mixedPermissionPolicyDraft },
+        ],
+      }, tenants.tenantA.contributorToken);
+      assert.equal(response.status, 403, response.body);
+      assert.equal((await statusOf(client, "metric_values", mixedPermissionMetricDraft)).workflow_status, "draft");
+      assert.equal((await generatedPolicyStatusOf(client, mixedPermissionPolicyDraft)).workflow_status, "draft");
+    });
+
+    await check("rejected generated policies can be reopened only by policy managers", async () => {
+      const submit = await apiRequest("POST", "/api/workflow/submit", {
+        entityType: "generated_policy",
+        entityIds: [rejectedPolicyDraft],
+      }, tenants.tenantA.adminToken);
+      assert.equal(submit.status, 200, submit.body);
+
+      for (const comment of [undefined, "   "]) {
+        const invalidReject = await apiRequest("POST", "/api/workflow/review", {
+          entityType: "generated_policy",
+          entityId: rejectedPolicyDraft,
+          action: "reject",
+          ...(comment === undefined ? {} : { comment }),
+        }, tenants.tenantA.adminToken);
+        assert.equal(invalidReject.status, 400, invalidReject.body);
+      }
+      assert.equal((await generatedPolicyStatusOf(client, rejectedPolicyDraft)).workflow_status, "submitted");
+
+      const reject = await apiRequest("POST", "/api/workflow/review", {
+        entityType: "generated_policy",
+        entityId: rejectedPolicyDraft,
+        action: "reject",
+        comment: "Clarify responsibilities",
+      }, tenants.tenantA.adminToken);
+      assert.equal(reject.status, 200, reject.body);
+
+      const rejectedEdit = await apiRequest("PUT", `/api/generated-policies/${rejectedPolicyDraft}`, {
+        title: "Changed without revision",
+      }, tenants.tenantA.adminToken);
+      assert.equal(rejectedEdit.status, 409, rejectedEdit.body);
+      const rejected = await generatedPolicyStatusOf(client, rejectedPolicyDraft);
+      assert.equal(rejected.workflow_status, "rejected");
+      assert.equal(rejected.review_comment, "Clarify responsibilities");
+
+      const contributorRevise = await apiRequest("POST", "/api/workflow/revise", {
+        entityType: "generated_policy",
+        entityId: rejectedPolicyDraft,
+      }, tenants.tenantA.contributorToken);
+      assert.equal(contributorRevise.status, 403, contributorRevise.body);
+
+      const revise = await apiRequest("POST", "/api/workflow/revise", {
+        entityType: "generated_policy",
+        entityId: rejectedPolicyDraft,
+      }, tenants.tenantA.adminToken);
+      assert.equal(revise.status, 200, revise.body);
+      const reopened = await generatedPolicyStatusOf(client, rejectedPolicyDraft);
+      assert.equal(reopened.workflow_status, "draft");
+      assert.equal(reopened.status, "draft");
+      assert.equal(reopened.review_comment, "Clarify responsibilities");
+
+      const revisedEdit = await apiRequest("PUT", `/api/generated-policies/${rejectedPolicyDraft}`, {
+        title: "Changed after controlled revision",
+      }, tenants.tenantA.adminToken);
+      assert.equal(revisedEdit.status, 200, revisedEdit.body);
     });
 
     await check("mixed metric and raw drafts submit in one cross-type batch", async () => {
@@ -399,6 +685,7 @@ async function main() {
       await client.query("DELETE FROM audit_logs WHERE entity_id = ANY($1::varchar[])", [createdIds]);
       await client.query("DELETE FROM metric_values WHERE id = ANY($1::varchar[])", [createdIds]);
       await client.query("DELETE FROM raw_data_inputs WHERE id = ANY($1::varchar[])", [createdIds]);
+      await client.query("DELETE FROM generated_policies WHERE id = ANY($1::varchar[])", [createdIds]);
     }
     await client.end();
   }

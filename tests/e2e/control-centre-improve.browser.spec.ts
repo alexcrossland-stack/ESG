@@ -24,7 +24,7 @@ const populatedPlan = {
     { id: "approval-open", name: "Waste diverted", entityType: "metric_value", period: "2026-08", linkUrl: "/my-approvals" },
   ],
   unapprovedPolicies: [
-    { id: "policy-draft", name: "Responsible sourcing policy", status: "pending_review", linkUrl: "/policy-templates" },
+    { id: "policy-draft", name: "Responsible sourcing policy", status: "pending_review", linkUrl: "/policies?tab=register&policy=policy-draft" },
   ],
   summary: {
     overdueActions: 2,
@@ -133,7 +133,7 @@ test.describe("Simple SME Action plan", () => {
 
     await openWork.locator("summary").click();
     await expect(page.getByTestId("open-work-area-overdueActions")).toBeVisible();
-    await expect(page.getByTestId("open-work-area-unapprovedPolicies")).toBeVisible();
+    await expect(page.getByTestId("open-work-area-unapprovedPolicies")).toHaveAttribute("href", "/policies?tab=register");
     await expect(page.getByTestId("open-work-area-unmetCompliance")).toHaveAttribute("href", "/framework-readiness");
 
     await specialistTools.locator("summary").click();

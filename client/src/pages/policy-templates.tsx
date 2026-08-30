@@ -10,14 +10,12 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
-import { OwnerAssignment } from "@/components/owner-assignment";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -194,24 +192,47 @@ function renderMarkdownToDocx(markdown: string): Array<Paragraph | Table> {
   return children;
 }
 
-type ViewState =
+export type PolicyTemplateView =
   | { mode: "library" }
   | { mode: "questionnaire"; slug: string }
   | { mode: "view-policy"; id: string };
 
-export default function PolicyTemplatesPage() {
-  const { toast } = useToast();
+type PolicyTemplatesWorkspaceProps = {
+  embedded?: boolean;
+  selectedTemplateSlug?: string | null;
+  selectedPolicyId?: string | null;
+  onNavigate?: (view: PolicyTemplateView) => void;
+};
+
+export function PolicyTemplatesWorkspace({
+  embedded = false,
+  selectedTemplateSlug = null,
+  selectedPolicyId = null,
+  onNavigate,
+}: PolicyTemplatesWorkspaceProps = {}) {
   const queryClient = useQueryClient();
   const { can } = usePermissions();
-  const [view, setView] = useState<ViewState>({ mode: "library" });
+  const [localView, setLocalView] = useState<PolicyTemplateView>({ mode: "library" });
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+
+  const view: PolicyTemplateView = onNavigate
+    ? selectedPolicyId
+      ? { mode: "view-policy", id: selectedPolicyId }
+      : selectedTemplateSlug
+        ? { mode: "questionnaire", slug: selectedTemplateSlug }
+        : { mode: "library" }
+    : localView;
+  const navigate = (nextView: PolicyTemplateView) => {
+    if (onNavigate) onNavigate(nextView);
+    else setLocalView(nextView);
+  };
 
   const { data: templates = [], isLoading: templatesLoading } = useQuery<any[]>({
     queryKey: ["/api/policy-templates"],
   });
 
-  const { data: generatedPolicies = [], isLoading: policiesLoading } = useQuery<any[]>({
+  const { data: generatedPolicies = [] } = useQuery<any[]>({
     queryKey: ["/api/generated-policies"],
   });
 
@@ -219,33 +240,25 @@ export default function PolicyTemplatesPage() {
     queryKey: ["/api/auth/me"],
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/generated-policies/${id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
-      toast({ title: "Policy deleted" });
-    },
-  });
-
-  const filteredTemplates = templates.filter((t: any) => {
+  const availableTemplates = templates.filter((template: any) => template.enabled !== false);
+  const filteredTemplates = availableTemplates.filter((t: any) => {
     const matchesSearch = !searchTerm || t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.description?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = categoryFilter === "all" || t.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
 
-  const categories = [...new Set(templates.map((t: any) => t.category))];
+  const categories = [...new Set(availableTemplates.map((t: any) => t.category))];
 
   if (view.mode === "questionnaire") {
     return (
       <QuestionnaireWizard
         slug={view.slug}
         authData={authData}
-        onBack={() => setView({ mode: "library" })}
+        embedded={embedded}
+        onBack={() => navigate({ mode: "library" })}
         onComplete={(policy: any) => {
           queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
-          setView({ mode: "view-policy", id: policy.id });
+          navigate({ mode: "view-policy", id: policy.id });
         }}
       />
     );
@@ -255,39 +268,28 @@ export default function PolicyTemplatesPage() {
     return (
       <PolicyViewer
         id={view.id}
-        onBack={() => setView({ mode: "library" })}
+        embedded={embedded}
+        onBack={() => navigate({ mode: "library" })}
       />
     );
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className={embedded ? "space-y-5" : "p-6 space-y-6 max-w-6xl mx-auto"} data-testid="policy-template-library">
+      {!embedded && <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
             <Library className="w-5 h-5 text-primary" />
             Policy Templates
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {templates.length} structured policy and procedure templates with guided questionnaires and smart drafting
+            {availableTemplates.length} structured policy and procedure templates with guided questionnaires and smart drafting
           </p>
         </div>
-      </div>
+      </div>}
 
-      <Tabs defaultValue="templates">
-        <TabsList>
-          <TabsTrigger value="templates" data-testid="tab-templates">
-            <Library className="w-3.5 h-3.5 mr-1.5" />
-            Template Library
-          </TabsTrigger>
-          <TabsTrigger value="my-policies" data-testid="tab-my-policies">
-            <FileText className="w-3.5 h-3.5 mr-1.5" />
-            My Policies ({generatedPolicies.length})
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="templates" className="mt-4 space-y-4">
-          <div className="flex flex-wrap gap-3">
+      <div className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
@@ -299,7 +301,7 @@ export default function PolicyTemplatesPage() {
               />
             </div>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-category-filter">
+              <SelectTrigger className="w-full sm:w-[180px]" data-testid="select-category-filter">
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
               <SelectContent>
@@ -315,6 +317,14 @@ export default function PolicyTemplatesPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-44" />)}
             </div>
+          ) : filteredTemplates.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center">
+                <Search className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                <p className="text-sm font-medium">No templates match your search</p>
+                <p className="mt-1 text-xs text-muted-foreground">Try another term or category.</p>
+              </CardContent>
+            </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredTemplates.map((t: any) => {
@@ -322,11 +332,11 @@ export default function PolicyTemplatesPage() {
                 const colorClass = CATEGORY_COLORS[t.category] || "bg-muted text-muted-foreground";
                 const compliance = t.complianceMapping as any;
                 const existingPolicy = generatedPolicies.find((p: any) => p.templateSlug === t.slug);
+                const canCreatePolicy = can("policy_editing");
                 return (
                   <Card
                     key={t.slug}
-                    className="group cursor-pointer hover:border-primary/40 transition-colors"
-                    onClick={() => setView({ mode: "questionnaire", slug: t.slug })}
+                    className="transition-colors hover:border-primary/30"
                     data-testid={`card-template-${t.slug}`}
                   >
                     <CardHeader className="pb-2">
@@ -348,96 +358,159 @@ export default function PolicyTemplatesPage() {
                           <Badge key={iso} variant="outline" className="text-[10px]">{iso.split(":")[0]}</Badge>
                         ))}
                       </div>
-                      <div className="flex items-center text-xs text-primary mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Sparkles className="w-3 h-3 mr-1" />
-                        Generate this policy
-                        <ChevronRight className="w-3 h-3 ml-auto" />
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="my-policies" className="mt-4 space-y-4">
-          {policiesLoading ? (
-            <div className="space-y-3">
-              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20" />)}
-            </div>
-          ) : generatedPolicies.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <FilePlus className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
-                <p className="text-sm font-medium">No policies created yet</p>
-                <p className="text-xs text-muted-foreground mt-1">Select a template from the library to get started</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-3">
-              {generatedPolicies.map((p: any) => {
-                const statusColor = p.status === "published" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
-                  : p.status === "approved" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
-                return (
-                  <Card
-                    key={p.id}
-                    className="cursor-pointer hover:border-primary/40 transition-colors"
-                    onClick={() => setView({ mode: "view-policy", id: p.id })}
-                    data-testid={`card-policy-${p.id}`}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-muted-foreground shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{p.title}</p>
-                          <p className="text-xs text-muted-foreground">
-                            v{p.versionNumber} · {p.policyOwner || "No owner"} · Updated {p.updatedAt ? format(new Date(p.updatedAt), "dd MMM yyyy") : "—"}
-                          </p>
-                        </div>
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <OwnerAssignment
-                            entityType="esg_policies"
-                            entityId={p.id}
-                            currentUserId={p.assignedUserId}
-                            invalidateKeys={[["/api/generated-policies"]]}
-                          />
-                        </div>
-                        <WorkflowBadge status={p.workflowStatus} size="sm" />
-                        {p.workflowStatus !== "approved" && p.status !== "approved" && p.status !== "published" && (
-                          <AiDraftBadge />
-                        )}
-                        <Badge className={`text-xs ${statusColor}`}>{p.status}</Badge>
+                      {canCreatePolicy ? (
                         <Button
-                          variant="ghost"
                           size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteMutation.mutate(p.id);
-                          }}
-                          data-testid={`button-delete-policy-${p.id}`}
+                          variant="outline"
+                          className="mt-4 w-full justify-between"
+                          onClick={() => navigate({ mode: "questionnaire", slug: t.slug })}
+                          data-testid={`button-use-template-${t.slug}`}
                         >
-                          <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span className="flex items-center">
+                            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                            Use template
+                          </span>
+                          <ChevronRight className="h-3.5 w-3.5" />
                         </Button>
-                      </div>
+                      ) : (
+                        <p className="mt-4 text-xs text-muted-foreground" data-testid={`template-read-only-${t.slug}`}>
+                          Company admins can use this template.
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
                 );
               })}
             </div>
           )}
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 }
 
-function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
+export default function PolicyTemplatesPage() {
+  return <PolicyTemplatesWorkspace />;
+}
+
+export function GeneratedPoliciesRegister({
+  onOpen,
+  onUseTemplate,
+}: {
+  onOpen: (id: string) => void;
+  onUseTemplate: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const { data: generatedPolicies = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/generated-policies"],
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/generated-policies/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
+      toast({ title: "Draft deleted" });
+    },
+    onError: () => toast({ title: "Delete failed", variant: "destructive" }),
+  });
+
+  return (
+    <section className="space-y-3" aria-labelledby="generated-policy-heading" data-testid="generated-policy-register">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="generated-policy-heading" className="text-base font-semibold">Template-created policies</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Follow each policy from first draft through review, adoption, publication and its next review date.
+          </p>
+        </div>
+        {can("policy_editing") && (
+          <Button size="sm" variant="outline" onClick={onUseTemplate} data-testid="button-create-from-template">
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            Use a template
+          </Button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[...Array(2)].map((_, index) => <Skeleton key={index} className="h-20" />)}
+        </div>
+      ) : generatedPolicies.length === 0 ? (
+        <Card>
+          <CardContent className="py-8 text-center">
+            <FilePlus className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">No generated drafts</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {can("policy_editing") ? "Use a template when you need help creating a policy." : "No template-generated policies are available yet."}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {generatedPolicies.map((policy: any) => {
+            const statusColor = policy.status === "published"
+              ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+              : policy.status === "approved"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+                : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+            return (
+              <Card key={policy.id} data-testid={`card-policy-${policy.id}`}>
+                <CardContent className="p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <FileText className="hidden h-5 w-5 shrink-0 text-muted-foreground sm:block" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{policy.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        v{policy.versionNumber} · {policy.policyOwner || "No owner"} · Updated {policy.updatedAt ? format(new Date(policy.updatedAt), "dd MMM yyyy") : "—"}
+                        {policy.reviewDate ? ` · Review ${format(new Date(policy.reviewDate), "dd MMM yyyy")}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <WorkflowBadge status={policy.workflowStatus} size="sm" />
+                      {policy.workflowStatus !== "approved" && policy.status !== "approved" && policy.status !== "published" && <AiDraftBadge />}
+                      <Badge className={`text-xs ${statusColor}`}>{policy.status}</Badge>
+                      <Button size="sm" variant="outline" onClick={() => onOpen(policy.id)} data-testid={`button-view-policy-${policy.id}`}>
+                        <Eye className="mr-1.5 h-3.5 w-3.5" />
+                        View
+                      </Button>
+                      {can("policy_editing") && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => {
+                            if (window.confirm(`Delete ${policy.title}? This cannot be undone.`)) {
+                              deleteMutation.mutate(policy.id);
+                            }
+                          }}
+                          disabled={deleteMutation.isPending}
+                          aria-label={`Delete ${policy.title}`}
+                          data-testid={`button-delete-policy-${policy.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = false }: {
   slug: string;
   authData: any;
   onBack: () => void;
   onComplete: (policy: any) => void;
+  embedded?: boolean;
 }) {
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -481,14 +554,48 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-3xl mx-auto space-y-4">
+      <div className={embedded ? "mx-auto max-w-3xl space-y-4" : "p-6 max-w-3xl mx-auto space-y-4"}>
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-64" />
       </div>
     );
   }
 
-  if (!template) return null;
+  if (!template || template.enabled === false) {
+    return (
+      <div className={embedded ? "mx-auto max-w-3xl space-y-4" : "p-6 max-w-3xl mx-auto space-y-4"}>
+        <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-to-library">
+          <ChevronLeft className="mr-1 h-4 w-4" />
+          Back to templates
+        </Button>
+        <Card>
+          <CardContent className="py-10 text-center">
+            <Library className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">Template not found</p>
+            <p className="mt-1 text-xs text-muted-foreground">This template may no longer be available.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!can("policy_editing")) {
+    return (
+      <div className={embedded ? "mx-auto max-w-3xl space-y-4" : "p-6 max-w-3xl mx-auto space-y-4"}>
+        <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-to-library">
+          <ChevronLeft className="mr-1 h-4 w-4" />
+          Back to templates
+        </Button>
+        <Card>
+          <CardContent className="py-10 text-center">
+            <Shield className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">Company admin access required</p>
+            <p className="mt-1 text-xs text-muted-foreground">Only company admins can create a policy from a template.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const questionnaire = template.questionnaire as any[];
   const compliance = template.complianceMapping as any;
@@ -522,7 +629,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
   };
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className={embedded ? "mx-auto max-w-3xl space-y-6" : "p-6 max-w-3xl mx-auto space-y-6"}>
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-to-library">
           <ChevronLeft className="w-4 h-4 mr-1" />
@@ -744,17 +851,26 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete }: {
   );
 }
 
-function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
+export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onBack: () => void; embedded?: boolean }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const isApprover = can("report_generation");
   const [editContent, setEditContent] = useState<Record<string, string> | null>(null);
+  const [editMetadata, setEditMetadata] = useState<{
+    policyOwner?: string;
+    approver?: string;
+    reviewDate?: string;
+  }>({});
   const [isDirty, setIsDirty] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
 
   const { data: policy, isLoading } = useQuery<any>({
     queryKey: ["/api/generated-policies", id],
+  });
+
+  const { data: workflowSettings } = useQuery<any>({
+    queryKey: ["/api/company/settings"],
   });
 
   const { data: template } = useQuery<any>({
@@ -771,6 +887,7 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
       queryClient.invalidateQueries({ queryKey: ["/api/generated-policies", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
       setIsDirty(false);
+      setEditMetadata({});
       toast({ title: "Policy updated" });
     },
     onError: () => toast({ title: "Update failed", variant: "destructive" }),
@@ -807,16 +924,45 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
     onError: () => toast({ title: "Review failed", variant: "destructive" }),
   });
 
+  const reviseMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/workflow/revise", {
+      entityType: "generated_policy",
+      entityId: id,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
+      toast({ title: "Policy reopened for revision" });
+    },
+    onError: () => toast({ title: "Unable to start revision", variant: "destructive" }),
+  });
+
   if (isLoading) {
     return (
-      <div className="p-6 max-w-4xl mx-auto space-y-4">
+      <div className={embedded ? "mx-auto max-w-4xl space-y-4" : "p-6 max-w-4xl mx-auto space-y-4"}>
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-64" />
       </div>
     );
   }
 
-  if (!policy) return null;
+  if (!policy) {
+    return (
+      <div className={embedded ? "mx-auto max-w-4xl space-y-4" : "p-6 max-w-4xl mx-auto space-y-4"}>
+        <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-from-viewer">
+          <ChevronLeft className="mr-1 h-4 w-4" />
+          Back
+        </Button>
+        <Card>
+          <CardContent className="py-10 text-center">
+            <FileText className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-sm font-medium">Policy not found</p>
+            <p className="mt-1 text-xs text-muted-foreground">It may have been deleted or you may no longer have access.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const content = (editContent || policy.content || {}) as Record<string, string>;
   const sections = (template?.sections || []) as any[];
@@ -828,7 +974,13 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
   };
 
   const handleSave = () => {
-    updateMutation.mutate({ content: editContent || content });
+    updateMutation.mutate({
+      ...(editContent ? { content: editContent } : {}),
+      ...editMetadata,
+      ...(editMetadata.reviewDate !== undefined
+        ? { reviewDate: editMetadata.reviewDate || null }
+        : {}),
+    });
   };
 
   const handleApprove = () => {
@@ -906,14 +1058,30 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
     toast({ title: `Policy exported as ${format.toUpperCase()}` });
   };
 
-  const isApprovedWorkflow = policy.workflowStatus === "approved";
+  const requiresApproval = workflowSettings?.requireApprovalPolicies !== false;
+  const approvedEditingUnlocked = policy.workflowStatus === "approved"
+    && workflowSettings?.autoLockApproved === false;
+  const canEditContent = can("policy_editing")
+    && (policy.workflowStatus === "draft" || approvedEditingUnlocked);
+  const canSubmitForReview = requiresApproval
+    && policy.workflowStatus === "draft"
+    && policy.status === "draft";
+  const displayedOwner = editMetadata.policyOwner ?? policy.policyOwner ?? "";
+  const displayedApprover = editMetadata.approver ?? policy.approver ?? "";
+  const displayedReviewDate = editMetadata.reviewDate
+    ?? (policy.reviewDate ? format(new Date(policy.reviewDate), "yyyy-MM-dd") : "");
+
+  const handleMetadataChange = (field: "policyOwner" | "approver" | "reviewDate", value: string) => {
+    setEditMetadata((current) => ({ ...current, [field]: value }));
+    setIsDirty(true);
+  };
 
   const statusColor = policy.status === "published" ? "bg-green-100 text-green-700"
     : policy.status === "approved" ? "bg-blue-100 text-blue-700"
     : "bg-amber-100 text-amber-700";
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className={embedded ? "mx-auto max-w-4xl space-y-6" : "p-6 max-w-4xl mx-auto space-y-6"} data-testid="generated-policy-viewer">
       <div className="flex items-start gap-3">
         <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-from-viewer">
           <ChevronLeft className="w-4 h-4 mr-1" />
@@ -939,6 +1107,14 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </div>
 
+      {policy.workflowStatus === "rejected" && policy.reviewComment && (
+        <Card className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20" data-testid="policy-rejection-guidance">
+          <CardContent className="p-3 text-sm text-amber-800 dark:text-amber-200">
+            <span className="font-medium">Reviewer feedback:</span> {policy.reviewComment}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex flex-wrap gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -959,21 +1135,37 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {can("policy_editing") && isDirty && (
+        {canEditContent && isDirty && (
           <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-generated">
             <Edit3 className="w-3.5 h-3.5 mr-1.5" />
             Save Changes
           </Button>
         )}
-        {policy.workflowStatus === "draft" && (
+        {can("policy_editing") && canSubmitForReview && (
           <Button
             size="sm"
             onClick={() => submitMutation.mutate()}
-            disabled={submitMutation.isPending}
+            disabled={submitMutation.isPending || isDirty}
+            title={isDirty ? "Save your changes before submitting this policy" : undefined}
             data-testid="button-submit-policy-review"
           >
             <Send className="w-3.5 h-3.5 mr-1.5" />
-            {submitMutation.isPending ? "Submitting..." : "Submit for Review"}
+            {submitMutation.isPending ? "Submitting..." : isDirty ? "Save before review" : "Submit for Review"}
+          </Button>
+        )}
+        {can("policy_editing") && (policy.workflowStatus === "rejected" || policy.workflowStatus === "approved") && (
+          <Button
+            size="sm"
+            onClick={() => reviseMutation.mutate()}
+            disabled={reviseMutation.isPending}
+            data-testid="button-revise-policy"
+          >
+            <Edit3 className="w-3.5 h-3.5 mr-1.5" />
+            {reviseMutation.isPending
+              ? "Starting revision..."
+              : policy.workflowStatus === "approved"
+                ? "Start new revision"
+                : "Revise policy"}
           </Button>
         )}
         {isApprover && policy.workflowStatus === "submitted" && (
@@ -991,14 +1183,16 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
               size="sm"
               variant="destructive"
               onClick={() => workflowReviewMutation.mutate({ action: "reject", comment: reviewComment })}
-              disabled={workflowReviewMutation.isPending}
+              disabled={workflowReviewMutation.isPending || !reviewComment.trim()}
+              title={!reviewComment.trim() ? "Add a reason before rejecting this policy" : undefined}
               data-testid="button-workflow-reject-policy"
             >
               <XCircle className="w-3.5 h-3.5 mr-1.5" />
               Reject
             </Button>
             <Input
-              placeholder="Review comment (optional)"
+              placeholder="Reason for rejection (required to reject)"
+              aria-label="Review comment; required for rejection"
               value={reviewComment}
               onChange={(e) => setReviewComment(e.target.value)}
               className="min-w-[150px] max-w-[250px]"
@@ -1006,13 +1200,13 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
             />
           </>
         )}
-        {can("policy_editing") && policy.status === "draft" && (
+        {can("policy_editing") && !requiresApproval && policy.status === "draft" && policy.workflowStatus === "draft" && (
           <Button size="sm" onClick={handleApprove} disabled={updateMutation.isPending} data-testid="button-approve-policy">
             <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
             Approve
           </Button>
         )}
-        {can("policy_editing") && policy.status === "approved" && (
+        {can("policy_editing") && policy.status === "approved" && (!requiresApproval || policy.workflowStatus === "approved") && (
           <Button size="sm" onClick={handlePublish} disabled={updateMutation.isPending} data-testid="button-publish-generated">
             <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
             Publish
@@ -1032,7 +1226,7 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
                   value={content[section.key] || ""}
                   onChange={(e) => handleContentChange(section.key, e.target.value)}
                   className="min-h-32 text-sm resize-none whitespace-pre-wrap"
-                  disabled={!can("policy_editing") || isApprovedWorkflow}
+                  disabled={!canEditContent}
                   data-testid={`textarea-${section.key}`}
                 />
               </CardContent>
@@ -1058,14 +1252,56 @@ function PolicyViewer({ id, onBack }: { id: string; onBack: () => void }) {
               <CardTitle className="text-xs">Policy Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Owner</span>
-                <span className="font-medium">{policy.policyOwner || "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Approver</span>
-                <span className="font-medium">{policy.approver || "—"}</span>
-              </div>
+              {canEditContent ? (
+                <>
+                  <div className="space-y-1">
+                    <Label htmlFor="generated-policy-owner" className="text-xs text-muted-foreground">Owner</Label>
+                    <Input
+                      id="generated-policy-owner"
+                      value={displayedOwner}
+                      onChange={(event) => handleMetadataChange("policyOwner", event.target.value)}
+                      className="h-8 text-xs"
+                      data-testid="input-generated-policy-owner"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="generated-policy-approver" className="text-xs text-muted-foreground">Approver</Label>
+                    <Input
+                      id="generated-policy-approver"
+                      value={displayedApprover}
+                      onChange={(event) => handleMetadataChange("approver", event.target.value)}
+                      className="h-8 text-xs"
+                      data-testid="input-generated-policy-approver"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="generated-policy-review-date" className="text-xs text-muted-foreground">Next review</Label>
+                    <Input
+                      id="generated-policy-review-date"
+                      type="date"
+                      value={displayedReviewDate}
+                      onChange={(event) => handleMetadataChange("reviewDate", event.target.value)}
+                      className="h-8 text-xs"
+                      data-testid="input-generated-policy-review-date"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Owner</span>
+                    <span className="text-right font-medium">{policy.policyOwner || "—"}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Approver</span>
+                    <span className="text-right font-medium">{policy.approver || "—"}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">Next review</span>
+                    <span className="text-right font-medium">{policy.reviewDate ? format(new Date(policy.reviewDate), "dd MMM yyyy") : "—"}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Version</span>
                 <span className="font-medium">{policy.versionNumber}</span>

@@ -237,7 +237,10 @@ test.describe("Metrics surface alignment", () => {
     await page.keyboard.press("Escape");
 
     await page.goto("/policy-templates");
-    await expect(page.getByRole("heading", { name: "Policy Templates" })).toBeVisible();
+    await expect(page).toHaveURL(/\/policies\?tab=templates$/);
+    await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
+    await expect(page.getByTestId("tab-policy-templates")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Template library", exact: true })).toBeVisible();
 
     expect(accessibilityWarnings).toEqual([]);
   });

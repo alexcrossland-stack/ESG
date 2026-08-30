@@ -22,6 +22,7 @@ export type NavSection = {
 export const MAIN_NAV_TOP_LEVEL_LABELS = [
   "Overview",
   "Data & evidence",
+  "Policies",
   "Action plan",
   "Reports",
   "Questionnaires",
@@ -29,6 +30,7 @@ export const MAIN_NAV_TOP_LEVEL_LABELS = [
 ] as const;
 
 export const MEASURE_HOME_HREF = "/data-entry";
+export const POLICIES_HOME_HREF = "/policies";
 export const IMPROVE_HOME_HREF = "/control-centre";
 export const SHARE_HOME_HREF = "/reports";
 
@@ -39,6 +41,14 @@ export const DATA_WORKSPACE_ROUTES = [
   "/evidence",
 ];
 
+export const POLICY_WORKSPACE_ROUTES = [
+  POLICIES_HOME_HREF,
+  "/policy",
+  "/policy-generator",
+  "/policy-templates",
+  "/esg-policy-register",
+];
+
 export const ACTION_PLAN_WORKSPACE_ROUTES = [
   "/control-centre",
   "/actions",
@@ -47,10 +57,6 @@ export const ACTION_PLAN_WORKSPACE_ROUTES = [
   "/recommendations",
   "/roadmap",
   "/topics",
-  "/policy",
-  "/policy-generator",
-  "/policy-templates",
-  "/esg-policy-register",
   "/my-tasks",
   "/my-approvals",
 ];
@@ -78,6 +84,7 @@ export const SME_PRIMARY_NAV_ITEMS: NavItem[] = [
     href: MEASURE_HOME_HREF,
     activeRoutes: DATA_WORKSPACE_ROUTES,
   },
+  { label: "Policies", href: POLICIES_HOME_HREF, activeRoutes: POLICY_WORKSPACE_ROUTES },
   { label: "Action plan", href: IMPROVE_HOME_HREF, activeRoutes: ACTION_PLAN_WORKSPACE_ROUTES },
   { label: "Reports", href: SHARE_HOME_HREF },
   { label: "Questionnaires", href: "/questionnaire", activeRoutes: QUESTIONNAIRE_WORKSPACE_ROUTES },
@@ -119,7 +126,6 @@ export const DATA_AND_METRICS_ROUTES = [
   "/metrics",
   "/metrics-library",
   "/data-entry",
-  "/esg-policy-register",
 ];
 export const DATA_EVIDENCE_ROUTES = [...DATA_AND_METRICS_ROUTES, "/evidence"];
 
@@ -192,8 +198,6 @@ export const MORE_TOOLS_SECTIONS: NavSection[] = [
       { label: "ESG profile", href: "/esg-profile", description: "Maintain a clear, shareable summary of your ESG position." },
       { label: "Priority topics", href: "/topics", description: "Focus effort on the topics that matter most to your business." },
       { label: "Materiality", href: "/materiality", description: "Assess business and stakeholder importance." },
-      { label: "Policy templates", href: "/policy-templates", description: "Start practical ESG policies from proven templates." },
-      { label: "Policy register", href: "/esg-policy-register", description: "Track policy ownership, status and review dates." },
     ],
   },
   {
@@ -228,7 +232,6 @@ export const ESG_SETUP_ADVANCED_SUPPORT_ITEMS: NavItem[] = [
 export const DATA_AND_METRICS_ITEMS: NavItem[] = [
   { label: "Metrics & data", href: "/data-entry" },
   { label: "Documents", href: "/evidence" },
-  { label: "Policy Register", href: "/esg-policy-register" },
 ];
 
 export const MOVED_MENU_ITEM_TARGETS = {
@@ -292,25 +295,24 @@ const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
   "/metrics-library": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }, { label: "Metrics library" }],
   "/evidence": [{ label: "Data & evidence", href: MEASURE_HOME_HREF }, { label: "Documents" }],
 
+  "/policies": [{ label: "Policies", href: POLICIES_HOME_HREF }],
+  "/policy": [{ label: "Policies", href: POLICIES_HOME_HREF }, { label: "ESG policy" }],
+  "/policy-generator": [
+    { label: "Policies", href: POLICIES_HOME_HREF },
+    { label: "Policy generator" },
+  ],
+  "/policy-templates": [
+    { label: "Policies", href: POLICIES_HOME_HREF },
+    { label: "Templates" },
+  ],
+  "/esg-policy-register": [
+    { label: "Policies", href: POLICIES_HOME_HREF },
+    { label: "Register" },
+  ],
+
   "/control-centre": [{ label: "Action plan", href: IMPROVE_HOME_HREF }],
   "/topics": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Priority topics" }],
   "/roadmap": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Roadmap" }],
-  "/policy": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "ESG policy" }],
-  "/policy-generator": [
-    { label: "Action plan", href: IMPROVE_HOME_HREF },
-    { label: "Policies", href: "/policy" },
-    { label: "Policy Generator" },
-  ],
-  "/policy-templates": [
-    { label: "Action plan", href: IMPROVE_HOME_HREF },
-    { label: "Policies", href: "/policy" },
-    { label: "Policy Templates" },
-  ],
-  "/esg-policy-register": [
-    { label: "Action plan", href: IMPROVE_HOME_HREF },
-    { label: "Policies", href: "/policy" },
-    { label: "Policy Register" },
-  ],
   "/esg-targets": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Targets and actions" }],
   "/actions": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Action tracker" }],
   "/esg-risks": [{ label: "Action plan", href: IMPROVE_HOME_HREF }, { label: "Risk register" }],

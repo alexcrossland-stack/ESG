@@ -76,12 +76,13 @@ async function openWithMockRole(
 }
 
 test.describe("Simplified SME workspace navigation", () => {
-  test("shows exactly six permanent workspaces with one Help and Settings area", async ({ browser }) => {
+  test("shows exactly seven permanent workspaces with Policies in the daily workflow", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin");
 
     await expect(page.getByTestId("primary-navigation").getByRole("link")).toHaveText([
       "Overview",
       "Data & evidence",
+      "Policies",
       "Action plan",
       "Reports",
       "Questionnaires",
@@ -101,6 +102,7 @@ test.describe("Simplified SME workspace navigation", () => {
     const { context, page } = await openWithMockRole(browser, "admin");
     const destinations: Array<[string, string]> = [
       ["nav-measure", "/data-entry"],
+      ["nav-policies", "/policies"],
       ["nav-control-centre", "/control-centre"],
       ["nav-reports", "/reports"],
       ["nav-questionnaires", "/questionnaire"],
@@ -128,6 +130,12 @@ test.describe("Simplified SME workspace navigation", () => {
     await expect(page.getByTestId("nav-control-centre")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("breadcrumb-action-plan")).toBeVisible();
 
+    for (const path of ["/policy", "/policy-generator"]) {
+      await page.goto(path);
+      await expect(page.getByTestId("nav-policies")).toHaveAttribute("aria-current", "page");
+      await expect(page.getByTestId("breadcrumb-policies")).toBeVisible();
+    }
+
     await page.goto("/answer-library");
     await expect(page.getByTestId("nav-questionnaires")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("breadcrumb-questionnaires")).toBeVisible();
@@ -150,6 +158,8 @@ test.describe("Simplified SME workspace navigation", () => {
     await expect(page.getByTestId("more-tools-team")).toBeVisible();
     await expect(page.getByTestId("more-tools-my-approvals")).toBeVisible();
     await expect(page.getByTestId("more-tools-metrics-library")).toHaveCount(0);
+    await expect(page.getByText("Policy templates", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Policy register", { exact: true })).toHaveCount(0);
 
     await context.close();
   });
@@ -159,6 +169,7 @@ test.describe("Simplified SME workspace navigation", () => {
 
     await expect(page.getByTestId("nav-measure")).toHaveAttribute("href", "/data-entry");
     await expect(page.getByTestId("nav-enter-data")).toBeVisible();
+    await expect(page.getByTestId("nav-policies")).toHaveAttribute("href", "/policies");
     await expect(page.getByTestId("more-tools-framework-settings")).toHaveCount(0);
     await expect(page.getByTestId("more-tools-team")).toHaveCount(0);
     await expect(page.getByTestId("more-tools-my-approvals")).toHaveCount(0);
@@ -223,7 +234,7 @@ test.describe("Simplified SME workspace navigation", () => {
     const { context, page } = await openWithMockRole(browser, "admin", "/more-tools");
     await page.setViewportSize({ width: 1280, height: 720 });
 
-    for (const testId of ["nav-dashboard", "nav-measure", "nav-control-centre", "nav-reports", "nav-questionnaires", "nav-more-tools", "nav-utility-help", "nav-utility-settings", "button-logout"]) {
+    for (const testId of ["nav-dashboard", "nav-measure", "nav-policies", "nav-control-centre", "nav-reports", "nav-questionnaires", "nav-more-tools", "nav-utility-help", "nav-utility-settings", "button-logout"]) {
       await expect(page.getByTestId(testId)).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -231,6 +242,7 @@ test.describe("Simplified SME workspace navigation", () => {
     await page.setViewportSize({ width: 360, height: 740 });
     await page.getByTestId("button-sidebar-toggle").click();
     await expect(page.getByTestId("primary-navigation")).toBeVisible();
+    await expect(page.getByTestId("nav-policies")).toBeVisible();
     await expect(page.getByTestId("nav-more-tools")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
