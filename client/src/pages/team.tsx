@@ -15,7 +15,7 @@ import { Redirect } from "wouter";
 
 const ROLES = [
   { value: "admin", label: "Admin", desc: "Full access to all features and settings" },
-  { value: "contributor", label: "Contributor", desc: "Can enter data, edit policies, answer questionnaires" },
+  { value: "contributor", label: "Contributor", desc: "Can enter data and answer questionnaires; company admins maintain policies" },
   { value: "approver", label: "Approver", desc: "Can review submissions and generate reports" },
   { value: "viewer", label: "Viewer", desc: "Read-only access across the platform" },
 ];

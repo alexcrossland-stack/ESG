@@ -33,9 +33,11 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { usePortfolioAccess } from "@/hooks/use-portfolio-access";
 import { useSiteContext } from "@/hooks/use-site-context";
+import { allowContextChange } from "@/hooks/use-unsaved-changes";
 import { logout } from "@/lib/auth";
 import { SME_PRIMARY_NAV_ITEMS, isActive, isNavItemActive, type NavItem } from "@/lib/navigation";
 import { getRoleLabel, usePermissions } from "@/lib/permissions";
@@ -66,7 +68,7 @@ function SiteSwitcher() {
 
   return (
     <div className="mt-3" data-testid="site-switcher">
-      <Select value={activeSiteId ?? "__all__"} onValueChange={value => setActiveSiteId(value === "__all__" ? null : value)}>
+      <Select value={activeSiteId ?? "__all__"} onValueChange={value => { if (allowContextChange()) setActiveSiteId(value === "__all__" ? null : value); }}>
         <SelectTrigger className="h-9 bg-background text-xs" data-testid="select-active-site" aria-label="Active site">
           <div className="flex min-w-0 items-center gap-2">
             <MapPin className="h-3.5 w-3.5 shrink-0 text-primary" />
@@ -90,6 +92,7 @@ function canShowItem(item: NavItem, can: ReturnType<typeof usePermissions>["can"
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { setOpenMobile } = useSidebar();
   const { can, isSuperAdmin } = usePermissions();
   const { canAccessPortfolio } = usePortfolioAccess();
   const { data: authData } = useQuery<{ user: any; company: any }>({ queryKey: ["/api/auth/me"] });
@@ -129,7 +132,7 @@ export function AppSidebar() {
                 return (
                   <SidebarMenuItem key={item.label}>
                     <SidebarMenuButton asChild data-active={active} className="h-10">
-                      <Link href={item.href} data-testid={PRIMARY_TEST_ID_BY_LABEL[item.label]} aria-current={active ? "page" : undefined}>
+                      <Link href={item.href} onClick={() => setOpenMobile(false)} data-testid={PRIMARY_TEST_ID_BY_LABEL[item.label]} aria-current={active ? "page" : undefined}>
                         <Icon className="h-4 w-4 shrink-0" />
                         <span
                           className="min-w-0 flex-1 truncate"
@@ -155,7 +158,7 @@ export function AppSidebar() {
           {canAccessPortfolio && (
             <SidebarMenuItem>
               <SidebarMenuButton asChild data-active={isActive(location, "/portfolio")}>
-                <Link href="/portfolio" data-testid="nav-utility-portfolio">
+                <Link href="/portfolio" onClick={() => setOpenMobile(false)} data-testid="nav-utility-portfolio">
                   <ClipboardCheck className="h-4 w-4" />
                   <span>Portfolio</span>
                 </Link>
@@ -164,7 +167,7 @@ export function AppSidebar() {
           )}
           <SidebarMenuItem>
             <SidebarMenuButton asChild data-active={isActive(location, "/help")}>
-              <Link href="/help" data-testid="nav-utility-help">
+              <Link href="/help" onClick={() => setOpenMobile(false)} data-testid="nav-utility-help">
                 <HelpCircle className="h-4 w-4" />
                 <span>Help</span>
               </Link>
@@ -172,7 +175,7 @@ export function AppSidebar() {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild data-active={isActive(location, "/settings")}>
-              <Link href="/settings" data-testid="nav-utility-settings">
+              <Link href="/settings" onClick={() => setOpenMobile(false)} data-testid="nav-utility-settings">
                 <Settings className="h-4 w-4" />
                 <span>Settings</span>
               </Link>
@@ -181,7 +184,7 @@ export function AppSidebar() {
           {isSuperAdmin && (
             <SidebarMenuItem>
               <SidebarMenuButton asChild data-active={isActive(location, "/admin")}>
-                <Link href="/admin" data-testid="nav-utility-platform-settings">
+                <Link href="/admin" onClick={() => setOpenMobile(false)} data-testid="nav-utility-platform-settings">
                   <UserCog className="h-4 w-4" />
                   <span>Platform admin</span>
                 </Link>
@@ -200,7 +203,7 @@ export function AppSidebar() {
             <p className="truncate text-xs font-medium">{user?.username || "User"}</p>
             <p className="truncate text-[11px] text-muted-foreground" data-testid="badge-user-role">{getRoleLabel(user?.role)}</p>
           </div>
-          <Button size="icon" variant="ghost" onClick={logout} data-testid="button-logout" title="Log out" aria-label="Log out">
+          <Button size="icon" variant="ghost" onClick={() => { if (allowContextChange()) logout(); }} data-testid="button-logout" title="Log out" aria-label="Log out">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

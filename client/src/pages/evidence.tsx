@@ -324,54 +324,54 @@ function CoverageOverview({ viewSiteId }: { viewSiteId: string }) {
   const coveragePercent = canonicalMetrics.length > 0 ? Math.round((evidencedCount / canonicalMetrics.length) * 100) : 0;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="p-3">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10">
+            <div className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
               <FileCheck className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-total-evidence">{coverage.totalEvidence}</p>
+              <p className="text-lg font-semibold" data-testid="text-total-evidence">{coverage.totalEvidence}</p>
               <p className="text-xs text-muted-foreground">Total Evidence Files</p>
             </div>
           </div>
         </CardContent>
       </Card>
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="p-3">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/30">
+            <div className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-green-100 dark:bg-green-900/30">
               <PieChart className="w-5 h-5 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-coverage-percent">{coveragePercent}%</p>
+              <p className="text-lg font-semibold" data-testid="text-coverage-percent">{coveragePercent}%</p>
               <p className="text-xs text-muted-foreground">Enabled Metrics Evidenced</p>
             </div>
           </div>
         </CardContent>
       </Card>
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="p-3">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/30">
+            <div className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/30">
               <Clock className="w-5 h-5 text-amber-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-pending-review">{coverage.byStatus?.uploaded || 0}</p>
+              <p className="text-lg font-semibold" data-testid="text-pending-review">{coverage.byStatus?.uploaded || 0}</p>
               <p className="text-xs text-muted-foreground">Pending Review</p>
             </div>
           </div>
         </CardContent>
       </Card>
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="p-3">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30">
+            <div className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg bg-red-100 dark:bg-red-900/30">
               <AlertTriangle className="w-5 h-5 text-red-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold" data-testid="text-expired-evidence">{coverage.expiredCount}</p>
+              <p className="text-lg font-semibold" data-testid="text-expired-evidence">{coverage.expiredCount}</p>
               <p className="text-xs text-muted-foreground">Expired</p>
             </div>
           </div>
@@ -856,7 +856,23 @@ export default function Evidence() {
   const metricsDataHref = `/data-entry?${returnQuery.toString()}`;
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold flex items-center gap-2" data-testid="text-evidence-title">Documents <EsgTooltip term="evidence" /></h1>
+          <p className="text-sm text-muted-foreground mt-1">Review linked evidence by metric and reporting period</p>
+        </div>
+        {isArchivedView && (
+          <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 dark:border-amber-700">
+            Archived site — uploads disabled
+          </Badge>
+        )}
+        {can("metrics_data_entry") && !isArchivedView && (
+          <UploadEvidenceDialog
+            defaultSiteScope={viewSiteId === "__all__" ? (activeSiteId || "__org__") : viewSiteId}
+          />
+        )}
+      </div>
       <nav
         className="grid h-auto w-full grid-cols-2 rounded-lg bg-muted p-1"
         aria-label="Data and evidence workspace"
@@ -891,22 +907,7 @@ export default function Evidence() {
           "Use the Coverage tab to see which metrics still need supporting documentation",
         ]}
       />
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-evidence-title">Documents <EsgTooltip term="evidence" /></h1>
-          <p className="text-sm text-muted-foreground mt-1">Review linked evidence by metric and reporting period</p>
-        </div>
-        {isArchivedView && (
-          <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 dark:border-amber-700">
-            Archived site — uploads disabled
-          </Badge>
-        )}
-        {can("metrics_data_entry") && !isArchivedView && (
-          <UploadEvidenceDialog
-            defaultSiteScope={viewSiteId === "__all__" ? (activeSiteId || "__org__") : viewSiteId}
-          />
-        )}
-      </div>
+
 
       {!isPro && can("metrics_data_entry") && (
         <UpgradeLimitBanner

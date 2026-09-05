@@ -129,7 +129,7 @@ export default function Settings() {
   const user = authData?.user;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
       <div>
         <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
           <SettingsIcon className="w-5 h-5 text-primary" />
@@ -141,8 +141,9 @@ export default function Settings() {
       </div>
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="w-full justify-start">
-          <TabsTrigger value="general" data-testid="tab-general">General</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 sm:flex sm:justify-start">
+          <TabsTrigger value="general" data-testid="tab-general">Company</TabsTrigger>
+          <TabsTrigger value="account" data-testid="tab-account">Account &amp; security</TabsTrigger>
           {isAdmin && <TabsTrigger value="admin" data-testid="tab-admin">Administration</TabsTrigger>}
           <TabsTrigger value="privacy" data-testid="tab-privacy">Privacy &amp; Data</TabsTrigger>
         </TabsList>
@@ -177,6 +178,9 @@ export default function Settings() {
                               <SelectTrigger className="flex-1" data-testid="select-industry"><SelectValue placeholder="Select industry" /></SelectTrigger>
                             </FormControl>
                             <SelectContent>
+                              {field.value && !INDUSTRIES.includes(field.value) && (
+                                <SelectItem value={field.value}>{field.value}</SelectItem>
+                              )}
                               {INDUSTRIES.map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
                             </SelectContent>
                           </Select>
@@ -222,7 +226,8 @@ export default function Settings() {
                     )} />
                     <FormField control={companyForm.control} name="employeeCount" render={({ field }) => (
                       <FormItem>
-                        <FormLabel className="text-xs">Number of Employees</FormLabel>
+                        <FormLabel className="text-xs">Exact employee count (optional)</FormLabel>
+                        {company?.onboardingAnswers?.employeeSizeBand && <p className="text-xs text-muted-foreground">Company size: {company.onboardingAnswers.employeeSizeBand} people. Add an exact count only when known.</p>}
                         <FormControl><Input type="number" placeholder="e.g. 50" {...field} data-testid="input-employee-count" /></FormControl>
                       </FormItem>
                     )} />
@@ -303,9 +308,11 @@ export default function Settings() {
             </CardContent>
           </Card>
 
+        </TabsContent>
+        <TabsContent value="account" className="space-y-5 mt-4">
           <Card>
             <CardHeader className="pb-4">
-              <CardTitle className="text-sm">Account Information</CardTitle>
+              <CardTitle className="text-sm">Account information</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center justify-between py-2 border-b border-border">
@@ -995,10 +1002,10 @@ function PrivacyDataTab() {
             <Leaf className="w-4 h-4 text-primary" />
             Data Use
           </CardTitle>
-          <CardDescription className="text-xs">How ESG Manager uses your company data</CardDescription>
+          <CardDescription className="text-xs">How SimplyESG uses your company data</CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>ESG data you enter is stored securely and used only to provide the ESG Manager service to your company.</p>
+          <p>ESG data you enter is stored securely and used only to provide the SimplyESG service to your company.</p>
           <p>We do not sell your data, share it with third parties for advertising, or use it to train AI models without your explicit consent.</p>
           <p>AI features (policy generation, questionnaire autofill) send limited context to OpenAI for processing under a data processing agreement. Personal details are not included in these requests.</p>
           <div className="pt-1">

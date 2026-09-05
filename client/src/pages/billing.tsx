@@ -121,7 +121,7 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (success === "1") {
-      toast({ title: "Subscription activated", description: "Your Pro plan is now active. Welcome to ESG Manager Pro!" });
+      toast({ title: "Subscription activated", description: "Your Pro plan is now active. Welcome to SimplyESG Pro!" });
       queryClient.invalidateQueries({ queryKey: ["/api/billing/status"] });
     }
     if (cancelled === "1") {
@@ -205,7 +205,7 @@ export default function BillingPage() {
           {isPro ? <Crown className="w-5 h-5 text-primary" /> : <Zap className="w-5 h-5 text-muted-foreground" />}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-sm">{isPro ? "ESG Manager Pro" : "ESG Manager Free"}</p>
+          <p className="font-medium text-sm">{isPro ? "SimplyESG Pro" : "SimplyESG Free"}</p>
           {isComped && compedExpiry && (
             <p className="text-xs text-emerald-600 dark:text-emerald-400">Complimentary access · Expires {compedExpiry}</p>
           )}

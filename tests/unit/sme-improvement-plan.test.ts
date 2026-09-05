@@ -95,7 +95,7 @@ const shortPlan = buildSmeImprovementPlan(data);
 assert.equal(shortPlan.length, SME_IMPROVEMENT_PLAN_LIMIT, "the primary plan stays intentionally short");
 assert.deepEqual(
   shortPlan.map((item) => item.id),
-  ["action-oldest", "action-later", "metric-missing", "evidence-expired", "metric-quality"],
+  ["action-oldest", "action-later", "evidence-expired", "approval-open", "metric-missing"],
   "urgent sections are ranked first, with the oldest due date and weakest data first within a section",
 );
 
@@ -111,8 +111,9 @@ for (const item of shortPlan) {
 assert.equal(shortPlan[0].owner, "Operations");
 assert.equal(shortPlan[0].dueDate, "2026-08-01T00:00:00.000Z");
 assert.equal(shortPlan[0].evidenceOrResult, "Result not yet recorded");
-assert.equal(shortPlan[4].owner, "Unassigned", "missing ownership is visible instead of silently omitted");
-assert.equal(shortPlan[4].evidenceOrResult, "Quality score: 15/100");
+const qualityItem = buildSmeImprovementPlan(data, 20).find(item => item.id === "metric-quality")!;
+assert.equal(qualityItem.owner, "Unassigned", "missing ownership is visible instead of silently omitted");
+assert.equal(qualityItem.evidenceOrResult, "Quality score: 15/100");
 
 const fullPlan = buildSmeImprovementPlan(data, 20);
 assert.deepEqual(
@@ -120,11 +121,11 @@ assert.deepEqual(
   [
     "overdueActions",
     "overdueActions",
-    "missingData",
     "expiredEvidence",
+    "pendingApprovals",
+    "missingData",
     "lowQuality",
     "unmetCompliance",
-    "pendingApprovals",
     "unapprovedPolicies",
   ],
 );

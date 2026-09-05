@@ -177,7 +177,7 @@ export default function PublicProfilePage() {
               </h1>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
                 {organisation.industry && <span>{organisation.industry}</span>}
-                {organisation.employeeCount !== null && organisation.employeeCount !== undefined && (
+                {organisation.employeeSizeBand ? <span>{organisation.employeeSizeBand} employees (size band)</span> : organisation.employeeCount !== null && organisation.employeeCount !== undefined && (
                   <span>{organisation.employeeCount} employees</span>
                 )}
               </div>

@@ -126,15 +126,7 @@ export default function PoliciesPage() {
             />
           )
         ) : (
-          <PolicyRegisterWorkspace
-            embedded
-            draftsSection={(
-              <GeneratedPoliciesRegister
-                onOpen={(id) => navigate(`/policies?tab=register&policy=${encodeURIComponent(id)}`)}
-                onUseTemplate={() => navigate("/policies?tab=templates")}
-              />
-            )}
-          />
+          <PolicyRegisterWorkspace embedded />
         )
       ) : (
         <section className="space-y-5" aria-label="Policy template workspace">

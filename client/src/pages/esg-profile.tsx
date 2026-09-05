@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useReportingMonth } from "@/hooks/use-reporting-month";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,13 +53,14 @@ function getReportingPeriodLabel(profile: any) {
 }
 
 export default function EsgProfilePage() {
+  const reporting = useReportingMonth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const { isPro, isLoading: billingLoading } = useBillingStatus();
   const [expiryDays, setExpiryDays] = useState("30");
   const [selectedSections, setSelectedSections] = useState<string[]>([...DEFAULT_PUBLIC_PASSPORT_SECTIONS]);
-  const [selectedPeriod, setSelectedPeriod] = useState("");
+  const [selectedPeriod, setSelectedPeriod] = useState(reporting.month);
 
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: profile, isLoading } = useQuery<any>({
@@ -161,7 +163,7 @@ export default function EsgProfilePage() {
           <CardTitle className="text-lg">{profile?.company?.name || "Company"}</CardTitle>
           <div className="flex gap-3 text-sm text-muted-foreground">
             {profile?.company?.industry && <span>{profile.company.industry}</span>}
-            {profile?.company?.employeeCount && <span>{profile.company.employeeCount} employees</span>}
+            {profile?.company?.employeeSizeBand ? <span>{profile.company.employeeSizeBand} employees (size band)</span> : profile?.company?.employeeCount != null && <span>{profile.company.employeeCount} employees (company profile)</span>}
           </div>
         </CardHeader>
       </Card>
@@ -232,7 +234,7 @@ export default function EsgProfilePage() {
             <CardContent>
               <Badge variant={profile.policy_status.status === "published" ? "default" : "secondary"} data-testid="badge-policy-status">
                 {profile.policy_status.status === "published" ? <CheckCircle className="w-3 h-3 mr-1" /> : <Clock className="w-3 h-3 mr-1" />}
-                {profile.policy_status.status}
+                {profile.policy_status.status === "not_created" ? "Not created yet" : String(profile.policy_status.status).replace(/_/g, " ")}
               </Badge>
               {profile.policy_status.publishedAt && (
                 <p className="text-xs text-muted-foreground mt-2">Published: {new Date(profile.policy_status.publishedAt).toLocaleDateString()}</p>

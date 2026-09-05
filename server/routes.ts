@@ -1,4 +1,5 @@
 import express from "express";
+import { parseEmployeeSize } from "@shared/employee-size";
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import fs from "fs/promises";
@@ -971,42 +972,8 @@ function safeOpenAiErrorMeta(error: unknown): Record<string, unknown> {
   };
 }
 
-function parseEmployeeCountInput(value: unknown): { ok: true; value: number } | { ok: false; error: string } {
-  if (value === undefined || value === null || value === "") {
-    return { ok: false, error: "Employee count is required" };
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return { ok: true, value: Math.max(0, Math.round(value)) };
-  }
-
-  const raw = String(value).trim();
-  if (!raw) {
-    return { ok: false, error: "Employee count is required" };
-  }
-
-  const rangeMap: Record<string, number> = {
-    "1-10": 10,
-    "11-50": 50,
-    "51-200": 200,
-    "51-250": 250,
-    "201-500": 500,
-    "251-1000": 1000,
-    "501-1000": 1000,
-    "1001-5000": 5000,
-    "5001+": 5001,
-  };
-
-  if (rangeMap[raw] !== undefined) {
-    return { ok: true, value: rangeMap[raw] };
-  }
-
-  const numeric = parseInt(raw, 10);
-  if (!Number.isNaN(numeric)) {
-    return { ok: true, value: Math.max(0, numeric) };
-  }
-
-  return { ok: false, error: "Invalid employee count. Use a numeric value or a supported range such as 1-10 or 11-50." };
+function parseEmployeeCountInput(value: unknown): ReturnType<typeof parseEmployeeSize> {
+  return parseEmployeeSize(value);
 }
 
 async function auditTokenAuthFailure(req: Request, input: {
@@ -3043,7 +3010,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid company profile update payload", details: parsed.error.errors });
       }
-      const company = await storage.updateCompany(companyId, parsed.data);
+      const company = await storage.updateCompany(companyId, {
+        ...parsed.data,
+        ...(parsed.data.employeeCount !== undefined && parsed.data.employeeCount !== before?.employeeCount ? { onboardingAnswers: { ...(before?.onboardingAnswers as any || {}), employeeSizeBand: null } } : {}),
+      });
       auditLog({
         companyId,
         userId,
@@ -3140,6 +3110,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existingCompany = await storage.getCompany(companyId);
       const existingAnswers = (existingCompany?.onboardingAnswers as any) || {};
       const mergedAnswers = { ...existingAnswers, ...(onboardingAnswers || {}) };
+      if (companyProfile?.employeeCount !== undefined) {
+        const size = parseEmployeeSize(companyProfile.employeeCount);
+        if (size.ok) mergedAnswers.employeeSizeBand = size.band;
+      }
       if (selectedTopics) mergedAnswers.selectedTopics = selectedTopics;
       if (reportingFrequency) mergedAnswers.reportingFrequency = reportingFrequency;
       update.onboardingAnswers = mergedAnswers;
@@ -3200,6 +3174,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existingCompanyData = await storage.getCompany(companyId);
       const existingAnswersData = (existingCompanyData?.onboardingAnswers as any) || {};
       const mergedAnswersData = { ...existingAnswersData, ...(onboardingAnswers || {}) };
+      if (companyProfile?.employeeCount !== undefined) {
+        const size = parseEmployeeSize(companyProfile.employeeCount);
+        if (size.ok) mergedAnswersData.employeeSizeBand = size.band;
+      }
       if (selectedTopics) mergedAnswersData.selectedTopics = selectedTopics;
       if (reportingFrequency) mergedAnswersData.reportingFrequency = reportingFrequency;
       update.onboardingAnswers = mergedAnswersData;
@@ -5512,7 +5490,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         resolveCompanyReportingContext,
       } = await import("./reporting-context");
       const reportingContext = await resolveCompanyReportingContext(companyId, {
-        requestedPeriod: typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : undefined,
+        requestedPeriod: typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : typeof req.query.period === "string" ? req.query.period : undefined,
       });
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = filterMetricsDueForPeriod(
@@ -5777,7 +5755,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const company = await storage.getCompany(companyId);
       const reportRuns = await storage.getReportRuns(companyId);
 
-      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const reportingContext = await resolveCompanyReportingContext(companyId, { requestedPeriod: typeof req.query.period === "string" ? req.query.period : undefined });
       const status = await evaluateEsgStatus(companyId, reportingContext);
 
       const hasGeneratedReport = reportRuns.length > 0;
@@ -10174,7 +10152,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         isSiteWithinReportingBoundary,
         resolveCompanyReportingContext,
       } = await import("./reporting-context");
-      const reportingContext = await resolveCompanyReportingContext(companyId);
+      const reportingContext = await resolveCompanyReportingContext(companyId, { requestedPeriod: typeof req.query.period === "string" ? req.query.period : undefined });
       const currentPeriod = reportingContext.period.name;
       const allMetrics = await storage.getMetrics(companyId);
       const enabledMetrics = filterMetricsDueForPeriod(
@@ -10187,7 +10165,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const missingData = enabledMetrics
         .filter((m: any) => !valueMap.has(m.id))
-        .map((m: any) => ({ id: m.id, name: m.name, category: m.category, owner: m.dataOwner, linkUrl: "/data-entry" }));
+        .map((m: any) => ({ id: m.id, name: m.name, category: m.category, owner: m.dataOwner, metricType: m.metricType, linkUrl: m.metricType && m.metricType !== "manual" ? `/data-entry?mode=guided&period=${encodeURIComponent(currentPeriod)}&sourceMetric=${encodeURIComponent(m.id)}` : `/data-entry?metric=${encodeURIComponent(m.id)}&period=${encodeURIComponent(currentPeriod)}` }));
 
       const evidenceFiles = (await storage.getEvidenceFiles(companyId, undefined, currentPeriod))
         .filter((file: any) => isSiteWithinReportingBoundary(file.siteId, reportingContext.siteBoundary));
@@ -10201,7 +10179,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (val.workflowStatus === "approved") score += 20;
         if (val.value != null && val.dataSourceType !== "estimated") score += 15;
         if (val.notes) score += 15;
-        return score < 40 ? { id: m.id, name: m.name, category: m.category, score, owner: m.dataOwner, linkUrl: "/data-entry" } : null;
+        return score < 40 ? { id: m.id, name: m.name, category: m.category, score, owner: m.dataOwner, linkUrl: `/data-entry?metric=${encodeURIComponent(m.id)}&period=${encodeURIComponent(currentPeriod)}` } : null;
       }).filter(Boolean);
 
       const expiredEvidence = evidenceFiles
@@ -12115,7 +12093,7 @@ Use the live data above to give accurate, specific advice. If you don't have inf
       }
 
       const filteredProfile: any = {
-        company: { name: company.name, industry: company.industry, employeeCount: company.employee_count },
+        company: { name: company.name, industry: company.industry, employeeCount: company.employee_count, employeeSizeBand: company.onboarding_answers?.employeeSizeBand ?? null },
         reporting_period: profile.reporting_period,
         passport,
       };
@@ -18450,6 +18428,7 @@ async function buildEsgProfile(
       name: companyInfo?.name || "Organisation",
       industry: companyInfo?.industry || null,
       employeeCount: companyInfo?.employeeCount || null,
+      employeeSizeBand: (companyInfo?.onboardingAnswers as any)?.employeeSizeBand ?? null,
     },
     reportingBoundary: {
       type: activeSites.length > 0 ? "whole_organisation" : "legal_entity",
@@ -18477,7 +18456,7 @@ async function buildEsgProfile(
   };
 
   return {
-    company: { name: companyInfo?.name, industry: companyInfo?.industry, employeeCount: companyInfo?.employeeCount },
+    company: { name: companyInfo?.name, industry: companyInfo?.industry, employeeCount: companyInfo?.employeeCount, employeeSizeBand: (companyInfo?.onboardingAnswers as any)?.employeeSizeBand ?? null },
     reporting_period: reportingPeriod,
     esg_scores,
     key_metrics: keyMetrics,

@@ -804,8 +804,8 @@ function PreviousQuestionnairesTab({ onCreateQuestionnaire }: { onCreateQuestion
       <EmptyState
         icon={ClipboardList}
         title="No questionnaires yet"
-        description="Create your first questionnaire to collect structured ESG data from your team or supply chain."
-        helpText="Use the &quot;New Questionnaire&quot; tab to get started"
+        description="Upload a customer request or start a new response using your company information."
+        helpText="Choose New response to prepare answers, then review them before sharing."
       />
     );
   }
@@ -1465,7 +1465,7 @@ export default function QuestionnairePage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
@@ -1473,7 +1473,7 @@ export default function QuestionnairePage() {
             Questionnaires
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage requests and create consistent, evidence-backed responses.
+            Respond to customer requests using your existing figures, policies and reviewed answers.
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -1484,11 +1484,11 @@ export default function QuestionnairePage() {
             <>
               <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} data-testid="button-open-import">
                 <Upload className="w-3.5 h-3.5 mr-1.5" />
-                Import
+                Upload request
               </Button>
-              <Button size="sm" onClick={() => setActiveTab("new")} data-testid="button-new-questionnaire">
+              <Button size="sm" onClick={() => setActiveTab("generator")} data-testid="button-new-questionnaire">
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
-                New questionnaire
+                New response
               </Button>
             </>
           )}
@@ -1500,7 +1500,7 @@ export default function QuestionnairePage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList data-testid="tabs-questionnaire">
           <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
-            Requests
+            Saved requests
           </TabsTrigger>
           {canAccess && (
             <TabsTrigger value="generator" data-testid="tab-ai-generator">
@@ -1510,7 +1510,7 @@ export default function QuestionnairePage() {
           )}
           {canAccess && (
             <TabsTrigger value="new" data-testid="tab-new-questionnaire">
-              Build manually
+              Build a questionnaire
             </TabsTrigger>
           )}
         </TabsList>
