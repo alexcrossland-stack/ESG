@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageLayout, PageHeader } from "@/components/page-layout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
@@ -129,19 +130,11 @@ export default function Settings() {
   const user = authData?.user;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
-      <div>
-        <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
-          <SettingsIcon className="w-5 h-5 text-primary" />
-          Settings
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Manage your company profile, account, and platform configuration
-        </p>
-      </div>
+    <PageLayout>
+      <PageHeader title="Settings" description="Manage your company profile, account, and platform configuration" />
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="grid h-auto w-full grid-cols-2 sm:flex sm:justify-start">
+        <TabsList className="workspace-nav h-auto w-full justify-start rounded-none bg-transparent p-0 pb-2">
           <TabsTrigger value="general" data-testid="tab-general">Company</TabsTrigger>
           <TabsTrigger value="account" data-testid="tab-account">Account &amp; security</TabsTrigger>
           {isAdmin && <TabsTrigger value="admin" data-testid="tab-admin">Administration</TabsTrigger>}
@@ -346,7 +339,7 @@ export default function Settings() {
           <PrivacyDataTab />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageLayout>
   );
 }
 

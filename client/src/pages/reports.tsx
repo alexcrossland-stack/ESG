@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PageLayout, PageHeader } from "@/components/page-layout";
 import { useReportingMonth } from "@/hooks/use-reporting-month";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
@@ -2337,20 +2338,14 @@ export default function Reports() {
   });
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
-      <div>
-        <h1 className="text-xl font-semibold flex items-center gap-2" data-testid="text-page-title">
-          <Download className="w-5 h-5 text-primary" />
-          Reports
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Create, review and export clear ESG information for the people who need it.
-        </p>
-      </div>
+    <PageLayout>
+      <PageHeader title="Reports" titleTestId="text-page-title"
+        description="Create, review and export clear ESG information for the people who need it."
+        actions={<Button asChild variant="outline"><Link href="/esg-profile"><FileText className="h-4 w-4" />SME ESG Passport</Link></Button>}
+      />
 
       <Tabs value={reportsView} onValueChange={setReportsView} className="space-y-5">
-        <p className="text-sm text-muted-foreground">Need a reusable company summary? <Link href="/esg-profile" className="text-primary underline">Open your SME ESG Passport</Link>.</p>
-        <TabsList className="grid h-auto w-full grid-cols-3" data-testid="tabs-reports">
+        <TabsList className="workspace-nav h-auto w-full justify-start rounded-none bg-transparent p-0 pb-2" data-testid="tabs-reports">
           <TabsTrigger value="create" data-testid="tab-reports-create">Create</TabsTrigger>
           <TabsTrigger value="library" data-testid="tab-reports-library">Report library</TabsTrigger>
           <TabsTrigger value="exports" data-testid="tab-reports-exports">Exports</TabsTrigger>
@@ -2365,7 +2360,7 @@ export default function Reports() {
         scopeLabel={reportReadinessScopeLabel}
           />
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(20rem,1fr)_minmax(0,2fr)]">
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
@@ -2386,7 +2381,7 @@ export default function Reports() {
                   aria-pressed={selectedTemplate === t.id}
                   onKeyDown={event => { if (!isLocked && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); handleTemplateChange(t.id); } }}
                   onClick={() => !isLocked && handleTemplateChange(t.id)}
-                  className={`p-3 rounded-md border transition-colors ${isLocked ? "opacity-60 cursor-not-allowed bg-muted/30" : "cursor-pointer"} ${selectedTemplate === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
+                  className={`p-4 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${isLocked ? "opacity-60 cursor-not-allowed bg-muted/30" : "cursor-pointer"} ${selectedTemplate === t.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}
                   data-testid={`template-${t.id}`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -2649,7 +2644,7 @@ export default function Reports() {
           </Card>
         </div>
 
-        <div className="lg:col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4">
           {reportData ? (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3310,6 +3305,6 @@ export default function Reports() {
           <EsgExportsSection />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageLayout>
   );
 }

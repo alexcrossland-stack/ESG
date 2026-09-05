@@ -16,6 +16,7 @@ import {
   Target,
   UploadCloud,
   UserCog,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -92,7 +93,7 @@ function canShowItem(item: NavItem, can: ReturnType<typeof usePermissions>["can"
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { setOpenMobile } = useSidebar();
+  const { isMobile, setOpenMobile } = useSidebar();
   const { can, isSuperAdmin } = usePermissions();
   const { canAccessPortfolio } = usePortfolioAccess();
   const { data: authData } = useQuery<{ user: any; company: any }>({ queryKey: ["/api/auth/me"] });
@@ -106,24 +107,26 @@ export function AppSidebar() {
   });
 
   return (
-    <Sidebar>
-      <SidebarHeader className="px-4 pb-3 pt-4">
+    <Sidebar className="app-navigation">
+      <SidebarHeader className="px-5 pb-4 pt-5">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary">
             <Leaf className="h-4 w-4 text-primary-foreground" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold leading-tight text-sidebar-foreground">SimplyESG</p>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{company?.name || "Your company"}</p>
+            <p className="truncate text-base font-semibold leading-tight tracking-tight text-foreground">SimplyESG</p>
+            <p className="mt-1 truncate text-xs text-muted-foreground" title={company?.name}>{company?.name || "Your company"}</p>
           </div>
+          {isMobile && <Button size="icon" variant="ghost" onClick={() => setOpenMobile(false)} aria-label="Close navigation" data-testid="button-sidebar-close"><X className="h-4 w-4" /></Button>}
         </div>
         <SiteSwitcher />
       </SidebarHeader>
 
       <SidebarSeparator />
 
-      <SidebarContent className="overflow-y-auto px-2 py-3">
+      <SidebarContent className="overflow-y-auto px-3 py-5">
         <SidebarGroup className="p-0">
+          <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[.12em] text-muted-foreground">Your workspace</p>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1" data-testid="primary-navigation" aria-label="Primary navigation">
               {primaryItems.map(item => {
@@ -131,7 +134,7 @@ export function AppSidebar() {
                 const active = isNavItemActive(location, item);
                 return (
                   <SidebarMenuItem key={item.label}>
-                    <SidebarMenuButton asChild data-active={active} className="h-10">
+                    <SidebarMenuButton asChild data-active={active} className="h-11 gap-3 px-3">
                       <Link href={item.href} onClick={() => setOpenMobile(false)} data-testid={PRIMARY_TEST_ID_BY_LABEL[item.label]} aria-current={active ? "page" : undefined}>
                         <Icon className="h-4 w-4 shrink-0" />
                         <span
@@ -167,7 +170,7 @@ export function AppSidebar() {
           )}
           <SidebarMenuItem>
             <SidebarMenuButton asChild data-active={isActive(location, "/help")}>
-              <Link href="/help" onClick={() => setOpenMobile(false)} data-testid="nav-utility-help">
+                <Link href="/help" onClick={() => setOpenMobile(false)} data-testid="nav-utility-help" aria-current={isActive(location, "/help") ? "page" : undefined}>
                 <HelpCircle className="h-4 w-4" />
                 <span>Help</span>
               </Link>
@@ -175,7 +178,7 @@ export function AppSidebar() {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild data-active={isActive(location, "/settings")}>
-              <Link href="/settings" onClick={() => setOpenMobile(false)} data-testid="nav-utility-settings">
+                <Link href="/settings" onClick={() => setOpenMobile(false)} data-testid="nav-utility-settings" aria-current={isActive(location, "/settings") ? "page" : undefined}>
                 <Settings className="h-4 w-4" />
                 <span>Settings</span>
               </Link>

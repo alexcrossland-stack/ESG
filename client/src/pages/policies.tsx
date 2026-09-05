@@ -3,10 +3,10 @@ import { FileText, Library, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader, PageLayout } from "@/components/page-layout";
 import { PolicyRegisterWorkspace } from "@/pages/esg-policy-register";
 import Policy from "@/pages/policy";
 import {
-  GeneratedPoliciesRegister,
   PolicyTemplatesWorkspace,
   type PolicyTemplateView,
 } from "@/pages/policy-templates";
@@ -55,21 +55,12 @@ export default function PoliciesPage() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6" data-testid="page-policies">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h1 className="flex items-center gap-2 text-xl font-semibold">
-              <FileText className="h-5 w-5 text-primary" />
-              Policies
-            </h1>
-            <Badge variant="outline" className="font-normal">Company-wide</Badge>
-          </div>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Create, maintain and review the policies your business relies on, without losing track of ownership or review dates.
-          </p>
-        </div>
-      </div>
+    <PageLayout data-testid="page-policies">
+      <PageHeader
+        title="Policies"
+        description="Create, maintain and review the policies your business relies on, without losing track of ownership or review dates."
+        eyebrow={<Badge variant="outline" className="bg-card font-normal">Company-wide</Badge>}
+      />
 
       {!canManagePolicies && (
         <div className="flex gap-3 rounded-lg border border-border bg-muted/30 p-3" data-testid="policy-read-only-notice">
@@ -83,16 +74,13 @@ export default function PoliciesPage() {
       )}
 
       <nav
-        className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/30 p-1"
+        className="workspace-nav"
         aria-label="Policies workspace"
-        role="tablist"
         data-testid="policies-workspace-tabs"
       >
-        <Button asChild variant={activeTab === "register" ? "secondary" : "ghost"} className="w-full">
+        <Button asChild variant="ghost">
           <Link
             href={tabHref("register")}
-            role="tab"
-            aria-selected={activeTab === "register"}
             aria-current={activeTab === "register" ? "page" : undefined}
             data-testid="tab-policy-register"
           >
@@ -100,11 +88,9 @@ export default function PoliciesPage() {
             Policy register
           </Link>
         </Button>
-        <Button asChild variant={activeTab === "templates" ? "secondary" : "ghost"} className="w-full">
+        <Button asChild variant="ghost">
           <Link
             href={tabHref("templates")}
-            role="tab"
-            aria-selected={activeTab === "templates"}
             aria-current={activeTab === "templates" ? "page" : undefined}
             data-testid="tab-policy-templates"
           >
@@ -145,6 +131,6 @@ export default function PoliciesPage() {
           />
         </section>
       )}
-    </div>
+    </PageLayout>
   );
 }

@@ -15,6 +15,7 @@ import {
   FileText,
   Gauge,
   Map,
+  Plus,
   Shield,
   ShieldAlert,
   Target,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { PageHeader, PageLayout } from "@/components/page-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -134,12 +136,12 @@ function formatPlanDate(value: string | null): string {
 function PlanItem({ item, position }: { item: ImprovementPlanItem; position: number }) {
   return (
     <article
-      className="border-t border-border px-4 py-5 first:border-t-0 sm:px-6"
+      className={`border-t border-border px-4 py-5 first:border-t-0 sm:px-6 ${position === 1 ? "bg-primary/[0.035]" : ""}`}
       data-testid={`improvement-plan-item-${item.type}-${item.id}`}
     >
       <div className="flex items-start gap-3 sm:gap-4">
         <div
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold tabular-nums ${position === 1 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
           aria-label={`Priority ${position}`}
         >
           {position}
@@ -148,7 +150,7 @@ function PlanItem({ item, position }: { item: ImprovementPlanItem; position: num
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-semibold leading-snug">{item.title}</h3>
+                <h3 className="min-w-0 max-w-full break-words font-semibold leading-snug">{item.title}</h3>
                 <Badge variant={item.statusTone} className="shrink-0 text-xs">
                   {item.status}
                 </Badge>
@@ -162,7 +164,7 @@ function PlanItem({ item, position }: { item: ImprovementPlanItem; position: num
               asChild
               variant={position === 1 ? "default" : "outline"}
               size="sm"
-              className="w-full shrink-0 sm:w-auto"
+              className="w-full shrink-0 whitespace-normal sm:w-auto"
               data-testid={`button-open-plan-item-${item.type}-${item.id}`}
             >
               <Link href={item.href}>
@@ -247,26 +249,21 @@ export default function ControlCentre() {
   const remainingOpen = Math.max(0, totalOpen - plan.length);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6" data-testid="page-control-centre">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold" data-testid="text-improve-title">Action plan</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            The three most useful things to do next, based on your current data, evidence and commitments.
-          </p>
-        </div>
-        {!isLoading && data && (
-          <Badge variant={totalOpen > 0 ? "secondary" : "outline"} data-testid="badge-total-open-work">
-            {totalOpen > 0 ? `${totalOpen} open item${totalOpen === 1 ? "" : "s"}` : "Plan clear"}
-          </Badge>
-        )}
-      </div>
+    <PageLayout data-testid="page-control-centre">
+      <PageHeader
+        title="Action plan"
+        titleTestId="text-improve-title"
+        description="The three most useful things to do next, based on your current data, evidence and commitments."
+        actions={!isLoading && can("metrics_data_entry") ? <Button asChild><Link href="/actions?create=true"><Plus className="h-4 w-4" />Add action</Link></Button> : undefined}
+      />
 
-      {!isLoading && <nav className="flex flex-wrap gap-2" aria-label="Action plan views">
-        <Button asChild variant="outline"><Link href="/my-tasks">My work</Link></Button>
-        {can("report_generation") && <Button asChild variant="outline"><Link href="/my-approvals">Review submissions</Link></Button>}
-        <Button asChild variant="outline"><Link href="/actions">Manage actions</Link></Button>
-        {can("metrics_data_entry") && <Button asChild><Link href="/actions?create=true">Add action</Link></Button>}
+      {!isLoading && <nav className="flex flex-wrap items-center gap-1 rounded-xl border bg-card p-2" aria-label="Action plan views">
+        <Button asChild variant="ghost"><Link href="/my-tasks">My work</Link></Button>
+        {can("report_generation") && <Button asChild variant="ghost"><Link href="/my-approvals">Review submissions</Link></Button>}
+        <Button asChild variant="ghost"><Link href="/actions">Manage actions</Link></Button>
+        {data && <Badge variant={totalOpen > 0 ? "secondary" : "outline"} className="m-1 sm:ml-auto" data-testid="badge-total-open-work">
+          {totalOpen > 0 ? `${totalOpen} open item${totalOpen === 1 ? "" : "s"}` : "Plan clear"}
+        </Badge>}
       </nav>}
       {isLoading ? (
         <div className="space-y-4" data-testid="improvement-plan-loading">
@@ -411,6 +408,6 @@ export default function ControlCentre() {
           </CardContent>
         </Card>
       )}
-    </div>
+    </PageLayout>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { PageLayout, PageHeader } from "@/components/page-layout";
 import { Link } from "wouter";
 import { useBillingStatus, UpgradePageGate } from "@/components/upgrade-prompt";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -1465,18 +1466,10 @@ export default function QuestionnairePage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <ClipboardList className="w-5 h-5 text-primary" />
-            Questionnaires
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Respond to customer requests using your existing figures, policies and reviewed answers.
-          </p>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
+    <PageLayout>
+      <PageHeader title="Questionnaires"
+        description="Respond to customer requests using your existing figures, policies and reviewed answers."
+        actions={<>
           <Button variant="outline" size="sm" asChild data-testid="button-open-answer-library">
             <Link href="/answer-library">Answer library</Link>
           </Button>
@@ -1492,13 +1485,13 @@ export default function QuestionnairePage() {
               </Button>
             </>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       <ImportQuestionnaireDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList data-testid="tabs-questionnaire">
+        <TabsList className="workspace-nav h-auto w-full justify-start rounded-none bg-transparent p-0 pb-2" data-testid="tabs-questionnaire">
           <TabsTrigger value="previous" data-testid="tab-previous-questionnaires">
             Saved requests
           </TabsTrigger>
@@ -1528,6 +1521,6 @@ export default function QuestionnairePage() {
           <PreviousQuestionnairesTab onCreateQuestionnaire={canAccess ? () => setActiveTab("new") : undefined} />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageLayout>
   );
 }
