@@ -245,6 +245,8 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("policy-card-record-1")).toContainText("Health and Safety Policy");
     await expect(page.getByTestId("button-add-policy")).toBeVisible();
     await expect(page.getByTestId("button-edit-policy-record-1")).toBeVisible();
+    await expect(page.getByTestId("button-edit-governance-environment")).toBeHidden();
+    await page.getByTestId("governance-ownership-section").locator("summary").click();
     await expect(page.getByTestId("button-edit-governance-environment")).toBeVisible();
     await expect(page.getByTestId("governance-ownership-section")).toContainText("Governance completeness: 20%");
 
@@ -256,6 +258,7 @@ test.describe("Unified Policies workspace", () => {
     await expect(page).toHaveURL(/\/policies\?tab=register$/);
 
     await page.getByTestId("button-add-policy").click();
+    await page.getByRole("menuitem", { name: "Add an existing policy", exact: true }).click();
     await page.getByTestId("input-policy-title").fill("Responsible Sourcing Policy");
     await page.getByTestId("input-policy-owner").fill("Procurement Lead");
     await page.getByTestId("button-save-policy").click();
@@ -267,14 +270,17 @@ test.describe("Unified Policies workspace", () => {
     await page.getByTestId("button-save-policy").click();
     await expect(page.getByTestId("policy-card-record-created")).toContainText("Responsible Procurement Policy");
 
+    await page.getByTestId("governance-ownership-section").locator("summary").click();
     await page.getByTestId("button-edit-governance-environment").click();
     await page.getByTestId("input-gov-owner-environment").fill("Jordan Lee");
     await page.getByTestId("button-save-gov-environment").click();
     await expect(page.getByTestId("governance-card-environment")).toContainText("Jordan Lee");
 
-    await expect(page.getByTestId("generated-policy-register")).toBeVisible();
-    await expect(page.getByTestId("card-policy-draft-1")).toContainText("Environmental Policy Draft");
-    await expect(page.getByTestId("button-create-from-template")).toBeVisible();
+    await expect(page.getByTestId("registered-policy-list")).toBeVisible();
+    await expect(page.getByTestId("policy-card-draft-1")).toContainText("Environmental Policy Draft");
+    await page.getByTestId("button-add-policy").click();
+    await expect(page.getByRole("menuitem", { name: "Use a template", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
 
     await page.getByTestId("tab-policy-templates").click();
     await expect(page).toHaveURL(/\/policies\?tab=templates$/);
@@ -313,7 +319,7 @@ test.describe("Unified Policies workspace", () => {
   test("generated drafts open from the register without leaving Policies", async ({ browser }) => {
     const { context, page } = await openPolicies(browser, "admin");
 
-    await page.getByTestId("button-view-policy-draft-1").click();
+    await page.getByTestId("policy-card-draft-1").getByRole("link", { name: "Open policy" }).click();
     await expect(page).toHaveURL(/\/policies\?tab=register&policy=draft-1$/);
     await expect(page.getByTestId("generated-policy-viewer")).toBeVisible();
     await expect(page.getByTestId("generated-policy-viewer").locator("h1").first()).toHaveText("Environmental Policy Draft");
@@ -330,7 +336,7 @@ test.describe("Unified Policies workspace", () => {
   test("approver can review a submitted draft but cannot edit or submit it", async ({ browser }) => {
     const { context, page } = await openPolicies(browser, "approver");
 
-    await page.getByTestId("button-view-policy-draft-1").click();
+    await page.getByTestId("policy-card-draft-1").getByRole("link", { name: "Open policy" }).click();
     await expect(page.getByTestId("button-workflow-approve-policy")).toBeVisible();
     await expect(page.getByTestId("button-workflow-reject-policy")).toBeVisible();
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
@@ -467,7 +473,7 @@ test.describe("Unified Policies workspace", () => {
 
     await expect(page.getByTestId("policy-read-only-notice")).toBeVisible();
     await expect(page.getByTestId("policy-card-record-1")).toBeVisible();
-    await expect(page.getByTestId("card-policy-draft-1")).toBeVisible();
+    await expect(page.getByTestId("policy-card-draft-1")).toBeVisible();
     await expect(page.getByTestId("button-add-policy")).toHaveCount(0);
     await expect(page.getByTestId("button-edit-policy-record-1")).toHaveCount(0);
     await expect(page.getByTestId("button-delete-policy-record-1")).toHaveCount(0);
@@ -481,7 +487,7 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("template-read-only-environmental-policy")).toBeVisible();
 
     await page.getByTestId("tab-policy-register").click();
-    await page.getByTestId("button-view-policy-draft-1").click();
+    await page.getByTestId("policy-card-draft-1").getByRole("link", { name: "Open policy" }).click();
     await expect(page.getByTestId("generated-policy-viewer")).toBeVisible();
     await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
     await expect(page.getByTestId("button-export-generated")).toBeVisible();

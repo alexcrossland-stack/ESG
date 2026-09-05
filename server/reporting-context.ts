@@ -159,6 +159,11 @@ export function selectCanonicalReportingPeriod(
   if (requested) {
     const match = candidates.find((period) => period.id === requested || period.name === requested);
     if (match) return { period: match, source: "requested" };
+    // A calendar month is a valid working scope even without a saved reporting-period record.
+    if (/^20\d{2}-(0[1-9]|1[0-2])$/.test(requested)) {
+      const [year, month] = requested.split("-").map(Number);
+      return { source: "requested", period: { name: requested, periodType: "monthly", startDate: `${requested}-01`, endDate: `${requested}-${new Date(Date.UTC(year, month, 0)).getUTCDate()}` } };
+    }
   }
 
   const today = calendarDay(options.now ?? new Date()) ?? calendarDay(new Date())!;

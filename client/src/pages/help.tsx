@@ -216,7 +216,7 @@ export default function HelpPage() {
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6 pb-12">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">Help Centre</h1>
-        <p className="text-muted-foreground text-sm">{HELP_ARTICLES.length} guides covering every part of ESG Manager</p>
+        <p className="text-muted-foreground text-sm">{HELP_ARTICLES.length} guides covering every part of SimplyESG</p>
       </div>
 
       <div className="flex gap-2">

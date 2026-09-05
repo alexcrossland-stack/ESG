@@ -22,6 +22,7 @@ type SmeDashboardOverviewProps = {
   readiness?: any;
   enhanced?: any;
   isLoading?: boolean;
+  showNextAction?: boolean;
 };
 
 const STATUS_COPY: Record<string, { label: string; fallback: string; className: string }> = {
@@ -73,7 +74,7 @@ function strengthLabel(value: number): string {
   return "Starting";
 }
 
-export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }: SmeDashboardOverviewProps) {
+export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, showNextAction = true }: SmeDashboardOverviewProps) {
   if (isLoading) {
     return (
       <section className="grid gap-4 lg:grid-cols-2" data-testid="section-sme-dashboard-overview">
@@ -110,7 +111,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
         </CardContent>
       </Card>
 
-      <Card className="flex flex-col border-primary/30 bg-primary/5" data-testid="card-sme-next-action">
+      {showNextAction && <Card className="flex flex-col border-primary/30 bg-primary/5" data-testid="card-sme-next-action">
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2 text-primary">
             <BarChart3 className="h-4 w-4" />
@@ -129,8 +130,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
             </Link>
           </Button>
         </CardContent>
-      </Card>
-
+      </Card>}
       <Card data-testid="card-sme-confidence">
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Data and evidence confidence</CardTitle>
@@ -138,10 +138,10 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
         <CardContent className="space-y-4">
           <div className="space-y-1.5" data-testid="progress-sme-data-confidence">
             <div className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-medium"><Database className="h-4 w-4 text-blue-600" />Full metric coverage</span>
+              <span className="flex items-center gap-2 font-medium"><Database className="h-4 w-4 text-blue-600" />Figures due this month</span>
               <span><span className="text-muted-foreground">{strengthLabel(dataCompleteness)}</span> · {dataCompleteness}%</span>
             </div>
-            <Progress value={dataCompleteness} aria-label="Full metric data coverage" className="h-2 [&>div]:bg-blue-500" />
+            <Progress value={dataCompleteness} aria-label="Data coverage for the selected month" className="h-2 [&>div]:bg-blue-500" />
           </div>
           <div className="space-y-1.5" data-testid="progress-sme-evidence-confidence">
             <div className="flex items-center justify-between text-sm">
@@ -168,11 +168,11 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false }:
           )}
           {estimatedPercent > 0 && (
             <p className="text-xs text-muted-foreground" data-testid="text-sme-estimated-data">
-              {estimatedPercent}% of entered data is estimated. Replace estimates over time to strengthen confidence.
+              {estimatedPercent}% of metrics due this month have estimated figures. Replace estimates over time to strengthen confidence.
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            Coverage includes every active metric. Use Update data in Metrics &amp; data for a guided first step or a spreadsheet import.
+            This overview covers metrics due in the selected month. Data &amp; evidence also shows related quarterly and annual items.
           </p>
         </CardContent>
       </Card>

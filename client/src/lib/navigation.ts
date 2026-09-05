@@ -68,7 +68,6 @@ export const MORE_TOOLS_ROUTES = [
   "/framework-readiness",
   "/framework-settings",
   "/compliance",
-  "/esg-profile",
   "/materiality",
   "/carbon-calculator",
   "/benchmarks",
@@ -86,7 +85,7 @@ export const SME_PRIMARY_NAV_ITEMS: NavItem[] = [
   },
   { label: "Policies", href: POLICIES_HOME_HREF, activeRoutes: POLICY_WORKSPACE_ROUTES },
   { label: "Action plan", href: IMPROVE_HOME_HREF, activeRoutes: ACTION_PLAN_WORKSPACE_ROUTES },
-  { label: "Reports", href: SHARE_HOME_HREF },
+  { label: "Reports", href: SHARE_HOME_HREF, activeRoutes: ["/reports", "/esg-profile"] },
   { label: "Questionnaires", href: "/questionnaire", activeRoutes: QUESTIONNAIRE_WORKSPACE_ROUTES },
   { label: "More tools", href: "/more-tools", activeRoutes: MORE_TOOLS_ROUTES },
 ];
@@ -195,7 +194,7 @@ export const MORE_TOOLS_SECTIONS: NavSection[] = [
   {
     label: "Company & governance",
     items: [
-      { label: "ESG profile", href: "/esg-profile", description: "Maintain a clear, shareable summary of your ESG position." },
+      { label: "SME ESG Passport", href: "/esg-profile", description: "Maintain a clear, shareable summary of your ESG position." },
       { label: "Priority topics", href: "/topics", description: "Focus effort on the topics that matter most to your business." },
       { label: "Materiality", href: "/materiality", description: "Assess business and stakeholder importance." },
     ],
@@ -327,7 +326,7 @@ const BREADCRUMBS: Record<string, BreadcrumbItem[]> = {
     { label: "Answer library" },
   ],
   "/more-tools": [{ label: "More tools", href: "/more-tools" }],
-  "/esg-profile": [{ label: "More tools", href: "/more-tools" }, { label: "ESG profile" }],
+  "/esg-profile": [{ label: "Reports", href: "/reports" }, { label: "SME ESG Passport" }],
   "/materiality": [{ label: "More tools", href: "/more-tools" }, { label: "Materiality" }],
   "/carbon-calculator": [{ label: "More tools", href: "/more-tools" }, { label: "Carbon estimator" }],
   "/benchmarks": [{ label: "More tools", href: "/more-tools" }, { label: "Benchmarks" }],

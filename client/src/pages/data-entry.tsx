@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { useReportingMonth, isReportingMonth } from "@/hooks/use-reporting-month";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import { EmptyState } from "@/components/empty-state";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
@@ -34,7 +36,6 @@ import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge } from "@/components/workflow-badge";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { DataSourceBadge } from "@/pages/evidence";
-import { SourceBadge } from "@/components/source-badge";
 import { EvidenceSuggestions } from "@/components/evidence-suggestions";
 import { trackEvent, AnalyticsEvents } from "@/lib/analytics";
 import { useActivationState } from "@/hooks/use-activation-state";
@@ -44,7 +45,7 @@ import { ValueSourceBadge } from "@/components/value-source-badge";
 import { Link, useLocation, useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
-import { PermissionBanner, OwnershipHint } from "@/components/permission-gate";
+import { PermissionBanner } from "@/components/permission-gate";
 import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
 import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
 import { formatMetricDisplayValue, isBooleanMetricDataType, isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
@@ -108,6 +109,8 @@ const RAW_DATA_FIELDS = {
 };
 
 const GUIDED_RAW_DATA_INPUT_KEYS = GUIDED_RAW_INPUT_NAME_SET;
+const EMPTY_DEFINITIONS: MetricDefinitionActivation[] = [];
+const EMPTY_COMPANY_METRICS: any[] = [];
 
 type DataWorkspaceMode = "overview" | "manual" | "raw" | "paste" | "manage";
 
@@ -205,16 +208,6 @@ function unavailableEvidenceLabel(evidence: EvidenceAttachment): string | null {
   return status ? `${status.charAt(0).toUpperCase()}${status.slice(1).toLowerCase()}` : "Unavailable";
 }
 
-function QualityBadge({ score, metricId }: { score: number; metricId: string }) {
-  const variant = score > 70 ? "default" : score >= 40 ? "secondary" : "outline";
-  const color = score > 70 ? "text-emerald-600 dark:text-emerald-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
-  return (
-    <Badge variant={variant} className={`text-xs gap-0.5 ${color}`} data-testid={`badge-quality-${metricId}`}>
-      Q:{score}
-    </Badge>
-  );
-}
-
 function InlineMetricEvidenceBadge({ state, metricKey }: { state: InlineMetricEvidenceState; metricKey: string }) {
   const styles: Record<InlineMetricEvidenceState, string> = {
     missing: "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300",
@@ -255,6 +248,7 @@ export default function DataEntry() {
   const selectedScopeParam = activeSiteId ?? "null";
   const selectedScopeLabel = activeSite ? activeSite.name : "Organisation-wide";
   const searchString = useSearch();
+  const reporting = useReportingMonth();
   const searchParams = new URLSearchParams(searchString);
   const highlightEstimated = searchParams.get("highlight") === "estimated";
   const focusEvidence = searchParams.get("focus") === "evidence";
@@ -269,8 +263,21 @@ export default function DataEntry() {
     invalidateEsgReadinessQueries(queryClient);
   };
   const [selectedPeriod, setSelectedPeriod] = useState(
-    requestedPeriod && periods.includes(requestedPeriod) ? requestedPeriod : periods[0],
+    isReportingMonth(requestedPeriod) ? requestedPeriod : reporting.month,
   );
+  const [dirtyKeys, setDirtyKeys] = useState<Record<string, boolean>>({});
+  const [lastSavedPeriod, setLastSavedPeriod] = useState<string | null>(null);
+  const dirtyRef = useRef(dirtyKeys);
+  dirtyRef.current = dirtyKeys;
+  const markDirty = (key: string) => {
+    dirtyRef.current = { ...dirtyRef.current, [key]: true };
+    setDirtyKeys(dirtyRef.current);
+    setLastSavedPeriod(null);
+  };
+  const markSaved = (key: string) => {
+    dirtyRef.current = { ...dirtyRef.current, [key]: false };
+    setDirtyKeys(dirtyRef.current);
+  };
   const selectedQuarterPeriod = resolveMetricWorkspacePeriod(selectedPeriod, "quarterly");
   const selectedAnnualPeriod = resolveMetricWorkspacePeriod(selectedPeriod, "annual");
   const [selectedReportingPeriodId, setSelectedReportingPeriodId] = useState<string>("__all__");
@@ -279,7 +286,7 @@ export default function DataEntry() {
   const [metricSearch, setMetricSearch] = useState("");
   const [metricStatusFilter, setMetricStatusFilter] = useState<MetricDataWorkspaceState | "all">("all");
   const [focusedEntryMetricId, setFocusedEntryMetricId] = useState<string | null>(focusedMetricId);
-  const [showAllInputs, setShowAllInputs] = useState(false);
+  const [showAllInputs, setShowAllInputs] = useState(searchParams.has("sourceMetric"));
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [recalcResults, setRecalcResults] = useState<any[] | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, { value: string; notes: string }>>({});
@@ -293,6 +300,14 @@ export default function DataEntry() {
   const [editEstimateValue, setEditEstimateValue] = useState("");
   const [editSaveAsActual, setEditSaveAsActual] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<Record<string, File[]>>({});
+  const confirmLeave = useUnsavedChanges(Object.values(dirtyKeys).some(Boolean) || Object.values(pendingAttachments).some(files => files.length > 0), () => {
+    dirtyRef.current = {};
+    setDirtyKeys({});
+    setPendingAttachments({});
+  });
+  useEffect(() => {
+    if (!requestedPeriod && !Object.values(dirtyRef.current).some(Boolean)) setSelectedPeriod(reporting.month);
+  }, [reporting.month, requestedPeriod]);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const { data: evidenceCoverage } = useQuery<any>({
@@ -339,20 +354,16 @@ export default function DataEntry() {
     enabled: !sitesLoading,
   });
 
-  const { data: dataQuality } = useQuery<any>({
-    queryKey: ["/api/data-quality"],
-  });
-
   const { data: reportingPeriods = [] } = useQuery<any[]>({
     queryKey: ["/api/reporting-periods"],
   });
 
-  const { data: metricDefinitions = [], isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
+  const { data: metricDefinitions = EMPTY_DEFINITIONS, isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
     queryKey: ["/api/metric-definitions"],
     queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
   });
 
-  const { data: companyMetrics = [], isLoading: companyMetricsLoading } = useQuery<any[]>({
+  const { data: companyMetrics = EMPTY_COMPANY_METRICS, isLoading: companyMetricsLoading } = useQuery<any[]>({
     queryKey: ["/api/metrics"],
     queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
   });
@@ -405,6 +416,7 @@ export default function DataEntry() {
   });
 
   useEffect(() => {
+    if (dirtyRef.current.raw) return;
     if (rawData && Array.isArray(rawData)) {
       const inputs: Record<string, string> = {};
       rawData.forEach((d: any) => {
@@ -412,9 +424,10 @@ export default function DataEntry() {
       });
       setRawInputs(inputs);
     }
-  }, [rawData]);
+  }, [rawData, dirtyKeys]);
 
   useEffect(() => {
+    if (Object.entries(dirtyRef.current).some(([key, dirty]) => key !== "raw" && dirty)) return;
     const periodValues = [entryData, quarterlyEntryData, annualEntryData].flatMap((data) => data?.values || []);
     const metricPeriodsById = new Map(
       buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics)
@@ -437,14 +450,14 @@ export default function DataEntry() {
       setManualValues({});
       setManualDataSourceTypes({});
     }
-  }, [entryData, quarterlyEntryData, annualEntryData, metricDefinitions, companyMetrics, selectedPeriod]);
+  }, [entryData, quarterlyEntryData, annualEntryData, metricDefinitions, companyMetrics, selectedPeriod, dirtyKeys]);
 
   useEffect(() => {
     const requestedMode = resolveInitialWorkspaceMode(searchParams);
     setActiveTab(requestedMode);
     if (requestedMode === "manual") setFocusedEntryMetricId(focusedMetricId);
     else if (requestedMode === "overview") setFocusedEntryMetricId(null);
-    if (requestedPeriod && periods.includes(requestedPeriod)) setSelectedPeriod(requestedPeriod);
+    if (isReportingMonth(requestedPeriod)) setSelectedPeriod(requestedPeriod);
   }, [focusedMetricId, searchString]);
 
   useEffect(() => {
@@ -526,8 +539,8 @@ export default function DataEntry() {
         siteId: data.siteId,
       }).then((response) => response.json());
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence"] });
       queryClient.invalidateQueries({ queryKey: ["/api/evidence/coverage"] });
       invalidateReadinessQueries();
@@ -777,6 +790,8 @@ export default function DataEntry() {
       period: selectedPeriod,
       siteId: selectedScopeSiteId,
     });
+    markSaved("raw");
+    setLastSavedPeriod(selectedPeriod);
     await recalcMutation.mutateAsync();
   };
 
@@ -817,6 +832,8 @@ export default function DataEntry() {
     if (attachments.length > 0) {
       setPendingAttachments((prev) => ({ ...prev, [metricKey]: [] }));
     }
+    markSaved(metricKey);
+    setLastSavedPeriod(selectedPeriod);
     const isFirstData = !activation.hasAddedData;
     if (isFirstData) {
       trackEvent(AnalyticsEvents.FIRST_DATA_ADDED, { period: metricPeriod, source: "manual" });
@@ -867,7 +884,7 @@ export default function DataEntry() {
   const canonicalEvidenceMetrics = buildCanonicalEvidenceMetrics(allEnabledMetrics, evidenceCoverage?.metricCoverage || []);
   const isMetricEntryEligible = (metric: any) => !metric.missingCompanyMetric && isEditableDataEntryMetricType(metric.metricType);
   const eligibleMetrics = allEnabledMetrics.filter(isMetricEntryEligible);
-  const editDisabled = isLocked || !canEdit || isReportingPeriodLocked;
+  const editDisabled = isLocked || !canEdit || isReportingPeriodLocked || saveRawMutation.isPending || recalcMutation.isPending;
   const getMetricEvidence = (metricValueId: string | undefined, metricId: string | null | undefined, metricPeriod: string) =>
     evidenceFiles.filter((file: any) => (
       (metricValueId && file.linkedModule === "metric_value" && file.linkedEntityId === metricValueId) ||
@@ -973,11 +990,13 @@ export default function DataEntry() {
   }).length;
   const filledTrackedMetricCount = metricWorkspaceRows.filter((row) => row.displayValue !== "").length;
   const returnToMetricsOverview = () => {
+    if (!confirmLeave()) return;
     setFocusedEntryMetricId(null);
     setActiveTab("overview");
     setLocation(`/data-entry?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`, { replace: true });
   };
   const navigateToWorkspaceMode = (mode: Exclude<DataWorkspaceMode, "overview">, metricId?: string) => {
+    if (!confirmLeave()) return;
     const params = new URLSearchParams({ period: selectedPeriod, siteId: selectedScopeKey });
     if (mode === "manage") params.set("manage", "metrics");
     else if (mode === "raw") params.set("mode", "guided");
@@ -989,7 +1008,9 @@ export default function DataEntry() {
     setLocation(`/data-entry?${params.toString()}`);
   };
   const changeWorkspacePeriod = (period: string) => {
+    if (!confirmLeave()) return;
     setSelectedPeriod(period);
+    reporting.setMonth(period);
     const params = new URLSearchParams(searchString);
     params.set("period", period);
     params.set("siteId", selectedScopeKey);
@@ -999,10 +1020,9 @@ export default function DataEntry() {
     <div className="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-medium text-muted-foreground">Data &amp; evidence</p>
           <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-primary" />
-            Metrics &amp; data
+            Data &amp; evidence
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             See what needs updating, add figures and keep the evidence behind every result.
@@ -1020,7 +1040,7 @@ export default function DataEntry() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {periods.map(p => (
+              {Array.from(new Set([selectedPeriod, ...periods])).map(p => (
                 <SelectItem key={p} value={p}>{p}</SelectItem>
               ))}
             </SelectContent>
@@ -1067,6 +1087,7 @@ export default function DataEntry() {
             <Select
               value={selectedScopeKey}
               onValueChange={(value) => {
+                if (!confirmLeave()) return;
                 setActiveSiteId(value === "__org__" ? null : value);
                 const params = new URLSearchParams(searchString);
                 params.set("period", selectedPeriod);
@@ -1301,7 +1322,7 @@ export default function DataEntry() {
         </Alert>
       )}
 
-      {activeTab !== "manage" && Object.keys(pendingEstimates).length > 0 && !estimateBannerDismissed && (
+      {(activeTab === "raw" || highlightEstimated) && Object.keys(pendingEstimates).length > 0 && !estimateBannerDismissed && (
         <details className="group rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20" data-testid="card-estimate-prefill">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
             <div className="flex min-w-0 items-center gap-2">
@@ -1425,6 +1446,7 @@ export default function DataEntry() {
                             } else {
                               setAcceptedEstimates(prev => new Set([...Array.from(prev), key]));
                               if (est.inputKey) {
+                                markDirty("raw");
                                 setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
                               }
                             }
@@ -1478,7 +1500,8 @@ export default function DataEntry() {
                           const noteText = [est.explanation, est.methodology].filter(Boolean).join(" | ") || `Sector estimate (${est.source})`;
                           acceptEstimateMutation.mutate({ metricId: est.metricId, value: est.value, notes: noteText });
                         } else if (est.inputKey) {
-                          setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
+                          markDirty("raw");
+                                setRawInputs(prev => ({ ...prev, [est.inputKey!]: String(est.value) }));
                         }
                       }
                     }
@@ -1504,10 +1527,6 @@ export default function DataEntry() {
         />
       )}
 
-      {activeTab !== "manage" && canEdit && (
-        <OwnershipHint owner="Finance, Operations, or HR — depending on the metric" action="Data entry" />
-      )}
-
       <CarbonImportDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} period={selectedPeriod} />
 
       <div>
@@ -1517,7 +1536,7 @@ export default function DataEntry() {
               <div className="space-y-1">
                 <CardTitle className="text-base">What needs updating?</CardTitle>
                 <CardDescription data-testid="metrics-data-summary">
-                  {metricWorkspaceSummary.complete} of {metricWorkspaceSummary.total} complete · {metricWorkspaceSummary.needsData} need updating · {metricWorkspaceSummary.needsEvidence} need evidence
+                  {metricWorkspaceSummary.complete} of {metricWorkspaceSummary.total} tracked items ready · {metricWorkspaceSummary.needsData} need a figure · {metricWorkspaceSummary.needsEvidence} need evidence
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1525,7 +1544,7 @@ export default function DataEntry() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button data-testid="button-update-data">
-                        Update data
+                        Add or update data
                         <ChevronDown className="ml-2 h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -1562,7 +1581,7 @@ export default function DataEntry() {
                   data-testid="button-manage-metrics"
                 >
                   <Settings2 className="mr-2 h-4 w-4" />
-                  {canEdit ? "Manage metrics" : "View metric set"}
+                  {canEdit ? "Choose what we track" : "View metric set"}
                 </Button>
               </div>
             </CardHeader>
@@ -1570,9 +1589,9 @@ export default function DataEntry() {
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Metric completion filters">
                 {([
                   { key: "all", label: "All", value: metricWorkspaceSummary.total },
-                  { key: "needs-data", label: "Needs update", value: metricWorkspaceSummary.needsData },
+                  { key: "needs-data", label: "Needs a figure", value: metricWorkspaceSummary.needsData },
                   { key: "needs-evidence", label: "Needs evidence", value: metricWorkspaceSummary.needsEvidence },
-                  { key: "complete", label: "Complete", value: metricWorkspaceSummary.complete },
+                  { key: "complete", label: "Ready", value: metricWorkspaceSummary.complete },
                 ] as const).map((item) => (
                   <button
                     key={item.key}
@@ -1582,8 +1601,8 @@ export default function DataEntry() {
                     aria-pressed={metricStatusFilter === item.key}
                     data-testid={`filter-metrics-${item.key}`}
                   >
-                    <span className="block text-lg font-semibold">{item.value}</span>
-                    <span className="block text-xs text-muted-foreground">{item.label}</span>
+                    <span className="mr-2 text-sm font-semibold">{item.value}</span>
+                    <span className="text-xs text-muted-foreground">{item.label}</span>
                   </button>
                 ))}
               </div>
@@ -1603,7 +1622,7 @@ export default function DataEntry() {
 
               <div className="space-y-5">
                 {(["environmental", "social", "governance"] as const).map((category) => {
-                  const categoryRows = filteredMetricWorkspaceRows.filter((row) => row.metric.category === category);
+                  const categoryRows = filteredMetricWorkspaceRows.filter((row) => row.metric.category === category).sort((a, b) => Number(isMetricEntryEligible(b.metric)) - Number(isMetricEntryEligible(a.metric)));
                   if (categoryRows.length === 0) return null;
                   const config = CATEGORY_ICONS[category];
                   const Icon = config.icon;
@@ -1644,7 +1663,7 @@ export default function DataEntry() {
                                   )}
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                  {displayValue !== "" ? `${displayValue}${metric.unit ? ` ${metric.unit}` : ""}` : `No value for ${metricPeriod}`}
+                                  {displayValue !== "" ? `${displayValue}${metric.unit && !isBooleanMetricDataType(metric.dataType) ? ` ${metric.unit}` : ""} · ${metricPeriod}` : `No value for ${metricPeriod}`}
                                 </p>
                                 {!isEligible && metric.formulaText && (
                                   <p className="truncate text-[11px] text-muted-foreground">Calculated from: {metric.formulaText}</p>
@@ -1666,7 +1685,7 @@ export default function DataEntry() {
                                   <Badge variant="outline" className="text-[10px] text-blue-700 dark:text-blue-300">
                                     <Calculator className="mr-1 h-3 w-3" /> Source inputs used
                                   </Badge>
-                                ) : displayValue !== "" && metric.evidenceRequired ? (
+                                ) : displayValue !== "" && metric.evidenceRequired && state !== "needs-evidence" ? (
                                   <Badge variant="outline" className="text-[10px] text-muted-foreground">
                                     <Paperclip className="mr-1 h-3 w-3" /> Evidence needed
                                   </Badge>
@@ -1771,6 +1790,7 @@ export default function DataEntry() {
             <div>
               <h2 className="font-semibold">Guided entry</h2>
               <p className="text-sm text-muted-foreground">Add familiar business figures and let SimplyESG update the related metrics.</p>
+              {searchParams.get("sourceMetric") && <p className="mt-2 text-sm font-medium text-primary">Source figures for {companyMetrics.find(metric => metric.id === searchParams.get("sourceMetric"))?.name || "your selected calculation"}: {companyMetrics.find(metric => metric.id === searchParams.get("sourceMetric"))?.formulaText || "enter the relevant business figures below; the result is calculated for you."}</p>}
             </div>
           </div>
           <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/50 p-3 sm:flex-row sm:items-center">
@@ -1867,7 +1887,7 @@ export default function DataEntry() {
                             type="number"
                             step="any"
                             value={rawInputs[field.key] ?? ""}
-                            onChange={e => setRawInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            onChange={e => { const value = e.target.value; markDirty("raw"); setRawInputs(prev => ({ ...prev, [field.key]: value })); }}
                             placeholder={`Enter ${field.unit}`}
                             disabled={editDisabled || rawWorkflowLocked}
                             className="h-8 text-sm"
@@ -1912,12 +1932,12 @@ export default function DataEntry() {
             </div>
           )}
 
-          {!activation.isLoading && !activation.isError && activation.hasAddedData && !activation.hasUploadedEvidence && (
+          {lastSavedPeriod === selectedPeriod && !activation.hasUploadedEvidence && (
             <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/20 sm:flex-row sm:items-center sm:justify-between" data-testid="banner-upload-evidence">
               <div className="flex items-center gap-2 min-w-0">
                 <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <p className="text-sm text-blue-800 dark:text-blue-200 leading-snug">
-                  Data saved. Return to Metrics &amp; data and open the relevant row so the evidence stays linked to the exact value and period.
+                  Data saved for {selectedPeriod}. Open a metric to attach evidence to its exact value and period.
                 </p>
               </div>
               <Button
@@ -1985,7 +2005,7 @@ export default function DataEntry() {
               </Link>
             )}
           </div>
-          {canEdit && visibleManualMetrics.some(isMetricEntryEligible) && <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
+          {!focusedEntryMetricId && canEdit && visibleManualMetrics.some(isMetricEntryEligible) && <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
             <Sparkles className="w-4 h-4 text-emerald-600" />
             <AlertDescription className="text-sm">
               <span className="font-medium text-emerald-800 dark:text-emerald-300">You can start with estimates.</span>{" "}
@@ -2002,7 +2022,7 @@ export default function DataEntry() {
             </Alert>
           )}
 
-          <div className="flex items-center justify-between gap-3 p-3 bg-muted/50 rounded-md border border-border" data-testid="manual-metric-summary">
+          <div className={focusedEntryMetricId ? "hidden" : "flex items-center justify-between gap-3 p-3 bg-muted/50 rounded-md border border-border"} data-testid="manual-metric-summary">
             <div>
               <p className="text-sm font-medium">{focusedEntryMetricId ? "Selected metric" : "Direct-entry metrics"}</p>
               <p className="text-xs text-muted-foreground">
@@ -2059,9 +2079,8 @@ export default function DataEntry() {
                       || Boolean(metricValue?.locked)
                       || !canEdit
                       || isReportingPeriodLocked
+                      || saveManualMutation.isPending
                       || metricWorkflowLocked;
-                    const metricPriority = getManualMetricPriority(metric.name);
-                    const mpc = PRIORITY_LABELS[metricPriority];
                     const currentSourceType = manualDataSourceTypes[metricKey] || metricValue?.dataSourceType || "manual";
                     const isCurrentlyEstimated = currentSourceType === "estimated";
                     const attachedEvidence = getMetricEvidence(metricValue?.id, metricId, metricPeriod);
@@ -2084,14 +2103,12 @@ export default function DataEntry() {
                             <Label className="text-sm font-medium">{metric.name}</Label>
                             <Badge variant="outline" className="text-xs">{metric.unit || "—"}</Badge>
                             <Badge variant="outline" className="text-[10px]">{metricPeriod}</Badge>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${mpc.color}`} data-testid={`badge-priority-metric-${metricKey}`}>{mpc.label}</span>
                             {!isEligible && (
                               <Badge variant="secondary" className="text-[10px]" data-testid={`badge-ineligible-${metricKey}`}>
                                 {metric.missingCompanyMetric ? "Awaiting sync" : metric.metricType === "derived" ? "Derived automatically" : "Calculated automatically"}
                               </Badge>
                             )}
                             <ValueSourceBadge source={!hasValue ? "missing" : metricValue?.dataSourceType === "estimated" ? "estimated" : "actual"} explanation={metricValue?.dataSourceType === "estimated" && metricValue?.notes ? metricValue.notes : undefined} />
-                            <DataSourceBadge type={metricValue?.dataSourceType} />
                             {isEligible && (hasValue || attachedEvidence.length > 0) && (
                               <InlineMetricEvidenceBadge state={evidenceState} metricKey={metricKey} />
                             )}
@@ -2114,23 +2131,6 @@ export default function DataEntry() {
                                 <Pencil className="mr-1 h-3 w-3" />
                                 Revise
                               </Button>
-                            )}
-                            {metricId && dataQuality?.perMetric?.find((q: any) => q.metricId === metricId) && (
-                              <QualityBadge
-                                score={dataQuality.perMetric.find((q: any) => q.metricId === metricId).score}
-                                metricId={metricKey}
-                              />
-                            )}
-                            {metricId && isEligible && (
-                              <SourceBadge
-                                entityType="metric"
-                                entityId={metricId}
-                                status={metricValue?.workflowStatus}
-                                owner={metricValue?.owner || metricValue?.submittedBy}
-                                reviewedAt={metricValue?.approvedAt || metricValue?.updatedAt}
-                                dataSourceType={metricValue?.dataSourceType}
-                                hasEvidence={attachedEvidence.length > 0}
-                              />
                             )}
                           </div>
                           {metricId && isEligible && <EvidenceSuggestions metricId={metricId} category={metric.category} siteId={selectedScopeSiteId} />}
@@ -2167,10 +2167,10 @@ export default function DataEntry() {
                               {isBooleanMetric ? (
                                 <Select
                                   value={localVal.value === "Yes" ? "yes" : localVal.value === "No" ? "no" : ""}
-                                  onValueChange={(value) => setManualValues(prev => ({
+                                  onValueChange={(value) => { markDirty(metricKey); setManualValues(prev => ({
                                     ...prev,
                                     [metricKey]: { ...prev[metricKey] || { notes: "" }, value: value === "yes" ? "Yes" : "No" }
-                                  }))}
+                                  })); }}
                                   disabled={rowEditDisabled || !isEligible}
                                 >
                                   <SelectTrigger className="h-8 text-sm" data-testid={`input-manual-${metricKey}`}>
@@ -2186,10 +2186,10 @@ export default function DataEntry() {
                                   type="number"
                                   step="any"
                                   value={localVal.value}
-                                  onChange={e => setManualValues(prev => ({
+                                  onChange={e => { const value = e.target.value; markDirty(metricKey); setManualValues(prev => ({
                                     ...prev,
-                                    [metricKey]: { ...prev[metricKey] || { notes: "" }, value: e.target.value }
-                                  }))}
+                                    [metricKey]: { ...prev[metricKey] || { notes: "" }, value }
+                                  })); }}
                                   placeholder={isEligible ? `Enter ${metric.unit || "value"}` : "Calculated automatically"}
                                   disabled={rowEditDisabled || !isEligible}
                                   className="h-8 text-sm"
@@ -2201,10 +2201,10 @@ export default function DataEntry() {
                               <Label className="text-xs text-muted-foreground">Notes</Label>
                               <Input
                                 value={localVal.notes}
-                                onChange={e => setManualValues(prev => ({
+                                onChange={e => { const notes = e.target.value; markDirty(metricKey); setManualValues(prev => ({
                                   ...prev,
-                                  [metricKey]: { ...prev[metricKey] || { value: "" }, notes: e.target.value }
-                                }))}
+                                  [metricKey]: { ...prev[metricKey] || { value: "" }, notes }
+                                })); }}
                                 placeholder="Optional note"
                                 disabled={rowEditDisabled || !isEligible}
                                 className="h-8 text-sm"
@@ -2217,7 +2217,7 @@ export default function DataEntry() {
                               </Label>
                               <Select
                                 value={manualDataSourceTypes[metricKey] || "manual"}
-                                onValueChange={(val) => setManualDataSourceTypes(prev => ({ ...prev, [metricKey]: val }))}
+                                onValueChange={(val) => { markDirty(metricKey); setManualDataSourceTypes(prev => ({ ...prev, [metricKey]: val })); }}
                                 disabled={rowEditDisabled || !isEligible}
                               >
                                 <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metricKey}`}>
@@ -2359,7 +2359,7 @@ export default function DataEntry() {
                           </div>}
                         </div>
                         {!rowEditDisabled && isEligible && (
-                          <div className="flex items-end">
+                          <div className="flex items-center gap-2">
                             <Button
                               size="sm"
                               variant={hasValue ? "secondary" : "default"}
@@ -2370,6 +2370,9 @@ export default function DataEntry() {
                               <Save className="w-3.5 h-3.5" />
                               <span className="ml-1">{queuedAttachments.length > 0 ? "Save & upload" : "Save"}</span>
                             </Button>
+                            {dirtyKeys[metricKey] === false && lastSavedPeriod === selectedPeriod && (
+                              <span role="status" className="text-xs text-emerald-700 dark:text-emerald-300" data-testid={`saved-manual-${metricKey}`}>Saved</span>
+                            )}
                           </div>
                         )}
                       </div>

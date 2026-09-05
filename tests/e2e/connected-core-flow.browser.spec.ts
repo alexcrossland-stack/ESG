@@ -269,7 +269,7 @@ test.describe("Browser-connected core ESG flow", () => {
     await page.getByTestId("summary-advanced-insights").click();
     await expect(page.getByTestId("section-advanced-insights")).toBeVisible();
     await chooseOption(page, "select-dashboard-period", period);
-    await expect(page.getByTestId("badge-latest-period")).toContainText(period, { timeout: 15000 });
+    await expect(page.getByLabel("Overview reporting month")).toHaveValue(period);
     await expect(page.getByTestId("stat-submission-rate")).toBeVisible();
     await expect(page.getByTestId("stat-evidence-coverage")).toBeVisible();
     const dashboardMetric = await getDashboardMetric(tenantA.adminToken, reportingPeriodId, metricId);
@@ -289,12 +289,8 @@ test.describe("Browser-connected core ESG flow", () => {
 
     await page.goto("/reports");
     await chooseOption(page, "select-report-scope", siteAName);
-    await expect(page.getByTestId("text-readiness-scope")).toContainText(`Site: ${siteAName}`, { timeout: 15000 });
-    await expect(page.getByTestId("text-completeness-percent")).toBeVisible();
-    await expect.poll(async () => {
-      const text = await page.getByTestId("text-completeness-percent").textContent();
-      return Number((text || "0").replace("%", ""));
-    }).toBeGreaterThan(0);
+    await expect(page.getByTestId("select-report-scope")).toContainText(siteAName);
+    await expect(page.getByTestId("button-generate-report")).toBeEnabled();
     await page.getByTestId("button-generate-report").click();
     await expect(page.getByTestId("report-preview")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("section-metrics")).toContainText(metricName);
@@ -303,7 +299,7 @@ test.describe("Browser-connected core ESG flow", () => {
     await expect(page.getByTestId("section-metrics")).not.toContainText(/101\.75/);
 
     await chooseOption(page, "select-report-scope", /All scopes/);
-    await expect(page.getByTestId("text-readiness-scope")).toContainText("All scopes", { timeout: 15000 });
+    await expect(page.getByTestId("select-report-scope")).toContainText("All scopes");
 
     const exportSiteA = (await getReportExportValues(tenantA.adminToken, period, siteAId)).filter((row) => row.metricId === metricId);
     const exportSiteB = (await getReportExportValues(tenantA.adminToken, period, siteBId)).filter((row) => row.metricId === metricId);

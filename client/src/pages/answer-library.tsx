@@ -436,12 +436,7 @@ export default function AnswerLibrary() {
                   })}
                 </div>
               ) : (
-                <Input
-                  value={formLinkedMetricIds}
-                  onChange={(e) => setFormLinkedMetricIds(e.target.value)}
-                  placeholder="Comma-separated metric IDs"
-                  data-testid="input-linked-metrics"
-                />
+                <p className="text-sm text-muted-foreground">No metrics available to link. Add your tracked metrics in Data &amp; Evidence, then return here.</p>
               )}
             </div>
 
@@ -478,12 +473,7 @@ export default function AnswerLibrary() {
                   })}
                 </div>
               ) : (
-                <Input
-                  value={formLinkedEvidenceIds}
-                  onChange={(e) => setFormLinkedEvidenceIds(e.target.value)}
-                  placeholder="Comma-separated evidence IDs"
-                  data-testid="input-linked-evidence"
-                />
+                <p className="text-sm text-muted-foreground">No evidence available to link. Upload a supporting document in Data &amp; Evidence first.</p>
               )}
             </div>
 
@@ -510,12 +500,7 @@ export default function AnswerLibrary() {
                   })}
                 </div>
               ) : (
-                <Input
-                  value={formLinkedComplianceReqIds}
-                  onChange={(e) => setFormLinkedComplianceReqIds(e.target.value)}
-                  placeholder="Comma-separated compliance requirement IDs"
-                  data-testid="input-linked-compliance"
-                />
+                <p className="text-sm text-muted-foreground">No framework requirements available. This link is optional.</p>
               )}
             </div>
 

@@ -261,7 +261,7 @@ function CategoryGroup({
         <div className="flex items-center justify-between py-2 px-1 hover:bg-muted/50 rounded-md cursor-pointer">
           <div className="flex items-center gap-2">
             {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
-            <span className="text-sm font-medium">{category}</span>
+            <span className="text-sm font-medium">{category.replace(/_/g, " ").replace(/\b\w/g, letter => letter.toUpperCase())}</span>
             <span className="text-xs text-muted-foreground">({enabledCount}/{metrics.length} enabled)</span>
           </div>
         </div>
@@ -290,7 +290,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
 
   const [search, setSearch] = useState("");
   const [pillarFilter, setPillarFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [toggling, setToggling] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
@@ -456,7 +456,12 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
         </div>
       )}
 
-      {libraryMetrics.length > 0 && (
+      {libraryMetrics.length > 0 && statusFilter === "active" && (
+        <p className="text-sm text-muted-foreground" data-testid="stats-summary">
+          <span data-testid="stat-active">{stats.enabled}</span> metrics tracked by your company. Choose “All metrics” to explore more.
+        </p>
+      )}
+      {libraryMetrics.length > 0 && statusFilter !== "active" && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="stats-summary">
           <Card className="p-3">
             <div className="text-2xl font-bold" data-testid="stat-total">{stats.total}</div>
@@ -507,7 +512,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
             <SelectItem value="all">All metrics</SelectItem>
             <SelectItem value="core">Recommended</SelectItem>
             <SelectItem value="advanced">Optional</SelectItem>
-            <SelectItem value="active">Enabled</SelectItem>
+            <SelectItem value="active">What we track</SelectItem>
             <SelectItem value="inactive">Disabled</SelectItem>
           </SelectContent>
         </Select>
@@ -562,7 +567,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
       ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            No metrics match your filters. Try adjusting your search or filter settings.
+            No metrics match your filters. Choose All metrics to browse the catalogue, or adjust your search.
           </CardContent>
         </Card>
       ) : (

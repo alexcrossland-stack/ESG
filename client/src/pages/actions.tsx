@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -89,6 +90,7 @@ function ActionDialog({
     <DialogContent className="max-w-lg">
       <DialogHeader>
         <DialogTitle>{isEditing ? "Edit Action" : "New Improvement Action"}</DialogTitle>
+        <DialogDescription>Describe the work, assign an owner and choose a due date.</DialogDescription>
       </DialogHeader>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(d => mutation.mutate(d))} className="space-y-4 pt-2">
@@ -168,7 +170,8 @@ export default function Actions() {
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const [editAction, setEditAction] = useState<ActionPlan | undefined>();
-  const [showCreate, setShowCreate] = useState(false);
+  const search = useSearch();
+  const [showCreate, setShowCreate] = useState(() => can("metrics_data_entry") && new URLSearchParams(search).get("create") === "true");
   const [filter, setFilter] = useState<string>("all");
 
   const { data: actions = [], isLoading } = useQuery<ActionPlan[]>({ queryKey: ["/api/actions"] });

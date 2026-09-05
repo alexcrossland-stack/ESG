@@ -1,4 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useReportingMonth } from "@/hooks/use-reporting-month";
+import { SmeNextTasks } from "@/components/sme-next-tasks";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1097,6 +1099,7 @@ function BackToPortfolioBanner() {
 }
 
 export default function Dashboard() {
+  const reporting = useReportingMonth();
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
   const [advancedInsightsOpen, setAdvancedInsightsOpen] = useState(false);
   const [milestoneDismissed, setMilestoneDismissed] = useState<boolean>(() => {
@@ -1107,8 +1110,8 @@ export default function Dashboard() {
   });
   const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
   const { data: latestEnhanced, isLoading: latestEnhancedLoading } = useQuery<any>({
-    queryKey: ["/api/dashboard/enhanced"],
-    queryFn: () => authFetch("/api/dashboard/enhanced").then(r => r.json()),
+    queryKey: ["/api/dashboard/enhanced", reporting.month],
+    queryFn: () => authFetch(`/api/dashboard/enhanced?period=${reporting.month}`).then(r => r.json()),
   });
   const { data: periodEnhanced, isLoading: periodEnhancedLoading } = useQuery<any>({
     queryKey: ["/api/dashboard/enhanced", selectedPeriodId],
@@ -1123,7 +1126,7 @@ export default function Dashboard() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
-  const { data: readiness, isLoading: readinessLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
+  const { data: readiness, isLoading: readinessLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness", reporting.month], queryFn: () => authFetch(`/api/dashboard/readiness?period=${reporting.month}`).then(r => r.json()) });
   const { can, isAdmin } = usePermissions();
   const { activeSiteId } = useSiteContext();
 
@@ -1218,19 +1221,16 @@ export default function Dashboard() {
             {company?.name ? `${company.name} — Overview` : "Overview"}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Your baseline, confidence and next step
+            Your next tasks and progress for the selected reporting month
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {latestEnhanced?.latestPeriod && (
-            <Badge variant="secondary" className="text-xs" data-testid="badge-latest-period">
-              Latest: {latestEnhanced.latestPeriod}
-            </Badge>
-          )}
+          <label className="text-xs text-muted-foreground">Reporting month<input className="ml-2 rounded-md border bg-background p-2 text-sm text-foreground" type="month" value={reporting.month} onChange={event => reporting.setMonth(event.target.value)} aria-label="Overview reporting month" /></label>
         </div>
       </div>
 
-      <SmeDashboardOverview readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} />
+      <SmeNextTasks month={reporting.month} />
+      <SmeDashboardOverview showNextAction={false} readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} />
 
       <details
         open={advancedInsightsOpen}
@@ -1259,7 +1259,7 @@ export default function Dashboard() {
             <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between" data-testid="advanced-period-scope">
               <div>
                 <p className="text-sm font-medium">Detailed insight period</p>
-                <p className="text-xs text-muted-foreground">This changes the detailed scores and trends below; the Home baseline above always shows your latest overall position.</p>
+                <p className="text-xs text-muted-foreground">Saved-period comparisons apply only to these advanced insights. The overview above stays on your working month.</p>
               </div>
               <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
                 <SelectTrigger className="w-full sm:w-44" data-testid="select-dashboard-period">

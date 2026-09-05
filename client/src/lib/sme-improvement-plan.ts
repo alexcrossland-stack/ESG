@@ -15,6 +15,7 @@ export interface ControlCentreData {
     category: string;
     owner?: string | null;
     linkUrl: string;
+    metricType?: string | null;
   }>;
   lowQuality: Array<{
     id: string;
@@ -84,15 +85,16 @@ export const SME_IMPROVEMENT_PLAN_LIMIT = 5;
 
 const SECTION_PRIORITY: ControlCentreSection[] = [
   "overdueActions",
-  "missingData",
   "expiredEvidence",
+  "pendingApprovals",
+  "missingData",
   "lowQuality",
   "unmetCompliance",
-  "pendingApprovals",
   "unapprovedPolicies",
 ];
 
 function cleanOwner(owner?: string | null): string {
+  if (owner && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(owner)) return "Assigned team member";
   return owner?.trim() || "Unassigned";
 }
 
@@ -113,6 +115,11 @@ function itemName(item: Record<string, unknown>): string {
 
 function sortSectionItems(section: ControlCentreSection, items: Array<Record<string, unknown>>) {
   return [...items].sort((left, right) => {
+    if (section === "missingData") {
+      const rank = (item: Record<string, unknown>) => (item.metricType && item.metricType !== "manual" ? 10 : 0) + (/electricity|employees|headcount/i.test(itemName(item)) ? 0 : 1);
+      const priority = rank(left) - rank(right);
+      if (priority) return priority;
+    }
     if (section === "lowQuality") {
       const byScore = Number(left.score ?? 100) - Number(right.score ?? 100);
       if (byScore !== 0) return byScore;
@@ -157,7 +164,7 @@ function toPlanItem(section: ControlCentreSection, item: Record<string, any>): I
         key: `${section}:${id}`,
         id,
         type: section,
-        title: `Add ${item.name || "missing ESG data"}`,
+        title: `${item.metricType && item.metricType !== "manual" ? "Complete source inputs for" : "Add"} ${item.name || "missing ESG data"}`,
         owner: cleanOwner(item.owner),
         dueDate: null,
         status: "Data needed",
@@ -165,7 +172,7 @@ function toPlanItem(section: ControlCentreSection, item: Record<string, any>): I
         evidenceOrResult: "No value recorded for the current period",
         why: "Current-period data is needed for a complete baseline and reliable reporting.",
         href,
-        actionLabel: "Add data",
+        actionLabel: item.metricType && item.metricType !== "manual" ? "Update source figures" : "Add data",
       };
     case "expiredEvidence":
       return {

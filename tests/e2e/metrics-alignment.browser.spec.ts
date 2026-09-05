@@ -18,7 +18,7 @@ test.describe("Metrics surface alignment", () => {
 
     await page.goto("/metrics");
     await expect(page).toHaveURL(/\/data-entry$/);
-    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
     const metricId = await page.evaluate(async () => {
       const token = localStorage.getItem("auth_token");
       const response = await fetch("/api/metrics", { headers: token ? { Authorization: `Bearer ${token}` } : {} });

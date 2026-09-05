@@ -12,7 +12,7 @@ interface SourceBadgeProps {
 }
 
 function formatOwner(owner: string | null | undefined): string {
-  if (!owner) return "Unassigned";
+  if (!owner || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(owner)) return "Unassigned";
   const parts = owner.trim().split(/\s+/);
   if (parts.length >= 2) {
     return `${parts[0][0]}.${parts[parts.length - 1]}`;

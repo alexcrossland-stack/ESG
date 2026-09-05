@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
@@ -16,6 +16,7 @@ import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Edit, Trash2, Shield
 import { PageGuidance } from "@/components/page-guidance";
 import { usePermissions } from "@/lib/permissions";
 import { Link } from "wouter";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 type PolicyAttachment = {
   id: string;
@@ -30,6 +31,7 @@ type PolicyAttachment = {
 };
 
 type PolicyRecord = {
+  origin?: "template";
   id: string;
   title: string;
   policyType: string;
@@ -109,7 +111,7 @@ function isUpcoming(reviewDate: string | null): boolean {
   return d >= new Date() && d <= in90;
 }
 
-function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?: PolicyRecord }) {
+function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) => void; initial?: PolicyRecord; saving?: boolean }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [removeExistingAttachment, setRemoveExistingAttachment] = useState(false);
   const { register, handleSubmit, setValue } = useForm({
@@ -269,7 +271,7 @@ function PolicyForm({ onSave, initial }: { onSave: (data: any) => void; initial?
         <Label>Notes</Label>
         <Textarea {...register("notes")} rows={2} className="resize-none" data-testid="textarea-policy-notes" />
       </div>
-      <Button type="submit" className="w-full" data-testid="button-save-policy">Save Policy</Button>
+      <div className="sticky -bottom-6 bg-background py-3 border-t"><Button type="submit" disabled={saving} className="w-full min-h-11" data-testid="button-save-policy">{saving ? "Saving…" : "Save policy"}</Button></div>
     </form>
   );
 }
@@ -357,10 +359,18 @@ export function PolicyRegisterWorkspace({
   const canManagePolicies = can("policy_editing");
   const [showDialog, setShowDialog] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<PolicyRecord | null>(null);
+  const [search, setSearch] = useState("");
 
-  const { data: policies = [], isLoading: policiesLoading } = useQuery<PolicyRecord[]>({
+  const { data: registeredPolicies = [], isLoading: policiesLoading, isError: policiesError } = useQuery<PolicyRecord[]>({
     queryKey: ["/api/policy-records"],
   });
+  const { data: generatedPolicies = [], isLoading: generatedPoliciesLoading, isError: generatedPoliciesError } = useQuery<any[]>({ queryKey: ["/api/generated-policies"] });
+  const policies: PolicyRecord[] = [...registeredPolicies, ...generatedPolicies.map(policy => ({
+    id: policy.id, title: policy.title || "Untitled policy", policyType: "other", owner: policy.policyOwner,
+    status: policy.status === "published" || policy.status === "approved" ? "active" : policy.workflowStatus === "submitted" ? "under_review" : "draft",
+    effectiveDate: policy.approvedAt || null, reviewDate: policy.reviewDate || null, documentLink: null,
+    notes: null, attachment: null, origin: "template" as const,
+  }))].sort((a, b) => a.title.localeCompare(b.title));
   const { data: legacyPolicyData, isLoading: legacyPolicyLoading } = useQuery<LegacyPolicyResponse>({
     queryKey: ["/api/policy"],
   });
@@ -406,6 +416,8 @@ export function PolicyRegisterWorkspace({
   });
 
   const legacyPolicy = legacyPolicyData?.policy ?? null;
+  const filteredPolicies = policies.filter(policy => `${policy.title} ${policy.owner || ""}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const showLegacyPolicy = legacyPolicy && "company esg policy".includes(search.trim().toLowerCase());
   const overduePolicies = policies.filter(p => p.status !== "retired" && isOverdue(p.reviewDate));
   const upcomingPolicies = policies.filter(p => p.status !== "retired" && !isOverdue(p.reviewDate) && isUpcoming(p.reviewDate));
   const overduePolicyCount = overduePolicies.length + (legacyPolicy && isOverdue(legacyPolicy.reviewDate) ? 1 : 0);
@@ -425,7 +437,7 @@ export function PolicyRegisterWorkspace({
     }
   };
 
-  if (policiesLoading || legacyPolicyLoading || assignmentsLoading) {
+  if (policiesLoading || generatedPoliciesLoading || legacyPolicyLoading || assignmentsLoading) {
     return (
       <div className={embedded ? "space-y-4" : "p-6 space-y-4"}>
         <Skeleton className="h-8 w-48" />
@@ -443,7 +455,7 @@ export function PolicyRegisterWorkspace({
           {embedded ? (
             <h2 className="text-base font-semibold flex items-center gap-2">
               <FileText className="w-4 h-4 text-primary" />
-              Registered policies
+              All policies
             </h2>
           ) : (
             <h1 className="text-xl font-semibold flex items-center gap-2">
@@ -453,22 +465,25 @@ export function PolicyRegisterWorkspace({
           )}
           <p className="text-sm text-muted-foreground mt-0.5">
             {embedded
-              ? "Your formally adopted and externally maintained policies, with owners and review dates."
+              ? "All your policies in one place, with owners, status and review dates."
               : "Track policies, owners, review dates and governance area assignments"}
           </p>
         </div>
         {canManagePolicies && (
           <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
-            <DialogTrigger asChild>
-              <Button size="sm" data-testid="button-add-policy">
-                <Plus className="w-4 h-4 mr-1" /> Add existing policy
-              </Button>
-            </DialogTrigger>
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild><Button size="sm" data-testid="button-add-policy"><Plus className="w-4 h-4 mr-1" /> Add policy</Button></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild><Link href="/policies?tab=templates">Use a template</Link></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => { setEditingPolicy(null); setShowDialog(true); }}>Add an existing policy</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>{editingPolicy ? "Edit Policy" : "Add existing policy"}</DialogTitle>
+                <DialogDescription>Record the policy, its owner and review date. You can add the document now or later.</DialogDescription>
               </DialogHeader>
-              <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} />
+              <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} saving={createMutation.isPending || updateMutation.isPending} />
             </DialogContent>
           </Dialog>
         )}
@@ -514,8 +529,10 @@ export function PolicyRegisterWorkspace({
         </div>
       )}
 
-      <section className="space-y-3" aria-label="Registered policies" data-testid="registered-policy-list">
-          {legacyPolicy && (
+      <Input aria-label="Search policies" placeholder="Search all policies by title or owner" value={search} onChange={event => setSearch(event.target.value)} data-testid="search-all-policies" />
+      {(policiesError || generatedPoliciesError) && <div role="alert" className="rounded-md border p-4 text-sm">Some policies could not be loaded. <Button variant="link" onClick={() => { queryClient.invalidateQueries({ queryKey: ["/api/policy-records"] }); queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] }); }}>Try again</Button></div>}
+      <section className="space-y-3" aria-label="All policies" data-testid="registered-policy-list">
+          {showLegacyPolicy && legacyPolicy && (
             <Card data-testid="core-esg-policy-card" className="border border-primary/20 bg-primary/[0.025]">
               <CardContent className="p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -539,17 +556,17 @@ export function PolicyRegisterWorkspace({
               </CardContent>
             </Card>
           )}
-          {policies.length === 0 && !legacyPolicy ? (
+          {filteredPolicies.length === 0 && !showLegacyPolicy ? (
             <Card>
               <CardContent className="py-12 text-center">
                 <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
                 <p className="text-sm text-muted-foreground">
-                  {canManagePolicies ? "No policies yet. Add your first policy to get started." : "No registered policies yet."}
+                  {search.trim() ? "No policies match your search. Try another title or owner." : policiesError || generatedPoliciesError ? "The policy list is incomplete. Retry loading before making changes." : canManagePolicies ? "No policies yet. Add your first policy to get started." : "No registered policies yet."}
                 </p>
               </CardContent>
             </Card>
           ) : (
-            policies.map(policy => {
+            filteredPolicies.map(policy => {
               const statusCfg = STATUS_CONFIG[policy.status] ?? STATUS_CONFIG.draft;
               const overdue = isOverdue(policy.reviewDate);
               const upcoming = isUpcoming(policy.reviewDate);
@@ -565,7 +582,7 @@ export function PolicyRegisterWorkspace({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium">{policy.title}</span>
                           <Badge variant={statusCfg.badge}>{statusCfg.label}</Badge>
-                          <Badge variant="outline" className="text-xs">{POLICY_TYPE_LABELS[policy.policyType] ?? policy.policyType}</Badge>
+                          <Badge variant="outline" className="text-xs">{policy.origin === "template" ? "From template" : POLICY_TYPE_LABELS[policy.policyType] ?? policy.policyType}</Badge>
                           {overdue && policy.status !== "retired" && (
                             <Badge variant="destructive" className="text-xs">
                               <AlertTriangle className="w-3 h-3 mr-1" />Overdue
@@ -606,10 +623,11 @@ export function PolicyRegisterWorkspace({
                           </div>
                         )}
                       </div>
-                      {canManagePolicies && <div className="flex items-center gap-1 shrink-0">
+                      {policy.origin === "template" ? <Button asChild size="sm" variant="outline"><Link href={`/policies?tab=register&policy=${encodeURIComponent(policy.id)}`}>Open policy</Link></Button> : canManagePolicies && <div className="flex items-center gap-1 shrink-0">
                         <Button
                           variant="ghost" size="icon" className="w-7 h-7"
                           onClick={() => { setEditingPolicy(policy); setShowDialog(true); }}
+                          aria-label={`Edit ${policy.title}`}
                           data-testid={`button-edit-policy-${policy.id}`}
                         >
                           <Edit className="w-3.5 h-3.5" />
@@ -637,10 +655,11 @@ export function PolicyRegisterWorkspace({
 
       {draftsSection}
 
-      <section className="space-y-4" aria-labelledby="governance-ownership-heading" data-testid="governance-ownership-section">
+      <details className="space-y-4 rounded-lg border p-4" data-testid="governance-ownership-section">
+          <summary className="cursor-pointer text-sm font-medium">Governance ownership · {assignedAreas.size} areas assigned</summary>
           <div>
             <h2 id="governance-ownership-heading" className="text-base font-semibold">Governance ownership</h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">Name the people accountable for each company-wide ESG area.</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">Name the people accountable for relevant ESG areas. One person can cover several areas.</p>
           </div>
           <div className="flex items-center gap-3 p-3 rounded-md border border-border bg-muted/30">
             <CheckCircle className={`w-5 h-5 ${govCompleteness === 100 ? "text-green-500" : govCompleteness >= 60 ? "text-amber-500" : "text-red-500"}`} />
@@ -661,7 +680,7 @@ export function PolicyRegisterWorkspace({
               />
             ))}
           </div>
-      </section>
+      </details>
     </div>
   );
 }

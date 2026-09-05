@@ -61,6 +61,7 @@ test.describe("Onboarding flow", () => {
 
     expect(stepRes.status()).toBe(200);
     const body = await stepRes.json();
-    expect(body.employeeCount).toBe(50);
+    expect(body.employeeCount).toBeNull();
+    expect(body.onboardingAnswers.employeeSizeBand).toBe("11-50");
   });
 });

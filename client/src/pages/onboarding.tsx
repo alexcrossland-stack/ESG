@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { rememberReportingMonth } from "@/hooks/use-reporting-month";
+import { isBooleanMetricDataType } from "@shared/data-entry-metrics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
@@ -267,7 +269,8 @@ export default function Onboarding() {
   const [failedMetrics, setFailedMetrics] = useState<Record<string, string>>({});
 
   const { data: companyData, isLoading: companyLoading } = useQuery({ queryKey: ["/api/company"] });
-  const company = (companyData as any)?.company;
+  const company = (companyData as any)?.company ?? companyData as any;
+  const hydratedCompanyId = useRef<string | null>(null);
 
   const { data: rawMetrics = [], isLoading: metricsLoading } = useQuery<OnboardingMetric[]>({
     queryKey: ["/api/metrics"],
@@ -302,11 +305,12 @@ export default function Onboarding() {
   });
 
   useEffect(() => {
-    if (!company) return;
+    if (!company || hydratedCompanyId.current === company.id) return;
+    hydratedCompanyId.current = company.id;
     setStep1({
       name: company.name || "",
       industry: company.industry || "",
-      employeeCount: company.employeeCount || "",
+      employeeCount: String(company.onboardingAnswers?.employeeSizeBand || company.employeeCount || ""),
       country: company.country || "United Kingdom",
       locations: String(company.locations || "1"),
       reportingYearStart: String(company.reportingYearStart || (new Date().getFullYear() - 1)),
@@ -338,6 +342,7 @@ export default function Onboarding() {
   const completeMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/onboarding/complete", data).then((r: any) => r.json()),
     onSuccess: async () => {
+      rememberReportingMonth(company.id, `${step1.reportingYearStart}-12`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["/api/company"] }),
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }),
@@ -928,14 +933,14 @@ function Step3StarterMetrics({
       <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 flex gap-2">
         <Lightbulb className="w-4 h-4 text-primary shrink-0 mt-0.5" />
         <p className="text-xs text-muted-foreground">
-          These are the metrics we've selected based on your sector and operations. You'll enter data for the essential ones in the next step — the rest you can add over time.
+          This is a short starting selection based on your sector and operations. You'll enter a few priority figures next. Your workspace also includes supporting calculations and optional metrics; use “Choose what we track” to review the full set.
         </p>
       </div>
 
       {essentials.length > 0 && (
         <MetricGroup
           label="Essential"
-          description="Start with these — they're required for your baseline report."
+          description="Start here for a useful baseline. You can save partial progress and add more later."
           metrics={essentials}
         />
       )}
@@ -1099,16 +1104,22 @@ function Step4DataEntry({
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Input
+                {isBooleanMetricDataType(m.dataType) || /yes\s*\/\s*no/i.test(m.unit || "") ? (
+                  <Select value={val} onValueChange={value => onChange(m.id, value)} disabled={isSaved}>
+                    <SelectTrigger aria-label={m.name} data-testid={`input-metric-value-${m.id}`}><SelectValue placeholder="Choose Yes or No" /></SelectTrigger>
+                    <SelectContent><SelectItem value="1">Yes</SelectItem><SelectItem value="0">No</SelectItem></SelectContent>
+                  </Select>
+                ) : <Input
                   type="text"
-                  inputMode="numeric"
+                  inputMode="decimal"
+                  aria-label={m.name}
                   placeholder={getExample(m.name)}
                   value={val}
                   onChange={e => onChange(m.id, e.target.value)}
                   className="flex-1"
                   disabled={isSaved}
                   data-testid={`input-metric-value-${m.id}`}
-                />
+                />}
                 <span className="text-xs text-muted-foreground whitespace-nowrap">{m.unit}</span>
               </div>
               {failure && !isSaved && (
@@ -1178,11 +1189,6 @@ function Step5BaselineReady({
 }) {
   const metricsWithData = preflight?.metricsWithData ?? savedCount;
 
-  const { data: esgStatus } = useQuery<EsgStatusData>({
-    queryKey: ["/api/esg-status"],
-    staleTime: 30_000,
-  });
-
   return (
     <div className="space-y-6" data-testid="step-baseline-ready">
       {isLoading ? (
@@ -1208,22 +1214,15 @@ function Step5BaselineReady({
         </div>
       )}
 
-      {esgStatus && (
-        <EsgStatusCard
-          status={esgStatus}
-          data-testid="card-baseline-esg-status"
-        />
-      )}
-
       <div className="rounded-lg border border-primary/25 bg-primary/5 p-4" data-testid="onboarding-next-step-preview">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
             <Upload className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <p className="text-sm font-medium text-foreground">Your next step: support one figure</p>
+            <p className="text-sm font-medium text-foreground">{metricsWithData > 0 ? "Your next step: support one figure" : "Your next step: enter your first figure"}</p>
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              After you finish setup, attach one bill, invoice, or HR record. This gives your baseline a clear source without asking you to complete every optional metric first.
+              {metricsWithData > 0 ? `After setup, open your saved figures for ${period} and attach one bill, invoice or HR record. You do not need to complete every optional metric first.` : `After setup, enter one figure for ${period} from a bill, payroll record or business account. You can add supporting evidence alongside it.`}
             </p>
           </div>
         </div>

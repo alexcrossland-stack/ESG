@@ -5,6 +5,7 @@ export type OnboardingMetric = {
   name: string;
   category: string;
   unit?: string | null;
+  dataType?: string | null;
   frequency?: string | null;
   helpText?: string | null;
   metricType?: string | null;
@@ -76,10 +77,12 @@ export function buildOnboardingMetricSubmission(
   period: string,
   dataSourceType: "manual" | "estimated" = "estimated",
 ): OnboardingMetricSubmission {
+  const number = Number(value.replace(/,/g, ""));
+  if (!value.trim() || !Number.isFinite(number)) throw new Error("Enter a valid number before saving.");
   return {
     metricId,
     period,
-    value: Number(value.replace(/,/g, "")),
+    value: number,
     notes: `Entered during setup wizard (${dataSourceType === "estimated" ? "estimate" : "actual figure"})`,
     dataSourceType,
   };

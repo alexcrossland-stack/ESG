@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { useReportingMonth } from "@/hooks/use-reporting-month";
+import { authFetch } from "@/lib/queryClient";
 import { Link } from "wouter";
 import {
   AlertTriangle,
@@ -236,7 +238,8 @@ function Disclosure({
 }
 
 export default function ControlCentre() {
-  const { data, isLoading } = useQuery<ControlCentreData>({ queryKey: ["/api/control-centre"] });
+  const { month } = useReportingMonth();
+  const { data, isLoading } = useQuery<ControlCentreData>({ queryKey: ["/api/control-centre", month], queryFn: () => authFetch(`/api/control-centre?period=${month}`).then(response => { if (!response.ok) throw new Error("Could not load actions"); return response.json(); }) });
   const { can } = usePermissions();
 
   const plan = data ? buildSmeImprovementPlan(data, 3) : [];
@@ -259,6 +262,12 @@ export default function ControlCentre() {
         )}
       </div>
 
+      {!isLoading && <nav className="flex flex-wrap gap-2" aria-label="Action plan views">
+        <Button asChild variant="outline"><Link href="/my-tasks">My work</Link></Button>
+        {can("report_generation") && <Button asChild variant="outline"><Link href="/my-approvals">Review submissions</Link></Button>}
+        <Button asChild variant="outline"><Link href="/actions">Manage actions</Link></Button>
+        {can("metrics_data_entry") && <Button asChild><Link href="/actions?create=true">Add action</Link></Button>}
+      </nav>}
       {isLoading ? (
         <div className="space-y-4" data-testid="improvement-plan-loading">
           <Skeleton className="h-20 w-full rounded-lg" />

@@ -215,6 +215,7 @@ export function PolicyTemplatesWorkspace({
   const [localView, setLocalView] = useState<PolicyTemplateView>({ mode: "library" });
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [showFullLibrary, setShowFullLibrary] = useState(false);
 
   const view: PolicyTemplateView = onNavigate
     ? selectedPolicyId
@@ -244,7 +245,8 @@ export function PolicyTemplatesWorkspace({
   const filteredTemplates = availableTemplates.filter((t: any) => {
     const matchesSearch = !searchTerm || t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.description?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = categoryFilter === "all" || t.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+    const starter = /environment|health.*safety|anti.bribery|data.*privacy|equal.*opportun/i.test(t.name);
+    return matchesSearch && matchesCategory && (showFullLibrary || searchTerm || categoryFilter !== "all" || starter);
   });
 
   const categories = [...new Set(availableTemplates.map((t: any) => t.category))];
@@ -289,6 +291,7 @@ export function PolicyTemplatesWorkspace({
       </div>}
 
       <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"><div><p className="text-sm font-medium">{showFullLibrary ? "Full template library" : "A practical starting shortlist"}</p><p className="text-xs text-muted-foreground">Common workplace, environmental and governance topics. Choose what fits your business; this is not a legal-requirements checklist.</p></div><Button variant="outline" size="sm" onClick={() => setShowFullLibrary(value => !value)}>{showFullLibrary ? "Show starter templates" : `Browse all ${availableTemplates.length} templates`}</Button></div>
           <div className="flex flex-col gap-3 sm:flex-row">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />

@@ -55,7 +55,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     slug: "creating-your-account",
     title: "Creating your account",
     category: "Getting Started",
-    summary: "How to register and set up your ESG Manager account for the first time.",
+    summary: "How to register and set up your SimplyESG account for the first time.",
     keywords: ["account", "register", "sign up", "create", "login", "new user"],
     featured: true,
     order: 1,
@@ -758,7 +758,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         type: "intro",
-        content: "You can invite colleagues to your ESG Manager account so they can enter data, review reports, or manage your ESG programme alongside you. Each person gets their own login and is assigned a role that controls what they can do.",
+        content: "You can invite colleagues to your SimplyESG account so they can enter data, review reports, or manage your ESG programme alongside you. Each person gets their own login and is assigned a role that controls what they can do.",
       },
       {
         type: "callout",
@@ -806,7 +806,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     sections: [
       {
         type: "intro",
-        content: "Roles control what each team member can see and do in ESG Manager. You can change a person's role at any time, or remove them from the account if they leave the company.",
+        content: "Roles control what each team member can see and do in SimplyESG. You can change a person's role at any time, or remove them from the account if they leave the company.",
       },
       {
         type: "steps",
@@ -894,7 +894,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "Go to the login page and click 'Forgot password'.",
           "Enter the email address you used to register.",
           "Click 'Send reset link'.",
-          "Check your email (including your spam folder) for a message from ESG Manager.",
+          "Check your email (including your spam folder) for a message from SimplyESG.",
           "Click the link in the email and enter a new password.",
           "Log in with your new password.",
         ],
