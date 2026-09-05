@@ -2209,7 +2209,8 @@ export default function Reports() {
     lines.push("Readiness is not certification, assurance, or legal compliance.");
     lines.push(hr);
 
-    downloadTextFile(lines.join("\n"), `framework-readiness-summary-${selectedPeriodFilename}.txt`);
+    const periodKey = selectedPeriod.replace(/[^a-zA-Z0-9._-]+/g, "-");
+    downloadTextFile(lines.join("\n"), `framework-readiness-summary-${periodKey}.txt`);
     toast({ title: "Framework Readiness Summary exported" });
   };
 

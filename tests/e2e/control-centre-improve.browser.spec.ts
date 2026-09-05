@@ -109,7 +109,7 @@ test.describe("Simple SME Action plan", () => {
     await expect(planItems).toHaveCount(3);
     await expect(planItems.nth(0)).toContainText("Complete energy audit");
     await expect(planItems.nth(1)).toContainText("Finish supplier review");
-    await expect(planItems.nth(2)).toContainText("Add Water use");
+    await expect(planItems.nth(2)).toContainText("Electricity invoice.pdf");
 
     await expect(planItems.nth(0)).toContainText("Why this matters:");
     await expect(planItems.nth(0)).toContainText("Owner");

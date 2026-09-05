@@ -78,6 +78,7 @@ test.describe("Settings/Security UI flows", () => {
     await expect(page).not.toHaveURL(/\/auth/);
 
     await page.goto("/settings");
+    await page.getByRole("tab", { name: "Account & security", exact: true }).click();
     await page.getByTestId("button-setup-mfa").click();
     await expect(page.getByTestId("img-mfa-qr")).toBeVisible();
 

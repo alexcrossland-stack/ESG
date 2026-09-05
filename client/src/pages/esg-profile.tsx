@@ -61,6 +61,7 @@ export default function EsgProfilePage() {
   const [expiryDays, setExpiryDays] = useState("30");
   const [selectedSections, setSelectedSections] = useState<string[]>([...DEFAULT_PUBLIC_PASSPORT_SECTIONS]);
   const [selectedPeriod, setSelectedPeriod] = useState(reporting.month);
+  useEffect(() => { setSelectedPeriod(reporting.month); }, [reporting.month]);
 
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: profile, isLoading } = useQuery<any>({

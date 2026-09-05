@@ -457,6 +457,8 @@ test.describe("Report generation", () => {
     await mockReportsPageApis(page);
 
     await page.goto("/reports");
+    await expect(page.getByTestId("template-management")).toBeVisible();
+    await page.getByRole("button", { name: "Browse other report types", exact: true }).click();
     await expect(page.getByTestId("template-annual")).toContainText("Annual ESG Report");
     await expect(page.getByTestId("template-annual")).not.toContainText("Annual ESG Summary");
     await expect(page.getByTestId("template-vsme")).toContainText("VSME Readiness & Draft Pack");

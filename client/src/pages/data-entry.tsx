@@ -2359,7 +2359,7 @@ export default function DataEntry() {
                           </div>}
                         </div>
                         {!rowEditDisabled && isEligible && (
-                          <div className="flex items-end">
+                          <div className="flex items-center gap-2">
                             <Button
                               size="sm"
                               variant={hasValue ? "secondary" : "default"}
@@ -2370,6 +2370,9 @@ export default function DataEntry() {
                               <Save className="w-3.5 h-3.5" />
                               <span className="ml-1">{queuedAttachments.length > 0 ? "Save & upload" : "Save"}</span>
                             </Button>
+                            {dirtyKeys[metricKey] === false && lastSavedPeriod === selectedPeriod && (
+                              <span role="status" className="text-xs text-emerald-700 dark:text-emerald-300" data-testid={`saved-manual-${metricKey}`}>Saved</span>
+                            )}
                           </div>
                         )}
                       </div>

@@ -716,7 +716,7 @@ async function openMetricsWorkspace(
     else localStorage.removeItem("activeSiteId");
   }, options.activeSiteId || null);
   await page.goto(options.path || "/data-entry");
-  await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
   return { context, page, state };
 }
 
@@ -755,7 +755,7 @@ test.describe("Unified Metrics & data workspace", () => {
 
     expect(new Set(state.dataEntryGets.map(({ period }) => period))).toEqual(new Set([selectedMonth, selectedQuarter, selectedYear]));
     expect(new Set(state.evidenceGets.map(({ period }) => period))).toEqual(new Set([selectedMonth, selectedQuarter, selectedYear]));
-    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 5 complete · 2 need updating · 1 need evidence");
+    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 5 tracked items ready · 2 need a figure · 1 need evidence");
     await expect(stateBadges).toHaveCount(5);
     await expect(stateBadges.filter({ hasText: "Needs update" })).toHaveCount(2);
     await expect(stateBadges.filter({ hasText: "Needs evidence" })).toHaveCount(1);
@@ -777,7 +777,7 @@ test.describe("Unified Metrics & data workspace", () => {
     await expect(turnoverRow.getByText("Evidence needs replacing", { exact: true })).toBeVisible();
     await expect(boardRow).toContainText(`No value for ${selectedQuarter}`);
     await expect(boardRow.getByText("quarterly", { exact: true })).toBeVisible();
-    await expect(policyRow.getByText("No", { exact: true })).toBeVisible();
+    await expect(policyRow).toContainText(`No · ${selectedYear}`);
     await expect(policyRow.getByText("annual", { exact: true })).toBeVisible();
     await expect(page.getByTestId("metric-data-state-metric-policy")).toHaveText("Complete");
     await expect(policyRow.getByText("Evidence attached", { exact: true })).toBeVisible();
@@ -876,12 +876,15 @@ test.describe("Unified Metrics & data workspace", () => {
     const electricityToggle = page.getByTestId("toggle-metric-def-electricity");
     await expect(electricityToggle).toHaveAttribute("aria-checked", "true");
     await electricityToggle.click();
+    await expect(electricityToggle).toHaveCount(0); // Disabled metrics leave the default What we track view.
+    await page.getByTestId("select-status-filter").click();
+    await page.getByRole("option", { name: "All metrics", exact: true }).click();
     await expect(electricityToggle).toHaveAttribute("aria-checked", "false");
     expect(state.definitions.find((definition) => definition.id === "def-electricity")?.isActive).toBe(false);
     await page.getByTestId("button-back-to-metrics-data").click();
     await expect(page.getByTestId("metrics-data-overview")).toBeVisible();
     await expect(page.getByTestId("metric-data-row-metric-electricity")).toHaveCount(0);
-    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 4 complete · 1 need updating · 1 need evidence");
+    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 4 tracked items ready · 1 need a figure · 1 need evidence");
 
     await page.getByTestId("tab-documents").click();
     await expect(page).toHaveURL(/\/evidence\?period=\d{4}-\d{2}&siteId=__org__$/);
@@ -913,6 +916,8 @@ test.describe("Unified Metrics & data workspace", () => {
     await expect(disabled.page.getByTestId("empty-state-description")).toContainText("Board meetings held");
     await disabled.page.getByTestId("empty-state-primary-action").click();
     await expect(disabled.page.getByTestId("panel-manage-metrics")).toBeVisible();
+    await disabled.page.getByTestId("select-status-filter").click();
+    await disabled.page.getByRole("option", { name: "All metrics", exact: true }).click();
     await disabled.page.getByTestId("input-search-metrics").fill("Board meetings held");
     await expect(disabled.page.getByTestId("toggle-metric-def-board")).toHaveAttribute("aria-checked", "false");
     await disabled.context.close();
@@ -934,6 +939,8 @@ test.describe("Unified Metrics & data workspace", () => {
       value: "4",
       siteId: null,
     });
+    await expect(page.getByTestId("button-save-manual-metric-board")).toBeEnabled();
+    await expect(page.getByTestId("saved-manual-metric-board")).toBeVisible();
     await page.getByTestId("button-back-from-manual-entry").click();
     await expect(page.getByTestId("metric-data-row-metric-board")).toContainText("4 meetings");
 
@@ -949,8 +956,10 @@ test.describe("Unified Metrics & data workspace", () => {
       value: "Yes",
       siteId: null,
     });
+    await expect(page.getByTestId("button-save-manual-metric-policy")).toBeEnabled();
+    await expect(page.getByTestId("saved-manual-metric-policy")).toBeVisible();
     await page.getByTestId("button-back-from-manual-entry").click();
-    await expect(page.getByTestId("metric-data-row-metric-policy").getByText("Yes", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("metric-data-row-metric-policy")).toContainText("Yes · 2026");
 
     await page.getByTestId("button-open-metric-metric-intensity").click();
     await expect(page.getByTestId("calculated-value-metric-intensity")).toContainText("Calculated result for 2026-08");
@@ -1006,7 +1015,7 @@ test.describe("Unified Metrics & data workspace", () => {
     await page.getByTestId("button-back-from-spreadsheet-import").click();
     await expect(page.getByTestId("metric-data-row-metric-electricity")).toContainText("126 kWh");
     await expect(page.getByTestId("metric-data-state-metric-electricity")).toHaveText("Needs evidence");
-    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 5 complete · 1 need updating · 2 need evidence");
+    await expect(page.getByTestId("metrics-data-summary")).toHaveText("2 of 5 tracked items ready · 1 need a figure · 2 need evidence");
 
     await context.close();
   });
@@ -1089,7 +1098,7 @@ test.describe("Unified Metrics & data workspace", () => {
     expect(reverseUrl.searchParams.get("period")).toBe("2026-08");
     expect(reverseUrl.searchParams.get("siteId")).toBe("site-a");
     await metricsDataLink.click();
-    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
     await expect(page.getByTestId("select-period")).toContainText("2026-08");
     await expect(page.getByTestId("select-data-entry-site-scope")).toContainText("London Office");
 
@@ -1119,7 +1128,7 @@ test.describe("Unified Metrics & data workspace", () => {
     await expect(policyDialog.getByTestId("metric-detail-evidence-history-evidence-policy")).toContainText("whistleblowing-policy.pdf");
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
     expect(new URL(page.url()).searchParams.get("period")).toBe("2026-08");
     expect(new URL(page.url()).searchParams.get("siteId")).toBe("site-a");
 

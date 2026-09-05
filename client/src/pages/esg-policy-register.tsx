@@ -471,7 +471,7 @@ export function PolicyRegisterWorkspace({
         </div>
         {canManagePolicies && (
           <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild><Button size="sm" data-testid="button-add-policy"><Plus className="w-4 h-4 mr-1" /> Add policy</Button></DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild><Link href="/policies?tab=templates">Use a template</Link></DropdownMenuItem>

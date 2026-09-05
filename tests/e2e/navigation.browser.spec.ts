@@ -181,7 +181,7 @@ test.describe("Simplified SME workspace navigation", () => {
   test("Metrics & data unifies the metric list, update methods and metric management", async ({ browser }) => {
     const { context, page } = await openWithMockRole(browser, "admin", "/data-entry");
 
-    await expect(page.getByRole("heading", { name: "Metrics & data", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
     const workspaceNavigation = page.getByRole("navigation", { name: "Data and evidence workspace" });
     await expect(workspaceNavigation.getByRole("link")).toHaveCount(2);
     await expect(page.getByTestId("tab-metrics-data")).toHaveAttribute("aria-current", "page");

@@ -4,7 +4,7 @@ async function openMockedEsgProfile(page: import("@playwright/test").Page) {
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
-    const period = url.searchParams.get("period") || "FY2025";
+    const period = url.searchParams.get("period") || "2025-12";
     const json = (body: unknown, status = 200) => route.fulfill({
       status,
       contentType: "application/json",
@@ -25,15 +25,15 @@ async function openMockedEsgProfile(page: import("@playwright/test").Page) {
         reporting_period: {
           period,
           label: period,
-          source: period === "FY2025" ? "active" : "selected",
+          source: period === "2025-12" ? "active" : "selected",
           hasActivePeriod: true,
         },
-        esg_scores: { environmental: period === "FY2025" ? 100 : 20, social: 0, governance: 0, overall: period === "FY2025" ? 100 : 20 },
+        esg_scores: { environmental: period === "2025-12" ? 100 : 20, social: 0, governance: 0, overall: period === "2025-12" ? 100 : 20 },
         key_metrics: [
           {
             id: "metric-electricity",
             name: "Electricity usage",
-            value: period === "FY2025" ? "4990.00" : "100.10",
+            value: period === "2025-12" ? "4990.00" : "100.10",
             hasValue: true,
             unit: "kWh",
             category: "environmental",
@@ -44,7 +44,7 @@ async function openMockedEsgProfile(page: import("@playwright/test").Page) {
     }
     if (path === "/api/reporting-periods") {
       return json([
-        { id: "period-fy2025", name: "FY2025", status: "open" },
+        { id: "period-fy2025", name: "2025-12", status: "open" },
         { id: "period-2025-02", name: "2025-02", status: "closed" },
       ]);
     }
@@ -58,18 +58,21 @@ async function openMockedEsgProfile(page: import("@playwright/test").Page) {
     return json([]);
   });
 
-  await page.addInitScript(() => localStorage.setItem("auth_token", "mock-token"));
+  await page.addInitScript(() => {
+    localStorage.setItem("auth_token", "mock-token");
+    localStorage.setItem("simplyesg.reporting-month.mock-company", "2025-12");
+  });
   await page.goto("/esg-profile");
   await page.waitForLoadState("domcontentloaded");
 }
 
 test.describe("ESG Profile reporting period", () => {
-  test("shows the active period for score cards and key metrics and updates metrics when switched", async ({ page }) => {
+  test("shows the shared working month for score cards and key metrics and updates metrics when switched", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openMockedEsgProfile(page);
 
-    await expect(page.getByTestId("text-profile-reporting-period")).toHaveText("Reporting Period: FY2025");
-    await expect(page.getByText("Values shown for FY2025")).toBeVisible();
+    await expect(page.getByTestId("text-profile-reporting-period")).toHaveText("Reporting Period: 2025-12");
+    await expect(page.getByText("Values shown for 2025-12")).toBeVisible();
     await expect(page.getByText("4990.00")).toBeVisible();
     await expect(page.getByTestId("select-profile-reporting-period")).toBeVisible();
 

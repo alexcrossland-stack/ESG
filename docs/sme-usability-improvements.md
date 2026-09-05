@@ -55,3 +55,11 @@ This is not a claim that every feature, role, integration or assessment recommen
 ## Deployment and rollback
 
 Production deployment requires explicit approval under repository policy and was not performed. Review and CI must precede deployment. No schema migration is added. A code rollback is possible, but the older frontend does not understand newly stored size bands; retain the new metadata and review the onboarding/profile compatibility implications before reverting. Do not roll back by deleting user data.
+
+### Deployment preparation following owner approval
+
+The owner subsequently requested production deployment. The first full CI run was blocked by browser/API assertions tied to the old interface. The existing tests now exercise the replacement controls rather than removed badges or hidden panels; permission, persistence, scope and export-content assertions remain in place. Follow-up fixes synchronise Passport's initial month after company context loads, include the canonical reporting-period key in the framework-summary filename, and show an inline Saved acknowledgement only after a confirmed metric save.
+
+The production dependency audit passes its high-severity gate but reports one moderate `qs` finding; no dependency upgrade or exception to the release threshold is included. Lockfile consistency passes. Production deployment remains conditional on a successful exact-commit full release gate and the existing manual deployment workflow, including backup/restore rehearsal and public health checks. The previous live release is `71f632847b26a28f6a697cdfa3c5e705a5170de0`.
+
+Local deployment-preparation checks: the revised onboarding/report suite passed 18/18; the affected Chromium run passed 40/41, exposing an intermittent nested policy-menu pointer lock. The menu now uses non-modal interaction alongside the modal editor; the previously failing full policy journey then passed three consecutive repeats. All other affected Chromium cases passed, including cadence-aware saving, multi-site data/evidence/report continuity and security controls. The complete CI gate remains the deployment authority; no tests were skipped or release thresholds weakened.
