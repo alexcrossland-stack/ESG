@@ -52,18 +52,27 @@ async function seedAccessGrantActors(client: Client, suffix: string) {
   return { superAdminEmail, adminEmail };
 }
 
-async function getLatestAccessGrantViewAuditAction(client: Client, userEmail: string): Promise<string | null> {
-  const result = await client.query<{ action: string | null }>(
-    `SELECT al.action
-     FROM audit_logs al
-     JOIN users u ON u.id = al.user_id
-     WHERE u.email = $1
-       AND al.entity_type = 'access_grant'
-     ORDER BY al.created_at DESC
-     LIMIT 1`,
-    [userEmail],
-  );
-  return result.rows[0]?.action ?? null;
+async function waitForAccessGrantViewAuditRow(client: Client, userEmail: string): Promise<{ action: string | null } | null> {
+  // auditLog writes asynchronously; the HTTP response can arrive before the row.
+  // Wait only for visibility, never for an incorrect/null action to change.
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const result = await client.query<{ action: string | null }>(
+      `SELECT al.action
+       FROM audit_logs al
+       JOIN users u ON u.id = al.user_id
+       WHERE u.email = $1
+         AND al.entity_type = 'access_grant'
+       ORDER BY al.created_at DESC
+       LIMIT 1`,
+      [userEmail],
+    );
+    if (result.rows[0]) return result.rows[0];
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+  }
+  return null;
 }
 
 async function run(): Promise<void> {
@@ -96,11 +105,13 @@ async function run(): Promise<void> {
       }
     }
 
-    const auditAction = await getLatestAccessGrantViewAuditAction(client, superAdminEmail);
-    if (auditAction !== "access_grants_viewed") {
-      fail("GET /api/admin/access-grants writes non-null audit action", `action=${String(auditAction)}`);
+    const auditRow = await waitForAccessGrantViewAuditRow(client, superAdminEmail);
+    if (!auditRow) {
+      fail("GET /api/admin/access-grants writes non-null audit action", "audit row absent after 4000ms");
+    } else if (auditRow.action !== "access_grants_viewed") {
+      fail("GET /api/admin/access-grants writes non-null audit action", `action=${String(auditRow.action)}`);
     } else {
-      pass("GET /api/admin/access-grants writes non-null audit action", `action=${auditAction}`);
+      pass("GET /api/admin/access-grants writes non-null audit action", `action=${auditRow.action}`);
     }
 
     const adminRes = await apiRequest("GET", "/api/admin/access-grants", undefined, adminToken);

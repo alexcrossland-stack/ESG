@@ -56,6 +56,7 @@ Implemented the three planned UI workstreams. The shared foundation applies thro
 | Check | Result |
 | --- | --- |
 | Complete existing Chromium and API E2E suite | 180 passed, 0 failed; fictional local tenants |
+| Existing WebKit app-boot check | 1 passed, 0 failed; Safari-engine smoke check, not a full Safari journey suite |
 | Focused policy suite | 11 passed, including keyboard multiselect state through review/submission and descriptive mobile edit/delete targets |
 | Production build | Passed; existing PostCSS and large-chunk warnings remain |
 | TypeScript diagnostic ratchet | Passed, 379/395; full TypeScript is still baseline-limited |
@@ -72,3 +73,9 @@ The first integrated subset run passed 31/34. The three failures were old tab-ro
 Core token pairs were checked independently: light primary/foreground contrast 5.58:1 and muted text on cards 5.57:1; corresponding dark pairs 8.17:1 and 8.02:1. This is a focused contrast check, not an exhaustive WCAG audit. Zoom restrictions were removed and reduced-motion styles added; physical-device pinch zoom, software keyboards, screen readers and moderated SME usability testing remain follow-up validation.
 
 Screenshots are in ignored local `output/playwright/modern-*.png`. No production account, customer data or external email/billing/AI credentials were used. CI/review status will be recorded on the PR. No production deployment has been performed for this update.
+
+### Release-gate follow-up
+
+The first CI run on `4002953` passed 114/115 release checks, with zero skips. All Chromium journeys and Playwright API checks passed. The single failure was the unchanged access-grants standalone test reading its audit row immediately after the HTTP response, while `auditLog` intentionally writes asynchronously. The CI server log later contains the same actor's exact `access_grants_viewed` entry and no audit-write errors, confirming a visibility race rather than a missing audit event.
+
+The test now waits only for the actor-specific row to appear within a bounded deadline, consistent with the existing audit completeness/export tests. It still fails on an absent, null or incorrect action; no production route, database schema or audit-delivery behavior changes. The full release gate will run again on this test-only follow-up, with the final result recorded on PR #88.
