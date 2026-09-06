@@ -291,20 +291,27 @@ export function PolicyTemplatesWorkspace({
       </div>}
 
       <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"><div><p className="text-sm font-medium">{showFullLibrary ? "Full template library" : "A practical starting shortlist"}</p><p className="text-xs text-muted-foreground">Common workplace, environmental and governance topics. Choose what fits your business; this is not a legal-requirements checklist.</p></div><Button variant="outline" size="sm" onClick={() => setShowFullLibrary(value => !value)}>{showFullLibrary ? "Show starter templates" : `Browse all ${availableTemplates.length} templates`}</Button></div>
+          <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 max-w-2xl">
+              <p className="text-sm font-semibold">{showFullLibrary ? "Full template library" : "A practical starting shortlist"}</p>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Common workplace, environmental and governance topics. Choose what fits your business; this is not a legal-requirements checklist.</p>
+            </div>
+            <Button variant="outline" size="sm" className="min-h-10 shrink-0" onClick={() => setShowFullLibrary(value => !value)}>{showFullLibrary ? "Show starter templates" : `Browse all ${availableTemplates.length} templates`}</Button>
+          </div>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <div className="relative min-w-0 flex-1">
+              <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
+                aria-label="Search policy templates"
                 placeholder="Search templates..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9"
+                className="min-h-11 bg-card pl-9"
                 data-testid="input-search-templates"
               />
             </div>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full sm:w-[180px]" data-testid="select-category-filter">
+              <SelectTrigger className="min-h-11 w-full bg-card sm:w-[200px]" aria-label="Filter templates by category" data-testid="select-category-filter">
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
               <SelectContent>
@@ -339,33 +346,34 @@ export function PolicyTemplatesWorkspace({
                 return (
                   <Card
                     key={t.slug}
-                    className="transition-colors hover:border-primary/30"
+                    className="flex min-w-0 flex-col transition-colors hover:border-primary/40"
                     data-testid={`card-template-${t.slug}`}
                   >
-                    <CardHeader className="pb-2">
+                    <CardHeader className="space-y-3 p-5 pb-3">
                       <div className="flex items-start justify-between gap-2">
-                        <div className={`flex items-center justify-center w-8 h-8 rounded-lg ${colorClass}`}>
-                          <IconComp className="w-4 h-4" />
+                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${colorClass}`}>
+                          <IconComp className="h-5 w-5" />
                         </div>
                         {existingPolicy && (
                           <Badge variant="secondary" className="text-xs">Created</Badge>
                         )}
                       </div>
-                      <CardTitle className="text-sm mt-2">{t.name}</CardTitle>
-                      <CardDescription className="text-xs line-clamp-2">{t.description}</CardDescription>
+                      <CardTitle className="break-words text-base leading-snug [overflow-wrap:anywhere]">{t.name}</CardTitle>
+                      <CardDescription className="text-sm leading-relaxed">{t.description}</CardDescription>
                     </CardHeader>
-                    <CardContent className="pt-0">
+                    <CardContent className="flex flex-1 flex-col p-5 pt-0">
                       <div className="flex flex-wrap gap-1.5">
-                        <Badge variant="outline" className="text-[10px]">{t.category}</Badge>
+                        <Badge variant="outline" className="text-xs">{t.category}</Badge>
                         {compliance?.isoStandards?.slice(0, 2).map((iso: string) => (
-                          <Badge key={iso} variant="outline" className="text-[10px]">{iso.split(":")[0]}</Badge>
+                          <Badge key={iso} variant="outline" className="text-xs">{iso.split(":")[0]}</Badge>
                         ))}
                       </div>
+                      <div className="flex-1" />
                       {canCreatePolicy ? (
                         <Button
                           size="sm"
                           variant="outline"
-                          className="mt-4 w-full justify-between"
+                          className="mt-5 min-h-11 w-full justify-between"
                           onClick={() => navigate({ mode: "questionnaire", slug: t.slug })}
                           data-testid={`button-use-template-${t.slug}`}
                         >
@@ -465,8 +473,8 @@ export function GeneratedPoliciesRegister({
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                     <FileText className="hidden h-5 w-5 shrink-0 text-muted-foreground sm:block" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{policy.title}</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="break-words text-base font-semibold [overflow-wrap:anywhere]">{policy.title}</p>
+                      <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                         v{policy.versionNumber} · {policy.policyOwner || "No owner"} · Updated {policy.updatedAt ? format(new Date(policy.updatedAt), "dd MMM yyyy") : "—"}
                         {policy.reviewDate ? ` · Review ${format(new Date(policy.reviewDate), "dd MMM yyyy")}` : ""}
                       </p>
@@ -483,7 +491,7 @@ export function GeneratedPoliciesRegister({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          className="h-10 w-10 text-destructive hover:text-destructive"
                           onClick={() => {
                             if (window.confirm(`Delete ${policy.title}? This cannot be undone.`)) {
                               deleteMutation.mutate(policy.id);
@@ -618,6 +626,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
   ];
 
   const currentStep = steps[step];
+  const TitleHeading = embedded ? "h2" : "h1";
 
   const updateAnswer = (key: string, value: any) => {
     setAnswers(prev => ({ ...prev, [key]: value }));
@@ -633,18 +642,18 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
 
   return (
     <div className={embedded ? "mx-auto max-w-3xl space-y-6" : "p-6 max-w-3xl mx-auto space-y-6"}>
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-to-library">
+      <div className="flex flex-col items-start gap-3 sm:flex-row">
+        <Button variant="ghost" size="sm" className="min-h-10 shrink-0" onClick={onBack} data-testid="button-back-to-library">
           <ChevronLeft className="w-4 h-4 mr-1" />
           Back
         </Button>
-        <div>
-          <h1 className="text-lg font-semibold">{template.name}</h1>
-          <p className="text-xs text-muted-foreground">{template.description}</p>
+        <div className="min-w-0">
+          <TitleHeading className="break-words text-lg font-semibold [overflow-wrap:anywhere]">{template.name}</TitleHeading>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{template.description}</p>
         </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2" aria-hidden="true">
         {steps.map((s, i) => (
           <div
             key={i}
@@ -652,16 +661,17 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
           />
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">Step {step + 1} of {steps.length}: {currentStep.label}</p>
+      <p className="text-sm font-medium" role="status">Step {step + 1} of {steps.length}: {currentStep.label}</p>
 
       {step < 3 ? (
         <Card>
           <CardContent className="p-5 space-y-4">
             {currentStep.questions.map((q: any) => (
               <div key={q.key} className="space-y-1.5">
-                <Label className="text-sm">{q.label}{q.required && <span className="text-destructive ml-0.5">*</span>}</Label>
+                <Label id={`policy-question-label-${q.key}`} htmlFor={q.type === "multiselect" ? undefined : `policy-question-${q.key}`} className="text-sm">{q.label}{q.required && <span className="text-destructive ml-0.5">*</span>}</Label>
                 {q.type === "text" && (
                   <Input
+                    id={`policy-question-${q.key}`}
                     value={answers[q.key] || ""}
                     onChange={(e) => updateAnswer(q.key, e.target.value)}
                     placeholder={q.placeholder || ""}
@@ -670,6 +680,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
                 )}
                 {q.type === "number" && (
                   <Input
+                    id={`policy-question-${q.key}`}
                     type="number"
                     value={answers[q.key] || ""}
                     onChange={(e) => updateAnswer(q.key, e.target.value)}
@@ -679,7 +690,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
                 )}
                 {q.type === "select" && (
                   <Select value={answers[q.key] || ""} onValueChange={(v) => updateAnswer(q.key, v)}>
-                    <SelectTrigger data-testid={`select-${q.key}`}>
+                    <SelectTrigger id={`policy-question-${q.key}`} data-testid={`select-${q.key}`}>
                       <SelectValue placeholder={`Select ${q.label.toLowerCase()}`} />
                     </SelectTrigger>
                     <SelectContent>
@@ -690,19 +701,22 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
                   </Select>
                 )}
                 {q.type === "multiselect" && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2" role="group" aria-labelledby={`policy-question-label-${q.key}`}>
                     {q.options?.map((opt: string) => {
                       const selected = Array.isArray(answers[q.key]) && answers[q.key].includes(opt);
                       return (
-                        <Badge
+                        <Button
                           key={opt}
                           variant={selected ? "default" : "outline"}
-                          className="cursor-pointer text-xs"
+                          type="button"
+                          size="sm"
+                          aria-pressed={selected}
+                          className="min-h-10 max-w-full whitespace-normal text-left text-sm"
                           onClick={() => toggleMultiSelect(q.key, opt)}
                           data-testid={`badge-${q.key}-${opt.replace(/\s+/g, "-").toLowerCase()}`}
                         >
                           {opt}
-                        </Badge>
+                        </Button>
                       );
                     })}
                   </div>
@@ -710,6 +724,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
                 {q.type === "checkbox" && (
                   <div className="flex items-center gap-2">
                     <Checkbox
+                      id={`policy-question-${q.key}`}
                       checked={!!answers[q.key]}
                       onCheckedChange={(c) => updateAnswer(q.key, !!c)}
                       data-testid={`checkbox-${q.key}`}
@@ -731,9 +746,9 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
               {Object.entries(answers).filter(([_, v]) => v && (typeof v !== "object" || (Array.isArray(v) && v.length > 0))).map(([key, val]) => {
                 const q = questionnaire.find((q: any) => q.key === key);
                 return (
-                  <div key={key} className="flex justify-between text-xs gap-2">
+                  <div key={key} className="flex flex-col justify-between gap-1 border-b border-border/60 py-2 text-sm last:border-0 sm:flex-row sm:gap-4">
                     <span className="text-muted-foreground">{q?.label || key}</span>
-                    <span className="text-right font-medium">{Array.isArray(val) ? val.join(", ") : val === true ? "Yes" : String(val)}</span>
+                    <span className="min-w-0 break-words font-medium [overflow-wrap:anywhere] sm:max-w-[60%] sm:text-right">{Array.isArray(val) ? val.join(", ") : val === true ? "Yes" : String(val)}</span>
                   </div>
                 );
               })}
@@ -795,7 +810,7 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
         </div>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Button
           variant="outline"
           onClick={() => step > 0 ? setStep(step - 1) : onBack()}
@@ -1079,20 +1094,21 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
     setIsDirty(true);
   };
 
-  const statusColor = policy.status === "published" ? "bg-green-100 text-green-700"
-    : policy.status === "approved" ? "bg-blue-100 text-blue-700"
-    : "bg-amber-100 text-amber-700";
+  const statusColor = policy.status === "published" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+    : policy.status === "approved" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+    : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+  const TitleHeading = embedded ? "h2" : "h1";
 
   return (
     <div className={embedded ? "mx-auto max-w-4xl space-y-6" : "p-6 max-w-4xl mx-auto space-y-6"} data-testid="generated-policy-viewer">
-      <div className="flex items-start gap-3">
-        <Button variant="ghost" size="sm" onClick={onBack} data-testid="button-back-from-viewer">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap">
+        <Button variant="ghost" size="sm" className="min-h-10 shrink-0" onClick={onBack} data-testid="button-back-from-viewer">
           <ChevronLeft className="w-4 h-4 mr-1" />
           Back
         </Button>
-        <div className="flex-1">
-          <h1 className="text-lg font-semibold">{policy.title}</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
+        <div className="min-w-0 flex-1">
+          <TitleHeading className="break-words text-lg font-semibold [overflow-wrap:anywhere]">{policy.title}</TitleHeading>
+          <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
             v{policy.versionNumber} · {policy.policyOwner || "No owner"} · {policy.tone === "audit_ready" ? "Audit-ready" : "Simple SME"}
           </p>
         </div>
@@ -1118,7 +1134,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
         </Card>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:flex-wrap [&>button]:min-h-10">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" data-testid="button-export-generated">
@@ -1198,7 +1214,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
               aria-label="Review comment; required for rejection"
               value={reviewComment}
               onChange={(e) => setReviewComment(e.target.value)}
-              className="min-w-[150px] max-w-[250px]"
+              className="min-h-10 min-w-0 w-full sm:max-w-[250px]"
               data-testid="input-policy-review-comment"
             />
           </>
@@ -1217,8 +1233,8 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
-        <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="min-w-0 space-y-4">
           {(sections.length > 0 ? sections : Object.keys(content).map(k => ({ key: k, label: k }))).map((section: any) => (
             <Card key={section.key} data-testid={`section-${section.key}`}>
               <CardHeader className="pb-2">
@@ -1226,6 +1242,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
               </CardHeader>
               <CardContent>
                 <Textarea
+                  aria-label={section.label}
                   value={content[section.key] || ""}
                   onChange={(e) => handleContentChange(section.key, e.target.value)}
                   className="min-h-32 text-sm resize-none whitespace-pre-wrap"
@@ -1238,23 +1255,23 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
 
           <Card data-testid="generated-policy-preview-card">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Rendered Preview</CardTitle>
+              <CardTitle className="text-base">Rendered Preview</CardTitle>
               <CardDescription className="text-xs">
                 Generated markdown is rendered here using the same safe document pipeline used for print and export.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="min-w-0 overflow-x-auto [overflow-wrap:anywhere]">
               <GeneratedDocumentContent markdown={renderedPolicyMarkdown} data-testid="generated-policy-preview" />
             </CardContent>
           </Card>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs">Policy Details</CardTitle>
+              <CardTitle className="text-sm">Policy Details</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-xs">
+            <CardContent className="space-y-3 text-sm">
               {canEditContent ? (
                 <>
                   <div className="space-y-1">
@@ -1263,7 +1280,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
                       id="generated-policy-owner"
                       value={displayedOwner}
                       onChange={(event) => handleMetadataChange("policyOwner", event.target.value)}
-                      className="h-8 text-xs"
+                      className="min-h-10 text-sm"
                       data-testid="input-generated-policy-owner"
                     />
                   </div>
@@ -1273,7 +1290,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
                       id="generated-policy-approver"
                       value={displayedApprover}
                       onChange={(event) => handleMetadataChange("approver", event.target.value)}
-                      className="h-8 text-xs"
+                      className="min-h-10 text-sm"
                       data-testid="input-generated-policy-approver"
                     />
                   </div>
@@ -1284,7 +1301,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
                       type="date"
                       value={displayedReviewDate}
                       onChange={(event) => handleMetadataChange("reviewDate", event.target.value)}
-                      className="h-8 text-xs"
+                      className="min-h-10 text-sm"
                       data-testid="input-generated-policy-review-date"
                     />
                   </div>
@@ -1293,11 +1310,11 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
                 <>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Owner</span>
-                    <span className="text-right font-medium">{policy.policyOwner || "—"}</span>
+                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{policy.policyOwner || "—"}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Approver</span>
-                    <span className="text-right font-medium">{policy.approver || "—"}</span>
+                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{policy.approver || "—"}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Next review</span>

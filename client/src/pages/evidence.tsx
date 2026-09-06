@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { PageLayout, PageHeader } from "@/components/page-layout";
 import { useBillingStatus, UpgradeLimitBanner } from "@/components/upgrade-prompt";
 import { PageGuidance } from "@/components/page-guidance";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -856,12 +857,10 @@ export default function Evidence() {
   const metricsDataHref = `/data-entry?${returnQuery.toString()}`;
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2" data-testid="text-evidence-title">Documents <EsgTooltip term="evidence" /></h1>
-          <p className="text-sm text-muted-foreground mt-1">Review linked evidence by metric and reporting period</p>
-        </div>
+    <PageLayout>
+      <PageHeader title={<>Documents <EsgTooltip term="evidence" /></>} titleTestId="text-evidence-title"
+        description="Review linked evidence by metric and reporting period"
+        actions={<>
         {isArchivedView && (
           <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 dark:border-amber-700">
             Archived site — uploads disabled
@@ -872,14 +871,14 @@ export default function Evidence() {
             defaultSiteScope={viewSiteId === "__all__" ? (activeSiteId || "__org__") : viewSiteId}
           />
         )}
-      </div>
+        </>}
+      />
       <nav
-        className="grid h-auto w-full grid-cols-2 rounded-lg bg-muted p-1"
+        className="workspace-nav"
         aria-label="Data and evidence workspace"
       >
         <Link
           href={metricsDataHref}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
           data-testid="tab-metrics-data"
         >
           <ClipboardList className="h-4 w-4" />
@@ -888,7 +887,6 @@ export default function Evidence() {
         <Link
           href="/evidence"
           aria-current="page"
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm"
           data-testid="tab-documents"
         >
           <FileCheck className="h-4 w-4" />
@@ -923,7 +921,7 @@ export default function Evidence() {
       <CoverageOverview viewSiteId={viewSiteId} />
 
       <Tabs defaultValue="files">
-        <TabsList>
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
           <TabsTrigger value="files" data-testid="tab-evidence-files">Audit View</TabsTrigger>
           <TabsTrigger value="coverage" data-testid="tab-evidence-coverage">Coverage</TabsTrigger>
           <TabsTrigger value="requests" data-testid="tab-evidence-requests">
@@ -946,7 +944,7 @@ export default function Evidence() {
           <EvidenceRequestsPanel />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageLayout>
   );
 }
 

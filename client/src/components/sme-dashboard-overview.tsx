@@ -78,7 +78,10 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
   if (isLoading) {
     return (
       <section className="grid gap-4 lg:grid-cols-2" data-testid="section-sme-dashboard-overview">
-        {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-44" />)}
+        <Skeleton className={showNextAction ? "h-40" : "h-32 lg:col-span-2"} />
+        {showNextAction && <Skeleton className="h-40" />}
+        <Skeleton className="h-64" />
+        <Skeleton className="h-64" />
       </section>
     );
   }
@@ -94,8 +97,8 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
 
   return (
     <section className="grid gap-4 lg:grid-cols-2" data-testid="section-sme-dashboard-overview">
-      <Card className="border-primary/20" data-testid="card-sme-baseline-status">
-        <CardHeader className="pb-3">
+      <Card className={showNextAction ? "border-primary/20" : "border-primary/20 lg:col-span-2"} data-testid="card-sme-baseline-status">
+        <CardHeader className="p-4 pb-2 sm:px-5 sm:pt-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">Your ESG baseline</CardTitle>
             <Badge variant="outline" className={status.className} data-testid="badge-sme-baseline-status">
@@ -103,7 +106,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
             </Badge>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-2 p-4 pt-0 sm:px-5 sm:pb-5">
           <p className="text-sm font-medium leading-relaxed" data-testid="text-sme-baseline-summary">{summary}</p>
           <p className="text-xs leading-relaxed text-muted-foreground">
             This is a practical view of your current information, not a regulatory rating. It becomes more useful as your data and supporting documents improve.
@@ -137,32 +140,32 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5" data-testid="progress-sme-data-confidence">
-            <div className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-medium"><Database className="h-4 w-4 text-blue-600" />Figures due this month</span>
-              <span><span className="text-muted-foreground">{strengthLabel(dataCompleteness)}</span> · {dataCompleteness}%</span>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+              <span className="flex items-center gap-2 font-medium"><Database className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />Figures due this month</span>
+              <span className="ml-auto shrink-0 tabular-nums"><span className="text-muted-foreground">{strengthLabel(dataCompleteness)}</span> · {dataCompleteness}%</span>
             </div>
             <Progress value={dataCompleteness} aria-label="Data coverage for the selected month" className="h-2 [&>div]:bg-blue-500" />
           </div>
           <div className="space-y-1.5" data-testid="progress-sme-evidence-confidence">
-            <div className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-medium"><FileCheck2 className="h-4 w-4 text-emerald-600" />Supporting evidence</span>
-              <span><span className="text-muted-foreground">{strengthLabel(evidenceCoverage)}</span> · {evidenceCoverage}%</span>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+              <span className="flex items-center gap-2 font-medium"><FileCheck2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />Supporting evidence</span>
+              <span className="ml-auto shrink-0 tabular-nums"><span className="text-muted-foreground">{strengthLabel(evidenceCoverage)}</span> · {evidenceCoverage}%</span>
             </div>
             <Progress value={evidenceCoverage} aria-label="Supporting evidence coverage" className="h-2 [&>div]:bg-emerald-500" />
           </div>
           {evidenceConfidence && (
-            <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-muted/30 p-2 text-center" data-testid="summary-sme-evidence-ladder">
+            <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/45 p-3 text-center" data-testid="summary-sme-evidence-ladder">
               <div>
                 <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.sourceLinkedCoverage)}%</p>
-                <p className="text-[11px] text-muted-foreground">Source linked</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Source linked</p>
               </div>
               <div>
                 <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.reviewedCoverage)}%</p>
-                <p className="text-[11px] text-muted-foreground">Reviewed</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Reviewed</p>
               </div>
               <div>
                 <p className="text-sm font-semibold tabular-nums">{percentage(evidenceConfidence.evidenceBackedCoverage)}%</p>
-                <p className="text-[11px] text-muted-foreground">Evidence-backed</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Evidence-backed</p>
               </div>
             </div>
           )}
@@ -177,27 +180,27 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
         </CardContent>
       </Card>
 
-      <Card data-testid="card-sme-esg-progress">
+      <Card className="flex flex-col" data-testid="card-sme-esg-progress">
         <CardHeader className="pb-3">
           <CardTitle className="text-base">E, S and G progress</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="flex flex-1 flex-col gap-5">
           {CATEGORIES.map(category => {
             const value = categoryProgress(enhanced, category.key);
             return (
-              <div key={category.key} className="grid grid-cols-[2rem_1fr_auto] items-center gap-3" data-testid={`progress-sme-${category.key}`}>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-semibold" aria-hidden="true">
+              <div key={category.key} className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3" data-testid={`progress-sme-${category.key}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-sm font-semibold" aria-hidden="true">
                   {category.shortLabel}
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm font-medium">{category.label}</p>
                   <Progress value={value} aria-label={`${category.label} progress`} className={`h-2 ${category.barClassName}`} />
                 </div>
-                <span className="w-10 text-right text-sm font-semibold">{value}%</span>
+                <span className="w-10 text-right text-sm font-semibold tabular-nums">{value}%</span>
               </div>
             );
           })}
-          <p className="text-xs text-muted-foreground">Progress shows completion of active metrics. Performance is shown separately once enough reliable data is available.</p>
+          <p className="mt-auto text-xs leading-relaxed text-muted-foreground">Progress shows completion of active metrics. Performance is shown separately once enough reliable data is available.</p>
         </CardContent>
       </Card>
     </section>

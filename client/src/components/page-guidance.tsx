@@ -46,17 +46,17 @@ export function PageGuidance({ pageKey, title, summary, goodLooksLike, steps, ic
   }
 
   return (
-    <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-950/20 mb-5" data-testid={`guidance-panel-${pageKey}`}>
+    <div className="rounded-lg border border-border bg-card mb-5" data-testid={`guidance-panel-${pageKey}`}>
       <button
         className="w-full flex items-center gap-3 px-4 py-3 text-left"
         onClick={() => setExpanded(e => !e)}
         aria-expanded={expanded}
         data-testid={`guidance-toggle-${pageKey}`}
       >
-        <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-        <span className="text-sm font-medium text-blue-800 dark:text-blue-200 flex-1">{title}</span>
+        <Info className="w-4 h-4 text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium text-muted-foreground flex-1">{title}</span>
         <div className="flex items-center gap-1">
-          {expanded ? <ChevronUp className="w-4 h-4 text-blue-500" /> : <ChevronDown className="w-4 h-4 text-blue-500" />}
+          {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
         </div>
       </button>
 

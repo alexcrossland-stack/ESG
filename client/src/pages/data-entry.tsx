@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { PageLayout, PageHeader } from "@/components/page-layout";
 import { useReportingMonth, isReportingMonth } from "@/hooks/use-reporting-month";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import { EmptyState } from "@/components/empty-state";
@@ -1017,26 +1018,19 @@ export default function DataEntry() {
     setLocation(`/data-entry?${params.toString()}`, { replace: true });
   };
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h1 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
-            <ClipboardList className="w-5 h-5 text-primary" />
-            Data &amp; evidence
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            See what needs updating, add figures and keep the evidence behind every result.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <PageLayout>
+      <PageHeader
+        title="Data & evidence"
+        description="See what needs updating, add figures and keep the evidence behind every result."
+        actions={<>
           {!canEdit && (
             <Badge variant="secondary" className="gap-1" data-testid="badge-read-only">
               <Eye className="w-3 h-3" />
               Read Only
             </Badge>
           )}
-          {activeTab !== "manage" && <Select value={selectedPeriod} onValueChange={changeWorkspacePeriod}>
-            <SelectTrigger className="w-36" data-testid="select-period">
+          {activeTab !== "manage" && <div className="space-y-1.5"><Label htmlFor="data-reporting-month" className="text-xs text-muted-foreground">Reporting month</Label><Select value={selectedPeriod} onValueChange={changeWorkspacePeriod}>
+            <SelectTrigger id="data-reporting-month" className="w-36" data-testid="select-period" aria-label="Reporting month">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1044,18 +1038,17 @@ export default function DataEntry() {
                 <SelectItem key={p} value={p}>{p}</SelectItem>
               ))}
             </SelectContent>
-          </Select>}
-        </div>
-      </div>
+          </Select></div>}
+        </>}
+      />
 
       <nav
-        className="grid h-auto w-full grid-cols-2 rounded-lg bg-muted p-1"
+        className="workspace-nav"
         aria-label="Data and evidence workspace"
       >
         <Link
           href={`/data-entry?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}
           aria-current="page"
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm"
           onClick={returnToMetricsOverview}
           data-testid="tab-metrics-data"
         >
@@ -1064,7 +1057,6 @@ export default function DataEntry() {
         </Link>
         <Link
           href={`/evidence?period=${encodeURIComponent(selectedPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
           data-testid="tab-documents"
         >
           <FileCheck className="h-4 w-4" />
@@ -1650,7 +1642,7 @@ export default function DataEntry() {
                             >
                               <div className="min-w-0 space-y-1">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-sm font-medium">{metric.name}</p>
+                                  <p className="text-sm font-medium [overflow-wrap:anywhere]">{metric.name}</p>
                                   {!isEligible && (
                                     <Badge variant="secondary" className="text-[10px]">
                                       <Calculator className="mr-1 h-3 w-3" />
@@ -1695,7 +1687,7 @@ export default function DataEntry() {
                                 <Button
                                   type="button"
                                   size="sm"
-                                  variant={state === "needs-data" && canEdit ? "default" : "outline"}
+                                  variant="outline"
                                   onClick={() => navigateToWorkspaceMode("manual", metricId)}
                                   data-testid={`button-open-metric-${metricKey}`}
                                 >
@@ -2408,7 +2400,7 @@ export default function DataEntry() {
 
         </section>}
       </div>
-    </div>
+    </PageLayout>
   );
 }
 

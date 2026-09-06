@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useReportingMonth } from "@/hooks/use-reporting-month";
 import { SmeNextTasks } from "@/components/sme-next-tasks";
+import { PageHeader, PageLayout } from "@/components/page-layout";
 import { apiRequest, authFetch } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1213,21 +1214,20 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-7xl mx-auto">
+    <PageLayout>
       <BackToPortfolioBanner />
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h1 className="text-lg sm:text-xl font-semibold" data-testid="text-dashboard-title">
-            {company?.name ? `${company.name} — Overview` : "Overview"}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Your next tasks and progress for the selected reporting month
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted-foreground">Reporting month<input className="ml-2 rounded-md border bg-background p-2 text-sm text-foreground" type="month" value={reporting.month} onChange={event => reporting.setMonth(event.target.value)} aria-label="Overview reporting month" /></label>
-        </div>
-      </div>
+      <PageHeader
+        title="Overview"
+        eyebrow={company?.name}
+        titleTestId="text-dashboard-title"
+        description="Your next tasks and progress for the selected reporting month"
+        actions={
+          <label className="flex w-full flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:w-auto">
+            Reporting month
+            <input className="min-h-11 w-full min-w-0 rounded-lg border border-input bg-card px-3 py-2 text-base text-foreground sm:w-44 sm:text-sm" type="month" value={reporting.month} onChange={event => reporting.setMonth(event.target.value)} aria-label="Overview reporting month" />
+          </label>
+        }
+      />
 
       <SmeNextTasks month={reporting.month} />
       <SmeDashboardOverview showNextAction={false} readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} />
@@ -1791,7 +1791,7 @@ export default function Dashboard() {
       {showConfirmed && <NotificationsPanel />}
         </div>
       </details>
-    </div>
+    </PageLayout>
   );
 }
 

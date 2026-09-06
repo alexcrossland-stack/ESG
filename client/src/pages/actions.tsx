@@ -19,6 +19,7 @@ import { CheckSquare, Plus, Edit2, Trash2, Calendar, User, AlertTriangle } from 
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { OwnerAssignment } from "@/components/owner-assignment";
+import { PageHeader, PageLayout } from "@/components/page-layout";
 
 type ActionPlan = {
   id: string;
@@ -186,7 +187,7 @@ export default function Actions() {
   });
 
   if (isLoading) {
-    return <div className="p-6 space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}</div>;
+    return <PageLayout>{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}</PageLayout>;
   }
 
   const filtered = filter === "all" ? actions : actions.filter(a => a.status === filter);
@@ -199,32 +200,25 @@ export default function Actions() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <CheckSquare className="w-5 h-5 text-primary" />
-            Action Tracker
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Track your ESG improvement actions and progress
-          </p>
-        </div>
-        {can("metrics_data_entry") && (
+    <PageLayout>
+      <PageHeader
+        title="Action Tracker"
+        description="Track your ESG improvement actions and progress"
+        actions={can("metrics_data_entry") ? (
           <Dialog open={showCreate} onOpenChange={setShowCreate}>
             <DialogTrigger asChild>
-              <Button size="sm" data-testid="button-new-action">
-                <Plus className="w-3.5 h-3.5 mr-1.5" />
+              <Button data-testid="button-new-action">
+                <Plus className="h-4 w-4" />
                 New Action
               </Button>
             </DialogTrigger>
             <ActionDialog onClose={() => setShowCreate(false)} />
           </Dialog>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {/* Status filter */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1 rounded-xl border bg-card p-2" role="group" aria-label="Filter actions by status">
         {[
           { key: "all", label: "All" },
           { key: "not_started", label: "Not Started" },
@@ -234,9 +228,10 @@ export default function Actions() {
         ].map(({ key, label }) => (
           <Button
             key={key}
-            variant={filter === key ? "default" : "outline"}
+            variant={filter === key ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setFilter(key)}
+            aria-pressed={filter === key}
             data-testid={`filter-${key}`}
           >
             {label}
@@ -256,9 +251,9 @@ export default function Actions() {
           { label: "Overdue", count: counts.overdue, color: "text-destructive" },
         ].map(({ label, count, color }) => (
           <Card key={label}>
-            <CardContent className="p-4 text-center">
-              <div className={`text-2xl font-bold ${color}`}>{count}</div>
-              <div className="text-xs text-muted-foreground mt-1">{label}</div>
+            <CardContent className="p-4 sm:p-5">
+              <div className="text-xs font-medium text-muted-foreground">{label}</div>
+              <div className={`mt-2 text-2xl font-semibold tabular-nums ${color}`}>{count}</div>
             </CardContent>
           </Card>
         ))}
@@ -273,10 +268,10 @@ export default function Actions() {
           return (
             <Card key={action.id} data-testid={`action-card-${action.id}`}>
               <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex-1 min-w-0 space-y-2">
+                <div className="flex flex-col items-start gap-3 sm:flex-row">
+                  <div className="w-full min-w-0 flex-1 space-y-2 sm:w-auto">
                     <div className="flex items-start gap-2 flex-wrap">
-                      <h3 className="text-sm font-semibold">{action.title}</h3>
+                      <h3 className="min-w-0 max-w-full break-words text-sm font-semibold">{action.title}</h3>
                       <Badge variant={statusConfig.variant} className="text-xs shrink-0">
                         {statusConfig.label}
                       </Badge>
@@ -288,7 +283,7 @@ export default function Actions() {
                       )}
                     </div>
                     {action.description && (
-                      <p className="text-sm text-muted-foreground line-clamp-2">{action.description}</p>
+                      <p className="line-clamp-2 break-words text-sm text-muted-foreground">{action.description}</p>
                     )}
                     <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                       <span className="flex items-center gap-1">
@@ -303,13 +298,13 @@ export default function Actions() {
                       )}
                     </div>
                     {action.notes && (
-                      <p className="text-xs text-muted-foreground italic bg-muted/50 px-2 py-1.5 rounded-md">
+                      <p className="break-words rounded-md bg-muted/50 px-2 py-1.5 text-xs italic text-muted-foreground">
                         {action.notes}
                       </p>
                     )}
                   </div>
                   {can("metrics_data_entry") && (
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex shrink-0 items-center gap-1 self-end sm:self-start">
                       <Dialog
                         open={editAction?.id === action.id}
                         onOpenChange={open => !open && setEditAction(undefined)}
@@ -319,6 +314,7 @@ export default function Actions() {
                             size="icon"
                             variant="ghost"
                             onClick={() => setEditAction(action)}
+                            aria-label={`Edit ${action.title}`}
                             data-testid={`button-edit-action-${action.id}`}
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -330,6 +326,7 @@ export default function Actions() {
                         size="icon"
                         variant="ghost"
                         onClick={() => deleteMutation.mutate(action.id)}
+                        aria-label={`Delete ${action.title}`}
                         data-testid={`button-delete-action-${action.id}`}
                       >
                         <Trash2 className="w-3.5 h-3.5 text-destructive" />
@@ -357,6 +354,6 @@ export default function Actions() {
           </div>
         )}
       </div>
-    </div>
+    </PageLayout>
   );
 }

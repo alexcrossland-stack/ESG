@@ -291,7 +291,8 @@ function AppBreadcrumbs() {
   const [location] = useLocation();
   const items = getBreadcrumbs(location);
 
-  if (items.length <= 1) return null;
+  if (items.length === 0) return <span className="text-sm font-medium">Workspace</span>;
+  if (items.length === 1) return <span className="text-sm font-medium" data-testid="workspace-title">{items[0].label}</span>;
 
   return (
     <Breadcrumb data-testid="app-breadcrumbs">
@@ -471,20 +472,21 @@ function ProtectedApp() {
 
   return (
     <SiteProvider>
-    <SidebarProvider style={{ "--sidebar-width": "14rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
-      <div className="flex h-screen w-full bg-background">
+    <SidebarProvider style={{ "--sidebar-width": "15.5rem", "--sidebar-width-icon": "3rem" } as React.CSSProperties}>
+      <button type="button" className="sr-only fixed left-4 top-4 z-[100] rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-lg focus:not-sr-only" onClick={() => document.getElementById("main-content")?.focus()}>Skip to content</button>
+      <div className="flex h-dvh w-full bg-background">
         <SidebarErrorBoundary><AppSidebar /></SidebarErrorBoundary>
         <div className="flex flex-col flex-1 min-w-0">
           <ImpersonationBanner />
           <ConsentBanner />
-          <header className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border bg-background shrink-0">
+          <header className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4 py-2 sm:px-6">
             <div className="flex items-center gap-3 min-w-0">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
               <AppBreadcrumbs />
             </div>
             <ThemeToggle />
           </header>
-          <main className="flex-1 overflow-auto">
+          <main id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-auto focus-visible:outline-none">
             <AppErrorBoundary>
               <Suspense fallback={<PageFallback />}>
                 <Switch>

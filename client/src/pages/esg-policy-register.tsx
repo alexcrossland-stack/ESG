@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
-import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Edit, Trash2, Shield } from "lucide-react";
+import { FileText, Plus, AlertTriangle, Clock, CheckCircle, Edit, Trash2, Shield, Search } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
 import { usePermissions } from "@/lib/permissions";
 import { Link } from "wouter";
@@ -152,14 +152,14 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
       <input type="hidden" {...register("policyType")} />
       <input type="hidden" {...register("status")} />
       <div className="space-y-1">
-        <Label>Policy Title *</Label>
-        <Input {...register("title", { required: true })} placeholder="e.g. Environmental Management Policy" data-testid="input-policy-title" />
+        <Label htmlFor="policy-record-title">Policy Title *</Label>
+        <Input id="policy-record-title" {...register("title", { required: true })} placeholder="e.g. Environmental Management Policy" data-testid="input-policy-title" />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label>Type</Label>
+          <Label htmlFor="policy-record-type">Type</Label>
           <Select defaultValue={initial?.policyType ?? "other"} onValueChange={(v: string) => setValue("policyType", v)}>
-            <SelectTrigger data-testid="select-policy-type">
+            <SelectTrigger id="policy-record-type" data-testid="select-policy-type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -170,9 +170,9 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
           </Select>
         </div>
         <div className="space-y-1">
-          <Label>Status</Label>
+          <Label htmlFor="policy-record-status">Status</Label>
           <Select defaultValue={initial?.status ?? "draft"} onValueChange={(v: string) => setValue("status", v)}>
-            <SelectTrigger data-testid="select-policy-status">
+            <SelectTrigger id="policy-record-status" data-testid="select-policy-status">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -184,27 +184,28 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
         </div>
       </div>
       <div className="space-y-1">
-        <Label>Owner</Label>
-        <Input {...register("owner")} placeholder="Policy owner name or role" data-testid="input-policy-owner" />
+        <Label htmlFor="policy-record-owner">Owner</Label>
+        <Input id="policy-record-owner" {...register("owner")} placeholder="Policy owner name or role" data-testid="input-policy-owner" />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label>Effective Date</Label>
-          <Input type="date" {...register("effectiveDate")} data-testid="input-policy-effective-date" />
+          <Label htmlFor="policy-record-effective-date">Effective Date</Label>
+          <Input id="policy-record-effective-date" type="date" {...register("effectiveDate")} data-testid="input-policy-effective-date" />
         </div>
         <div className="space-y-1">
-          <Label>Review Date</Label>
-          <Input type="date" {...register("reviewDate")} data-testid="input-policy-review-date" />
+          <Label htmlFor="policy-record-review-date">Review Date</Label>
+          <Input id="policy-record-review-date" type="date" {...register("reviewDate")} data-testid="input-policy-review-date" />
         </div>
       </div>
       <div className="space-y-1">
-        <Label>Document Link</Label>
-        <Input {...register("documentLink")} placeholder="https://..." data-testid="input-policy-doc-link" />
+        <Label htmlFor="policy-record-document-link">Document Link</Label>
+        <Input id="policy-record-document-link" {...register("documentLink")} placeholder="https://..." data-testid="input-policy-doc-link" />
         <p className="text-xs text-muted-foreground">Provide a link, upload a file, or use both.</p>
       </div>
       <div className="space-y-2">
-        <Label>Policy Attachment</Label>
+        <Label htmlFor="policy-record-attachment">Policy Attachment</Label>
         <Input
+          id="policy-record-attachment"
           type="file"
           accept={POLICY_ATTACHMENT_ACCEPT}
           data-testid="input-policy-attachment"
@@ -218,9 +219,9 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
         <p className="text-xs text-muted-foreground">Accepted formats: PDF, DOC, DOCX. Max size 10 MB.</p>
         {initial?.attachment && !removeExistingAttachment && !selectedFile && (
           <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs" data-testid="policy-existing-attachment">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <p className="font-medium text-foreground truncate">{initial.attachment.fileName}</p>
+                <p className="break-words font-medium text-foreground [overflow-wrap:anywhere]">{initial.attachment.fileName}</p>
                 <p className="text-muted-foreground">
                   Existing attachment{initial.attachment.size ? ` • ${formatFileSize(initial.attachment.size)}` : ""}
                 </p>
@@ -229,6 +230,7 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
                 type="button"
                 size="sm"
                 variant="ghost"
+                className="min-h-10 shrink-0"
                 onClick={() => setRemoveExistingAttachment(true)}
                 data-testid="button-remove-policy-attachment"
               >
@@ -244,7 +246,7 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
               type="button"
               variant="ghost"
               size="sm"
-              className="ml-2 h-6 px-2 text-xs"
+              className="ml-2 min-h-10 px-3 text-xs"
               onClick={() => setRemoveExistingAttachment(false)}
             >
               Undo
@@ -253,14 +255,14 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
         )}
         {selectedFile && (
           <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-xs" data-testid="policy-selected-attachment">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <p className="font-medium text-foreground truncate">{selectedFile.name}</p>
+                <p className="break-words font-medium text-foreground [overflow-wrap:anywhere]">{selectedFile.name}</p>
                 <p className="text-muted-foreground">
                   New upload{selectedFile.size ? ` • ${formatFileSize(selectedFile.size)}` : ""}
                 </p>
               </div>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedFile(null)}>
+              <Button type="button" size="sm" variant="ghost" className="min-h-10 shrink-0" onClick={() => setSelectedFile(null)}>
                 Clear
               </Button>
             </div>
@@ -268,8 +270,8 @@ function PolicyForm({ onSave, initial, saving = false }: { onSave: (data: any) =
         )}
       </div>
       <div className="space-y-1">
-        <Label>Notes</Label>
-        <Textarea {...register("notes")} rows={2} className="resize-none" data-testid="textarea-policy-notes" />
+        <Label htmlFor="policy-record-notes">Notes</Label>
+        <Textarea id="policy-record-notes" {...register("notes")} rows={2} className="resize-none" data-testid="textarea-policy-notes" />
       </div>
       <div className="sticky -bottom-6 bg-background py-3 border-t"><Button type="submit" disabled={saving} className="w-full min-h-11" data-testid="button-save-policy">{saving ? "Saving…" : "Save policy"}</Button></div>
     </form>
@@ -297,11 +299,11 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave, canEdit }: 
     <Card data-testid={`governance-card-${area}`} className="border border-border">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-purple-500" />
+          <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <div className="flex flex-wrap items-center gap-2">
+              <Shield className="h-4 w-4 shrink-0 text-primary" />
               <span className="text-sm font-medium">{label}</span>
-              {assignedOwnerName && <Badge variant="secondary" className="text-xs">{assignedOwnerName}</Badge>}
+              {assignedOwnerName && <Badge variant="secondary" className="max-w-full whitespace-normal text-xs [overflow-wrap:anywhere]">{assignedOwnerName}</Badge>}
             </div>
             {assignment?.ownerTitle && (
               <p className="text-xs text-muted-foreground mt-1">{assignment.ownerTitle}</p>
@@ -313,6 +315,7 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave, canEdit }: 
           {canEdit && (
             <Button
               variant="ghost" size="sm"
+              className="min-h-10 min-w-10 shrink-0"
               onClick={() => setEditing(!editing)}
               aria-label={`Edit ${label} governance owner`}
               data-testid={`button-edit-governance-${area}`}
@@ -324,20 +327,20 @@ function GovernanceAssignmentCard({ area, label, assignment, onSave, canEdit }: 
         {editing && (
           <form onSubmit={handleSubmit(data => { onSave(data); setEditing(false); })} className="mt-4 space-y-3 border-t border-border pt-3">
             <div className="space-y-1">
-              <Label className="text-xs">Owner Name</Label>
-              <Input {...register("ownerName")} placeholder="Name" className="h-8 text-sm" data-testid={`input-gov-owner-${area}`} />
+              <Label htmlFor={`gov-owner-${area}`} className="text-xs">Owner Name</Label>
+              <Input id={`gov-owner-${area}`} {...register("ownerName")} placeholder="Name" className="min-h-10 text-sm" data-testid={`input-gov-owner-${area}`} />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Title / Role</Label>
-              <Input {...register("ownerTitle")} placeholder="e.g. Head of Sustainability" className="h-8 text-sm" data-testid={`input-gov-title-${area}`} />
+              <Label htmlFor={`gov-title-${area}`} className="text-xs">Title / Role</Label>
+              <Input id={`gov-title-${area}`} {...register("ownerTitle")} placeholder="e.g. Head of Sustainability" className="min-h-10 text-sm" data-testid={`input-gov-title-${area}`} />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Responsibilities</Label>
-              <Textarea {...register("responsibilities")} rows={2} className="text-sm resize-none" data-testid={`textarea-gov-resp-${area}`} />
+              <Label htmlFor={`gov-resp-${area}`} className="text-xs">Responsibilities</Label>
+              <Textarea id={`gov-resp-${area}`} {...register("responsibilities")} rows={2} className="text-sm resize-none" data-testid={`textarea-gov-resp-${area}`} />
             </div>
             <div className="flex gap-2">
-              <Button type="submit" size="sm" data-testid={`button-save-gov-${area}`}>Save</Button>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button type="submit" size="sm" className="min-h-10" data-testid={`button-save-gov-${area}`}>Save</Button>
+              <Button type="button" size="sm" variant="ghost" className="min-h-10" onClick={() => setEditing(false)}>Cancel</Button>
             </div>
           </form>
         )}
@@ -449,8 +452,8 @@ export function PolicyRegisterWorkspace({
   }
 
   return (
-    <div className={embedded ? "space-y-8" : "p-6 space-y-8 max-w-5xl mx-auto"} data-testid="policy-register-workspace">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className={embedded ? "space-y-6" : "p-6 space-y-6 max-w-6xl mx-auto"} data-testid="policy-register-workspace">
+      <div className="space-y-4">
         <div>
           {embedded ? (
             <h2 className="text-base font-semibold flex items-center gap-2">
@@ -469,24 +472,30 @@ export function PolicyRegisterWorkspace({
               : "Track policies, owners, review dates and governance area assignments"}
           </p>
         </div>
-        {canManagePolicies && (
-          <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
-            <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild><Button size="sm" data-testid="button-add-policy"><Plus className="w-4 h-4 mr-1" /> Add policy</Button></DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem asChild><Link href="/policies?tab=templates">Use a template</Link></DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => { setEditingPolicy(null); setShowDialog(true); }}>Add an existing policy</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>{editingPolicy ? "Edit Policy" : "Add existing policy"}</DialogTitle>
-                <DialogDescription>Record the policy, its owner and review date. You can add the document now or later.</DialogDescription>
-              </DialogHeader>
-              <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} saving={createMutation.isPending || updateMutation.isPending} />
-            </DialogContent>
-          </Dialog>
-        )}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input aria-label="Search policies" placeholder="Search by title or owner" className="min-h-11 bg-card pl-9" value={search} onChange={event => setSearch(event.target.value)} data-testid="search-all-policies" />
+          </div>
+          {canManagePolicies && (
+            <Dialog open={showDialog} onOpenChange={(v: boolean) => { setShowDialog(v); if (!v) setEditingPolicy(null); }}>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild><Button className="min-h-11 shrink-0" data-testid="button-add-policy"><Plus className="w-4 h-4 mr-1" /> Add policy</Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild><Link href="/policies?tab=templates">Use a template</Link></DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { setEditingPolicy(null); setShowDialog(true); }}>Add an existing policy</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{editingPolicy ? "Edit Policy" : "Add existing policy"}</DialogTitle>
+                  <DialogDescription>Record the policy, its owner and review date. You can add the document now or later.</DialogDescription>
+                </DialogHeader>
+                <PolicyForm onSave={handleSave} initial={editingPolicy ?? undefined} saving={createMutation.isPending || updateMutation.isPending} />
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
       </div>
 
       <PageGuidance
@@ -529,7 +538,6 @@ export function PolicyRegisterWorkspace({
         </div>
       )}
 
-      <Input aria-label="Search policies" placeholder="Search all policies by title or owner" value={search} onChange={event => setSearch(event.target.value)} data-testid="search-all-policies" />
       {(policiesError || generatedPoliciesError) && <div role="alert" className="rounded-md border p-4 text-sm">Some policies could not be loaded. <Button variant="link" onClick={() => { queryClient.invalidateQueries({ queryKey: ["/api/policy-records"] }); queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] }); }}>Try again</Button></div>}
       <section className="space-y-3" aria-label="All policies" data-testid="registered-policy-list">
           {showLegacyPolicy && legacyPolicy && (
@@ -538,7 +546,7 @@ export function PolicyRegisterWorkspace({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">Company ESG policy</span>
+                      <h3 className="text-base font-semibold">Company ESG policy</h3>
                       <Badge variant={legacyPolicy.status === "published" ? "default" : "secondary"}>
                         {legacyPolicy.status === "published" ? "Published" : "Draft"}
                       </Badge>
@@ -549,7 +557,7 @@ export function PolicyRegisterWorkspace({
                       {legacyPolicy.reviewDate ? ` · Review ${new Date(legacyPolicy.reviewDate).toLocaleDateString()}` : " · Review date not set"}
                     </p>
                   </div>
-                  <Button asChild size="sm" variant="outline" data-testid="button-open-core-policy">
+                  <Button asChild size="sm" variant="outline" className="min-h-10 shrink-0" data-testid="button-open-core-policy">
                     <Link href="/policies?tab=register&policy=company">Open policy</Link>
                   </Button>
                 </div>
@@ -577,10 +585,10 @@ export function PolicyRegisterWorkspace({
                   className={`border ${overdue && policy.status !== "retired" ? "border-red-200 dark:border-red-900" : upcoming ? "border-amber-200 dark:border-amber-900" : "border-border"}`}
                 >
                   <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium">{policy.title}</span>
+                        <h3 className="break-words text-base font-semibold leading-snug [overflow-wrap:anywhere]">{policy.title}</h3>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Badge variant={statusCfg.badge}>{statusCfg.label}</Badge>
                           <Badge variant="outline" className="text-xs">{policy.origin === "template" ? "From template" : POLICY_TYPE_LABELS[policy.policyType] ?? policy.policyType}</Badge>
                           {overdue && policy.status !== "retired" && (
@@ -594,17 +602,17 @@ export function PolicyRegisterWorkspace({
                             </Badge>
                           )}
                         </div>
-                        <div className="flex flex-wrap gap-4 mt-2 text-xs text-muted-foreground">
-                          {policy.owner && <span>Owner: <span className="font-medium text-foreground">{policy.owner}</span></span>}
+                        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                          <span>Owner: <span className="font-medium text-foreground">{policy.owner || "Not assigned"}</span></span>
                           {policy.effectiveDate && <span>Effective: <span className="font-medium text-foreground">{new Date(policy.effectiveDate).toLocaleDateString()}</span></span>}
-                          {policy.reviewDate && <span className={overdue ? "text-red-500" : upcoming ? "text-amber-500" : ""}>Review: <span className="font-medium">{new Date(policy.reviewDate).toLocaleDateString()}</span></span>}
+                          <span className={overdue ? "text-red-700 dark:text-red-400" : upcoming ? "text-amber-700 dark:text-amber-400" : ""}>Review: <span className="font-medium">{policy.reviewDate ? new Date(policy.reviewDate).toLocaleDateString() : "Not set"}</span></span>
                         </div>
                         {(policy.documentLink || policy.attachment) && (
                           <div className="mt-3 space-y-1.5 text-xs">
                             {policy.documentLink && (
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-medium text-foreground">Document link:</span>
-                                <a href={policy.documentLink} target="_blank" rel="noreferrer" className="text-primary hover:underline" data-testid={`link-policy-doc-${policy.id}`}>
+                                <a href={policy.documentLink} target="_blank" rel="noreferrer" className="min-w-0 max-w-full break-words text-primary underline-offset-4 hover:underline [overflow-wrap:anywhere]" data-testid={`link-policy-doc-${policy.id}`}>
                                   {policy.documentLink}
                                 </a>
                               </div>
@@ -612,7 +620,7 @@ export function PolicyRegisterWorkspace({
                             {policy.attachment && (
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-medium text-foreground">Attachment:</span>
-                                <a href={policy.attachment.downloadUrl} className="text-primary hover:underline" data-testid={`link-policy-attachment-${policy.id}`}>
+                                <a href={policy.attachment.downloadUrl} className="min-w-0 max-w-full break-words text-primary underline-offset-4 hover:underline [overflow-wrap:anywhere]" data-testid={`link-policy-attachment-${policy.id}`}>
                                   {policy.attachment.fileName}
                                 </a>
                                 {policy.attachment.size && (
@@ -623,17 +631,17 @@ export function PolicyRegisterWorkspace({
                           </div>
                         )}
                       </div>
-                      {policy.origin === "template" ? <Button asChild size="sm" variant="outline"><Link href={`/policies?tab=register&policy=${encodeURIComponent(policy.id)}`}>Open policy</Link></Button> : canManagePolicies && <div className="flex items-center gap-1 shrink-0">
+                      {policy.origin === "template" ? <Button asChild size="sm" variant="outline" className="min-h-10 shrink-0"><Link href={`/policies?tab=register&policy=${encodeURIComponent(policy.id)}`}>Open policy</Link></Button> : canManagePolicies && <div className="flex shrink-0 items-center gap-2 border-t pt-3 sm:border-0 sm:pt-0">
                         <Button
-                          variant="ghost" size="icon" className="w-7 h-7"
+                          variant="outline" size="sm" className="min-h-10 flex-1 sm:flex-none"
                           onClick={() => { setEditingPolicy(policy); setShowDialog(true); }}
                           aria-label={`Edit ${policy.title}`}
                           data-testid={`button-edit-policy-${policy.id}`}
                         >
-                          <Edit className="w-3.5 h-3.5" />
+                          <Edit className="mr-1.5 h-4 w-4" /> Edit
                         </Button>
                         <Button
-                          variant="ghost" size="icon" className="w-7 h-7 text-destructive hover:text-destructive"
+                          variant="ghost" size="sm" className="min-h-10 flex-1 text-destructive hover:text-destructive sm:flex-none"
                           onClick={() => {
                             if (window.confirm(`Delete ${policy.title}? This cannot be undone.`)) {
                               deleteMutation.mutate(policy.id);
@@ -642,7 +650,7 @@ export function PolicyRegisterWorkspace({
                           aria-label={`Delete ${policy.title}`}
                           data-testid={`button-delete-policy-${policy.id}`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="mr-1.5 h-4 w-4" /> Delete
                         </Button>
                       </div>}
                     </div>
@@ -655,8 +663,8 @@ export function PolicyRegisterWorkspace({
 
       {draftsSection}
 
-      <details className="space-y-4 rounded-lg border p-4" data-testid="governance-ownership-section">
-          <summary className="cursor-pointer text-sm font-medium">Governance ownership · {assignedAreas.size} areas assigned</summary>
+      <details className="space-y-4 rounded-xl border bg-card p-4 sm:p-5" data-testid="governance-ownership-section">
+          <summary className="min-h-10 cursor-pointer content-center text-sm font-medium">Governance ownership · {assignedAreas.size} areas assigned</summary>
           <div>
             <h2 id="governance-ownership-heading" className="text-base font-semibold">Governance ownership</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">Name the people accountable for relevant ESG areas. One person can cover several areas.</p>

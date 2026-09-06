@@ -18,6 +18,7 @@ const policyTemplate = {
   questionnaire: [
     { key: "companyName", label: "Company name", type: "text", required: true },
     { key: "policyOwner", label: "Policy owner", type: "text", required: true },
+    { key: "keyRisks", label: "Environmental priorities", type: "multiselect", options: ["Reduce energy use", "Reduce waste"] },
   ],
   sections: [{ key: "purpose", label: "Purpose" }],
   complianceMapping: { isoStandards: ["ISO 14001:2015"], legalDrivers: [], customerQuestionnaireUses: [] },
@@ -237,7 +238,11 @@ test.describe("Unified Policies workspace", () => {
 
     await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
     await expect(page.getByTestId("nav-policies")).toHaveAttribute("aria-current", "page");
-    await expect(page.getByTestId("policies-workspace-tabs").getByRole("tab")).toHaveCount(2);
+    const workspaceNavigation = page.getByRole("navigation", { name: "Policies workspace", exact: true });
+    await expect(workspaceNavigation).toHaveAttribute("data-testid", "policies-workspace-tabs");
+    await expect(workspaceNavigation.getByRole("link")).toHaveCount(2);
+    await expect(workspaceNavigation.getByRole("link", { name: "Policy register", exact: true })).toHaveAttribute("href", "/policies?tab=register");
+    await expect(workspaceNavigation.getByRole("link", { name: "Templates", exact: true })).toHaveAttribute("href", "/policies?tab=templates");
     await expect(page.getByTestId("tab-policy-register")).toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("tab-policy-templates")).not.toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("core-esg-policy-card")).toContainText("Company ESG policy");
@@ -245,6 +250,10 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("policy-card-record-1")).toContainText("Health and Safety Policy");
     await expect(page.getByTestId("button-add-policy")).toBeVisible();
     await expect(page.getByTestId("button-edit-policy-record-1")).toBeVisible();
+    await expect(page.getByTestId("button-edit-policy-record-1")).toHaveAccessibleName("Edit Health and Safety Policy");
+    await expect(page.getByTestId("button-edit-policy-record-1")).toHaveText("Edit");
+    await expect(page.getByTestId("button-delete-policy-record-1")).toHaveAccessibleName("Delete Health and Safety Policy");
+    await expect(page.getByTestId("button-delete-policy-record-1")).toHaveText("Delete");
     await expect(page.getByTestId("button-edit-governance-environment")).toBeHidden();
     await page.getByTestId("governance-ownership-section").locator("summary").click();
     await expect(page.getByTestId("button-edit-governance-environment")).toBeVisible();
@@ -305,11 +314,29 @@ test.describe("Unified Policies workspace", () => {
     await page.getByTestId("button-use-template-environmental-policy").click();
     await expect(page.getByTestId("input-companyName")).toHaveValue("Northstar Components");
     await expect(page.getByTestId("input-policyOwner")).toHaveValue("Alex Admin");
+    const priorities = page.getByRole("group", { name: "Environmental priorities", exact: true });
+    const energyPriority = priorities.getByRole("button", { name: "Reduce energy use", exact: true });
+    const wastePriority = priorities.getByRole("button", { name: "Reduce waste", exact: true });
+    await expect(energyPriority).toHaveAttribute("aria-pressed", "false");
+    await energyPriority.focus();
+    await page.keyboard.press("Space");
+    await expect(energyPriority).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Enter");
+    await expect(energyPriority).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Enter");
+    await expect(energyPriority).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Tab");
+    await expect(wastePriority).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(wastePriority).toHaveAttribute("aria-pressed", "true");
     await page.getByTestId("button-wizard-next").click();
     await page.getByTestId("button-wizard-next").click();
     await page.getByTestId("button-wizard-next").click();
     await expect(page.getByTestId("button-generate-policy")).toBeVisible();
+    await expect(page.getByText("Reduce energy use, Reduce waste", { exact: true })).toBeVisible();
+    const generateRequest = page.waitForRequest(request => request.method() === "POST" && new URL(request.url()).pathname === `/api/policy-templates/${policyTemplate.slug}/generate`);
     await page.getByTestId("button-generate-policy").click();
+    expect((await generateRequest).postDataJSON().answers.keyRisks).toEqual(["Reduce energy use", "Reduce waste"]);
 
     await expect(page).toHaveURL(/\/policies\?tab=register&policy=draft-generated$/);
     await expect(page.getByTestId("generated-policy-viewer")).toContainText("Northstar Components — Environmental Policy");
@@ -322,7 +349,7 @@ test.describe("Unified Policies workspace", () => {
     await page.getByTestId("policy-card-draft-1").getByRole("link", { name: "Open policy" }).click();
     await expect(page).toHaveURL(/\/policies\?tab=register&policy=draft-1$/);
     await expect(page.getByTestId("generated-policy-viewer")).toBeVisible();
-    await expect(page.getByTestId("generated-policy-viewer").locator("h1").first()).toHaveText("Environmental Policy Draft");
+    await expect(page.getByTestId("generated-policy-viewer").getByRole("heading", { level: 2, name: "Environmental Policy Draft", exact: true })).toBeVisible();
     await expect(page.getByTestId("textarea-purpose")).toHaveValue(/reduce our environmental impact/i);
     await expect(page.getByTestId("textarea-purpose")).toBeEnabled();
     await expect(page.getByTestId("button-submit-policy-review")).toBeVisible();
@@ -503,10 +530,26 @@ test.describe("Unified Policies workspace", () => {
     const { context, page } = await openPolicies(browser, "admin", "/policies", { width: 360, height: 740 });
 
     await expect(page.getByTestId("page-policies")).toBeVisible();
-    await expect(page.getByTestId("policies-workspace-tabs").getByRole("tab")).toHaveCount(2);
+    const workspaceNavigation = page.getByRole("navigation", { name: "Policies workspace", exact: true });
+    await expect(workspaceNavigation).toHaveAttribute("data-testid", "policies-workspace-tabs");
+    await expect(workspaceNavigation.getByRole("link")).toHaveCount(2);
+    await expect(workspaceNavigation.getByRole("link", { name: "Policy register", exact: true })).toHaveAttribute("aria-current", "page");
+    for (const [testId, action] of [["button-edit-policy-record-1", "Edit"], ["button-delete-policy-record-1", "Delete"]]) {
+      const button = page.getByTestId(testId);
+      await expect(button).toHaveAccessibleName(`${action} Health and Safety Policy`);
+      await expect(button).toHaveText(action);
+      await expect(button).toBeVisible();
+      const target = await button.boundingBox();
+      expect(target).not.toBeNull();
+      expect(target!.width).toBeGreaterThanOrEqual(40);
+      expect(target!.height).toBeGreaterThanOrEqual(40);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.getByTestId("tab-policy-templates").click();
+    await expect(page).toHaveURL(/\/policies\?tab=templates$/);
+    await expect(workspaceNavigation.getByRole("link", { name: "Templates", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(workspaceNavigation.getByRole("link", { name: "Policy register", exact: true })).not.toHaveAttribute("aria-current", "page");
     await expect(page.getByTestId("policy-template-library")).toBeVisible();
     await expect(page.getByTestId("button-use-template-environmental-policy")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
