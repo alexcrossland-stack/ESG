@@ -15,6 +15,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getCategoryKey, getCategoryLabel } from "@shared/categories";
+import {
+  getAnswerCategoryForSave,
+  getAnswerCategoryOptions,
+  groupAnswersByCategory,
+  matchesAnswerCategory,
+} from "@/lib/answer-categories";
 import { Plus, Pencil, Trash2, Search, AlertTriangle, Check, FileText } from "lucide-react";
 
 interface ProcurementAnswer {
@@ -37,16 +44,6 @@ interface ProcurementAnswer {
   reviewReasons: string[];
 }
 
-const CATEGORIES = [
-  "Environmental",
-  "Social",
-  "Governance",
-  "Supply Chain",
-  "Health & Safety",
-  "Data Privacy",
-  "General",
-];
-
 function statusBadge(status: string, needsReview: boolean) {
   if (needsReview) {
     return <Badge variant="outline" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-300 dark:border-amber-700">Needs Review</Badge>;
@@ -65,13 +62,13 @@ export default function AnswerLibrary() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAnswer, setEditingAnswer] = useState<ProcurementAnswer | null>(null);
-  const [filterCategory, setFilterCategory] = useState<string>("all");
+  const [filterCategory, setFilterCategory] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   const [formQuestion, setFormQuestion] = useState("");
   const [formAnswer, setFormAnswer] = useState("");
-  const [formCategory, setFormCategory] = useState("General");
+  const [formCategory, setFormCategory] = useState("general");
   const [formStatus, setFormStatus] = useState<string>("draft");
   const [formLinkedMetricIds, setFormLinkedMetricIds] = useState("");
   const [formLinkedPolicySection, setFormLinkedPolicySection] = useState("");
@@ -136,7 +133,7 @@ export default function AnswerLibrary() {
     setEditingAnswer(null);
     setFormQuestion("");
     setFormAnswer("");
-    setFormCategory("General");
+    setFormCategory("general");
     setFormStatus("draft");
     setFormLinkedMetricIds("");
     setFormLinkedPolicySection("");
@@ -150,7 +147,7 @@ export default function AnswerLibrary() {
     setEditingAnswer(a);
     setFormQuestion(a.question);
     setFormAnswer(a.answer);
-    setFormCategory(a.category || "General");
+    setFormCategory(getCategoryKey(a.category));
     setFormStatus(a.status);
     setFormLinkedMetricIds((a.linked_metric_ids || []).join(", "));
     setFormLinkedPolicySection(a.linked_policy_section || "");
@@ -179,7 +176,7 @@ export default function AnswerLibrary() {
     const payload = {
       question: formQuestion.trim(),
       answer: formAnswer.trim(),
-      category: formCategory,
+      category: getAnswerCategoryForSave(formCategory, editingAnswer?.category),
       status: formStatus,
       linkedMetricIds: parseIds(formLinkedMetricIds),
       linkedPolicySection: formLinkedPolicySection.trim() || null,
@@ -195,7 +192,7 @@ export default function AnswerLibrary() {
   }
 
   const filtered = answers.filter((a) => {
-    if (filterCategory !== "all" && a.category !== filterCategory) return false;
+    if (!matchesAnswerCategory(a.category, filterCategory)) return false;
     if (filterStatus === "needs_review" && !a.needsReview) return false;
     if (filterStatus !== "all" && filterStatus !== "needs_review" && a.status !== filterStatus) return false;
     if (searchQuery) {
@@ -205,12 +202,8 @@ export default function AnswerLibrary() {
     return true;
   });
 
-  const grouped: Record<string, ProcurementAnswer[]> = {};
-  for (const a of filtered) {
-    const cat = a.category || "Uncategorised";
-    if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push(a);
-  }
+  const grouped = groupAnswersByCategory(filtered);
+  const categoryOptions = getAnswerCategoryOptions(answers, formCategory, filterCategory);
 
   const metricOptions = metricsData.map((m: any) => ({ id: m.id, name: m.name }));
   const evidenceOptions = evidenceData.map((e: any) => ({ id: e.id, name: e.filename }));
@@ -242,14 +235,17 @@ export default function AnswerLibrary() {
             data-testid="input-search-answers"
           />
         </div>
-        <Select value={filterCategory} onValueChange={setFilterCategory}>
+        <Select
+          value={filterCategory === null ? "all" : `category:${filterCategory}`}
+          onValueChange={(value) => setFilterCategory(value === "all" ? null : value.slice("category:".length))}
+        >
           <SelectTrigger className="w-[160px]" data-testid="select-filter-category">
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Categories</SelectItem>
-            {CATEGORIES.map((c) => (
-              <SelectItem key={c} value={c}>{c}</SelectItem>
+            {categoryOptions.map(({ key, label }) => (
+              <SelectItem key={key} value={`category:${key}`}>{label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -284,10 +280,10 @@ export default function AnswerLibrary() {
           </CardContent>
         </Card>
       ) : (
-        Object.entries(grouped).map(([category, items]) => (
+        Array.from(grouped, ([category, items]) => (
           <div key={category} className="space-y-3">
             <h2 className="text-lg font-semibold flex items-center gap-2" data-testid={`text-category-${category}`}>
-              {category}
+              {getCategoryLabel(category)}
               <Badge variant="secondary">{items.length}</Badge>
             </h2>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -392,8 +388,8 @@ export default function AnswerLibrary() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {CATEGORIES.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    {categoryOptions.map(({ key, label }) => (
+                      <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

@@ -16,6 +16,8 @@ import { AddMetricDialog } from "@/components/add-metric-dialog";
 import { usePermissions } from "@/lib/permissions";
 import { buildMetricLibraryEntries, type MetricLibraryEntry } from "@/lib/metric-activation";
 import { invalidateMetricDependentQueries } from "@/lib/metric-query-invalidation";
+import { getCategoryKey, getCategoryLabel } from "@shared/categories";
+import { groupMetricsByCategory } from "@/lib/metric-categories";
 
 const STRENGTH_COLORS: Record<string, string> = {
   direct: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
@@ -253,15 +255,16 @@ function CategoryGroup({
   canToggle: boolean;
 }) {
   const enabledCount = metrics.filter(m => m.isActive).length;
-  const testId = `${pillar}-${category}`.replace(/\s+/g, "-").toLowerCase();
+  const testId = `${pillar}-${category}`;
+  const categoryLabel = getCategoryLabel(category);
 
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} data-testid={`group-category-${testId}`}>
-      <CollapsibleTrigger className="w-full" aria-label={`${open ? "Collapse" : "Expand"} ${category} metrics`}>
+      <CollapsibleTrigger className="w-full" aria-label={`${open ? "Collapse" : "Expand"} ${categoryLabel} metrics`}>
         <div className="flex items-center justify-between py-2 px-1 hover:bg-muted/50 rounded-md cursor-pointer">
           <div className="flex items-center gap-2">
             {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
-            <span className="text-sm font-medium">{category.replace(/_/g, " ").replace(/\b\w/g, letter => letter.toUpperCase())}</span>
+            <span className="text-sm font-medium">{categoryLabel}</span>
             <span className="text-xs text-muted-foreground">({enabledCount}/{metrics.length} enabled)</span>
           </div>
         </div>
@@ -340,7 +343,10 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
       .filter(d => {
         const matchesPillar = pillarFilter === "all" || d.pillar === pillarFilter;
         const matchesStatus = statusFilter === "all" || (statusFilter === "active" && d.isActive) || (statusFilter === "inactive" && !d.isActive) || (statusFilter === "core" && d.isCore) || (statusFilter === "advanced" && !d.isCore);
-        const matchesSearch = !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.code.toLowerCase().includes(search.toLowerCase()) || (d.description ?? "").toLowerCase().includes(search.toLowerCase());
+        const query = search.trim().toLowerCase();
+        const matchesSearch = !query || d.name.toLowerCase().includes(query) || d.code.toLowerCase().includes(query) || (d.description ?? "").toLowerCase().includes(query)
+          || getCategoryLabel(d.category).toLowerCase().includes(query)
+          || getCategoryKey(d.category).includes(getCategoryKey(query));
         return matchesPillar && matchesStatus && matchesSearch;
       })
       .sort((left, right) => {
@@ -354,15 +360,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
       });
   }, [libraryMetrics, pillarFilter, statusFilter, search]);
 
-  const byPillarAndCategory = useMemo(() => {
-    const pillars: Record<string, Record<string, MetricDefinition[]>> = {};
-    for (const d of filtered) {
-      if (!pillars[d.pillar]) pillars[d.pillar] = {};
-      if (!pillars[d.pillar][d.category]) pillars[d.pillar][d.category] = [];
-      pillars[d.pillar][d.category].push(d);
-    }
-    return pillars;
-  }, [filtered]);
+  const byPillarAndCategory = useMemo(() => groupMetricsByCategory(filtered), [filtered]);
 
   const pillarOrder: Array<"environmental" | "social" | "governance"> = ["environmental", "social", "governance"];
 
@@ -599,7 +597,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
                         if (enabledDelta !== 0) return enabledDelta;
                         const recommendedDelta = rightMetrics.filter((metric) => metric.isCore).length - leftMetrics.filter((metric) => metric.isCore).length;
                         if (recommendedDelta !== 0) return recommendedDelta;
-                        return leftName.localeCompare(rightName);
+                        return getCategoryLabel(leftName).localeCompare(getCategoryLabel(rightName));
                       })
                       .map(([category, catMetrics]) => {
                         const categoryKey = `${pillar}:${category}`;
