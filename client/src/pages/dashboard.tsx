@@ -12,11 +12,11 @@ import {
   Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  AlertTriangle, CheckCircle, CheckCircle2, Clock, Zap, Users, Shield,
+  AlertTriangle, CheckCircle, Clock, Zap, Users, Shield,
   Activity, Leaf, ArrowUp, ArrowDown, ClipboardList, FileText, Info,
   Calendar, FileCheck, AlertCircle, TrendingUp, CircleDot,
   Bell, X, ChevronDown, ChevronUp, Sparkles, Target, BarChart3,
-  Database, TrendingDown, BookOpen, Globe, Star, Download, Upload,
+  Database, TrendingDown, BookOpen, Globe,
   Droplets, Recycle,
 } from "lucide-react";
 import { Link } from "wouter";
@@ -35,13 +35,18 @@ import { SmeDashboardOverview } from "@/components/sme-dashboard-overview";
 import { ValueSourceBadge } from "@/components/value-source-badge";
 import { Building2, ArrowRight } from "lucide-react";
 import { PageGuidance } from "@/components/page-guidance";
-import { useActivationState } from "@/hooks/use-activation-state";
 import { EsgTooltip } from "@/components/esg-tooltip";
 import { ContextualHelpLink } from "@/components/help";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
-import { getNextAction } from "@/lib/get-next-action";
 import { useBillingStatus } from "@/components/upgrade-prompt";
 import { buildDashboardScoreQuery, resolveDashboardScorePeriodScope } from "@/lib/dashboard-score-period";
+import { overviewPeriodContext, overviewReadinessUrl } from "@/lib/overview-period";
+
+async function fetchDashboardData(url: string) {
+  const response = await authFetch(url);
+  if (!response.ok) throw new Error("Dashboard data is temporarily unavailable");
+  return response.json();
+}
 
 const COLORS = {
   environmental: "hsl(158, 64%, 32%)",
@@ -237,225 +242,6 @@ function DashboardTrendCards({ trendSummary }: { trendSummary: any }) {
   );
 }
 
-function ActivationCard() {
-  const activation = useActivationState();
-
-  if (activation.isLoading || activation.isError) {
-    return (
-      <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
-        <CardHeader className="pb-2">
-          <Skeleton className="h-4 w-48" />
-          <Skeleton className="h-1.5 w-full mt-2" />
-        </CardHeader>
-        <CardContent className="pb-3 space-y-2">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (!activation.activationSteps.length) return null;
-  if (activation.activationComplete) return null;
-
-  const { activationSteps, activationPercent, activationNextStep } = activation;
-
-  const progressLabel = activationPercent === 0
-    ? "Not started yet — pick step 1 below"
-    : activationPercent === 33
-    ? "1 of 3 done — keep going"
-    : activationPercent === 67
-    ? "2 of 3 done — almost there"
-    : "All 3 done — you're set up!";
-
-  return (
-    <Card className="border-primary/30 bg-primary/5" data-testid="card-activation-checklist">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" />
-            Get started — 3 steps to your first ESG report
-          </CardTitle>
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <CardDescription className="text-xs">{progressLabel}</CardDescription>
-            <span className="text-xs font-medium text-primary">{activationPercent}%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${activationPercent}%` }} />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pb-3">
-        <div className="space-y-1">
-          {activationSteps.map((step, idx) => (
-            <Link key={step.key} href={step.actionUrl || "/"}>
-              <div
-                className="flex items-start gap-2.5 p-2 rounded-md hover:bg-background/60 cursor-pointer transition-colors group"
-                data-testid={`activation-step-${step.key}`}
-              >
-                {step.complete ? (
-                  <CheckCircle2 className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 shrink-0 mt-0.5 group-hover:border-primary/50 transition-colors flex items-center justify-center">
-                    <span className="text-[9px] font-bold text-muted-foreground">{idx + 1}</span>
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm leading-snug ${step.complete ? "text-muted-foreground line-through" : "font-medium"}`}>{step.label}</p>
-                  {!step.complete && <p className="text-xs text-muted-foreground">{step.description}</p>}
-                  {!step.complete && step.why && (
-                    <p className="text-xs text-primary/70 mt-0.5 italic">{step.why}</p>
-                  )}
-                </div>
-                {!step.complete && activationNextStep && step.key === activationNextStep.key && (
-                  <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium shrink-0">Next</span>
-                )}
-              </div>
-            </Link>
-          ))}
-        </div>
-        {activationNextStep && (
-          <div className="mt-3 pt-3 border-t">
-            <Link href={activationNextStep.actionUrl || "/"}>
-              <Button size="sm" className="w-full" data-testid="button-activation-primary-cta">
-                {activationNextStep.label} <ArrowRight className="w-3.5 h-3.5 ml-1" />
-              </Button>
-            </Link>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function NextStepBanner() {
-  const activation = useActivationState();
-
-  if (activation.isLoading || activation.isError) {
-    return <Skeleton className="h-12 w-full rounded-lg" />;
-  }
-
-  if (activation.activationComplete) return null;
-
-  const next = activation.activationNextStep;
-  if (!next) return null;
-
-  return (
-    <div
-      className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-primary/20 bg-primary/5"
-      data-testid="banner-next-step"
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        <Zap className="w-4 h-4 text-primary shrink-0" />
-        <p className="text-sm text-foreground leading-snug">{next.description}</p>
-      </div>
-      <Link href={next.actionUrl || "/"}>
-        <Button size="sm" className="shrink-0" data-testid="button-next-step-banner">
-          {next.label} <ArrowRight className="w-3.5 h-3.5 ml-1" />
-        </Button>
-      </Link>
-    </div>
-  );
-}
-
-function PostWizardPanel() {
-  const { data: authData } = useQuery({ queryKey: ["/api/auth/me"] });
-  const company = (authData as any)?.company;
-  const activation = useActivationState();
-
-  const isV3Completer =
-    company?.onboardingVersion === 3 &&
-    company?.onboardingComplete === true;
-
-  if (!isV3Completer) return null;
-  if (activation.isLoading) return null;
-  if (activation.activationComplete) return null;
-
-  type NextAction = {
-    icon: any;
-    title: string;
-    desc: string;
-    href: string;
-    testId: string;
-    highlighted?: boolean;
-  };
-  const NEXT_ACTIONS: NextAction[] = [
-    {
-      icon: TrendingUp,
-      title: "Enter more data",
-      desc: "Add figures for more metrics to build a fuller picture.",
-      href: "/data-entry",
-      testId: "post-wizard-action-data",
-    },
-    {
-      icon: Upload,
-      title: "Upload proof",
-      desc: "Attach invoices or certificates to back up your figures.",
-      href: "/evidence",
-      testId: "post-wizard-action-evidence",
-    },
-    {
-      icon: FileText,
-      title: "Generate your first report",
-      desc: "Create a baseline report to share with customers or investors.",
-      href: "/reports",
-      testId: "post-wizard-action-report",
-      highlighted: true,
-    },
-    {
-      icon: ClipboardList,
-      title: "Create your first policy",
-      desc: "Set out your commitment with a simple written ESG policy.",
-      href: "/policies?tab=templates",
-      testId: "post-wizard-action-policy",
-    },
-  ];
-
-  return (
-    <Card className="border-primary/30 bg-primary/5" data-testid="card-post-wizard-panel">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-primary" />
-          Setup complete — here's what to do next
-        </CardTitle>
-        <CardDescription className="text-xs">
-          You've finished the setup. These four steps will take you to your first report.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="pb-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {NEXT_ACTIONS.map(action => {
-          const Icon = action.icon;
-          return (
-            <Link key={action.href} href={action.href}>
-              <button
-                type="button"
-                className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:bg-background/60 ${
-                  action.highlighted
-                    ? "border-primary/40 bg-background/50"
-                    : "border-border/60 bg-background/30"
-                }`}
-                data-testid={action.testId}
-              >
-                <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${action.highlighted ? "bg-primary/10" : "bg-muted"}`}>
-                  <Icon className={`w-3.5 h-3.5 ${action.highlighted ? "text-primary" : "text-muted-foreground"}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-xs font-medium ${action.highlighted ? "text-primary" : "text-foreground"}`}>{action.title}</p>
-                  <p className="text-xs text-muted-foreground leading-snug">{action.desc}</p>
-                </div>
-                <ArrowRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-              </button>
-            </Link>
-          );
-        })}
-      </CardContent>
-    </Card>
-  );
-}
-
 function ScoreMethodology({ weightedScore }: { weightedScore: any }) {
   const [open, setOpen] = useState(false);
   if (!weightedScore) return null;
@@ -603,39 +389,13 @@ function DataQualityCard() {
   );
 }
 
-function PrimaryActionCard({ readiness, isLoading }: { readiness: any; isLoading: boolean }) {
-  if (isLoading) return <Skeleton className="h-24 w-full" data-testid="card-primary-action" />;
-
-  const action = getNextAction(readiness);
-
-  return (
-    <Card
-      className="border-primary/40 bg-gradient-to-r from-primary/10 to-primary/5"
-      data-testid="card-primary-action"
-    >
-      <CardContent className="p-5 flex flex-col sm:flex-row sm:items-center gap-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-base font-semibold text-foreground">{action.title}</p>
-          <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{action.description}</p>
-        </div>
-        <Link href={action.href} className="shrink-0">
-          <Button size="default" className="w-full sm:w-auto" data-testid="button-primary-action-cta">
-            {action.ctaLabel}
-            <ArrowRight className="w-4 h-4 ml-2" />
-          </Button>
-        </Link>
-      </CardContent>
-    </Card>
-  );
-}
-
 type MissingPanelItem = {
   label: string;
   priority: number;
   href: string;
 };
 
-function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: string }) {
+function WhatsMissingPanel({ readiness, esgState, metricMonth, isSavedPeriod }: { readiness: any; esgState: string; metricMonth: string; isSavedPeriod: boolean }) {
   const isProvisionalPlus = esgState === "PROVISIONAL" || esgState === "CONFIRMED";
   const [expanded, setExpanded] = useState(() => isProvisionalPlus);
 
@@ -651,21 +411,23 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
   const reportingReadiness: boolean = readiness?.reportingReadiness ?? false;
 
   const items: MissingPanelItem[] = [];
+  const dataHref = `/data-entry?period=${encodeURIComponent(metricMonth)}`;
+  const evidencePeriod = readiness?.reportingContext?.period?.name || metricMonth;
 
   missingMetricNames.forEach(name => {
-    items.push({ label: `Add data for: ${name}`, priority: 1, href: "/data-entry" });
+    items.push({ label: `Review missing data: ${name}`, priority: 1, href: dataHref });
   });
 
   if (!reportingReadiness && missingMetricNames.length === 0) {
-    items.push({ label: "More data needed before generating a report", priority: 2, href: "/data-entry" });
+    items.push({ label: "More data needed before generating a report", priority: 2, href: dataHref });
   }
 
   if (estimatedPct > 10) {
-    items.push({ label: `Replace estimated data with real figures (${estimatedPct}% estimated)`, priority: 3, href: "/data-entry?highlight=estimated" });
+    items.push({ label: `Review estimated figures (${estimatedPct}% estimated)`, priority: 3, href: `${dataHref}&highlight=estimated` });
   }
 
   if (evidenceCoverage < 60) {
-    items.push({ label: `Upload supporting documents (${evidenceCoverage}% evidence coverage)`, priority: 4, href: "/evidence" });
+    items.push({ label: `Review supporting documents (${evidenceCoverage}% evidence coverage)`, priority: 4, href: `/evidence?period=${encodeURIComponent(evidencePeriod)}` });
   }
 
   if (items.length === 0) return null;
@@ -688,6 +450,7 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
         <h3 className="text-sm font-medium">What's still missing</h3>
         <Badge variant="secondary" className="text-xs">{items.length}</Badge>
       </div>
+      {isSavedPeriod && <p className="text-xs text-muted-foreground">These checks cover the saved reporting period. Data links open {overviewPeriodContext(metricMonth).label}; for a longer period, review the remaining months in Data &amp; evidence too.</p>}
       <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
         {visibleItems.map((item, i) => (
           <Link key={i} href={item.href}>
@@ -725,10 +488,9 @@ function WhatsMissingPanel({ readiness, esgState }: { readiness: any; esgState: 
   );
 }
 
-function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weightedScore: any }) {
-  const { data: readiness, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness"] });
-
+function DashboardHeroCard({ esgScore, readiness, isLoading }: { esgScore: number; readiness: any; isLoading: boolean }) {
   if (isLoading) return <Skeleton className="h-40 w-full" />;
+  if (!readiness) return null;
 
   const esgStatus: EsgStatusData | undefined = readiness?.esgStatus;
   const confidence = readiness?.scoreConfidence || "score_in_progress";
@@ -805,144 +567,6 @@ function DashboardHeroCard({ esgScore, weightedScore }: { esgScore: number; weig
                 <p className="text-xs text-amber-700 dark:text-amber-300">{estimatedPct}% of your data is estimated. <Link href="/data-entry?highlight=estimated" className="underline font-medium" data-testid="link-replace-estimates">Replace with actual values</Link> to improve your score confidence.</p>
               </div>
             )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ActionFeedCard() {
-  const { data, isLoading } = useQuery<any>({ queryKey: ["/api/dashboard/actions"] });
-
-  if (isLoading) return (
-    <Card data-testid="card-action-feed">
-      <CardHeader className="pb-2">
-        <Skeleton className="h-4 w-48" />
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
-      </CardContent>
-    </Card>
-  );
-
-  const actions: any[] = Array.isArray(data) ? data : (Array.isArray(data?.actions) ? data.actions : []);
-
-  if (actions.length === 0) return null;
-
-  const impactColors: Record<string, string> = {
-    low: "text-gray-500",
-    medium: "text-blue-600 dark:text-blue-400",
-    high: "text-primary",
-  };
-
-  return (
-    <Card data-testid="card-action-feed">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <Zap className="w-4 h-4 text-primary" />
-          What to do next
-        </CardTitle>
-        <CardDescription className="text-xs">Prioritised actions to improve your ESG performance</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {actions.map((action: any, idx: number) => {
-          const explanation = action.explanation ?? action.description ?? "";
-          const whyItMatters = action.whyItMatters ?? action.reason ?? "";
-          const ctaUrl = action.ctaUrl ?? action.ctaHref ?? "/";
-          const effortLabel = action.effort ? `${action.effort} effort` : (action.effortLabel ?? "");
-          return (
-            <div
-              key={action.id}
-              className="flex items-start gap-3 p-3 rounded-md border border-border hover:bg-muted/30 transition-colors"
-              data-testid={`action-card-${action.id}`}
-            >
-              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
-                {idx + 1}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                  <p className="text-sm font-medium">{action.title}</p>
-                  {effortLabel && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded text-muted-foreground bg-muted">
-                      {effortLabel}
-                    </span>
-                  )}
-                  {action.impact && (
-                    <span className={`text-[10px] font-medium ${impactColors[action.impact] ?? "text-muted-foreground"}`}>
-                      {action.impact} impact
-                    </span>
-                  )}
-                </div>
-                {explanation && <p className="text-xs text-muted-foreground leading-snug">{explanation}</p>}
-                {whyItMatters && <p className="text-xs text-primary/70 italic mt-0.5">{whyItMatters}</p>}
-              </div>
-              <Link href={ctaUrl}>
-                <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" data-testid={`button-action-cta-${action.id}`}>
-                  {action.ctaLabel}
-                  <ArrowRight className="w-3 h-3 ml-1" />
-                </Button>
-              </Link>
-            </div>
-          );
-        })}
-      </CardContent>
-    </Card>
-  );
-}
-
-function FirstReportMilestone({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10" data-testid="card-milestone-first-report">
-      <CardContent className="p-5">
-        <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-            <Star className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Your first ESG report is ready!</h3>
-                <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80 mt-0.5">
-                  Your draft score is now available. This is your ESG baseline — keep improving data accuracy to strengthen your score over time.
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-6 h-6 shrink-0 text-muted-foreground"
-                onClick={onDismiss}
-                data-testid="button-dismiss-milestone"
-              >
-                <X className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2 mt-3">
-              <Link href="/reports">
-                <Button size="sm" className="h-7 text-xs gap-1.5" data-testid="button-milestone-view-report">
-                  <FileText className="w-3 h-3" />
-                  View report
-                </Button>
-              </Link>
-              <Link href="/reports">
-                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" data-testid="button-milestone-download-report">
-                  <Download className="w-3 h-3" />
-                  Download report
-                </Button>
-              </Link>
-              <Link href="/data-entry">
-                <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" data-testid="button-milestone-improve-accuracy">
-                  <TrendingUp className="w-3 h-3" />
-                  Improve accuracy
-                </Button>
-              </Link>
-              <Link href="/data-entry?highlight=estimated">
-                <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5" data-testid="button-milestone-review-estimates">
-                  <CheckCircle className="w-3 h-3" />
-                  Review estimated values
-                </Button>
-              </Link>
-            </div>
           </div>
         </div>
       </CardContent>
@@ -1103,20 +727,15 @@ export default function Dashboard() {
   const reporting = useReportingMonth();
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>("__latest__");
   const [advancedInsightsOpen, setAdvancedInsightsOpen] = useState(false);
-  const [milestoneDismissed, setMilestoneDismissed] = useState<boolean>(() => {
-    try { return localStorage.getItem("milestone_first_report_dismissed") === "true"; } catch { return false; }
-  });
-  const [milestoneSeenAtLoad] = useState<boolean>(() => {
-    try { return localStorage.getItem("milestone_first_report_seen") === "true"; } catch { return false; }
-  });
-  const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${selectedPeriodId}` : "";
-  const { data: latestEnhanced, isLoading: latestEnhancedLoading } = useQuery<any>({
+  const monthContext = overviewPeriodContext(reporting.month);
+  const periodParam = selectedPeriodId !== "__latest__" ? `?reportingPeriodId=${encodeURIComponent(selectedPeriodId)}` : "";
+  const { data: latestEnhanced, isLoading: latestEnhancedLoading, isError: latestEnhancedError, refetch: retryEnhanced } = useQuery<any>({
     queryKey: ["/api/dashboard/enhanced", reporting.month],
-    queryFn: () => authFetch(`/api/dashboard/enhanced?period=${reporting.month}`).then(r => r.json()),
+    queryFn: () => fetchDashboardData(`/api/dashboard/enhanced?period=${reporting.month}`),
   });
-  const { data: periodEnhanced, isLoading: periodEnhancedLoading } = useQuery<any>({
+  const { data: periodEnhanced, isLoading: periodEnhancedLoading, isError: periodEnhancedError, refetch: retryPeriodEnhanced } = useQuery<any>({
     queryKey: ["/api/dashboard/enhanced", selectedPeriodId],
-    queryFn: () => authFetch(`/api/dashboard/enhanced${periodParam}`).then(r => r.json()),
+    queryFn: () => fetchDashboardData(`/api/dashboard/enhanced${periodParam}`),
     enabled: selectedPeriodId !== "__latest__",
   });
   const enhanced = selectedPeriodId === "__latest__" ? latestEnhanced : periodEnhanced;
@@ -1127,21 +746,21 @@ export default function Dashboard() {
   const { data: policyData } = useQuery<any>({ queryKey: ["/api/policy"] });
   const { data: reportingPeriods = [] } = useQuery<any[]>({ queryKey: ["/api/reporting-periods"] });
   const { data: evidenceRequests = [] } = useQuery<any[]>({ queryKey: ["/api/evidence-requests"] });
-  const { data: readiness, isLoading: readinessLoading } = useQuery<any>({ queryKey: ["/api/dashboard/readiness", reporting.month], queryFn: () => authFetch(`/api/dashboard/readiness?period=${reporting.month}`).then(r => r.json()) });
+  const { data: readiness, isLoading: readinessLoading, isError: readinessError, refetch: retryReadiness } = useQuery<any>({ queryKey: ["/api/dashboard/readiness", reporting.month], queryFn: () => fetchDashboardData(overviewReadinessUrl(reporting.month)) });
+  const { data: periodReadiness, isLoading: periodReadinessLoading, isError: periodReadinessError, refetch: retryPeriodReadiness } = useQuery<any>({
+    queryKey: ["/api/dashboard/readiness", selectedPeriodId],
+    queryFn: () => fetchDashboardData(overviewReadinessUrl(reporting.month, selectedPeriodId)),
+    enabled: selectedPeriodId !== "__latest__",
+  });
+  const advancedReadiness = selectedPeriodId === "__latest__" ? readiness : periodReadiness;
+  const advancedReadinessLoading = selectedPeriodId === "__latest__" ? readinessLoading : periodReadinessLoading;
+  const advancedError = selectedPeriodId === "__latest__" ? readinessError || latestEnhancedError : periodReadinessError || periodEnhancedError;
   const { can, isAdmin } = usePermissions();
   const { activeSiteId } = useSiteContext();
 
-  const isLoading = enhancedLoading || oldLoading;
+  const isLoading = latestEnhancedLoading || oldLoading;
   const activePeriod = reportingPeriods.find((rp: any) => rp.id === selectedPeriodId);
-  const scorePeriodScope = resolveDashboardScorePeriodScope(activePeriod);
-
-  const showMilestone = !milestoneDismissed && !milestoneSeenAtLoad && Boolean(readiness?.hasGeneratedReport);
-
-  useEffect(() => {
-    if (advancedInsightsOpen && showMilestone) {
-      try { localStorage.setItem("milestone_first_report_seen", "true"); } catch {}
-    }
-  }, [advancedInsightsOpen, showMilestone]);
+  const scorePeriodScope = activePeriod ? resolveDashboardScorePeriodScope(activePeriod) : { metricPeriod: reporting.month, frameworkPeriod: reporting.month };
 
   if (isLoading) {
     return (
@@ -1203,15 +822,10 @@ export default function Dashboard() {
 
   const hasAlerts = missingDataAlerts.length > 0 || overdueActions.length > 0 || upcomingPolicyReviews.length > 0;
 
-  const esgState: string = readiness?.esgStatus?.state ?? "IN_PROGRESS";
+  const esgState: string = advancedReadiness?.esgStatus?.state ?? "IN_PROGRESS";
   const showDraft = esgState === "DRAFT" || esgState === "PROVISIONAL" || esgState === "CONFIRMED";
   const showProvisional = esgState === "PROVISIONAL" || esgState === "CONFIRMED";
   const showConfirmed = esgState === "CONFIRMED";
-
-  const handleDismissMilestone = () => {
-    setMilestoneDismissed(true);
-    try { localStorage.setItem("milestone_first_report_dismissed", "true"); } catch {}
-  };
 
   return (
     <PageLayout>
@@ -1220,7 +834,7 @@ export default function Dashboard() {
         title="Overview"
         eyebrow={company?.name}
         titleTestId="text-dashboard-title"
-        description="Your next tasks and progress for the selected reporting month"
+        description="Know where you stand. Focus on what matters next."
         actions={
           <label className="flex w-full flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:w-auto">
             Reporting month
@@ -1229,8 +843,20 @@ export default function Dashboard() {
         }
       />
 
-      <SmeNextTasks month={reporting.month} />
-      <SmeDashboardOverview showNextAction={false} readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} />
+      {monthContext.position !== "current" && (
+        <div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="overview-period-notice">
+          <p className="text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">{monthContext.position === "past" ? "Reviewing" : "Planning for"} {monthContext.label}.</span>{" "}
+            {monthContext.position === "past" ? "Your figures relate to this earlier month." : "This is a future reporting month."}
+          </p>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={() => reporting.setMonth(monthContext.currentMonth)} data-testid="button-overview-current-month">Go to current month</Button>
+        </div>
+      )}
+
+      <SmeDashboardOverview month={reporting.month} showNextAction={false} readiness={readiness} enhanced={latestEnhanced} isLoading={readinessLoading || latestEnhancedLoading} hasError={readinessError || latestEnhancedError}>
+        <SmeNextTasks month={reporting.month} />
+      </SmeDashboardOverview>
+      {(readinessError || latestEnhancedError) && <Button variant="outline" className="self-start" onClick={() => { void retryReadiness(); void retryEnhanced(); }} data-testid="button-retry-overview">Retry summary</Button>}
 
       <details
         open={advancedInsightsOpen}
@@ -1248,7 +874,7 @@ export default function Dashboard() {
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-medium">Advanced insights</span>
-              <span className="block text-xs text-muted-foreground">Detailed scores, trends, alerts and recommendations</span>
+              <span className="block text-xs text-muted-foreground">Performance, trends and detailed checks</span>
             </span>
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
@@ -1263,10 +889,10 @@ export default function Dashboard() {
               </div>
               <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
                 <SelectTrigger className="w-full sm:w-44" data-testid="select-dashboard-period">
-                  <SelectValue placeholder="Latest Data" />
+                  <SelectValue placeholder="Working month" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__latest__">Latest Data</SelectItem>
+                  <SelectItem value="__latest__">Working month · {monthContext.label}</SelectItem>
                   {reportingPeriods.map((rp: any) => (
                     <SelectItem key={rp.id} value={rp.id}>{rp.name}</SelectItem>
                   ))}
@@ -1274,39 +900,33 @@ export default function Dashboard() {
               </Select>
             </div>
           )}
+          {advancedError ? (
+            <div role="alert" className="rounded-lg border border-border p-4" data-testid="advanced-insights-error">
+              <p className="text-sm">Detailed insights could not be loaded for this period. Your saved data has not changed.</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => { if (selectedPeriodId === "__latest__") { void retryReadiness(); void retryEnhanced(); } else { void retryPeriodReadiness(); void retryPeriodEnhanced(); } }}>Retry detailed insights</Button>
+            </div>
+          ) : enhancedLoading || advancedReadinessLoading ? <Skeleton className="h-40 w-full" data-testid="advanced-insights-loading" /> : <>
           {showProvisional && (
             <PageGuidance
               pageKey="dashboard"
-              title="ESG Dashboard — what the numbers mean"
-              summary="This dashboard shows your overall ESG (Environmental, Social and Governance) performance. The score is calculated from the data you enter and the policies/evidence you have in place. A higher score means better data coverage and performance — it is not a regulatory rating."
-              goodLooksLike="ESG score above 60%, all key metrics showing data for the current month, and the activation checklist fully complete."
+              title="What the detailed insights mean"
+              summary="These insights use the selected detailed period. Data completion shows what has been recorded; metric results and comparable trends show performance. Neither is a regulatory rating or a guarantee of compliance."
+              goodLooksLike="Figures complete for the selected period, reliable supporting evidence, and overdue company actions addressed."
               steps={[
-                "Check the 'Get up and running' checklist if it is visible — complete those steps first",
-                "Go to Data Entry to add your monthly/quarterly metric values (energy, headcount, waste, etc.)",
-                "Once data is entered, your score and charts will update automatically",
-                "Use the Reports page to generate a summary for customers, investors, or your own team",
+                "Use the priority task list above for your working month and outstanding company work",
+                "Check the detailed period before comparing scores or trends",
+                "Review missing figures and supporting evidence in Data & evidence",
+                "Use Reports to review and share a summary when it is ready",
               ]}
             />
           )}
-          {showProvisional && <ActionPlanBanner company={company} />}
-
-      {showProvisional && <PostWizardPanel />}
-      {showProvisional && <NextStepBanner />}
-      {showProvisional && <ActivationCard />}
-
-      {showProvisional && showMilestone && (
-        <FirstReportMilestone onDismiss={handleDismissMilestone} />
-      )}
-
-      <PrimaryActionCard readiness={readiness} isLoading={!readiness} />
-
-      <DashboardHeroCard esgScore={esgScore} weightedScore={weightedScore} />
+      <h2 className="text-base font-semibold">Performance &amp; trends</h2>
+      <DashboardHeroCard esgScore={esgScore} readiness={advancedReadiness} isLoading={advancedReadinessLoading} />
 
       <DashboardTrendCards trendSummary={enhanced?.trendSummary} />
 
-      <WhatsMissingPanel readiness={readiness} esgState={esgState} />
-
-      {showDraft && <ActionFeedCard />}
+      <h2 className="text-base font-semibold">Detailed checks</h2>
+      <WhatsMissingPanel readiness={advancedReadiness} esgState={esgState} metricMonth={scorePeriodScope.metricPeriod || reporting.month} isSavedPeriod={selectedPeriodId !== "__latest__"} />
 
       {showProvisional && hasAlerts && (
         <div className="space-y-2" data-testid="section-alerts">
@@ -1789,6 +1409,7 @@ export default function Dashboard() {
       {showConfirmed && <ActivityFeed />}
 
       {showConfirmed && <NotificationsPanel />}
+          </>}
         </div>
       </details>
     </PageLayout>
@@ -2080,66 +1701,6 @@ function MultiDimensionalScoreCards({
           }
         />
       </div>
-    </div>
-  );
-}
-
-function ActionPlanBanner({ company }: { company: any }) {
-  const [dismissed, setDismissed] = useState(() => {
-    try { return localStorage.getItem("action_plan_banner_dismissed") === "true"; } catch { return false; }
-  });
-
-  if (dismissed) return null;
-  const plan = company?.esgActionPlan;
-  if (!plan) return null;
-
-  function dismiss() {
-    try { localStorage.setItem("action_plan_banner_dismissed", "true"); } catch {}
-    setDismissed(true);
-  }
-
-  const MATURITY_LABELS: Record<string, string> = {
-    just_starting: "Starter",
-    some_policies: "Developing",
-    formal_programme: "Established",
-  };
-
-  return (
-    <div className="flex items-start gap-3 p-4 rounded-lg border border-primary/30 bg-primary/5 relative" data-testid="banner-action-plan">
-      <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-        <Sparkles className="w-4 h-4 text-primary" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold">Your ESG Action Plan is ready</p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Based on your {MATURITY_LABELS[plan.maturityLevel] || plan.maturityLevel} maturity level.
-          We've recommended {plan.recommendedPolicies?.length || 0} policies,&nbsp;
-          {plan.recommendedMetrics?.length || 0} metrics, and {plan.recommendedEvidence?.length || 0} evidence documents to collect.
-        </p>
-        <div className="flex gap-2 mt-2 flex-wrap">
-          {(plan.recommendedPolicies || []).slice(0, 2).map((p: any, i: number) => (
-            <Badge key={i} variant="secondary" className="text-xs">{p.name}</Badge>
-          ))}
-          {(plan.recommendedPolicies || []).length > 2 && (
-            <Badge variant="secondary" className="text-xs">+{(plan.recommendedPolicies || []).length - 2} more</Badge>
-          )}
-        </div>
-        <div className="flex gap-2 mt-2">
-          <Link href="/policies?tab=templates">
-            <Button size="sm" variant="outline" className="h-7 text-xs" data-testid="button-action-plan-create-policy">
-              Create first policy
-            </Button>
-          </Link>
-          <Link href="/data-entry">
-            <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid="button-action-plan-view-metrics">
-              View metrics
-            </Button>
-          </Link>
-        </div>
-      </div>
-      <button onClick={dismiss} className="text-muted-foreground hover:text-foreground transition-colors shrink-0" data-testid="button-dismiss-action-plan">
-        <X className="w-4 h-4" />
-      </button>
     </div>
   );
 }
