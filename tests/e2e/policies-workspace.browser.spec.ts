@@ -368,7 +368,9 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("button-workflow-reject-policy")).toBeVisible();
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-save-generated")).toHaveCount(0);
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
 
     await page.getByTestId("button-workflow-approve-policy").click();
     await expect(page.getByTestId("badge-policy-status")).toContainText("approved");
@@ -385,7 +387,9 @@ test.describe("Unified Policies workspace", () => {
       { policy: { workflowStatus: "submitted" } },
     );
 
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
     await expect(page.getByTestId("button-save-generated")).toHaveCount(0);
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-revise-policy")).toHaveCount(0);
@@ -416,7 +420,9 @@ test.describe("Unified Policies workspace", () => {
     await rejectButton.click();
 
     await expect(page.getByTestId("policy-rejection-guidance")).toContainText("Clarify operational responsibilities");
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-revise-policy")).toBeVisible();
     expect(getReviewRequests()).toBe(1);
@@ -438,7 +444,9 @@ test.describe("Unified Policies workspace", () => {
     );
 
     await expect(page.getByTestId("badge-policy-status")).toContainText("published");
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-revise-policy")).toBeVisible();
 
@@ -469,7 +477,9 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("badge-policy-status")).toContainText("approved");
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-approve-policy")).toHaveCount(0);
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
     await expect(page.getByTestId("button-revise-policy")).toBeVisible();
 
     await page.getByTestId("button-revise-policy").click();
@@ -516,7 +526,9 @@ test.describe("Unified Policies workspace", () => {
     await page.getByTestId("tab-policy-register").click();
     await page.getByTestId("policy-card-draft-1").getByRole("link", { name: "Open policy" }).click();
     await expect(page.getByTestId("generated-policy-viewer")).toBeVisible();
-    await expect(page.getByTestId("textarea-purpose")).toBeDisabled();
+    await expect(page.getByTestId("textarea-purpose")).toHaveCount(0);
+    await expect(page.getByTestId("tab-generated-policy-edit")).toHaveCount(0);
+    await expect(page.getByTestId("generated-policy-preview")).toContainText(/reduce our environmental impact/i);
     await expect(page.getByTestId("button-export-generated")).toBeVisible();
     await expect(page.getByTestId("button-submit-policy-review")).toHaveCount(0);
     await expect(page.getByTestId("button-save-generated")).toHaveCount(0);

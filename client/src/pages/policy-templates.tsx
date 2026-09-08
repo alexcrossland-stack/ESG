@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -869,7 +870,14 @@ function QuestionnaireWizard({ slug, authData, onBack, onComplete, embedded = fa
   );
 }
 
-export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onBack: () => void; embedded?: boolean }) {
+type PolicyViewerProps = { id: string; onBack: () => void; embedded?: boolean };
+
+export function PolicyViewer(props: PolicyViewerProps) {
+  // Opening a different policy must never carry over another document's draft or mode.
+  return <PolicyViewerDocument key={props.id} {...props} />;
+}
+
+function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can } = usePermissions();
@@ -882,6 +890,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
   }>({});
   const [isDirty, setIsDirty] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
+  const [documentMode, setDocumentMode] = useState<"edit" | "preview">("edit");
 
   const { data: policy, isLoading } = useQuery<any>({
     queryKey: ["/api/generated-policies", id],
@@ -901,7 +910,8 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
       const res = await apiRequest("PUT", `/api/generated-policies/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (updatedPolicy) => {
+      queryClient.setQueryData(["/api/generated-policies", id], updatedPolicy);
       queryClient.invalidateQueries({ queryKey: ["/api/generated-policies", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] });
       setIsDirty(false);
@@ -985,6 +995,10 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
   const content = (editContent || policy.content || {}) as Record<string, string>;
   const sections = (template?.sections || []) as any[];
   const compliance = template?.complianceMapping as any;
+  const displayedOwner = editMetadata.policyOwner ?? policy.policyOwner ?? "";
+  const displayedApprover = editMetadata.approver ?? policy.approver ?? "";
+  const displayedReviewDate = editMetadata.reviewDate
+    ?? (policy.reviewDate ? format(new Date(policy.reviewDate), "yyyy-MM-dd") : "");
 
   const handleContentChange = (key: string, value: string) => {
     setEditContent(prev => ({ ...(prev || content), [key]: value }));
@@ -1011,11 +1025,11 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
 
   const buildDocContent = () => {
     const metadataRows = [
-      ["Policy Owner", policy.policyOwner || "—"],
-      ["Approver", policy.approver || "—"],
+      ["Policy Owner", displayedOwner || "—"],
+      ["Approver", displayedApprover || "—"],
       ["Version", String(policy.versionNumber || 1)],
       ["Status", policy.status || "draft"],
-      ["Review Date", policy.reviewDate ? new Date(policy.reviewDate).toLocaleDateString() : "Not set"],
+      ["Review Date", displayedReviewDate ? format(new Date(`${displayedReviewDate}T00:00:00`), "dd MMM yyyy") : "Not set"],
     ];
 
     const metadataTable = [
@@ -1084,11 +1098,6 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
   const canSubmitForReview = requiresApproval
     && policy.workflowStatus === "draft"
     && policy.status === "draft";
-  const displayedOwner = editMetadata.policyOwner ?? policy.policyOwner ?? "";
-  const displayedApprover = editMetadata.approver ?? policy.approver ?? "";
-  const displayedReviewDate = editMetadata.reviewDate
-    ?? (policy.reviewDate ? format(new Date(policy.reviewDate), "yyyy-MM-dd") : "");
-
   const handleMetadataChange = (field: "policyOwner" | "approver" | "reviewDate", value: string) => {
     setEditMetadata((current) => ({ ...current, [field]: value }));
     setIsDirty(true);
@@ -1098,6 +1107,19 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
     : policy.status === "approved" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
     : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
   const TitleHeading = embedded ? "h2" : "h1";
+  const policyPreview = (
+    <Card data-testid="generated-policy-preview-card">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Document preview</CardTitle>
+        <CardDescription className="text-xs">
+          {isDirty ? "Includes your unsaved changes. Save when you're ready." : "Review the complete policy as it will appear in your export."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="min-w-0 overflow-x-auto [overflow-wrap:anywhere]">
+        <GeneratedDocumentContent markdown={renderedPolicyMarkdown} data-testid="generated-policy-preview" />
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className={embedded ? "mx-auto max-w-4xl space-y-6" : "p-6 max-w-4xl mx-auto space-y-6"} data-testid="generated-policy-viewer">
@@ -1155,10 +1177,13 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
           </DropdownMenuContent>
         </DropdownMenu>
         {canEditContent && isDirty && (
-          <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-generated">
-            <Edit3 className="w-3.5 h-3.5 mr-1.5" />
-            Save Changes
-          </Button>
+          <>
+            <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending} data-testid="button-save-generated">
+              <Edit3 className="w-3.5 h-3.5 mr-1.5" />
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+            <span className="self-center text-xs text-muted-foreground" role="status" data-testid="generated-policy-unsaved-changes">Unsaved changes</span>
+          </>
         )}
         {can("policy_editing") && canSubmitForReview && (
           <Button
@@ -1235,35 +1260,40 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="min-w-0 space-y-4">
-          {(sections.length > 0 ? sections : Object.keys(content).map(k => ({ key: k, label: k }))).map((section: any) => (
-            <Card key={section.key} data-testid={`section-${section.key}`}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">{section.label}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Textarea
-                  aria-label={section.label}
-                  value={content[section.key] || ""}
-                  onChange={(e) => handleContentChange(section.key, e.target.value)}
-                  className="min-h-32 text-sm resize-none whitespace-pre-wrap"
-                  disabled={!canEditContent}
-                  data-testid={`textarea-${section.key}`}
-                />
-              </CardContent>
-            </Card>
-          ))}
-
-          <Card data-testid="generated-policy-preview-card">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Rendered Preview</CardTitle>
-              <CardDescription className="text-xs">
-                Generated markdown is rendered here using the same safe document pipeline used for print and export.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="min-w-0 overflow-x-auto [overflow-wrap:anywhere]">
-              <GeneratedDocumentContent markdown={renderedPolicyMarkdown} data-testid="generated-policy-preview" />
-            </CardContent>
-          </Card>
+          {canEditContent ? (
+            <Tabs value={documentMode} onValueChange={(value) => setDocumentMode(value as "edit" | "preview")}>
+              <TabsList className="h-auto w-full justify-start sm:w-auto" aria-label="Policy document mode">
+                <TabsTrigger value="edit" className="min-h-10 flex-1 gap-2" data-testid="tab-generated-policy-edit">
+                  <Edit3 className="h-4 w-4" aria-hidden="true" /> Edit
+                </TabsTrigger>
+                <TabsTrigger value="preview" className="min-h-10 flex-1 gap-2" data-testid="tab-generated-policy-preview">
+                  <Eye className="h-4 w-4" aria-hidden="true" /> Preview
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="edit" className="mt-4 space-y-4" data-testid="generated-policy-edit-panel">
+                <p className="text-sm text-muted-foreground">Update each section, then preview your complete policy.</p>
+                {(sections.length > 0 ? sections : Object.keys(content).map(k => ({ key: k, label: k }))).map((section: any) => (
+                  <Card key={section.key} data-testid={`section-${section.key}`}>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">{section.label}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <Textarea
+                        aria-label={section.label}
+                        value={content[section.key] || ""}
+                        onChange={(e) => handleContentChange(section.key, e.target.value)}
+                        className="min-h-32 text-sm resize-none whitespace-pre-wrap"
+                        data-testid={`textarea-${section.key}`}
+                      />
+                    </CardContent>
+                  </Card>
+                ))}
+              </TabsContent>
+              <TabsContent value="preview" className="mt-4" data-testid="generated-policy-preview-panel">
+                {policyPreview}
+              </TabsContent>
+            </Tabs>
+          ) : policyPreview}
         </div>
 
         <div className="min-w-0 space-y-4">
@@ -1272,7 +1302,7 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
               <CardTitle className="text-sm">Policy Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {canEditContent ? (
+              {canEditContent && documentMode === "edit" ? (
                 <>
                   <div className="space-y-1">
                     <Label htmlFor="generated-policy-owner" className="text-xs text-muted-foreground">Owner</Label>
@@ -1310,15 +1340,15 @@ export function PolicyViewer({ id, onBack, embedded = false }: { id: string; onB
                 <>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Owner</span>
-                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{policy.policyOwner || "—"}</span>
+                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{displayedOwner || "—"}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Approver</span>
-                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{policy.approver || "—"}</span>
+                    <span className="min-w-0 break-words text-right font-medium [overflow-wrap:anywhere]">{displayedApprover || "—"}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted-foreground">Next review</span>
-                    <span className="text-right font-medium">{policy.reviewDate ? format(new Date(policy.reviewDate), "dd MMM yyyy") : "—"}</span>
+                    <span className="text-right font-medium">{displayedReviewDate ? format(new Date(`${displayedReviewDate}T00:00:00`), "dd MMM yyyy") : "—"}</span>
                   </div>
                 </>
               )}
