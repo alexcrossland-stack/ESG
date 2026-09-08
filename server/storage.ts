@@ -1196,6 +1196,25 @@ export class DatabaseStorage implements IStorage {
 
   async updateMetric(id: string, companyId: string, data: Partial<Metric>) {
     const mutable = pickMutableFields(data, METRIC_MUTABLE_FIELDS) as Partial<Metric>;
+    if (typeof mutable.enabled === "boolean") {
+      // Activation is one user-facing choice for compatible historical waste
+      // aliases. Updating flags together is atomic; values/IDs stay untouched.
+      const { metricAliasKey } = await import("@shared/metric-aliases");
+      return db.transaction(async (tx) => {
+        const companyMetrics = await tx.select().from(metrics).where(eq(metrics.companyId, companyId));
+        const existing = companyMetrics.find((metric) => metric.id === id);
+        if (!existing) return undefined;
+        const aliasKey = metricAliasKey(existing);
+        if (aliasKey) {
+          const ids = companyMetrics.filter((metric) => metricAliasKey(metric) === aliasKey).map((metric) => metric.id);
+          await tx.update(metrics).set({ enabled: mutable.enabled })
+            .where(and(eq(metrics.companyId, companyId), inArray(metrics.id, ids)));
+        }
+        const [metric] = await tx.update(metrics).set(mutable)
+          .where(and(eq(metrics.id, id), eq(metrics.companyId, companyId))).returning();
+        return metric;
+      });
+    }
     const [m] = await db.update(metrics).set(mutable)
       .where(and(eq(metrics.id, id), eq(metrics.companyId, companyId)))
       .returning();

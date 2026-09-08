@@ -1,6 +1,8 @@
 import { Client } from "pg";
 import { apiRequest, seedTestTenants } from "../fixtures/seed.js";
 import { isActiveEditableDataEntryMetric } from "../../shared/data-entry-metrics.js";
+import { buildMetricLibraryEntries } from "../../client/src/lib/metric-activation.js";
+import { canonicalMetricAliases } from "../../shared/metric-aliases.js";
 
 interface TestResult { name: string; passed: boolean; detail?: string }
 const results: TestResult[] = [];
@@ -84,7 +86,6 @@ async function run() {
     pass("GET /api/metric-definitions returns 200 for admin");
 
     const definitions = JSON.parse(libraryRes.body) as Array<{ id: string; name: string; isActive: boolean; isCore: boolean }>;
-    const enabledDefinitionCount = definitions.filter((metric) => metric.isActive).length;
     const recommendedLibraryMetric = definitions.find((metric) => metric.name === recommendedDef.name);
     if (!recommendedLibraryMetric) {
       fail("Recommended default definition appears in Metrics Library", recommendedDef.name);
@@ -109,10 +110,14 @@ async function run() {
       pass("New company has recommended defaults enabled in company metrics", `${enabledDefaults.length} enabled defaults`);
     }
 
-    if (enabledCompanyMetrics.length !== enabledDefinitionCount) {
-      fail("Enabled Metrics Library count matches enabled company metrics count", `library=${enabledDefinitionCount} metrics=${enabledCompanyMetrics.length}`);
+    // The raw API retains legacy definition IDs for compatibility. The SME
+    // library and its completion denominator count each tracked concept once.
+    const enabledDefinitionCount = buildMetricLibraryEntries(definitions as any, companyMetrics as any).filter((metric) => metric.isActive).length;
+    const enabledConceptCount = canonicalMetricAliases(enabledCompanyMetrics).length;
+    if (enabledConceptCount !== enabledDefinitionCount) {
+      fail("Enabled Metrics Library count matches tracked company concepts", `library=${enabledDefinitionCount} concepts=${enabledConceptCount}`);
     } else {
-      pass("Enabled Metrics Library count matches enabled company metrics count", `${enabledCompanyMetrics.length}`);
+      pass("Enabled Metrics Library count matches tracked company concepts", `${enabledConceptCount}`);
     }
 
     const initialDataEntryRes = await apiRequest("GET", "/api/data-entry/2024-01", undefined, tenantA.adminToken);

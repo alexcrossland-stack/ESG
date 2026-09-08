@@ -47,7 +47,7 @@ import { Link, useLocation, useSearch } from "wouter";
 import { InlineGuidanceTrigger } from "@/components/metric-guidance-panel";
 import { getRawFieldPriority, getManualMetricPriority, PRIORITY_LABELS, CONTEXTUAL_PROMPTS } from "@/lib/metric-guidance";
 import { PermissionBanner } from "@/components/permission-gate";
-import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics } from "@/lib/metric-activation";
+import { buildCanonicalEnabledMetrics, buildCanonicalEvidenceMetrics, resolveCanonicalMetricValueSource } from "@/lib/metric-activation";
 import { PasteFromExcelTab } from "@/components/paste-from-excel-tab";
 import { formatMetricDisplayValue, isBooleanMetricDataType, isEditableDataEntryMetricType } from "@shared/data-entry-metrics";
 import {
@@ -432,6 +432,10 @@ export default function DataEntry() {
     const periodValues = [entryData, quarterlyEntryData, annualEntryData].flatMap((data) => data?.values || []);
     const metricPeriodsById = new Map(
       buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics)
+        .map((metric) => resolveCanonicalMetricValueSource(metric, periodValues, (value: any) => (
+          value.period === resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType)
+          && (value.siteId ?? null) === selectedScopeSiteId
+        ), focusedEntryMetricId))
         .filter((metric) => metric.id)
         .map((metric) => [metric.id as string, resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType)]),
     );
@@ -451,7 +455,7 @@ export default function DataEntry() {
       setManualValues({});
       setManualDataSourceTypes({});
     }
-  }, [entryData, quarterlyEntryData, annualEntryData, metricDefinitions, companyMetrics, selectedPeriod, dirtyKeys]);
+  }, [entryData, quarterlyEntryData, annualEntryData, metricDefinitions, companyMetrics, selectedPeriod, selectedScopeSiteId, focusedEntryMetricId, dirtyKeys]);
 
   useEffect(() => {
     const requestedMode = resolveInitialWorkspaceMode(searchParams);
@@ -865,14 +869,18 @@ export default function DataEntry() {
     selectedScopeSiteId === null
       ? value?.siteId === null || value?.siteId === undefined
       : value?.siteId === selectedScopeSiteId;
-  const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics);
+  const allEnabledMetrics = buildCanonicalEnabledMetrics(metricDefinitions, companyMetrics)
+    .map((metric) => resolveCanonicalMetricValueSource(metric, existingValues, (value: any) => (
+      value.period === resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType)
+      && isSelectedScopeValue(value)
+    ), focusedEntryMetricId));
   const selectedMetricPeriodsById = new Map(
     allEnabledMetrics
       .filter((metric) => metric.id)
-      .map((metric) => [
-        metric.id as string,
+      .flatMap((metric) => (metric.aliasMetricIds ?? [metric.id as string]).map((id) => [
+        id,
         resolveMetricWorkspacePeriod(selectedPeriod, metric.frequency, metric.metricType),
-      ]),
+      ] as const)),
   );
   const scopedExistingValues = existingValues.filter((value: any) => (
     isSelectedScopeValue(value) && selectedMetricPeriodsById.get(value.metricId) === value.period
@@ -912,6 +920,7 @@ export default function DataEntry() {
     ? allEnabledMetrics.filter((metric: any) => (
         metric.id === focusedEntryMetricId
         || metric.definitionId === focusedEntryMetricId
+        || metric.aliasDefinitionIds?.includes(focusedEntryMetricId)
         || metric.key === focusedEntryMetricId
       ))
     : [];
@@ -936,6 +945,9 @@ export default function DataEntry() {
     const attachedEvidence = getMetricEvidence(metricValue?.id, metricId, metricPeriod);
     const usableEvidence = attachedEvidence.filter((file) => isUsableMetricEvidence(file));
     const displayValue = metricValue ? formatMetricDisplayValue(metricValue) : "";
+    const aliasValues = existingValues.filter((value: any) => metric.aliasMetricIds?.includes(value.metricId)
+      && value.period === metricPeriod && isSelectedScopeValue(value) && formatMetricDisplayValue(value) !== "");
+    const aliasConflict = new Set(aliasValues.map((value: any) => formatMetricDisplayValue(value))).size > 1;
     const isEligible = isMetricEntryEligible(metric);
     // Calculated/derived outputs do not require duplicate output-row evidence;
     // their editable source rows carry the assurance requirements instead.
@@ -944,15 +956,16 @@ export default function DataEntry() {
       value: displayValue,
       evidenceCount: usableEvidence.length,
       evidenceRequired: evidenceRequiredForWorkspace,
-      requiresCorrection: normalizeDataEntryWorkflowStatus(metricValue?.workflowStatus) === "rejected",
+      requiresCorrection: aliasConflict || normalizeDataEntryWorkflowStatus(metricValue?.workflowStatus) === "rejected",
     });
-    return { metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state };
+    return { metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state, aliasConflict };
   });
   const metricWorkspaceSummary = summarizeMetricDataStates(metricWorkspaceRows.map((row) => row.state));
   const normalizedMetricSearch = metricSearch.trim().toLowerCase();
   const filteredMetricWorkspaceRows = metricWorkspaceRows.filter((row) => {
     const matchesSearch = !normalizedMetricSearch
       || row.metric.name.toLowerCase().includes(normalizedMetricSearch)
+      || Boolean(row.metric.aliasNames?.some((name: string) => name.toLowerCase().includes(normalizedMetricSearch)))
       || (row.metric.description || "").toLowerCase().includes(normalizedMetricSearch);
     const matchesStatus = metricStatusFilter === "all" || row.state === metricStatusFilter;
     return matchesSearch && matchesStatus;
@@ -1626,9 +1639,9 @@ export default function DataEntry() {
                         <span className="text-xs text-muted-foreground">{categoryRows.length}</span>
                       </div>
                       <div className="divide-y rounded-lg border bg-card">
-                        {categoryRows.map(({ metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state }) => {
+                        {categoryRows.map(({ metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state, aliasConflict }) => {
                           const isEligible = isMetricEntryEligible(metric);
-                          const stateLabel = state === "needs-data" ? "Needs update" : state === "needs-evidence" ? "Needs evidence" : "Complete";
+                          const stateLabel = aliasConflict ? "Review legacy values" : state === "needs-data" ? "Needs update" : state === "needs-evidence" ? "Needs evidence" : "Complete";
                           const stateClass = state === "needs-data"
                             ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
                             : state === "needs-evidence"
@@ -1659,6 +1672,23 @@ export default function DataEntry() {
                                 </p>
                                 {!isEligible && metric.formulaText && (
                                   <p className="truncate text-[11px] text-muted-foreground">Calculated from: {metric.formulaText}</p>
+                                )}
+                                {aliasConflict && <p className="text-xs text-amber-700 dark:text-amber-300" role="status">Previous labels have different saved values for this period. Review their records below; values have not been added together or overwritten.</p>}
+                                {(metric.historicalAliasMetricIds?.length ?? 0) > 1 && (
+                                  <details className="text-xs text-muted-foreground">
+                                    <summary className="cursor-pointer">Previous labels &amp; saved records</summary>
+                                    <p className="mt-1">One tracked item. Existing values and evidence stay with their original records.</p>
+                                    <ul className="mt-1 space-y-1">
+                                      {companyMetrics.filter((item: any) => metric.historicalAliasMetricIds.includes(item.id)).map((item: any) => (
+                                        <li key={item.id}>
+                                          <Link className="underline underline-offset-2" href={`/metrics?metric=${encodeURIComponent(item.id)}&period=${encodeURIComponent(selectedPeriod)}&metricPeriod=${encodeURIComponent(metricPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}>
+                                            {item.name}: history &amp; evidence
+                                          </Link>
+                                          {aliasConflict && <span> — {existingValues.filter((value: any) => value.metricId === item.id && value.period === metricPeriod && isSelectedScopeValue(value)).map((value: any) => formatMetricDisplayValue(value)).join(", ") || "No value"}</span>}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </details>
                                 )}
                               </div>
                               <div className="flex flex-wrap items-center gap-2 sm:justify-end">

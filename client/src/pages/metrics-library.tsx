@@ -125,6 +125,7 @@ type MetricDefinition = {
   isSyntheticCustom?: boolean;
   metricType?: string | null;
   formulaText?: string | null;
+  aliasNames?: string[];
 };
 
 const PILLAR_CONFIG = {
@@ -179,6 +180,9 @@ function MetricCard({ metric, onToggle, isToggling, canToggle }: { metric: Metri
           </div>
           {metric.description && (
             <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{metric.description}</p>
+          )}
+          {(metric.aliasNames?.length ?? 0) > 1 && (
+            <p className="text-[11px] text-muted-foreground mb-2">Includes previous labels: {metric.aliasNames!.filter((name) => name !== metric.name).join(", ")}. Track once; existing records are retained.</p>
           )}
           {calculationClassification && calculationDescription && (
             <p
@@ -345,6 +349,7 @@ export function MetricsLibraryContent({ embedded = false, onBack }: MetricsLibra
         const matchesStatus = statusFilter === "all" || (statusFilter === "active" && d.isActive) || (statusFilter === "inactive" && !d.isActive) || (statusFilter === "core" && d.isCore) || (statusFilter === "advanced" && !d.isCore);
         const query = search.trim().toLowerCase();
         const matchesSearch = !query || d.name.toLowerCase().includes(query) || d.code.toLowerCase().includes(query) || (d.description ?? "").toLowerCase().includes(query)
+          || Boolean(d.aliasNames?.some((name) => name.toLowerCase().includes(query)))
           || getCategoryLabel(d.category).toLowerCase().includes(query)
           || getCategoryKey(d.category).includes(getCategoryKey(query));
         return matchesPillar && matchesStatus && matchesSearch;

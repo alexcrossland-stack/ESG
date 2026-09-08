@@ -10,27 +10,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
 import { CheckSquare, Plus, Edit2, Trash2, Calendar, User, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { OwnerAssignment } from "@/components/owner-assignment";
 import { PageHeader, PageLayout } from "@/components/page-layout";
-
-type ActionPlan = {
-  id: string;
-  title: string;
-  description: string | null;
-  owner: string | null;
-  dueDate: string | null;
-  status: "not_started" | "in_progress" | "complete" | "overdue";
-  notes: string | null;
-  createdAt: string;
-};
+import { ACTION_INVALIDATION_KEYS, actionFormSchema, buildActionPayload, getActionFormValues, type ActionFormValues, type ActionPlan } from "@/lib/action-form";
 
 const STATUS_CONFIG = {
   not_started: { label: "Not Started", variant: "outline" as const, color: "text-muted-foreground" },
@@ -38,15 +27,6 @@ const STATUS_CONFIG = {
   complete: { label: "Complete", variant: "default" as const, color: "text-primary" },
   overdue: { label: "Overdue", variant: "destructive" as const, color: "text-destructive" },
 };
-
-const actionSchema = z.object({
-  title: z.string().min(3, "Title must be at least 3 characters"),
-  description: z.string().optional(),
-  owner: z.string().optional(),
-  dueDate: z.string().optional(),
-  status: z.enum(["not_started", "in_progress", "complete", "overdue"]),
-  notes: z.string().optional(),
-});
 
 function ActionDialog({
   action,
@@ -59,28 +39,20 @@ function ActionDialog({
   const queryClient = useQueryClient();
   const isEditing = !!action;
 
-  const form = useForm<z.infer<typeof actionSchema>>({
-    resolver: zodResolver(actionSchema),
-    defaultValues: {
-      title: action?.title || "",
-      description: action?.description || "",
-      owner: action?.owner || "",
-      dueDate: action?.dueDate ? format(new Date(action.dueDate), "yyyy-MM-dd") : "",
-      status: action?.status || "not_started",
-      notes: action?.notes || "",
-    },
+  const form = useForm<ActionFormValues>({
+    resolver: zodResolver(actionFormSchema),
+    defaultValues: getActionFormValues(action),
   });
 
   const mutation = useMutation({
-    mutationFn: (data: z.infer<typeof actionSchema>) => {
-      const payload = { ...data, dueDate: data.dueDate ? new Date(data.dueDate).toISOString() : null };
+    mutationFn: (data: ActionFormValues) => {
+      const payload = buildActionPayload(data, isEditing ? form.formState.dirtyFields : undefined);
       return isEditing
         ? apiRequest("PUT", `/api/actions/${action!.id}`, payload)
         : apiRequest("POST", "/api/actions", payload);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      for (const queryKey of ACTION_INVALIDATION_KEYS) queryClient.invalidateQueries({ queryKey });
       toast({ title: isEditing ? "Action updated" : "Action created" });
       onClose();
     },
@@ -91,7 +63,7 @@ function ActionDialog({
     <DialogContent className="max-w-lg">
       <DialogHeader>
         <DialogTitle>{isEditing ? "Edit Action" : "New Improvement Action"}</DialogTitle>
-        <DialogDescription>Describe the work, assign an owner and choose a due date.</DialogDescription>
+        <DialogDescription>Describe the work and choose a due date. Team members can be assigned from the saved action.</DialogDescription>
       </DialogHeader>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(d => mutation.mutate(d))} className="space-y-4 pt-2">
@@ -110,15 +82,18 @@ function ActionDialog({
               <FormControl>
                 <Textarea placeholder="What needs to be done and why?" className="resize-none min-h-20" {...field} data-testid="input-action-desc" />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )} />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <FormField control={form.control} name="owner" render={({ field }) => (
               <FormItem>
-                <FormLabel>Owner</FormLabel>
+                <FormLabel>Responsible person or role</FormLabel>
                 <FormControl>
                   <Input placeholder="HR Manager" {...field} data-testid="input-action-owner" />
                 </FormControl>
+                <FormDescription>Optional contact or role. This does not assign a team member or send a notification.</FormDescription>
+                <FormMessage />
               </FormItem>
             )} />
             <FormField control={form.control} name="dueDate" render={({ field }) => (
@@ -127,6 +102,7 @@ function ActionDialog({
                 <FormControl>
                   <Input type="date" {...field} data-testid="input-action-due" />
                 </FormControl>
+                <FormMessage />
               </FormItem>
             )} />
           </div>
@@ -152,11 +128,12 @@ function ActionDialog({
               <FormControl>
                 <Textarea placeholder="Any updates or notes?" className="resize-none" {...field} data-testid="input-action-notes" />
               </FormControl>
+              <FormMessage />
             </FormItem>
           )} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending} data-testid="button-save-action">
+            <Button type="submit" disabled={mutation.isPending || (isEditing && !form.formState.isDirty)} data-testid="button-save-action">
               {mutation.isPending ? "Saving..." : (isEditing ? "Save Changes" : "Create Action")}
             </Button>
           </div>
@@ -180,8 +157,7 @@ export default function Actions() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/actions/${id}`, undefined),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      for (const queryKey of ACTION_INVALIDATION_KEYS) queryClient.invalidateQueries({ queryKey });
       toast({ title: "Action deleted" });
     },
   });
@@ -212,7 +188,7 @@ export default function Actions() {
                 New Action
               </Button>
             </DialogTrigger>
-            <ActionDialog onClose={() => setShowCreate(false)} />
+            {showCreate && <ActionDialog onClose={() => setShowCreate(false)} />}
           </Dialog>
         ) : undefined}
       />
@@ -286,9 +262,15 @@ export default function Actions() {
                       <p className="line-clamp-2 break-words text-sm text-muted-foreground">{action.description}</p>
                     )}
                     <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-                      <span className="flex items-center gap-1">
+                      {action.owner && (
+                        <span className="break-words" data-testid={`text-action-responsible-${action.id}`}>
+                          Responsible person or role: {action.owner}
+                        </span>
+                      )}
+                      <span className="flex flex-wrap items-center gap-1">
                         <User className="w-3 h-3" />
-                        <OwnerAssignment entityType="action_plans" entityId={action.id} currentUserId={(action as any).assignedUserId} invalidateKeys={[["/api/actions"]]} />
+                        Assigned team member:
+                        <OwnerAssignment entityType="action_plans" entityId={action.id} currentUserId={action.assignedUserId} ariaLabel={`Assigned team member for ${action.title}`} invalidateKeys={ACTION_INVALIDATION_KEYS} />
                       </span>
                       {action.dueDate && (
                         <span className={`flex items-center gap-1 ${isOverdue ? "text-destructive" : ""}`}>
@@ -320,7 +302,9 @@ export default function Actions() {
                             <Edit2 className="w-3.5 h-3.5" />
                           </Button>
                         </DialogTrigger>
-                        <ActionDialog action={editAction} onClose={() => setEditAction(undefined)} />
+                        {editAction?.id === action.id && (
+                          <ActionDialog key={editAction.id} action={editAction} onClose={() => setEditAction(current => current?.id === action.id ? undefined : current)} />
+                        )}
                       </Dialog>
                       <Button
                         size="icon"

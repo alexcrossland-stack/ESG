@@ -1,6 +1,7 @@
 import { storage } from "./storage";
 import { isPeriodWithinDateRange } from "@shared/report-periods";
 import { hasMetricReportedValue } from "@shared/data-entry-metrics";
+import { canonicalMetricAliases, groupMetricAliases, projectMetricAliasValues } from "@shared/metric-aliases";
 import {
   filterMetricsDueForPeriod,
   isSiteWithinReportingBoundary,
@@ -364,9 +365,14 @@ export async function evaluateEsgStatus(
     ? periodEvidenceFiles.filter((file) => isSiteWithinReportingBoundary(file.siteId, reportingContext.siteBoundary))
     : periodEvidenceFiles;
 
-  const enabledMetrics = reportingContext
+  const dueMetrics = reportingContext
     ? filterMetricsDueForPeriod(allMetrics.filter((metric) => metric.enabled), reportingContext.period.periodType)
     : allMetrics.filter((metric) => metric.enabled);
+  const enabledMetrics = canonicalMetricAliases(dueMetrics);
+  const scopedValues = (await Promise.all(dueMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, metricScope))))
+    .flat()
+    .filter((value) => value.workflowStatus !== "rejected" && value.workflowStatus !== "archived");
+  const projectedValues = projectMetricAliasValues(dueMetrics, scopedValues);
   const totalMetrics = enabledMetrics.length;
 
   let filledMetrics = 0;
@@ -377,7 +383,7 @@ export async function evaluateEsgStatus(
   const missingMetricNames: string[] = [];
 
   for (const metric of enabledMetrics) {
-    const vals = await storage.getMetricValuesForMetric(companyId, metric.id, metricScope);
+    const vals = projectedValues.filter((value) => value.metricId === metric.id);
     const latestVal = vals
       .filter((value) => !reportingContext || isSiteWithinReportingBoundary(value.siteId, reportingContext.siteBoundary))
       .filter((value) => useDateRange
@@ -418,9 +424,17 @@ export async function evaluateEsgStatus(
   const approvedCoverage =
     totalMetrics > 0 ? Math.round((approvedMetrics / totalMetrics) * 100) : 0;
 
+  const canonicalIdByMetricId = new Map(groupMetricAliases(dueMetrics).flatMap((group) => group.map((metric) => [metric.id, group[0].id] as const)));
+  const canonicalEvidence = evidenceFiles.map((file) => ({
+    ...file,
+    metricId: file.metricId ? canonicalIdByMetricId.get(file.metricId) ?? file.metricId : file.metricId,
+    linkedEntityId: file.linkedModule === "metric" || file.linkedModule === "metrics"
+      ? canonicalIdByMetricId.get(file.linkedEntityId ?? "") ?? file.linkedEntityId
+      : file.linkedEntityId,
+  }));
   const evidenceConfidence = calculateEvidenceConfidence(
     enabledMetrics.map((metric) => metric.id),
-    evidenceFiles,
+    canonicalEvidence,
     { period: useDateRange || reportingContext ? undefined : period, siteId },
   );
   const evidenceCoverage = evidenceConfidence.evidenceBackedCoverage;

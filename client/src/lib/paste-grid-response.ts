@@ -1,3 +1,6 @@
+import { hasMetricReportedValue } from "@shared/data-entry-metrics";
+import { groupMetricAliases, metricAliasDisplayName, metricAliasKey } from "@shared/metric-aliases";
+
 export type GridMetric = {
   id: string;
   name: string;
@@ -7,6 +10,9 @@ export type GridMetric = {
   dataType: string;
   enabled: boolean;
   readOnly: boolean;
+  frequency?: string | null;
+  isDefault?: boolean | null;
+  legacyReviewRequired?: boolean;
 };
 
 export type GridValue = {
@@ -28,6 +34,33 @@ export type GridResponse = {
   values: GridValue[];
   lockedPeriods: string[];
 };
+
+/**
+ * Show each waste concept once, without ever rebinding a value to a different
+ * editable metric ID. Mixed legacy histories require the explicit record view
+ * before editing; their source IDs, locks and evidence protections stay intact.
+ */
+export function canonicalPasteGrid(data: GridResponse): GridResponse {
+  const periods = data.periods.slice().sort().reverse();
+  return {
+    ...data,
+    metrics: groupMetricAliases(data.metrics).map((group) => {
+      if (group.length < 2 || !metricAliasKey(group[0])) return group[0];
+      const idsWithValues = new Set(data.values
+        .filter((value) => group.some((metric) => metric.id === value.metricId) && hasMetricReportedValue(value))
+        .map((value) => value.metricId));
+      const source = periods.flatMap((period) => group.filter((metric) => data.values.some((value) => (
+        value.metricId === metric.id && value.period === period && hasMetricReportedValue(value)
+      ))))[0] ?? group[0];
+      return {
+        ...source,
+        name: metricAliasDisplayName(source.name),
+        readOnly: source.readOnly || idsWithValues.size > 1,
+        legacyReviewRequired: idsWithValues.size > 1,
+      };
+    }),
+  };
+}
 
 export function isGridResponse(value: unknown): value is GridResponse {
   if (!value || typeof value !== "object") return false;

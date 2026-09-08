@@ -128,10 +128,10 @@ const VEHICLE_FUEL_OPTIONS = [
   { value: "electric", label: "Electric" },
 ];
 
-function DataQualitySelector({ value, onChange, fieldKey }: { value: string; onChange: (key: string, val: string) => void; fieldKey: string }) {
+function DataQualitySelector({ value, onChange, fieldKey, fieldLabel }: { value: string; onChange: (key: string, val: string) => void; fieldKey: string; fieldLabel: string }) {
   return (
     <Select value={value || "actual"} onValueChange={(v) => onChange(fieldKey, v)}>
-      <SelectTrigger className="h-6 w-24 text-xs" data-testid={`dq-${fieldKey}`}>
+      <SelectTrigger aria-label={`${fieldLabel} data quality`} className="h-6 w-24 text-xs" data-testid={`dq-${fieldKey}`}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -158,11 +158,12 @@ function InputField({ id, label, icon: Icon, unit, value, onChange, helpText, di
         id={id} type="number" value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="0" min={0} disabled={disabled}
+        aria-describedby={`${id}-help`}
         data-testid={`input-${id}`}
       />
       <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">{helpText}</p>
-        <DataQualitySelector value={dataQuality} onChange={onDqChange} fieldKey={id} />
+        <p id={`${id}-help`} className="text-xs text-muted-foreground">{helpText}</p>
+        <DataQualitySelector value={dataQuality} onChange={onDqChange} fieldKey={id} fieldLabel={label} />
       </div>
     </div>
   );
@@ -295,9 +296,9 @@ export default function CarbonCalculator() {
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Reporting Period</Label>
+          <Label htmlFor="carbon-reporting-period" className="text-xs text-muted-foreground">Reporting Period</Label>
           <Select value={reportingPeriod} onValueChange={setReportingPeriod}>
-            <SelectTrigger className="w-36" data-testid="select-reporting-period">
+            <SelectTrigger id="carbon-reporting-period" className="w-36" data-testid="select-reporting-period">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -308,9 +309,9 @@ export default function CarbonCalculator() {
           </Select>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Period Type</Label>
+          <Label htmlFor="carbon-period-type" className="text-xs text-muted-foreground">Period Type</Label>
           <Select value={periodType} onValueChange={setPeriodType}>
-            <SelectTrigger className="w-36" data-testid="select-period-type">
+            <SelectTrigger id="carbon-period-type" className="w-36" data-testid="select-period-type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -321,12 +322,12 @@ export default function CarbonCalculator() {
           </Select>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Calculation boundary</Label>
+          <Label htmlFor="carbon-scope" className="text-xs text-muted-foreground">Calculation boundary</Label>
           <Select value={calculationScope} onValueChange={(value) => {
             setCalculationScope(value);
             setResult(null);
           }}>
-            <SelectTrigger className="w-48" data-testid="select-carbon-scope">
+            <SelectTrigger id="carbon-scope" aria-describedby="carbon-scope-help" className="w-48" data-testid="select-carbon-scope">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -336,13 +337,14 @@ export default function CarbonCalculator() {
               ))}
             </SelectContent>
           </Select>
-          <p className="max-w-48 text-xs text-muted-foreground">
+          <p id="carbon-scope-help" className="max-w-48 text-xs text-muted-foreground">
             Save one organisation-wide estimate or a separate estimate for a specific site.
           </p>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Employees</Label>
+          <Label htmlFor="carbon-employee-count" className="text-xs text-muted-foreground">Employees</Label>
           <Input
+            id="carbon-employee-count"
             type="number" value={employeeCount}
             onChange={(e) => setEmployeeCount(e.target.value)}
             placeholder="Employee count" className="w-36" min={0}
@@ -392,11 +394,12 @@ export default function CarbonCalculator() {
               helpText="LPG fuel purchased" disabled={!canEdit}
               dataQuality={dataQuality.lpg || "actual"} onDqChange={handleDqChange} />
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium flex items-center gap-1.5">
+              <Label htmlFor="vehicleMileage" className="text-sm font-medium flex items-center gap-1.5">
                 <Car className="w-3.5 h-3.5 text-muted-foreground" />
                 Vehicle Mileage (miles)
               </Label>
               <Input
+                id="vehicleMileage"
                 type="number" value={inputs.vehicleMileage}
                 onChange={(e) => handleInputChange("vehicleMileage", e.target.value)}
                 placeholder="0" min={0} disabled={!canEdit}
@@ -404,7 +407,7 @@ export default function CarbonCalculator() {
               />
               <div className="flex items-center gap-2">
                 <Select value={inputs.vehicleFuelType} onValueChange={(v) => handleInputChange("vehicleFuelType", v)}>
-                  <SelectTrigger className="h-6 text-xs flex-1" data-testid="select-vehicle-fuel-type">
+                  <SelectTrigger aria-label="Vehicle fuel type" className="h-6 text-xs flex-1" data-testid="select-vehicle-fuel-type">
                     <SelectValue placeholder="Fuel type" />
                   </SelectTrigger>
                   <SelectContent>
@@ -413,7 +416,7 @@ export default function CarbonCalculator() {
                     ))}
                   </SelectContent>
                 </Select>
-                <DataQualitySelector value={dataQuality.vehicleMileage || "actual"} onChange={handleDqChange} fieldKey="vehicleMileage" />
+                <DataQualitySelector value={dataQuality.vehicleMileage || "actual"} onChange={handleDqChange} fieldKey="vehicleMileage" fieldLabel="Vehicle mileage" />
               </div>
             </div>
           </div>
@@ -470,17 +473,18 @@ export default function CarbonCalculator() {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium flex items-center gap-1.5">
+              <Label htmlFor="floorAreaM2" className="text-sm font-medium flex items-center gap-1.5">
                 <Building className="w-3.5 h-3.5 text-muted-foreground" />
                 Office Floor Area (m2)
               </Label>
               <Input
+                id="floorAreaM2" aria-describedby="floorAreaM2-help"
                 type="number" value={inputs.floorAreaM2}
                 onChange={(e) => handleInputChange("floorAreaM2", e.target.value)}
                 placeholder="0" min={0} disabled={!canEdit}
                 data-testid="input-floorAreaM2"
               />
-              <p className="text-xs text-muted-foreground">
+              <p id="floorAreaM2-help" className="text-xs text-muted-foreground">
                 {hasProxyInputs && !hasActualElec && "Will estimate electricity from floor area (120 kWh/m2/yr)"}
                 {hasProxyInputs && hasActualElec && "Actual electricity entered - proxy will not be used"}
                 {!hasProxyInputs && "Enter floor area to generate proxy energy estimates"}
