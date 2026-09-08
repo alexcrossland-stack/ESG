@@ -9,12 +9,14 @@ export function OwnerAssignment({
   entityId,
   currentUserId,
   currentUsername,
+  ariaLabel = "Assigned owner",
   invalidateKeys = [],
 }: {
   entityType: string;
   entityId: string;
   currentUserId?: string | null;
   currentUsername?: string | null;
+  ariaLabel?: string;
   invalidateKeys?: string[][];
 }) {
   const { isAdmin } = usePermissions();
@@ -59,8 +61,8 @@ export function OwnerAssignment({
       onValueChange={(val) => assignMutation.mutate(val)}
       disabled={assignMutation.isPending}
     >
-      <SelectTrigger className="w-32 h-7 text-xs" data-testid={`select-assign-owner-${entityType}-${entityId}`}>
-        <SelectValue placeholder="Unassigned">{currentUser?.username || "Unassigned"}</SelectValue>
+      <SelectTrigger className="w-32 h-7 text-xs" aria-label={ariaLabel} data-testid={`select-assign-owner-${entityType}-${entityId}`}>
+        <SelectValue placeholder="Unassigned">{currentUser?.username || currentUsername || (currentUserId ? "Assigned" : "Unassigned")}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="__none__">Unassigned</SelectItem>

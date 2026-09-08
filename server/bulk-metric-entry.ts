@@ -53,7 +53,7 @@ type ExistingMetricValue = {
   hasEvidence: boolean;
 };
 
-type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled" | "frequency"> & {
+type BulkGridMetric = Pick<Metric, "id" | "name" | "category" | "unit" | "metricType" | "enabled" | "frequency" | "isDefault"> & {
   dataType: string;
   readOnly: boolean;
 };
@@ -292,6 +292,7 @@ async function loadCompanyMetrics(companyId: string): Promise<BulkGridMetric[]> 
     metricType: metric.metricType,
     frequency: metric.frequency ?? "monthly",
     enabled: Boolean(metric.enabled),
+    isDefault: metric.isDefault,
     dataType: resolveMetricDataType(metric, definitionDataTypeByMetricName.get(normalizeMetricName(metric.name))),
     readOnly: false,
   }));
@@ -418,6 +419,7 @@ export async function getBulkMetricGrid(companyId: string, periods: string[], si
       metricType: metric.metricType,
       frequency: metric.frequency,
       enabled: Boolean(metric.enabled),
+      isDefault: metric.isDefault,
       dataType: metric.dataType,
       readOnly: false,
     }));

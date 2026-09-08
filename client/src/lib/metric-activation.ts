@@ -1,3 +1,6 @@
+import { metricAliasDisplayName, metricAliasKey, orderMetricAliasCandidates } from "@shared/metric-aliases";
+import { hasMetricReportedValue, type MetricReportedValueLike } from "@shared/data-entry-metrics";
+
 type MetricDefinitionLike = {
   id: string;
   code?: string | null;
@@ -19,6 +22,7 @@ type MetricDefinitionLike = {
   sortOrder?: number | null;
   metricType?: string | null;
   formulaText?: string | null;
+  isDefault?: boolean | null;
 };
 
 type CompanyMetricLike = {
@@ -34,11 +38,15 @@ type CompanyMetricLike = {
   direction?: string | null;
   helpText?: string | null;
   formulaText?: string | null;
+  isDefault?: boolean | null;
 };
 
 export type MetricLibraryEntry = MetricDefinitionLike & {
   companyMetricId?: string;
   isSyntheticCustom?: boolean;
+  aliasMetricIds?: string[];
+  aliasDefinitionIds?: string[];
+  aliasNames?: string[];
 };
 
 type EvidenceCoverageLike = {
@@ -67,6 +75,10 @@ export type CanonicalEnabledMetric = {
   evidenceRequired: boolean;
   missingCompanyMetric: boolean;
   source: "definition" | "company" | "merged";
+  aliasMetricIds?: string[];
+  historicalAliasMetricIds?: string[];
+  aliasDefinitionIds?: string[];
+  aliasNames?: string[];
 };
 
 export type CanonicalEvidenceMetric = CanonicalEnabledMetric & {
@@ -83,8 +95,9 @@ export function normalizeMetricActivationName(name: string | null | undefined): 
 }
 
 function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEnabledMetric {
+  const library = definition as MetricLibraryEntry;
   return {
-    canonicalId: normalizeMetricActivationName(definition.name),
+    canonicalId: metricAliasKey(definition) ?? normalizeMetricActivationName(definition.name),
     key: `definition:${definition.id}`,
     definitionId: definition.id,
     name: definition.name,
@@ -101,15 +114,18 @@ function buildDefinitionCandidate(definition: MetricDefinitionLike): CanonicalEn
     evidenceRequired: Boolean(definition.evidenceRequired),
     missingCompanyMetric: true,
     source: "definition",
+    aliasMetricIds: library.aliasMetricIds,
+    aliasDefinitionIds: library.aliasDefinitionIds,
+    aliasNames: library.aliasNames,
   };
 }
 
 function buildCompanyCandidate(metric: CompanyMetricLike): CanonicalEnabledMetric {
   return {
-    canonicalId: normalizeMetricActivationName(metric.name),
+    canonicalId: metricAliasKey(metric) ?? normalizeMetricActivationName(metric.name),
     key: metric.id,
     id: metric.id,
-    name: metric.name,
+    name: metricAliasKey(metric) ? metricAliasDisplayName(metric.name) : metric.name,
     category: metric.category,
     description: metric.description ?? null,
     unit: metric.unit ?? null,
@@ -156,6 +172,9 @@ function mergeCandidates(
     evidenceRequired: base.evidenceRequired || extra.evidenceRequired,
     missingCompanyMetric: base.missingCompanyMetric && extra.missingCompanyMetric,
     source: existing.source === incoming.source ? existing.source : "merged",
+    aliasMetricIds: base.aliasMetricIds ?? extra.aliasMetricIds,
+    aliasDefinitionIds: base.aliasDefinitionIds ?? extra.aliasDefinitionIds,
+    aliasNames: base.aliasNames ?? extra.aliasNames,
   };
 }
 
@@ -192,10 +211,14 @@ export function buildMetricLibraryEntries(
 ): MetricLibraryEntry[] {
   const byCanonicalId = new Map<string, MetricLibraryEntry>();
 
-  for (const definition of definitions) {
-    const canonicalId = normalizeMetricActivationName(definition.name);
+  for (const definition of orderMetricAliasCandidates(definitions)) {
+    const canonicalId = metricAliasKey(definition) ?? normalizeMetricActivationName(definition.name);
     if (!byCanonicalId.has(canonicalId)) {
-      byCanonicalId.set(canonicalId, { ...definition });
+      byCanonicalId.set(canonicalId, {
+        ...definition,
+        name: metricAliasKey(definition) ? metricAliasDisplayName(definition.name) : definition.name,
+        ...(metricAliasKey(definition) ? { aliasDefinitionIds: [definition.id], aliasNames: [definition.name] } : {}),
+      });
       continue;
     }
     const existing = byCanonicalId.get(canonicalId)!;
@@ -208,13 +231,26 @@ export function buildMetricLibraryEntries(
       unit: existing.unit ?? definition.unit ?? null,
       frameworkTags: existing.frameworkTags ?? definition.frameworkTags ?? null,
       evidenceRequired: Boolean(existing.evidenceRequired) || Boolean(definition.evidenceRequired),
+      ...(metricAliasKey(definition) ? {
+        aliasDefinitionIds: [...(existing.aliasDefinitionIds ?? []), definition.id],
+        aliasNames: Array.from(new Set([...(existing.aliasNames ?? []), definition.name])),
+      } : {}),
     });
   }
 
-  for (const metric of companyMetrics) {
-    const canonicalId = normalizeMetricActivationName(metric.name);
+  for (const metric of orderMetricAliasCandidates(companyMetrics)) {
+    const canonicalId = metricAliasKey(metric) ?? normalizeMetricActivationName(metric.name);
     if (byCanonicalId.has(canonicalId)) {
       const existing = byCanonicalId.get(canonicalId)!;
+      if (metricAliasKey(metric) && existing.companyMetricId) {
+        byCanonicalId.set(canonicalId, {
+          ...existing,
+          isActive: existing.isActive || Boolean(metric.enabled),
+          aliasMetricIds: [...(existing.aliasMetricIds ?? [existing.companyMetricId]), metric.id],
+          aliasNames: Array.from(new Set([...(existing.aliasNames ?? []), metric.name])),
+        });
+        continue;
+      }
       const metricType = metric.metricType ?? existing.metricType ?? "manual";
       const isCalculated = metricType === "calculated" || metricType === "derived";
       byCanonicalId.set(canonicalId, {
@@ -226,13 +262,21 @@ export function buildMetricLibraryEntries(
         metricType,
         formulaText: metric.formulaText ?? existing.formulaText ?? null,
         companyMetricId: metric.id,
+        ...(metricAliasKey(metric) ? {
+          aliasMetricIds: [metric.id],
+          aliasNames: Array.from(new Set([...(existing.aliasNames ?? []), metric.name])),
+        } : {}),
       });
       continue;
     }
-    byCanonicalId.set(canonicalId, buildSyntheticLibraryMetric(metric));
+    byCanonicalId.set(canonicalId, {
+      ...buildSyntheticLibraryMetric(metric),
+      name: metricAliasKey(metric) ? metricAliasDisplayName(metric.name) : metric.name,
+      ...(metricAliasKey(metric) ? { aliasMetricIds: [metric.id], aliasNames: [metric.name] } : {}),
+    });
   }
 
-  return [...byCanonicalId.values()].sort((a, b) => {
+  return Array.from(byCanonicalId.values()).sort((a, b) => {
     if (a.pillar !== b.pillar) return a.pillar.localeCompare(b.pillar);
     return a.name.localeCompare(b.name);
   });
@@ -251,13 +295,17 @@ export function buildCanonicalEnabledMetrics(
     byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
   }
 
-  for (const metric of companyMetrics.filter((item) => Boolean(item.enabled))) {
+  for (const metric of orderMetricAliasCandidates(companyMetrics.filter((item) => Boolean(item.enabled)))) {
     const candidate = buildCompanyCandidate(metric);
     if (!byCanonicalId.has(candidate.canonicalId)) continue;
     byCanonicalId.set(candidate.canonicalId, mergeCandidates(byCanonicalId.get(candidate.canonicalId), candidate));
   }
 
-  return [...byCanonicalId.values()].sort((a, b) => {
+  return Array.from(byCanonicalId.values()).map((metric) => ({
+    ...metric,
+    historicalAliasMetricIds: metric.aliasMetricIds,
+    aliasMetricIds: metric.aliasMetricIds?.filter((id) => companyMetrics.some((item) => item.id === id && item.enabled)),
+  })).sort((a, b) => {
     if (a.category !== b.category) return a.category.localeCompare(b.category);
     return a.name.localeCompare(b.name);
   });
@@ -283,11 +331,27 @@ export function buildCanonicalEvidenceMetrics(
   }
 
   return canonicalMetrics.map((metric) => {
-    const coverage = coverageByCanonicalId.get(metric.canonicalId);
+    const coverage = coverageByCanonicalId.get(normalizeMetricActivationName(metric.name));
+    const aliasCoverage = metricCoverage.find((item) => metric.aliasMetricIds?.includes(item.metricId ?? "") && item.hasEvidence);
     return {
       ...metric,
-      hasEvidence: Boolean(coverage?.hasEvidence),
-      dataSourceType: coverage?.dataSourceType ?? null,
+      hasEvidence: metric.aliasMetricIds ? Boolean(aliasCoverage) : Boolean(coverage?.hasEvidence),
+      dataSourceType: (metric.aliasMetricIds ? aliasCoverage : coverage)?.dataSourceType ?? null,
     };
   });
+}
+
+/** Use an existing legacy value when the primary row is empty; edits keep its original ID. */
+export function resolveCanonicalMetricValueSource<T extends MetricReportedValueLike & { metricId: string }>(
+  metric: CanonicalEnabledMetric,
+  values: readonly T[],
+  inScope: (value: T) => boolean,
+  requestedMetricId?: string | null,
+): CanonicalEnabledMetric {
+  const ids = metric.aliasMetricIds;
+  if (!ids?.length) return metric;
+  const sourceId = requestedMetricId && ids.includes(requestedMetricId)
+    ? requestedMetricId
+    : ids.find((id) => values.some((value) => value.metricId === id && inScope(value) && hasMetricReportedValue(value))) ?? metric.id;
+  return sourceId ? { ...metric, id: sourceId, key: sourceId } : metric;
 }

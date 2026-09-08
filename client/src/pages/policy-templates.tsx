@@ -31,6 +31,7 @@ import { format } from "date-fns";
 import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge, AiDraftBadge } from "@/components/workflow-badge";
 import { GeneratedDocumentContent } from "@/components/generated-document-content";
+import { buildPolicyDocumentSections, getOrderedPolicySections } from "@shared/policy-document";
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, WidthType } from "docx";
 import {
   buildGeneratedDocumentHtmlPage,
@@ -1038,10 +1039,7 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
       ...metadataRows.map(([label, value]) => `| ${label} | ${String(value).replace(/\|/g, "\\|")} |`),
     ].join("\n");
 
-    const text = Object.entries(content).map(([key, val]) => {
-      const section = sections.find((s: any) => s.key === key);
-      return `## ${section?.label || key}\n\n${val}\n`;
-    }).join("\n---\n\n");
+    const text = buildPolicyDocumentSections(content, sections);
     const header = `# ${policy.title}\n\n${metadataTable}\n\n---\n\n`;
     const guardrail = "\n\n---\n\n> **Disclaimer:** This policy does not guarantee certification to any ISO standard or full legal compliance. Implementation, records, training, internal audits, and management review are also required.\n";
     return header + text + guardrail;
@@ -1272,7 +1270,7 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
               </TabsList>
               <TabsContent value="edit" className="mt-4 space-y-4" data-testid="generated-policy-edit-panel">
                 <p className="text-sm text-muted-foreground">Update each section, then preview your complete policy.</p>
-                {(sections.length > 0 ? sections : Object.keys(content).map(k => ({ key: k, label: k }))).map((section: any) => (
+                {getOrderedPolicySections(content, sections).map((section) => (
                   <Card key={section.key} data-testid={`section-${section.key}`}>
                     <CardHeader className="pb-2">
                       <CardTitle className="text-sm">{section.label}</CardTitle>

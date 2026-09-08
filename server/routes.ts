@@ -1,5 +1,6 @@
 import express from "express";
 import { parseEmployeeSize } from "@shared/employee-size";
+import { canonicalMetricAliases, groupMetricAliases, metricAliasKey, projectMetricAliasValues } from "@shared/metric-aliases";
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import fs from "fs/promises";
@@ -107,6 +108,7 @@ import { clearGuidedRawInputsFromMetrics } from "./raw-data-metric-sync";
 import { recalculateGuidedPeriod } from "./guided-recalculation";
 import { getConfiguredEmissionFactors } from "./emission-factor-resolution";
 import { getPolicyPortfolioStatus } from "./policy-portfolio";
+import { buildPolicyReviewTasks } from "./policy-review-tasks";
 import {
   acquirePeriodMutationLocks,
   dataEntryPeriodMonths,
@@ -1709,6 +1711,13 @@ const METRIC_KEY_MAP: Record<string, string> = {
 
 function normalizeMetricName(name: string | null | undefined): string {
   return normalizeMetricDefinitionName(name);
+}
+
+function companyMetricsForDefinition(definition: any, companyMetrics: any[]): any[] {
+  const aliasKey = metricAliasKey(definition);
+  return companyMetrics.filter((metric) => aliasKey
+    ? metricAliasKey(metric) === aliasKey
+    : normalizeMetricName(metric.name) === normalizeMetricName(definition.name));
 }
 
 async function metricDefinitionSeedReservations() {
@@ -4897,14 +4906,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (isCore !== undefined) filter.isCore = isCore === "true";
       const defs = await storage.getMetricDefinitions(Object.keys(filter).length ? filter : undefined);
       const companyMetrics = await storage.getMetrics(companyId);
-      const metricByName = new Map(
-        companyMetrics.map((metric: any) => [normalizeMetricName(metric.name), metric]),
-      );
       const defsWithCompanyState = defs.map((def: any) => {
-        const companyMetric = metricByName.get(normalizeMetricName(def.name));
+        const matchingMetrics = companyMetricsForDefinition(def, companyMetrics);
         return {
           ...def,
-          isActive: companyMetric ? Boolean(companyMetric.enabled) : false,
+          isActive: matchingMetrics.some((metric) => Boolean(metric.enabled)),
         };
       });
       const filteredDefs = isActive !== undefined
@@ -4937,7 +4943,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Not found" });
       const companyMetrics = await storage.getMetrics(companyId);
-      const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
+      const existingMetric = companyMetricsForDefinition(def, companyMetrics)[0];
 
       if (existingMetric) {
         const updatedMetric = await storage.updateMetric(existingMetric.id, companyId, { enabled: isActive });
@@ -5493,10 +5499,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         requestedPeriod: typeof req.query.reportingPeriodId === "string" ? req.query.reportingPeriodId : typeof req.query.period === "string" ? req.query.period : undefined,
       });
       const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = filterMetricsDueForPeriod(
+      const dueMetrics = filterMetricsDueForPeriod(
         allMetrics.filter(m => m.enabled),
         reportingContext.period.periodType,
       );
+      const enabledMetrics = canonicalMetricAliases(dueMetrics);
+      const metricHistory = projectMetricAliasValues(dueMetrics, (await Promise.all(
+        dueMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" })),
+      )).flat());
       const settings = await storage.getCompanySettings(companyId);
       const materialTopics = await storage.getMaterialTopics(companyId);
 
@@ -5539,7 +5549,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const _fallbackHeadcount = _companyForHC?.employeeCount ?? 0;
 
       for (const metric of enabledMetrics) {
-        const values = await storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" });
+        const values = metricHistory.filter((value) => value.metricId === metric.id);
         // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
         const periodValues = values.filter(v =>
           v.period === latestPeriod &&
@@ -5661,9 +5671,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const evidenceFiles = (await storage.getEvidenceFiles(companyId, undefined, latestPeriod))
         .filter((file: any) => isSiteWithinReportingBoundary(file.siteId, reportingContext.siteBoundary));
+      const canonicalIdByMetricId = new Map(groupMetricAliases(dueMetrics).flatMap((group) => group.map((metric) => [metric.id, group[0].id] as const)));
       const uniqueMetricsWithEvidence = new Set(
         evidenceFiles
           .map((e: any) => e.metricId || (e.linkedModule === "metric" ? e.linkedEntityId : null))
+          .map((metricId: string | null) => metricId ? canonicalIdByMetricId.get(metricId) : undefined)
           .filter(Boolean)
       ).size;
       const evidenceCoverage = enabledMetrics.length > 0 ? Math.min(100, Math.round((uniqueMetricsWithEvidence / enabledMetrics.length) * 100)) : 0;
@@ -5683,7 +5695,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         [...trendCurrentPeriods, ...trendPreviousPeriods],
         { scope: "all" },
       );
-      const trendValues = trendValueRows
+      const trendValues = projectMetricAliasValues(dueMetrics, trendValueRows)
         .filter((row: any) => isSiteWithinReportingBoundary(row.siteId, reportingContext.siteBoundary))
         .map((row: any): TrendValueInput => ({
           metricId: row.metricId,
@@ -6099,7 +6111,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const allMetrics = await storage.getMetrics(companyId);
     const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
-    const totalMetrics = enabledMetrics.length;
+    const totalMetrics = canonicalMetricAliases(enabledMetrics).length;
 
     if (totalMetrics === 0) {
       return {
@@ -6132,7 +6144,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       values = allPeriodValues.filter((v: any) => v.siteId === null || activeSiteIds.has(v.siteId));
     }
 
-    const metricsWithData = new Set(values.map((v: any) => v.metricId)).size;
+    const metricsWithData = new Set(projectMetricAliasValues(enabledMetrics, values).filter(hasMetricReportedValue).map((v: any) => v.metricId)).size;
 
     if (metricsWithData === 0) {
       return {
@@ -6652,12 +6664,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           )
         : boundaryEvidenceFiles;
 
-      const enabledMetrics = allMetrics.filter((m: any) => m.enabled);
+      const enabledMetrics = canonicalMetricAliases(allMetrics.filter((m: any) => m.enabled));
+      const canonicalIdByMetricId = new Map(groupMetricAliases(allMetrics.filter((m: any) => m.enabled)).flatMap((group) => group.map((metric) => [metric.id, group[0].id] as const)));
 
-      // Evidence gap: which metrics have no linked evidence?
+      // Evidence gap: which tracked concepts have no linked evidence?
       const metricsWithEvidence = new Set(
         evidenceFiles
           .map((e: any) => e.metricId || (e.linkedModule === "metric" || e.linkedModule === "metrics" ? e.linkedEntityId : null))
+          .map((metricId: string | null) => metricId ? canonicalIdByMetricId.get(metricId) : undefined)
           .filter(Boolean)
       );
       const missingEvidenceCount = enabledMetrics.length - metricsWithEvidence.size;
@@ -10155,16 +10169,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reportingContext = await resolveCompanyReportingContext(companyId, { requestedPeriod: typeof req.query.period === "string" ? req.query.period : undefined });
       const currentPeriod = reportingContext.period.name;
       const allMetrics = await storage.getMetrics(companyId);
-      const enabledMetrics = filterMetricsDueForPeriod(
+      const dueMetrics = filterMetricsDueForPeriod(
         allMetrics.filter((m: any) => m.enabled),
         reportingContext.period.periodType,
       );
-      const values = (await storage.getMetricValuesByPeriod(companyId, currentPeriod))
+      const enabledMetrics = canonicalMetricAliases(dueMetrics);
+      const sourceValues = (await storage.getMetricValuesByPeriod(companyId, currentPeriod))
         .filter((value: any) => isSiteWithinReportingBoundary(value.siteId, reportingContext.siteBoundary));
+      const values = projectMetricAliasValues(dueMetrics, sourceValues);
       const valueMap = new Map(values.map((v: any) => [v.metricId, v]));
 
       const missingData = enabledMetrics
-        .filter((m: any) => !valueMap.has(m.id))
+        .filter((m: any) => !hasMetricReportedValue(valueMap.get(m.id)))
         .map((m: any) => ({ id: m.id, name: m.name, category: m.category, owner: m.dataOwner, metricType: m.metricType, linkUrl: m.metricType && m.metricType !== "manual" ? `/data-entry?mode=guided&period=${encodeURIComponent(currentPeriod)}&sourceMetric=${encodeURIComponent(m.id)}` : `/data-entry?metric=${encodeURIComponent(m.id)}&period=${encodeURIComponent(currentPeriod)}` }));
 
       const evidenceFiles = (await storage.getEvidenceFiles(companyId, undefined, currentPeriod))
@@ -10192,8 +10208,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .map((a: any) => ({ id: a.id, name: a.title, dueDate: a.dueDate, owner: a.assignedUserId, linkUrl: "/actions" }));
 
       const pendingApprovals: any[] = [];
-      values.filter((v: any) => v.workflowStatus === "submitted").forEach((v: any) => {
-        const m = enabledMetrics.find((met: any) => met.id === v.metricId);
+      sourceValues.filter((v: any) => v.workflowStatus === "submitted").forEach((v: any) => {
+        const m = allMetrics.find((met: any) => met.id === v.metricId);
         pendingApprovals.push({ id: v.id, name: m?.name || "Metric", entityType: "metric_value", period: v.period, linkUrl: "/my-approvals" });
       });
       const reports = await storage.getReportRuns(companyId);
@@ -10202,14 +10218,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       const genPolicies = await storage.getGeneratedPolicies(companyId);
-      const unapprovedPolicies = genPolicies
-        .filter((p: any) => p.workflowStatus !== "approved")
-        .map((p: any) => ({
-          id: p.id,
-          name: p.templateId || "Policy",
-          status: p.workflowStatus,
-          linkUrl: `/policies?tab=register&policy=${encodeURIComponent(p.id)}`,
-        }));
+      const reviewTemplates = genPolicies.some((policy) => policy.workflowStatus !== "approved")
+        ? await storage.getPolicyTemplates()
+        : [];
+      const unapprovedPolicies = buildPolicyReviewTasks(genPolicies, reviewTemplates);
 
       let unmetCompliance: any[] = [];
       try {
@@ -14417,10 +14429,11 @@ Include all 12 months. Make the progression realistic: start with quick wins and
       const def = await storage.getMetricDefinition(req.params.id);
       if (!def) return res.status(404).json({ error: "Metric definition not found" });
       const companyMetrics = await storage.getMetrics(companyId);
-      const existingMetric = companyMetrics.find((metric: any) => normalizeMetricName(metric.name) === normalizeMetricName(def.name));
+      const matchingMetrics = companyMetricsForDefinition(def, companyMetrics);
+      const existingMetric = matchingMetrics[0];
 
       if (existingMetric) {
-        const updatedMetric = await storage.updateMetric(existingMetric.id, companyId, { enabled: !existingMetric.enabled });
+        const updatedMetric = await storage.updateMetric(existingMetric.id, companyId, { enabled: !matchingMetrics.some((metric) => metric.enabled) });
         return res.json({ ...def, isActive: Boolean(updatedMetric?.enabled) });
       }
 

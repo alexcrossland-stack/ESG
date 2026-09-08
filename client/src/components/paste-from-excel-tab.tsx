@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { authFetch, apiRequest } from "@/lib/queryClient";
 import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
-import { parseBulkGridResponse, resolvePasteGridState, type GridMetric, type GridResponse } from "@/lib/paste-grid-response";
+import { canonicalPasteGrid, parseBulkGridResponse, resolvePasteGridState, type GridMetric, type GridResponse } from "@/lib/paste-grid-response";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useSiteContext } from "@/hooks/use-site-context";
@@ -156,6 +156,7 @@ export function PasteFromExcelTab({
   const [validation, setValidation] = useState<ValidationResponse | null>(null);
   const [pasteNotice, setPasteNotice] = useState<PasteNotice>(null);
   const [heuristicReviewRequired, setHeuristicReviewRequired] = useState(false);
+  const [showLegacyRecords, setShowLegacyRecords] = useState(false);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   // Lightweight scale safeguard for now: defer draft propagation so validation/review
   // work does not fire on every keystroke at full priority. If the grid grows much
@@ -180,7 +181,9 @@ export function PasteFromExcelTab({
     data,
     error: error as Error | null | undefined,
   });
-  const gridData = gridState.gridData;
+  const canonicalGrid = useMemo(() => gridState.gridData ? canonicalPasteGrid(gridState.gridData) : null, [gridState.gridData]);
+  const hasLegacyRecords = Boolean(canonicalGrid && gridState.gridData && canonicalGrid.metrics.length < gridState.gridData.metrics.length);
+  const gridData = showLegacyRecords ? gridState.gridData : canonicalGrid;
 
   useEffect(() => {
     if (!gridData) return;
@@ -323,7 +326,7 @@ export function PasteFromExcelTab({
         pasteRow.forEach((value, colOffset) => {
           const targetRow = row + rowOffset;
           const targetCol = col + colOffset;
-          if (!gridData.metrics[targetRow] || !gridData.periods[targetCol]) {
+          if (!gridData.metrics[targetRow] || !gridData.periods[targetCol] || gridData.metrics[targetRow].readOnly) {
             ignoredCells += 1;
             return;
           }
@@ -338,7 +341,7 @@ export function PasteFromExcelTab({
     setSelectionEnd({ row: targetEndRow, col: targetEndCol });
     setActiveCell({ row, col });
     if (ignoredCells > 0) {
-      setPasteNotice({ kind: "warning", message: `${ignoredCells} pasted cells were outside the visible grid and were ignored.` });
+      setPasteNotice({ kind: "warning", message: `${ignoredCells} pasted cells were outside the visible grid or read-only and were ignored.` });
       setHeuristicReviewRequired(false);
     } else if (normalizedBlock.strippedHeaderRow || normalizedBlock.strippedMetricColumn) {
       const parts = [
@@ -405,6 +408,18 @@ export function PasteFromExcelTab({
         </AlertDescription>
       </Alert>
 
+      {hasLegacyRecords && (
+        <Alert data-testid="alert-paste-legacy-records">
+          <AlertDescription className="space-y-2 text-sm">
+            <p>{showLegacyRecords
+              ? "Previous-label record view: these are separate historical records, not additional figures you must enter. Check the row label before importing; each value keeps its original record and evidence."
+              : "Waste aliases count as one tracked item. Where values exist under more than one previous label, that row is read-only here: open previous-label records to review or import into the exact original record."}</p>
+            <Button type="button" size="sm" variant="outline" disabled={dirtyCells.length > 0} onClick={() => setShowLegacyRecords((value) => !value)}>
+              {showLegacyRecords ? "Back to tracked items" : "Review previous-label records"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {pasteNotice && (
         <Alert variant={pasteNotice.kind === "error" ? "destructive" : "default"} data-testid="alert-paste-notice">
           <AlertCircle className="w-4 h-4" />
@@ -433,7 +448,7 @@ export function PasteFromExcelTab({
             </SelectContent>
           </Select>
           <Badge variant="outline" data-testid="badge-grid-metric-count">
-            {gridData.metrics.length} metrics
+            {gridData.metrics.length} {showLegacyRecords ? "records (includes previous labels)" : "tracked items"}
           </Badge>
           <Badge variant="outline" data-testid="badge-grid-period-count">
             {gridData.periods.length} months
@@ -500,6 +515,7 @@ export function PasteFromExcelTab({
                     <td className="sticky left-0 z-10 border-r bg-background px-3 py-2 align-middle">
                       <div className="font-medium">{metric.name}</div>
                       <div className="text-[11px] text-muted-foreground">{metric.unit || "Value"}</div>
+                      {metric.legacyReviewRequired && <div className="text-[11px] text-amber-700">Review previous-label records to edit</div>}
                     </td>
                     {gridData.periods.map((period, colIndex) => {
                       const key = keyFor(metric.id, period);
@@ -526,6 +542,8 @@ export function PasteFromExcelTab({
                         >
                           <input
                             ref={(node) => { inputRefs.current[key] = node; }}
+                            readOnly={metric.readOnly}
+                            aria-label={`${metric.name}, ${period}${metric.readOnly ? ", read-only" : ""}`}
                             value={draftValues[key] ?? ""}
                             onFocus={() => {
                               setActiveCell({ row: rowIndex, col: colIndex });

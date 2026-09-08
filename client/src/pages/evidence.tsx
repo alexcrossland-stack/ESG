@@ -1094,7 +1094,7 @@ function EvidenceRequestsPanel() {
           <p className="text-xs text-muted-foreground max-w-xs mx-auto">
             Evidence requests let you ask a team member to upload a specific file — for example, ask your finance team for the latest electricity bill.
           </p>
-          <p className="text-xs text-muted-foreground">Use the "Request File" button above to send your first request.</p>
+          <p className="text-xs text-muted-foreground">Use the "Create Request" button above to send your first request.</p>
         </div>
       )}
 
