@@ -622,6 +622,7 @@ export interface IStorage {
 
   // Metric Values
   getMetricValuesForMetric(companyId: string, metricId: string, scope: MetricValueScope): Promise<MetricValue[]>;
+  getMetricValuesForMetrics(companyId: string, metricIds: string[], scope: MetricValueScope): Promise<MetricValue[]>;
   getMetricValueForPeriodSite(metricId: string, period: string, siteId: string | null): Promise<MetricValue | undefined>;
   getMetricValuesByPeriod(companyId: string, period: string, siteId?: string | null): Promise<(MetricValue & { metricName: string; category: string; unit: string | null })[]>;
   getMetricTrendValues(companyId: string, periods: string[], scope: MetricValueScope): Promise<MetricTrendValueRow[]>;
@@ -1238,8 +1239,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getMetricValuesForMetric(companyId: string, metricId: string, scope: MetricValueScope) {
+    return this.getMetricValuesForMetrics(companyId, [metricId], scope);
+  }
+
+  async getMetricValuesForMetrics(companyId: string, metricIds: string[], scope: MetricValueScope) {
+    if (metricIds.length === 0) return [];
     const conditions: any[] = [
-      eq(metricValues.metricId, metricId),
+      inArray(metricValues.metricId, metricIds),
       sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
     ];
     if (scope.scope === "organisation") {
@@ -3945,54 +3951,27 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(organisationSites.companyId, companyId), eq(organisationSites.status, "active")))
       .orderBy(organisationSites.name);
 
-    const rows: Array<{ siteId: string | null; siteName: string; status: string; metricCount: number; evidenceCount: number; questionnaireCount: number }> = [];
-
-    for (const site of activeSites) {
-      const mvConditions: any[] = [
-        sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
-        eq(metricValues.siteId, site.id),
-      ];
-      if (period) mvConditions.push(eq(metricValues.period, period));
-
-      const [mvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...mvConditions));
-
-      const evConditions: any[] = [eq(evidenceFiles.companyId, companyId), eq(evidenceFiles.siteId, site.id)];
-      if (period) evConditions.push(eq(evidenceFiles.linkedPeriod, period));
-      const [evRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...evConditions));
-
-      const qqConditions: any[] = [eq(questionnaires.companyId, companyId), eq(questionnaires.siteId, site.id)];
-      if (reportingPeriodId) qqConditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
-      const [qqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...qqConditions));
-
-      rows.push({
-        siteId: site.id,
-        siteName: site.name,
-        status: site.status,
-        metricCount: Number(mvRow?.cnt ?? 0),
-        evidenceCount: Number(evRow?.cnt ?? 0),
-        questionnaireCount: Number(qqRow?.cnt ?? 0),
-      });
-    }
-
-    // Unassigned row — null site_id records within period
-    const unassignedMvConds: any[] = [
-      sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`,
-      isNull(metricValues.siteId),
-    ];
-    if (period) unassignedMvConds.push(eq(metricValues.period, period));
-    const [uMvRow] = await db.select({ cnt: count() }).from(metricValues).where(and(...unassignedMvConds));
-
-    const uEvConds: any[] = [eq(evidenceFiles.companyId, companyId), isNull(evidenceFiles.siteId)];
-    if (period) uEvConds.push(eq(evidenceFiles.linkedPeriod, period));
-    const [uEvRow] = await db.select({ cnt: count() }).from(evidenceFiles).where(and(...uEvConds));
-    const uQqConds: any[] = [eq(questionnaires.companyId, companyId), isNull(questionnaires.siteId)];
-    if (reportingPeriodId) uQqConds.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
-    const [uQqRow] = await db.select({ cnt: count() }).from(questionnaires).where(and(...uQqConds));
-
-    if (Number(uMvRow?.cnt ?? 0) > 0 || Number(uEvRow?.cnt ?? 0) > 0 || Number(uQqRow?.cnt ?? 0) > 0) {
-      rows.push({ siteId: null, siteName: "Unassigned", status: "active", metricCount: Number(uMvRow?.cnt ?? 0), evidenceCount: Number(uEvRow?.cnt ?? 0), questionnaireCount: Number(uQqRow?.cnt ?? 0) });
-    }
-
+    // Three grouped counts regardless of whether there are 1 or 50 sites.
+    const mvConditions: any[] = [sql`${metricValues.metricId} IN (SELECT id FROM metrics WHERE company_id = ${companyId})`];
+    const evConditions: any[] = [eq(evidenceFiles.companyId, companyId)];
+    const qqConditions: any[] = [eq(questionnaires.companyId, companyId)];
+    if (period) { mvConditions.push(eq(metricValues.period, period)); evConditions.push(eq(evidenceFiles.linkedPeriod, period)); }
+    if (reportingPeriodId) qqConditions.push(eq(questionnaires.reportingPeriodId, reportingPeriodId));
+    const [mv, ev, qq] = await Promise.all([
+      db.select({ siteId: metricValues.siteId, cnt: count() }).from(metricValues).where(and(...mvConditions)).groupBy(metricValues.siteId),
+      db.select({ siteId: evidenceFiles.siteId, cnt: count() }).from(evidenceFiles).where(and(...evConditions)).groupBy(evidenceFiles.siteId),
+      db.select({ siteId: questionnaires.siteId, cnt: count() }).from(questionnaires).where(and(...qqConditions)).groupBy(questionnaires.siteId),
+    ]);
+    const metricCounts = new Map(mv.map(row => [row.siteId, Number(row.cnt)]));
+    const evidenceCounts = new Map(ev.map(row => [row.siteId, Number(row.cnt)]));
+    const questionnaireCounts = new Map(qq.map(row => [row.siteId, Number(row.cnt)]));
+    const rowFor = (siteId: string | null, siteName: string, status: string) => ({ siteId, siteName, status,
+      metricCount: metricCounts.get(siteId) ?? 0, evidenceCount: evidenceCounts.get(siteId) ?? 0,
+      questionnaireCount: questionnaireCounts.get(siteId) ?? 0,
+    });
+    const rows = activeSites.map(site => rowFor(site.id, site.name, site.status));
+    const unassigned = rowFor(null, "Unassigned", "active");
+    if (unassigned.metricCount || unassigned.evidenceCount || unassigned.questionnaireCount) rows.push(unassigned);
     return rows;
   }
 

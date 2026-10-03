@@ -30,7 +30,7 @@ export function SmeNextTasks({ month }: { month: string }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id="next-tasks-title" className="text-base font-semibold">What to focus on next</h2>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Figures for {periodLabel}, plus outstanding work across your company.</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">For {periodLabel} and company-wide work. Urgent items first; other suggestions span ESG areas. All actions shows the full priority order.</p>
         </div>
         <div className="flex flex-wrap gap-1">
           <Button asChild variant="ghost" size="sm"><Link href="/control-centre">All actions</Link></Button>

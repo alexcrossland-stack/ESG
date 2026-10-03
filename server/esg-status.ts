@@ -369,8 +369,7 @@ export async function evaluateEsgStatus(
     ? filterMetricsDueForPeriod(allMetrics.filter((metric) => metric.enabled), reportingContext.period.periodType)
     : allMetrics.filter((metric) => metric.enabled);
   const enabledMetrics = canonicalMetricAliases(dueMetrics);
-  const scopedValues = (await Promise.all(dueMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, metricScope))))
-    .flat()
+  const scopedValues = (await storage.getMetricValuesForMetrics(companyId, dueMetrics.map(metric => metric.id), metricScope))
     .filter((value) => value.workflowStatus !== "rejected" && value.workflowStatus !== "archived");
   const projectedValues = projectMetricAliasValues(dueMetrics, scopedValues);
   const totalMetrics = enabledMetrics.length;

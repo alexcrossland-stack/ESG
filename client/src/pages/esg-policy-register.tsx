@@ -32,6 +32,10 @@ type PolicyAttachment = {
 
 type PolicyRecord = {
   origin?: "template";
+  templateSlug?: string;
+  versionNumber?: number;
+  createdAt?: string;
+  lastReviewedAt?: string | null;
   id: string;
   title: string;
   policyType: string;
@@ -373,6 +377,8 @@ export function PolicyRegisterWorkspace({
     status: policy.status === "published" || policy.status === "approved" ? "active" : policy.workflowStatus === "submitted" ? "under_review" : "draft",
     effectiveDate: policy.approvedAt || null, reviewDate: policy.reviewDate || null, documentLink: null,
     notes: null, attachment: null, origin: "template" as const,
+    templateSlug: policy.templateSlug, versionNumber: policy.versionNumber, createdAt: policy.createdAt,
+    lastReviewedAt: policy.reviewedAt || policy.approvedAt || null,
   }))].sort((a, b) => a.title.localeCompare(b.title));
   const { data: legacyPolicyData, isLoading: legacyPolicyLoading } = useQuery<LegacyPolicyResponse>({
     queryKey: ["/api/policy"],
@@ -422,6 +428,8 @@ export function PolicyRegisterWorkspace({
   const filteredPolicies = policies.filter(policy => `${policy.title} ${policy.owner || ""}`.toLowerCase().includes(search.trim().toLowerCase()));
   const showLegacyPolicy = legacyPolicy && "company esg policy".includes(search.trim().toLowerCase());
   const overduePolicies = policies.filter(p => p.status !== "retired" && isOverdue(p.reviewDate));
+  const unscheduledPolicies = policies.filter(p => p.status !== "retired" && !p.reviewDate);
+  const unownedPolicies = policies.filter(p => p.status !== "retired" && !p.owner?.trim());
   const upcomingPolicies = policies.filter(p => p.status !== "retired" && !isOverdue(p.reviewDate) && isUpcoming(p.reviewDate));
   const overduePolicyCount = overduePolicies.length + (legacyPolicy && isOverdue(legacyPolicy.reviewDate) ? 1 : 0);
   const upcomingPolicyCount = upcomingPolicies.length + (legacyPolicy && isUpcoming(legacyPolicy.reviewDate) ? 1 : 0);
@@ -538,6 +546,10 @@ export function PolicyRegisterWorkspace({
         </div>
       )}
 
+      {(unscheduledPolicies.length > 0 || unownedPolicies.length > 0) && <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4 text-sm dark:bg-amber-950/20" data-testid="policy-maintenance-gaps">
+        <p className="font-medium">Keep policies maintained</p>
+        <p className="mt-1">{unscheduledPolicies.length} policies have no review date · {unownedPolicies.length} have no owner. Open each policy to complete these details before adopting it.</p>
+      </div>}
       {(policiesError || generatedPoliciesError) && <div role="alert" className="rounded-md border p-4 text-sm">Some policies could not be loaded. <Button variant="link" onClick={() => { queryClient.invalidateQueries({ queryKey: ["/api/policy-records"] }); queryClient.invalidateQueries({ queryKey: ["/api/generated-policies"] }); }}>Try again</Button></div>}
       <section className="space-y-3" aria-label="All policies" data-testid="registered-policy-list">
           {showLegacyPolicy && legacyPolicy && (
@@ -588,6 +600,8 @@ export function PolicyRegisterWorkspace({
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex-1 min-w-0">
                         <h3 className="break-words text-base font-semibold leading-snug [overflow-wrap:anywhere]">{policy.title}</h3>
+                        {policy.origin === "template" && <p className="mt-1 text-xs text-muted-foreground">Version {policy.versionNumber ?? 1}{policy.createdAt ? ` · Created ${new Date(policy.createdAt).toLocaleDateString("en-GB")}` : ""}{policy.lastReviewedAt ? ` · Last approved/reviewed ${new Date(policy.lastReviewedAt).toLocaleDateString("en-GB")}` : " · Not yet reviewed"}</p>}
+                        {policy.templateSlug && policies.filter(item => item.templateSlug === policy.templateSlug).length > 1 && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">Other documents from this template exist. Compare versions and status before adopting; these records have not been merged.</p>}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Badge variant={statusCfg.badge}>{statusCfg.label}</Badge>
                           <Badge variant="outline" className="text-xs">{policy.origin === "template" ? "From template" : POLICY_TYPE_LABELS[policy.policyType] ?? policy.policyType}</Badge>

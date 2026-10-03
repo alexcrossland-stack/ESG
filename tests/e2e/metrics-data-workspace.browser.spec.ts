@@ -412,6 +412,7 @@ async function openMetricsWorkspace(
     sites?: Array<Record<string, any>>;
     activeSiteId?: string;
     disabledDefinitionIds?: string[];
+    showAllTracked?: boolean;
   } = {},
 ) {
   const context = await browser.newContext(options.viewport ? { viewport: options.viewport } : undefined);
@@ -717,6 +718,9 @@ async function openMetricsWorkspace(
   }, options.activeSiteId || null);
   await page.goto(options.path || "/data-entry");
   await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
+  if (options.showAllTracked !== false && !new URL(page.url()).searchParams.has("metric")) {
+    await page.getByRole("button", { name: "All tracked", exact: true }).click();
+  }
   return { context, page, state };
 }
 
@@ -745,7 +749,13 @@ test.describe("Unified Metrics & data workspace", () => {
   test("keeps cadence-aware completion counts aligned and rejects unusable or wrong-period evidence", async ({ browser }) => {
     const { context, page, state } = await openMetricsWorkspace(browser, "admin", {
       viewport: { width: 1280, height: 800 },
+      showAllTracked: false,
     });
+    await expect(page.getByRole("button", { name: "Due now", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-testid^="metric-data-row-"]')).toHaveCount(3);
+    await expect(page.getByTestId("button-open-metric-metric-board")).toHaveCount(0);
+    await expect(page.getByTestId("metrics-data-summary")).toContainText("items due this month");
+    await page.getByRole("button", { name: "All tracked", exact: true }).click();
     const overview = page.getByTestId("metrics-data-overview");
     const stateBadges = overview.locator('[data-testid^="metric-data-state-"]');
     const selectedMonth = state.dataEntryGets.find(({ period }) => /^\d{4}-\d{2}$/.test(period))?.period;
@@ -1082,7 +1092,7 @@ test.describe("Unified Metrics & data workspace", () => {
       activeSiteId: "site-a",
     });
 
-    await expect(page.getByTestId("select-period")).toContainText("2026-08");
+    await expect(page.getByTestId("select-period")).toContainText("August 2026");
     await expect(page.getByTestId("select-data-entry-site-scope")).toContainText("London Office");
     await expect(page.getByTestId("tab-documents")).toHaveAttribute("href", "/evidence?period=2026-08&siteId=site-a");
     await page.getByTestId("tab-documents").click();
@@ -1099,7 +1109,7 @@ test.describe("Unified Metrics & data workspace", () => {
     expect(reverseUrl.searchParams.get("siteId")).toBe("site-a");
     await metricsDataLink.click();
     await expect(page.getByRole("heading", { name: "Data & evidence", exact: true })).toBeVisible();
-    await expect(page.getByTestId("select-period")).toContainText("2026-08");
+    await expect(page.getByTestId("select-period")).toContainText("August 2026");
     await expect(page.getByTestId("select-data-entry-site-scope")).toContainText("London Office");
 
     await context.close();

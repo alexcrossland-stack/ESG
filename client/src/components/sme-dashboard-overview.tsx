@@ -68,7 +68,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
           </div>
         </CardHeader>
         <CardContent className="space-y-4 p-5 pt-0">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] lg:items-start">
+          <div className={`grid gap-4 lg:items-start ${trend || readiness?.hasGeneratedReport === true ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]" : ""}`}>
             <div className="space-y-2" data-testid="progress-sme-data-confidence">
               <p className="text-xs text-muted-foreground">Figures due in {monthLabel}</p>
               <p className="text-2xl font-semibold tracking-tight sm:text-3xl" data-testid="text-sme-figures-complete">
@@ -82,11 +82,11 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
               )}
               <p className="text-sm leading-relaxed text-muted-foreground" data-testid="text-sme-baseline-summary">
                 {completion?.total === 0 ? "No enabled metrics are due in this month. Review your reporting schedule or choose another month."
-                  : readiness?.esgStatus?.plainMeaning || status?.fallback || "We do not yet have a reliable summary for this month."}
+                  : completion ? `${completion.missing} figures still need recording. Add reliable sources as you go.` : "We do not yet have a reliable summary for this month."}
               </p>
               <Link href={"/data-entry" + periodQuery} className="inline-flex min-h-10 items-center gap-1.5 rounded text-sm font-medium text-primary underline-offset-4 hover:underline" data-testid="link-sme-review-figures">Review figures <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
             </div>
-            <div className="rounded-lg bg-muted/35 p-4" data-testid="card-sme-highlight">
+            {(trend || readiness?.hasGeneratedReport === true) && <div className="rounded-lg bg-muted/35 p-4" data-testid="card-sme-highlight">
               {trend ? (
                 <>
                   <p className="text-xs font-medium text-muted-foreground">What changed</p>
@@ -108,9 +108,10 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
                   <p className="mt-2 text-xs leading-relaxed text-muted-foreground">A comparison will appear when a metric has numeric values in both this month and the previous comparable period. Missing history is not a zero result.</p>
                 </>
               )}
-            </div>
+            </div>}
           </div>
 
+          {children}
           <div className="grid gap-2 border-t pt-3 sm:grid-cols-3" data-testid="sme-status-strip">
             <Link href="/control-centre" className="min-w-0 rounded-lg p-2 text-foreground transition-colors hover:bg-muted/50" data-testid="sme-status-actions">
               <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><ListChecks aria-hidden="true" className="h-4 w-4" />Actions</span>
@@ -120,6 +121,7 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
             <Link href="/policies?tab=register" className="min-w-0 rounded-lg p-2 text-foreground transition-colors hover:bg-muted/50" data-testid="sme-status-policies">
               <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><ShieldCheck aria-hidden="true" className="h-4 w-4" />Policy reviews</span>
               <p className="mt-1.5 text-sm font-semibold">{policyReviews ? policyReviews.overdue + " overdue · " + policyReviews.dueWithin90Days + " due soon" : "Unavailable"}</p>
+              {typeof enhanced?.missingPolicyReviewDates === "number" && enhanced.missingPolicyReviewDates > 0 && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{enhanced.missingPolicyReviewDates} adopted policies need a review date</p>}
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{policyReviews ? "Next 90 days (" + policyReviews.dueWithin30Days + " within 30 days). Company-wide, from today." : "Company-wide · next 90 days and overdue"}</p>
             </Link>
             <Link href={"/reports" + periodQuery} className="min-w-0 rounded-lg p-2 text-foreground transition-colors hover:bg-muted/50" data-testid="sme-status-report">
@@ -134,13 +136,12 @@ export function SmeDashboardOverview({ readiness, enhanced, isLoading = false, s
 
       {showNextAction && completion && <Card className="border-primary/20 bg-primary/5" data-testid="card-sme-next-action"><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5"><div><h3 className="text-sm font-semibold">{nextAction.title}</h3><p className="mt-1 text-sm text-muted-foreground">{nextAction.description}</p></div><Button asChild data-testid="button-sme-next-action"><Link href={nextAction.href}>{nextAction.ctaLabel}<ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" /></Link></Button></CardContent></Card>}
 
-      {children}
-
       <details className="group rounded-xl border bg-card" data-testid="disclosure-sme-confidence">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 rounded-xl p-4 text-sm font-medium [&::-webkit-details-marker]:hidden">Data quality and completion details<ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" /></summary>
         <div className="grid gap-6 border-t p-5 lg:grid-cols-2">
           <div className="space-y-4" data-testid="card-sme-confidence">
             <h3 className="text-sm font-semibold">Data and evidence confidence</h3>
+            <p className="text-xs leading-relaxed text-muted-foreground">{readiness?.esgStatus?.plainMeaning || status?.fallback} A comparison appears when numeric values exist in both this month and the previous comparable period. Missing history is not a zero result.</p>
             <div className="space-y-2" data-testid="progress-sme-evidence-confidence">
               <div className="flex items-center justify-between gap-2 text-sm"><span>Supporting evidence</span><span className="tabular-nums">{evidenceCoverage === null ? "Unavailable" : evidenceCoverage + "%"}</span></div>
               {evidenceCoverage !== null && <Progress value={evidenceCoverage} aria-label="Supporting evidence coverage" className="h-2" />}

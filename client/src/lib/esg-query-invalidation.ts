@@ -10,6 +10,18 @@ export const ESG_READINESS_QUERY_KEYS = [
   "/api/data-quality",
   "/api/framework-readiness",
   "/api/recommendations",
+  "/api/control-centre",
+  "/api/my-tasks",
+  "/api/my-approvals",
+  "/api/notifications/count",
+  "/api/metrics",
+  "/api/data-entry",
+  "/api/raw-data",
+  "/api/evidence",
+  "/api/evidence/coverage",
+  "/api/policy-records",
+  "/api/generated-policies",
+  "/api/reports",
 ] as const;
 
 export function invalidateEsgReadinessQueries(queryClient: QueryClient): void {

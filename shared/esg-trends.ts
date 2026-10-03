@@ -1,5 +1,5 @@
 import type { ReportPeriodSelection } from "./report-periods";
-import { getPreviousComparableReportPeriod, getReportComparisonLabel } from "./report-periods";
+import { getPreviousComparableReportPeriod, getReportComparisonLabel, resolveReportPeriodSelection } from "./report-periods";
 
 export type TrendDirection = "improved" | "worsened" | "unchanged" | "unavailable";
 export type TrendReason =
@@ -29,6 +29,8 @@ export type TrendValueInput = {
   valueNumeric?: unknown;
   valueBoolean?: unknown;
   siteId?: string | null;
+  weight?: number;
+  workflowStatus?: string | null;
 };
 
 export type MetricTrend = {
@@ -81,15 +83,67 @@ function metricUsesAverage(metric: TrendMetricInput): boolean {
 }
 
 export function aggregateTrendValue(metric: TrendMetricInput, rows: TrendValueInput[]): number | null {
-  const numericRows = rows
-    .map((row) => parseNumericValue(row.valueNumeric ?? row.value))
-    .filter((value): value is number => value !== null);
+  const numericRows = rows.map(row => ({ value: parseNumericValue(row.valueNumeric ?? row.value), weight: row.weight }))
+    .filter((row): row is { value: number; weight: number | undefined } => row.value !== null);
 
   if (numericRows.length === 0) return null;
   if (metricUsesAverage(metric)) {
-    return numericRows.reduce((sum, value) => sum + value, 0) / numericRows.length;
+    // Partial weights bias a comparison. Only weight when every source has a
+    // valid denominator for that period; otherwise use the same explicit mean.
+    if (numericRows.every(row => row.weight !== undefined && Number.isFinite(row.weight) && row.weight > 0)) {
+      return numericRows.reduce((sum, row) => sum + row.value * row.weight!, 0) / numericRows.reduce((sum, row) => sum + row.weight!, 0);
+    }
+    return numericRows.reduce((sum, row) => sum + row.value, 0) / numericRows.length;
   }
-  return numericRows.reduce((sum, value) => sum + value, 0);
+  return numericRows.reduce((sum, row) => sum + row.value, 0);
+}
+
+export function aggregateMetricHistory(metric: TrendMetricInput, rows: TrendValueInput[], selectedPeriod: string,
+  boundary?: { periodType: "monthly" | "quarterly" | "annual"; dateFrom: string; dateTo: string }) {
+  const periodSelection = (period: string) => resolveReportPeriodSelection({ period,
+    periodType: /^\d{4}$/.test(period) ? "annual" : /^\d{4}-Q[1-4]$/.test(period) ? "quarterly" : "monthly",
+  });
+  const selection = boundary ?? periodSelection(selectedPeriod);
+  const monthIndex = (date: string) => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1;
+  const selectedStart = selection ? monthIndex(selection.dateFrom) : 0;
+  const span = selection ? monthIndex(selection.dateTo) - selectedStart + 1 : 0;
+  const periods = new Map<string, TrendValueInput[]>();
+  for (const row of rows) {
+    const source = row.period === selectedPeriod && selection ? selection : periodSelection(row.period);
+    if (row.metricId !== metric.id || ["rejected", "archived"].includes(row.workflowStatus || "") || !selection || !source || span <= 0 || source.dateTo > selection.dateTo) continue;
+    const sourceStart = monthIndex(source.dateFrom), sourceEnd = monthIndex(source.dateTo);
+    const bucketOffset = Math.floor((sourceStart - selectedStart) / span);
+    const bucketStart = selectedStart + bucketOffset * span;
+    // Longer or cross-boundary records cannot be split into shorter reports.
+    if (sourceEnd >= bucketStart + span) continue;
+    const year = Math.floor(bucketStart / 12), month = bucketStart % 12 + 1;
+    const period = bucketOffset === 0 ? selectedPeriod : selection.periodType === "annual" ? String(year)
+      : selection.periodType === "quarterly" ? `${year}-Q${Math.ceil(month / 3)}` : `${year}-${String(month).padStart(2, "0")}`;
+    const entries = periods.get(period) ?? [];
+    entries.push(row);
+    periods.set(period, entries);
+  }
+  return Array.from(periods).sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, entries]) => {
+      // A stored quarterly/annual total supersedes contained monthly values at
+      // the same site; never add both representations of the same activity.
+      const sources = entries.filter(row => {
+        const source = row.period === selectedPeriod ? selection : periodSelection(row.period);
+        return !entries.some(other => {
+          if ((other.siteId ?? null) !== (row.siteId ?? null) || other.period === row.period) return false;
+          const larger = other.period === selectedPeriod ? selection : periodSelection(other.period);
+          const hasValue = typeof other.valueBoolean === "boolean" || parseNumericValue(other.valueNumeric ?? other.value) !== null;
+          return hasValue && source && larger && larger.dateFrom <= source.dateFrom && larger.dateTo >= source.dateTo;
+        });
+      });
+      if (metricIsYesNo(metric, sources)) {
+        const answers = sources.map(row => typeof row.valueBoolean === "boolean" ? row.valueBoolean
+          : /^(yes|true|1)$/i.test(String(row.value ?? "")) ? true : /^(no|false|0)$/i.test(String(row.value ?? "")) ? false : null)
+          .filter(answer => answer !== null);
+        return { period, value: answers.length ? answers.every(Boolean) ? 1 : 0 : null };
+      }
+      return { period, value: aggregateTrendValue(metric, sources) };
+    });
 }
 
 export function calculateMetricTrend(input: {

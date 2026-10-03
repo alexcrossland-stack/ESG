@@ -27,7 +27,7 @@ assert.match(html, /1 overdue · 2 due soon/);
 assert.match(html, /Next 90 days \(1 within 30 days\)/);
 assert.match(html, /href="\/reports\?period=2025-12"/);
 assert.match(html, /href="\/data-entry\?period=2025-12"/);
-assert.ok(html.indexOf("test-next-tasks") > html.indexOf("sme-status-strip"));
+assert.ok(html.indexOf("test-next-tasks") < html.indexOf("sme-status-strip"), "Primary next task must precede secondary status details");
 assert.ok(html.indexOf("test-next-tasks") < html.indexOf("disclosure-sme-confidence"));
 assert.match(html, /<details[^>]*data-testid="disclosure-sme-confidence"[^>]*>/);
 assert.doesNotMatch(html, /<details[^>]*\bopen(?:=|\s|>)/);

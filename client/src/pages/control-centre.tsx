@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useReportingMonth } from "@/hooks/use-reporting-month";
+import { ReportingContextStrip } from "@/components/reporting-context-strip";
+import { QueryFailure, QueryFreshness } from "@/components/query-feedback";
 import { authFetch } from "@/lib/queryClient";
 import { Link } from "wouter";
 import {
@@ -241,7 +243,7 @@ function Disclosure({
 
 export default function ControlCentre() {
   const { month } = useReportingMonth();
-  const { data, isLoading } = useQuery<ControlCentreData>({ queryKey: ["/api/control-centre", month], queryFn: () => authFetch(`/api/control-centre?period=${month}`).then(response => { if (!response.ok) throw new Error("Could not load actions"); return response.json(); }) });
+  const { data, isLoading, isError, refetch, dataUpdatedAt, isFetching } = useQuery<ControlCentreData>({ queryKey: ["/api/control-centre", month], queryFn: () => authFetch(`/api/control-centre?period=${month}`).then(response => { if (!response.ok) throw new Error("Could not load actions"); return response.json(); }) });
   const { can } = usePermissions();
 
   const plan = data ? buildSmeImprovementPlan(data, 3) : [];
@@ -257,6 +259,9 @@ export default function ControlCentre() {
         actions={!isLoading && can("metrics_data_entry") ? <Button asChild><Link href="/actions?create=true"><Plus className="h-4 w-4" />Add action</Link></Button> : undefined}
       />
 
+      <ReportingContextStrip month={month} readOnly={!can("metrics_data_entry")} />
+      <QueryFreshness updatedAt={dataUpdatedAt} refreshing={isFetching} refresh={() => void refetch()} />
+      {isError && <QueryFailure label="action plan" stale={!!data} retry={() => void refetch()} />}
       {!isLoading && <nav className="flex flex-wrap items-center gap-1 rounded-xl border bg-card p-2" aria-label="Action plan views">
         <Button asChild variant="ghost"><Link href="/my-tasks">My work</Link></Button>
         {can("report_generation") && <Button asChild variant="ghost"><Link href="/my-approvals">Review submissions</Link></Button>}
@@ -400,14 +405,15 @@ export default function ControlCentre() {
             </div>
           </Disclosure>
         </>
-      ) : (
+      ) : !isError ? (
         <Card>
           <CardContent className="py-10 text-center">
             <AlertTriangle className="mx-auto h-8 w-8 text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">The improvement plan could not be loaded.</p>
+            <Button variant="outline" className="mt-3" onClick={() => void refetch()}>Try again</Button>
           </CardContent>
         </Card>
-      )}
+      ) : null}
     </PageLayout>
   );
 }

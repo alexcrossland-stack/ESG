@@ -60,10 +60,8 @@ export async function getReportReadiness(companyId: string): Promise<ReportReadi
   const govEntries = esgEntries.filter(r => classifyEsgCategory(r.inputCategory) === "gov");
 
   const enabledMetrics = metrics.filter(m => m.enabled);
-  const metricValues = await Promise.all(
-    enabledMetrics.map(m => storage.getMetricValuesForMetric(companyId, m.id, { scope: "all" }))
-  );
-  const currentMetricValues = metricValues.flat().filter(value =>
+  const metricValues = await storage.getMetricValuesForMetrics(companyId, enabledMetrics.map(metric => metric.id), { scope: "all" });
+  const currentMetricValues = metricValues.filter(value =>
     hasMetricReportedValue(value) && (!value.period || value.period === currentPeriod)
   );
 

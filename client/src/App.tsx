@@ -157,7 +157,8 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 
   static getDerivedStateFromError(error: Error) {
-    return { hasError: true, message: error.message || "An unexpected error occurred" };
+    const obsoleteRelease = /Failed to fetch dynamically imported module|Loading chunk|Importing a module script failed/i.test(error.message);
+    return { hasError: true, message: obsoleteRelease ? "A newer release may be available, or your connection was interrupted. Reload to load the latest version. Previously saved records are safe; unsaved edits may need to be entered again." : error.message || "An unexpected error occurred" };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

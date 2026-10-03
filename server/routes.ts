@@ -87,7 +87,7 @@ import {
   type ReportPeriodSelection,
   resolveReportPeriodSelection,
 } from "@shared/report-periods";
-import { calculateMetricTrends, type MetricTrend, type TrendMetricInput, type TrendValueInput } from "@shared/esg-trends";
+import { aggregateMetricHistory, calculateMetricTrends, type MetricTrend, type TrendMetricInput, type TrendValueInput } from "@shared/esg-trends";
 import { buildAssuranceEvidenceHistoryEntry } from "./assurance-pack";
 import { frameworkResponseSourceIsEligible, parseFrameworkReadinessPeriod } from "./framework-readiness";
 import {
@@ -5504,9 +5504,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportingContext.period.periodType,
       );
       const enabledMetrics = canonicalMetricAliases(dueMetrics);
-      const metricHistory = projectMetricAliasValues(dueMetrics, (await Promise.all(
-        dueMetrics.map((metric) => storage.getMetricValuesForMetric(companyId, metric.id, { scope: "all" })),
-      )).flat());
+      const metricHistory = projectMetricAliasValues(dueMetrics, await storage.getMetricValuesForMetrics(companyId, dueMetrics.map(metric => metric.id), { scope: "all" }));
       const settings = await storage.getCompanySettings(companyId);
       const materialTopics = await storage.getMaterialTopics(companyId);
 
@@ -5529,62 +5527,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Reuse the active site IDs already fetched above for archive exclusion
       const activeSiteIds = _activeSiteIdsForPeriod;
 
-      // Build siteId → headcount map from carbon calculations for the selected period
-      // Used for headcount-weighted averaging of rate/% metrics
-      const _carbonCalcsForPeriod = latestPeriod
-        ? await storage.getCarbonCalculations(companyId, undefined, latestPeriod)
-        : [];
-      const _siteHeadcount = new Map<string | null, number>();
-      for (const cc of _carbonCalcsForPeriod) {
-        if (cc.employeeCount && cc.employeeCount > 0) {
-          const key = cc.siteId ?? null;
-          // Keep the largest headcount if multiple calcs exist for same site+period
-          if (!_siteHeadcount.has(key) || (_siteHeadcount.get(key) ?? 0) < cc.employeeCount) {
-            _siteHeadcount.set(key, cc.employeeCount);
-          }
+      // Denominators belong to the source period, not today's company headcount.
+      const carbonHistory = await storage.getCarbonCalculations(companyId);
+      const headcounts = new Map<string, number>();
+      for (const calculation of carbonHistory) {
+        if (calculation.employeeCount && calculation.employeeCount > 0) {
+          const key = JSON.stringify([calculation.reportingPeriod, calculation.siteId ?? null]);
+          headcounts.set(key, Math.max(headcounts.get(key) ?? 0, calculation.employeeCount));
         }
       }
-      // If no per-site headcount available, try company-level employeeCount as fallback weight
-      const _companyForHC = await storage.getCompany(companyId);
-      const _fallbackHeadcount = _companyForHC?.employeeCount ?? 0;
 
       for (const metric of enabledMetrics) {
-        const values = metricHistory.filter((value) => value.metricId === metric.id);
-        // Period values: only include org-level (null siteId) or active-site values; exclude archived-site data
-        const periodValues = values.filter(v =>
-          v.period === latestPeriod &&
-          isSiteWithinReportingBoundary(v.siteId, reportingContext.siteBoundary)
-        );
-        // Aggregate ALL period values (active-site + unassigned) for org-level totals
-        let latestVal: typeof periodValues[0] | null = null;
-        if (periodValues.length === 1) {
-          latestVal = periodValues[0];
-        } else if (periodValues.length > 1) {
-          const numericVals = periodValues
-            .map(v => ({ siteId: v.siteId ?? null, value: v.value !== null ? Number(v.value) : null }))
-            .filter(e => e.value !== null) as { siteId: string | null; value: number }[];
-          if (numericVals.length > 0) {
-            const isRateMetric = metric.unit?.includes("%") || metric.direction === "compliance_yes_no";
-            let aggregated: number;
-            if (isRateMetric) {
-              // Headcount-weighted average: use per-site employeeCount weights if available
-              const weights = numericVals.map(e => _siteHeadcount.get(e.siteId) ?? _fallbackHeadcount);
-              const totalWeight = weights.reduce((a, b) => a + b, 0);
-              if (totalWeight > 0) {
-                aggregated = numericVals.reduce((sum, e, i) => sum + e.value * weights[i], 0) / totalWeight;
-              } else {
-                // Fallback: simple average when no headcount data is available
-                aggregated = numericVals.reduce((a, e) => a + e.value, 0) / numericVals.length;
-              }
-            } else {
-              // Additive metrics: sum across all sites
-              aggregated = numericVals.reduce((a, e) => a + e.value, 0);
-            }
-            latestVal = { ...(periodValues[0]!), siteId: null, value: String(aggregated) };
-          } else {
-            latestVal = periodValues[0];
-          }
-        }
+        const values = metricHistory.filter(value => value.metricId === metric.id &&
+          isSiteWithinReportingBoundary(value.siteId, reportingContext.siteBoundary) && !["rejected", "archived"].includes(value.workflowStatus || ""));
+        const history = aggregateMetricHistory(metric, values.map(value => ({ ...value,
+          weight: headcounts.get(JSON.stringify([value.period, value.siteId ?? null])),
+        })), latestPeriod, reportingContext.period.startDate && reportingContext.period.endDate ? {
+          periodType: reportingContext.period.periodType, dateFrom: reportingContext.period.startDate, dateTo: reportingContext.period.endDate,
+        } : undefined);
+        const periodValues = values.filter(value => value.period === latestPeriod);
+        const currentValue = history.find(point => point.period === latestPeriod)?.value ?? null;
+        const latestVal = currentValue === null ? null : { ...periodValues[0], value: String(currentValue) };
         const cat = metric.category;
         categorySummary[cat].total++;
 
@@ -5607,10 +5570,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
 
         const val = Number(latestVal.value);
-        const sortedVals = values.sort((a, b) => a.period.localeCompare(b.period));
-        const prevEntry = sortedVals.filter(v => v.period < latestPeriod).pop();
-        const prev = prevEntry?.value ? Number(prevEntry.value) : null;
-        const status = latestVal.status || getTrafficLightStatus(
+        const prev = history.filter(point => point.period < latestPeriod && point.value !== null).at(-1)?.value ?? null;
+        const status = (periodValues.length === 1 && !isCompliance ? latestVal.status : null) || getTrafficLightStatus(
           val, metric.targetValue ? Number(metric.targetValue) : null,
           metric.direction || "higher_is_better",
           Number(metric.amberThreshold || 5), Number(metric.redThreshold || 15),
@@ -5620,7 +5581,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         statusCounts[status as "green" | "amber" | "red"]++;
         categorySummary[cat][status as "green" | "amber" | "red"]++;
 
-        const trend = sortedVals.slice(-6).map(v => ({ period: v.period, value: v.value ? Number(v.value) : null }));
+        const trend = isCompliance ? null : history.slice(-6);
 
         scoredMetricInputs.push({
           id: metric.id, name: metric.name, category: cat,
@@ -5637,7 +5598,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           amberThreshold: metric.amberThreshold, redThreshold: metric.redThreshold,
           targetMin: metric.targetMin, targetMax: metric.targetMax,
           latestValue: val, previousValue: prev, status, trend,
-          percentChange: prev && prev !== 0 ? Math.round(((val - prev) / Math.abs(prev)) * 10000) / 100 : null,
+          percentChange: !isCompliance && prev !== null && prev !== 0 ? Math.round(((val - prev) / Math.abs(prev)) * 10000) / 100 : null,
           target: metric.targetValue ? Number(metric.targetValue) : null,
           helpText: metric.helpText, formulaText: metric.formulaText,
         });
@@ -5657,12 +5618,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         storage.getPolicyRecords(companyId),
       ]);
       const upcomingPolicyReviews: { reviewDate: string; status: string }[] = [];
-      const policyReviewDates = getPolicyPortfolioStatus({
+      const policyPortfolioForReviews = getPolicyPortfolioStatus({
         legacyPolicy: policy,
         generatedPolicies: generatedPoliciesForReviews,
         policyRecords: policyRecordsForReviews,
-      }).reviewDates;
-      for (const rd of policyReviewDates) {
+      });
+      for (const rd of policyPortfolioForReviews.reviewDates) {
         const daysUntil = Math.ceil((rd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
         if (daysUntil <= 90) {
           upcomingPolicyReviews.push({ reviewDate: rd.toISOString(), status: daysUntil < 0 ? "overdue" : daysUntil <= 30 ? "urgent" : "upcoming" });
@@ -5705,6 +5666,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           valueNumeric: row.valueNumeric,
           valueBoolean: row.valueBoolean,
           siteId: row.siteId,
+          weight: headcounts.get(JSON.stringify([row.period, row.siteId ?? null])),
         }));
       const trendResult = calculateMetricTrends({
         metrics: enabledMetrics.map(trendMetricFromMetric),
@@ -5742,6 +5704,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         missingDataAlerts,
         overdueActions: overdueActions.map(a => ({ id: a.id, title: a.title, dueDate: a.dueDate, owner: a.owner })),
         upcomingPolicyReviews,
+        missingPolicyReviewDates: policyPortfolioForReviews.missingReviewDateCount,
         evidenceCoverage,
         submissionRate,
         calculatedMetrics,

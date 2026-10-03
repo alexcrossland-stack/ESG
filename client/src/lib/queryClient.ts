@@ -28,6 +28,32 @@ export function authFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, headers, credentials: "include" });
 }
 
+// Custom query functions must not interpret an HTTP failure as a blank record.
+export async function checkedJson<T = unknown>(res: Response): Promise<T> {
+  await throwIfResNotOk(res);
+  try {
+    return await res.json();
+  } catch {
+    throw new Error("The server returned an unreadable response. Please try again.");
+  }
+}
+
+export async function apiGet<T = unknown>(url: string): Promise<T> {
+  return checkedJson<T>(await authFetch(url));
+}
+
+export async function checkedArrayJson(res: Response): Promise<any[]> {
+  const result = await checkedJson<unknown>(res);
+  if (!Array.isArray(result) || result.some(row => row === null || typeof row !== "object")) throw new Error("The server returned an invalid list. Please try again.");
+  return result;
+}
+
+export async function checkedEntryJson(res: Response): Promise<{ metrics: any[]; values: any[]; [key: string]: any }> {
+  const result = await checkedJson<any>(res);
+  if (!result || !Array.isArray(result.metrics) || !Array.isArray(result.values)) throw new Error("Recorded values could not be read. Please try again.");
+  return result;
+}
+
 export class StepUpRequiredError extends Error {
   readonly code = "STEP_UP_REQUIRED";
   constructor() {
@@ -135,7 +161,7 @@ export async function apiRequest(
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
+}) => QueryFunction<T | null> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     const res = await fetch(queryKey.join("/") as string, {
@@ -147,8 +173,7 @@ export const getQueryFn: <T>(options: {
       return null;
     }
 
-    await throwIfResNotOk(res);
-    return await res.json();
+    return await checkedJson(res);
   };
 
 export const queryClient = new QueryClient({
@@ -156,12 +181,24 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      refetchOnWindowFocus: true,
+      staleTime: 60_000,
       retry: false,
     },
     mutations: {
       retry: false,
     },
   },
+});
+
+// Invalidation only: form state remains owned by the page's dirty-input guards.
+// The storage event is delivered to other tabs, never rebroadcast by receivers.
+queryClient.getMutationCache().subscribe((event) => {
+  if (event.type === "updated" && event.action.type === "success") {
+    void queryClient.invalidateQueries();
+    try { localStorage.setItem("simplyesg-data-changed", `${Date.now()}-${Math.random()}`); } catch { /* Storage may be disabled. */ }
+  }
+});
+window.addEventListener("storage", (event) => {
+  if (event.key === "simplyesg-data-changed") void queryClient.invalidateQueries();
 });
