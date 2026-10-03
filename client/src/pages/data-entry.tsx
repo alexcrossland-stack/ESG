@@ -5,7 +5,12 @@ import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import { EmptyState } from "@/components/empty-state";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
-import { apiRequest, queryClient, authFetch, type ApiRequestError } from "@/lib/queryClient";
+import { apiRequest, queryClient, authFetch, checkedJson, checkedArrayJson, checkedEntryJson, type ApiRequestError } from "@/lib/queryClient";
+import { ReportingContextStrip } from "@/components/reporting-context-strip";
+import { QueryFailure } from "@/components/query-feedback";
+import { overviewPeriodContext } from "@/lib/overview-period";
+import { isMetricDueInMonth } from "@shared/metric-cadence";
+import { loadColumnMappings, saveColumnMappings } from "@/lib/import-column-mappings";
 import { invalidateEsgReadinessQueries } from "@/lib/esg-query-invalidation";
 import { resolveApiError } from "@/lib/errorResolver";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -286,6 +291,8 @@ export default function DataEntry() {
   const [activeTab, setActiveTab] = useState<DataWorkspaceMode>(() => resolveInitialWorkspaceMode(searchParams));
   const [metricSearch, setMetricSearch] = useState("");
   const [metricStatusFilter, setMetricStatusFilter] = useState<MetricDataWorkspaceState | "all">("all");
+  const [metricCadenceFilter, setMetricCadenceFilter] = useState<"due" | "all">("due");
+  const needsExtendedCadence = metricCadenceFilter === "all" || activeTab === "manual" || activeTab === "paste";
   const [focusedEntryMetricId, setFocusedEntryMetricId] = useState<string | null>(focusedMetricId);
   const [showAllInputs, setShowAllInputs] = useState(searchParams.has("sourceMetric"));
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -317,103 +324,103 @@ export default function DataEntry() {
       const params = new URLSearchParams();
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
       const qs = params.toString();
-      return authFetch(`/api/evidence/coverage${qs ? `?${qs}` : ""}`).then((r) => r.json());
+      return authFetch(`/api/evidence/coverage${qs ? `?${qs}` : ""}`).then(checkedJson<any>);
     },
     enabled: !sitesLoading,
   });
 
-  const { data: monthlyEvidenceFiles = [], isLoading: monthlyEvidenceLoading } = useQuery<EvidenceAttachment[]>({
+  const { data: monthlyEvidenceFiles = [], isLoading: monthlyEvidenceLoading, isError: monthlyEvidenceError } = useQuery<EvidenceAttachment[]>({
     queryKey: ["/api/evidence", selectedPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("period", selectedPeriod);
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
-      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+      return authFetch(`/api/evidence?${params.toString()}`).then(checkedArrayJson);
     },
     enabled: !sitesLoading,
   });
 
-  const { data: quarterlyEvidenceFiles = [], isLoading: quarterlyEvidenceLoading } = useQuery<EvidenceAttachment[]>({
+  const { data: quarterlyEvidenceFiles = [], isLoading: quarterlyEvidenceLoading, isError: quarterlyEvidenceError } = useQuery<EvidenceAttachment[]>({
     queryKey: ["/api/evidence", selectedQuarterPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("period", selectedQuarterPeriod);
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
-      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+      return authFetch(`/api/evidence?${params.toString()}`).then(checkedArrayJson);
     },
-    enabled: !sitesLoading,
+    enabled: !sitesLoading && needsExtendedCadence,
   });
 
-  const { data: annualEvidenceFiles = [], isLoading: annualEvidenceLoading } = useQuery<EvidenceAttachment[]>({
+  const { data: annualEvidenceFiles = [], isLoading: annualEvidenceLoading, isError: annualEvidenceError } = useQuery<EvidenceAttachment[]>({
     queryKey: ["/api/evidence", selectedAnnualPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("period", selectedAnnualPeriod);
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
-      return authFetch(`/api/evidence?${params.toString()}`).then((r) => r.json());
+      return authFetch(`/api/evidence?${params.toString()}`).then(checkedArrayJson);
     },
-    enabled: !sitesLoading,
+    enabled: !sitesLoading && needsExtendedCadence,
   });
 
   const { data: reportingPeriods = [] } = useQuery<any[]>({
     queryKey: ["/api/reporting-periods"],
   });
 
-  const { data: metricDefinitions = EMPTY_DEFINITIONS, isLoading: definitionsLoading } = useQuery<MetricDefinitionActivation[]>({
+  const { data: metricDefinitions = EMPTY_DEFINITIONS, isLoading: definitionsLoading, isError: definitionsError } = useQuery<MetricDefinitionActivation[]>({
     queryKey: ["/api/metric-definitions"],
-    queryFn: () => authFetch("/api/metric-definitions").then((r) => r.json()),
+    queryFn: () => authFetch("/api/metric-definitions").then(checkedArrayJson),
   });
 
-  const { data: companyMetrics = EMPTY_COMPANY_METRICS, isLoading: companyMetricsLoading } = useQuery<any[]>({
+  const { data: companyMetrics = EMPTY_COMPANY_METRICS, isLoading: companyMetricsLoading, isError: metricsError } = useQuery<any[]>({
     queryKey: ["/api/metrics"],
-    queryFn: () => authFetch("/api/metrics").then((r) => r.json()),
+    queryFn: () => authFetch("/api/metrics").then(checkedArrayJson),
   });
 
   const activeReportingPeriod = reportingPeriods.find((rp: any) => rp.id === selectedReportingPeriodId);
   const isReportingPeriodLocked = activeReportingPeriod?.status === "locked";
 
-  const { data: rawData, isLoading: rawLoading } = useQuery<any[]>({
+  const { data: rawData, isLoading: rawLoading, isError: rawError } = useQuery<any[]>({
     queryKey: ["/api/raw-data", selectedPeriod, selectedScopeKey],
     queryFn: () => {
         const params = new URLSearchParams();
         if (hasActiveSites) params.set("siteId", selectedScopeParam);
         const qs = params.toString();
-        return authFetch(`/api/raw-data/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(r => r.json()).then(d => Array.isArray(d) ? d : []);
+        return authFetch(`/api/raw-data/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(checkedArrayJson);
       },
     enabled: !sitesLoading,
   });
 
-  const { data: entryData, isLoading: entryLoading } = useQuery<any>({
+  const { data: entryData, isLoading: entryLoading, isError: entryError } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedPeriod, selectedScopeKey],
     queryFn: () => {
         const params = new URLSearchParams();
         if (hasActiveSites) params.set("siteId", selectedScopeParam);
         const qs = params.toString();
-        return authFetch(`/api/data-entry/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(r => r.json());
+        return authFetch(`/api/data-entry/${selectedPeriod}${qs ? `?${qs}` : ""}`).then(checkedEntryJson);
       },
     enabled: !sitesLoading,
   });
 
-  const { data: quarterlyEntryData, isLoading: quarterlyEntryLoading } = useQuery<any>({
+  const { data: quarterlyEntryData, isLoading: quarterlyEntryLoading, isError: quarterlyEntryError } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedQuarterPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
       const qs = params.toString();
-      return authFetch(`/api/data-entry/${selectedQuarterPeriod}${qs ? `?${qs}` : ""}`).then((r) => r.json());
+      return authFetch(`/api/data-entry/${selectedQuarterPeriod}${qs ? `?${qs}` : ""}`).then(checkedEntryJson);
     },
-    enabled: !sitesLoading,
+    enabled: !sitesLoading && needsExtendedCadence,
   });
 
-  const { data: annualEntryData, isLoading: annualEntryLoading } = useQuery<any>({
+  const { data: annualEntryData, isLoading: annualEntryLoading, isError: annualEntryError } = useQuery<any>({
     queryKey: ["/api/data-entry", selectedAnnualPeriod, selectedScopeKey],
     queryFn: () => {
       const params = new URLSearchParams();
       if (hasActiveSites) params.set("siteId", selectedScopeParam);
       const qs = params.toString();
-      return authFetch(`/api/data-entry/${selectedAnnualPeriod}${qs ? `?${qs}` : ""}`).then((r) => r.json());
+      return authFetch(`/api/data-entry/${selectedAnnualPeriod}${qs ? `?${qs}` : ""}`).then(checkedEntryJson);
     },
-    enabled: !sitesLoading,
+    enabled: !sitesLoading && needsExtendedCadence,
   });
 
   useEffect(() => {
@@ -960,9 +967,10 @@ export default function DataEntry() {
     });
     return { metric, metricId, metricKey, metricPeriod, metricValue, displayValue, attachedEvidence, usableEvidence, state, aliasConflict };
   });
-  const metricWorkspaceSummary = summarizeMetricDataStates(metricWorkspaceRows.map((row) => row.state));
+  const cadenceRows = metricCadenceFilter === "all" ? metricWorkspaceRows : metricWorkspaceRows.filter(row => isMetricDueInMonth(row.metric.frequency));
+  const metricWorkspaceSummary = summarizeMetricDataStates(cadenceRows.map((row) => row.state));
   const normalizedMetricSearch = metricSearch.trim().toLowerCase();
-  const filteredMetricWorkspaceRows = metricWorkspaceRows.filter((row) => {
+  const filteredMetricWorkspaceRows = cadenceRows.filter((row) => {
     const matchesSearch = !normalizedMetricSearch
       || row.metric.name.toLowerCase().includes(normalizedMetricSearch)
       || Boolean(row.metric.aliasNames?.some((name: string) => name.toLowerCase().includes(normalizedMetricSearch)))
@@ -995,6 +1003,7 @@ export default function DataEntry() {
   if (isLoading) {
     return <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>;
   }
+  if (entryError || metricsError || definitionsError || rawError || monthlyEvidenceError || (needsExtendedCadence && (quarterlyEntryError || annualEntryError || quarterlyEvidenceError || annualEvidenceError))) return <PageLayout><PageHeader title="Data & evidence" /><QueryFailure label="metrics, recorded values and supporting evidence" retry={() => { void queryClient.invalidateQueries(); }} /></PageLayout>;
 
   const allRawFields = Object.values(RAW_DATA_FIELDS).flat();
   const starterRawFields = allRawFields.filter(field => SME_STARTER_INPUT_KEYS.has(field.key));
@@ -1048,13 +1057,14 @@ export default function DataEntry() {
             </SelectTrigger>
             <SelectContent>
               {Array.from(new Set([selectedPeriod, ...periods])).map(p => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+                <SelectItem key={p} value={p}>{overviewPeriodContext(p).label}</SelectItem>
               ))}
             </SelectContent>
           </Select></div>}
         </>}
       />
 
+      <ReportingContextStrip month={selectedPeriod} scope={selectedScopeLabel} locked={isReportingPeriodLocked} readOnly={!canEdit} />
       <nav
         className="workspace-nav"
         aria-label="Data and evidence workspace"
@@ -1541,7 +1551,7 @@ export default function DataEntry() {
               <div className="space-y-1">
                 <CardTitle className="text-base">What needs updating?</CardTitle>
                 <CardDescription data-testid="metrics-data-summary">
-                  {metricWorkspaceSummary.complete} of {metricWorkspaceSummary.total} tracked items ready · {metricWorkspaceSummary.needsData} need a figure · {metricWorkspaceSummary.needsEvidence} need evidence
+                  {metricWorkspaceSummary.complete} of {metricWorkspaceSummary.total} {metricCadenceFilter === "due" ? "items due this month" : "tracked items"} ready · {metricWorkspaceSummary.needsData} need a figure · {metricWorkspaceSummary.needsEvidence} need evidence
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1591,6 +1601,11 @@ export default function DataEntry() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2" aria-label="Reporting workload">
+                <Button size="sm" variant={metricCadenceFilter === "due" ? "default" : "outline"} aria-pressed={metricCadenceFilter === "due"} onClick={() => setMetricCadenceFilter("due")}>Due now</Button>
+                <Button size="sm" variant={metricCadenceFilter === "all" ? "default" : "outline"} aria-pressed={metricCadenceFilter === "all"} onClick={() => setMetricCadenceFilter("all")}>All tracked</Button>
+                <p className="text-xs text-muted-foreground">Ready here means a figure with required evidence, not approved or share-ready.</p>
+              </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Metric completion filters">
                 {([
                   { key: "all", label: "All", value: metricWorkspaceSummary.total },
@@ -2020,11 +2035,11 @@ export default function DataEntry() {
               </p>
             </div>
             {focusedHistoryMetricId && (
+                <Button asChild variant="outline" size="sm" data-testid="button-view-metric-history">
               <Link href={`/metrics?metric=${encodeURIComponent(focusedHistoryMetricId)}&period=${encodeURIComponent(selectedPeriod)}&metricPeriod=${encodeURIComponent(focusedHistoryPeriod)}&siteId=${encodeURIComponent(selectedScopeKey)}`}>
-                <Button type="button" variant="outline" size="sm" data-testid="button-view-metric-history">
                   <ExternalLink className="mr-2 h-3.5 w-3.5" /> History &amp; trend
-                </Button>
               </Link>
+                </Button>
             )}
           </div>
           {!focusedEntryMetricId && canEdit && visibleManualMetrics.some(isMetricEntryEligible) && <Alert className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800">
@@ -2185,7 +2200,7 @@ export default function DataEntry() {
                           <InlineGuidanceTrigger metricName={metric.name} />
                           {isEligible ? <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">Value</Label>
+                              <Label htmlFor={`value-${metricKey}`} className="text-xs text-muted-foreground">Value ({metric.unit || "value"})</Label>
                               {isBooleanMetric ? (
                                 <Select
                                   value={localVal.value === "Yes" ? "yes" : localVal.value === "No" ? "no" : ""}
@@ -2195,7 +2210,7 @@ export default function DataEntry() {
                                   })); }}
                                   disabled={rowEditDisabled || !isEligible}
                                 >
-                                  <SelectTrigger className="h-8 text-sm" data-testid={`input-manual-${metricKey}`}>
+                                  <SelectTrigger id={`value-${metricKey}`} className="h-8 text-sm" data-testid={`input-manual-${metricKey}`}>
                                     <SelectValue placeholder={isEligible ? "Select Yes or No" : "Calculated automatically"} />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -2205,6 +2220,7 @@ export default function DataEntry() {
                                 </Select>
                               ) : (
                                 <Input
+                                  id={`value-${metricKey}`}
                                   type="number"
                                   step="any"
                                   value={localVal.value}
@@ -2220,8 +2236,9 @@ export default function DataEntry() {
                               )}
                             </div>
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">Notes</Label>
+                              <Label htmlFor={`notes-${metricKey}`} className="text-xs text-muted-foreground">Notes</Label>
                               <Input
+                                id={`notes-${metricKey}`}
                                 value={localVal.notes}
                                 onChange={e => { const notes = e.target.value; markDirty(metricKey); setManualValues(prev => ({
                                   ...prev,
@@ -2234,15 +2251,13 @@ export default function DataEntry() {
                               />
                             </div>
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                                Type of data <EsgTooltip term="dataType" />
-                              </Label>
+                              <div className="flex items-center gap-1"><Label htmlFor={`source-${metricKey}`} className="text-xs text-muted-foreground">Type of data</Label><EsgTooltip term="dataType" /></div>
                               <Select
                                 value={manualDataSourceTypes[metricKey] || "manual"}
                                 onValueChange={(val) => { markDirty(metricKey); setManualDataSourceTypes(prev => ({ ...prev, [metricKey]: val })); }}
                                 disabled={rowEditDisabled || !isEligible}
                               >
-                                <SelectTrigger className="w-32 h-8" data-testid={`select-source-type-${metricKey}`}>
+                                <SelectTrigger id={`source-${metricKey}`} className="w-32 h-8" data-testid={`select-source-type-${metricKey}`}>
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -2442,6 +2457,8 @@ const TEMPLATE_OPTIONS = [
 ];
 
 function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose: () => void; period: string }) {
+  const { data: importAuth } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const importCompanyId = importAuth?.company?.id || "";
   const { toast } = useToast();
   const qc = useQueryClient();
   const [, setLocation] = useLocation();
@@ -2452,6 +2469,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
   const [step, setStep] = useState<"upload" | "preview" | "result">("upload");
   const [parsedResult, setParsedResult] = useState<any>(null);
   const [mappings, setMappings] = useState<{ column: string; inputKey: string | null }[]>([]);
+  const [savedMappings, setSavedMappings] = useState<typeof mappings | null>(null);
   const [importResult, setImportResult] = useState<any>(null);
   const [importedSiteId, setImportedSiteId] = useState<string | null | undefined>(undefined);
   const [selectedTemplate, setSelectedTemplate] = useState("all");
@@ -2469,6 +2487,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     onSuccess: (data: any) => {
       setParsedResult(data);
       setMappings((data.mappings || []).map((m: any) => ({ column: m.column, inputKey: m.inputKey })));
+      setSavedMappings(loadColumnMappings(localStorage, importCompanyId, data.columns || [], Object.values(RAW_DATA_FIELDS).flat().map(field => field.key)));
       setStep("preview");
     },
     onError: () => toast({ title: "Failed to parse file", variant: "destructive" }),
@@ -2487,6 +2506,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
     onSuccess: (data: any) => {
       const resolvedImportedSiteId = isMultiSite ? selectedSiteId : activeSiteId;
       setImportResult(data);
+      saveColumnMappings(localStorage, importCompanyId, mappings);
       setImportedSiteId(resolvedImportedSiteId || null);
       setStep("result");
       qc.invalidateQueries({ queryKey: ["/api/raw-data"] });
@@ -2505,6 +2525,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!/\.csv$/i.test(file.name)) { toast({ title: "Choose a CSV file", description: "Save Excel or Google Sheets as CSV first. Workbooks (.xlsx/.xls) are not supported here.", variant: "destructive" }); return; }
     const reader = new FileReader();
     reader.onload = (evt) => {
       const base64 = btoa(new Uint8Array(evt.target?.result as ArrayBuffer).reduce((d, b) => d + String.fromCharCode(b), ""));
@@ -2570,7 +2591,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
         {step === "upload" && (
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">Upload a CSV of operational figures such as energy, travel or workforce data. We map the columns for you and show a review before saving.</p>
+            <p className="text-sm text-muted-foreground">Upload a CSV of operational figures such as energy, travel or workforce data. Save Excel or Google Sheets as CSV first; .xlsx/.xls workbooks are not supported. Review mappings, units and each row before saving.</p>
 
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Download a template to get started</p>
@@ -2632,6 +2653,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
 
             <div className="space-y-2">
               <Label className="text-xs font-medium">Column Mappings</Label>
+              {savedMappings && <Button variant="outline" size="sm" onClick={() => { setMappings(savedMappings); setSavedMappings(null); }}>Use saved mappings for these columns</Button>}
               {mappings.map((m, i) => {
                 const confidence = parsedResult.mappings?.[i]?.confidence || 0;
                 return (
@@ -2645,7 +2667,7 @@ function CarbonImportDialog({ open, onClose, period }: { open: boolean; onClose:
                       <SelectContent>
                         <SelectItem value="__skip__">Skip</SelectItem>
                         {allInputKeys.map(k => (
-                          <SelectItem key={k.key} value={k.key}>{k.label}</SelectItem>
+                          <SelectItem key={k.key} value={k.key}>{k.label} ({Object.values(RAW_DATA_FIELDS).flat().find(field => field.key === k.key)?.unit})</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

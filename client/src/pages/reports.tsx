@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { PageLayout, PageHeader } from "@/components/page-layout";
 import { useReportingMonth } from "@/hooks/use-reporting-month";
+import { ReportingContextStrip } from "@/components/reporting-context-strip";
 import { useBillingStatus, UpgradeButton } from "@/components/upgrade-prompt";
 import { EsgStatusBadge, type EsgStatusData } from "@/components/esg-status-badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -2339,6 +2340,7 @@ export default function Reports() {
 
   return (
     <PageLayout>
+      <ReportingContextStrip month={reporting.month} scope={reportReadinessScopeLabel} readOnly={true} />
       <PageHeader title="Reports" titleTestId="text-page-title"
         description="Create, review and export clear ESG information for the people who need it."
         actions={<Button asChild variant="outline"><Link href="/esg-profile"><FileText className="h-4 w-4" />SME ESG Passport</Link></Button>}

@@ -1,4 +1,5 @@
 import { storage } from "./storage";
+import { normalizeMetricCadence } from "@shared/metric-cadence";
 
 export type CanonicalReportingPeriodType = "monthly" | "quarterly" | "annual";
 export type CanonicalMetricFrequency = CanonicalReportingPeriodType | "one_off";
@@ -180,11 +181,7 @@ export function selectCanonicalReportingPeriod(
 }
 
 export function normalizeMetricFrequency(value: unknown): CanonicalMetricFrequency | null {
-  if (value === null || value === undefined || value === "") return "monthly";
-  const normalized = String(value).trim().toLowerCase().replace(/[ -]+/g, "_");
-  if (normalized === "monthly" || normalized === "quarterly" || normalized === "annual") return normalized;
-  if (normalized === "one_off" || normalized === "oneoff" || normalized === "once") return "one_off";
-  return null;
+  return normalizeMetricCadence(value);
 }
 
 /**

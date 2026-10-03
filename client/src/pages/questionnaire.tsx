@@ -190,6 +190,7 @@ function QuestionCard({
             {sourceData.length > 0 && (
               <div className="space-y-1" data-testid={`source-data-${question.id}`}>
                 <p className="text-xs font-medium text-muted-foreground">Supporting Data</p>
+                <p className="text-xs text-muted-foreground">Sources used when this answer was prepared. Check the reporting period and current records before submitting; later source changes do not silently rewrite this answer.</p>
                 <ul className="text-xs text-muted-foreground space-y-0.5 pl-3">
                   {sourceData.map((item, idx) => (
                     <li key={idx} data-testid={`source-data-item-${question.id}-${idx}`}>

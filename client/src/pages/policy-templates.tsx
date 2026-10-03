@@ -32,7 +32,7 @@ import { usePermissions } from "@/lib/permissions";
 import { WorkflowBadge, AiDraftBadge } from "@/components/workflow-badge";
 import { GeneratedDocumentContent } from "@/components/generated-document-content";
 import { buildPolicyDocumentSections, getOrderedPolicySections } from "@shared/policy-document";
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, WidthType } from "docx";
+
 import {
   buildGeneratedDocumentHtmlPage,
   parseGeneratedInlineMarkdown,
@@ -62,137 +62,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Supply Chain": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
 };
 
-function sanitizeDocxText(value: unknown): string {
-  if (value == null) return "";
-  const normalized = String(value).replace(/\r\n?/g, "\n");
-  let sanitized = "";
 
-  for (let index = 0; index < normalized.length; index++) {
-    const codeUnit = normalized.charCodeAt(index);
-
-    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
-      const nextCodeUnit = normalized.charCodeAt(index + 1);
-      if (nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF) {
-        sanitized += normalized[index] + normalized[index + 1];
-        index += 1;
-      }
-      continue;
-    }
-
-    if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) continue;
-
-    const isValidXmlChar =
-      codeUnit === 0x09 ||
-      codeUnit === 0x0A ||
-      codeUnit === 0x0D ||
-      (codeUnit >= 0x20 && codeUnit <= 0xD7FF) ||
-      (codeUnit >= 0xE000 && codeUnit <= 0xFFFD);
-
-    if (isValidXmlChar) sanitized += normalized[index];
-  }
-
-  return sanitized;
-}
-
-function docxRunsFromMarkdownRuns(runs: GeneratedInlineRun[], size = 22): TextRun[] {
-  if (!runs.length) return [new TextRun({ text: "", size })];
-  return runs.map((run) => new TextRun({
-    text: sanitizeDocxText(run.text),
-    size,
-    bold: run.bold,
-    italics: run.italic,
-    font: run.code ? "Courier New" : undefined,
-  }));
-}
-
-function paragraphFromMarkdownRuns(runs: GeneratedInlineRun[], options: { size?: number; bullet?: boolean } = {}) {
-  return new Paragraph({
-    children: docxRunsFromMarkdownRuns(runs, options.size ?? 22),
-    bullet: options.bullet ? { level: 0 } : undefined,
-    spacing: { after: 120 },
-  });
-}
-
-function buildDocxTable(headers: string[], rows: string[][]) {
-  const colPercent = Math.floor(100 / Math.max(headers.length, 1));
-  return new Table({
-    rows: [
-      new TableRow({
-        children: headers.map((header) => new TableCell({
-          width: { size: colPercent, type: WidthType.PERCENTAGE },
-          children: [
-            new Paragraph({
-              children: [new TextRun({ text: sanitizeDocxText(stripMarkdownToText(header)) || "-", bold: true, size: 20 })],
-            }),
-          ],
-        })),
-      }),
-      ...rows.map((row) => new TableRow({
-        children: row.map((cell) => new TableCell({
-          width: { size: colPercent, type: WidthType.PERCENTAGE },
-          children: [
-            new Paragraph({
-              children: [new TextRun({ text: sanitizeDocxText(stripMarkdownToText(cell)) || "-", size: 20 })],
-            }),
-          ],
-        })),
-      })),
-    ],
-    width: { size: 100, type: WidthType.PERCENTAGE },
-  });
-}
-
-function renderMarkdownToDocx(markdown: string): Array<Paragraph | Table> {
-  const blocks = parseGeneratedMarkdownBlocks(markdown);
-  const children: Array<Paragraph | Table> = [];
-
-  for (const block of blocks) {
-    if (block.type === "heading") {
-      const heading = block.depth <= 1
-        ? HeadingLevel.HEADING_1
-        : block.depth === 2
-          ? HeadingLevel.HEADING_2
-          : HeadingLevel.HEADING_3;
-      children.push(new Paragraph({
-        children: docxRunsFromMarkdownRuns(block.runs, 22),
-        heading,
-        spacing: { before: 160, after: 100 },
-      }));
-      continue;
-    }
-
-    if (block.type === "paragraph") {
-      children.push(paragraphFromMarkdownRuns(block.runs));
-      continue;
-    }
-
-    if (block.type === "list") {
-      for (const [index, item] of block.items.entries()) {
-        if (block.ordered) {
-          const runs = item.runs.length ? item.runs : [{ text: stripMarkdownToText(item.text) }];
-          children.push(new Paragraph({
-            children: docxRunsFromMarkdownRuns([{ text: `${index + 1}. ` }, ...runs], 22),
-            spacing: { after: 120 },
-          }));
-        } else {
-          children.push(paragraphFromMarkdownRuns(item.runs.length ? item.runs : [{ text: stripMarkdownToText(item.text) }], { bullet: true }));
-        }
-      }
-      continue;
-    }
-
-    if (block.type === "table") {
-      children.push(buildDocxTable(block.headers, block.rows));
-      continue;
-    }
-
-    if (block.type === "thematicBreak") {
-      children.push(new Paragraph({ text: "", spacing: { after: 120 } }));
-    }
-  }
-
-  return children;
-}
 
 export type PolicyTemplateView =
   | { mode: "library" }
@@ -376,12 +246,12 @@ export function PolicyTemplatesWorkspace({
                           size="sm"
                           variant="outline"
                           className="mt-5 min-h-11 w-full justify-between"
-                          onClick={() => navigate({ mode: "questionnaire", slug: t.slug })}
+                          onClick={() => navigate(existingPolicy ? { mode: "view-policy", id: existingPolicy.id } : { mode: "questionnaire", slug: t.slug })}
                           data-testid={`button-use-template-${t.slug}`}
                         >
                           <span className="flex items-center">
                             <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                            Use template
+                            {existingPolicy ? "Open existing policy" : "Use template"}
                           </span>
                           <ChevronRight className="h-3.5 w-3.5" />
                         </Button>
@@ -390,6 +260,7 @@ export function PolicyTemplatesWorkspace({
                           Company admins can use this template.
                         </p>
                       )}
+                      {canCreatePolicy && existingPolicy && <Button size="sm" variant="ghost" className="mt-2" onClick={() => navigate({ mode: "questionnaire", slug: t.slug })}>Create another draft</Button>}
                     </CardContent>
                   </Card>
                 );
@@ -1055,6 +926,7 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
   const renderedPolicyMarkdown = buildDocContent();
 
   const handleExport = async (format: "txt" | "docx" | "pdf") => {
+    try {
     if (format === "txt") {
       const blob = new Blob([buildDocContent()], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
@@ -1064,12 +936,8 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
       a.click();
       URL.revokeObjectURL(url);
     } else if (format === "docx") {
-      const doc = new Document({
-        sections: [{
-          children: renderMarkdownToDocx(buildDocContent()),
-        }],
-      });
-      const blob = await Packer.toBlob(doc);
+      const { exportPolicyDocx } = await import("@/lib/policy-docx-export");
+      const blob = await exportPolicyDocx(buildDocContent());
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1083,9 +951,12 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
         printWindow.document.write(html);
         printWindow.document.close();
         setTimeout(() => { printWindow.print(); }, 500);
-      }
+      } else throw new Error("Allow pop-ups to print or save this policy as PDF.");
     }
     toast({ title: `Policy exported as ${format.toUpperCase()}` });
+    } catch (error) {
+      toast({ title: "Export could not be completed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    }
   };
 
   const requiresApproval = workflowSettings?.requireApprovalPolicies !== false;
@@ -1154,6 +1025,10 @@ function PolicyViewerDocument({ id, onBack, embedded = false }: PolicyViewerProp
         </Card>
       )}
 
+      {(!policy.policyOwner?.trim() || !policy.reviewDate) && <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4 text-sm dark:bg-amber-950/20" data-testid="policy-adoption-checklist">
+        <p className="font-medium">Before adopting this policy</p>
+        <p className="mt-1">Assign a policy owner and a next review date. {canEditContent ? "Edit the metadata below, then save before submitting for review." : "If this version is locked, start a revision to complete its ownership and review schedule."}</p>
+      </div>}
       <div className="flex flex-col gap-2 rounded-xl border bg-card p-3 sm:flex-row sm:flex-wrap [&>button]:min-h-10">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

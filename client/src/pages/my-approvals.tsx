@@ -16,7 +16,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiGet, apiRequest, queryClient } from "@/lib/queryClient";
+import { QueryFailure, QueryFreshness } from "@/components/query-feedback";
 import { usePermissions } from "@/lib/permissions";
 import { ListChecks, Inbox, Check, X, CheckCheck, XCircle } from "lucide-react";
 import { PermissionBlockedCard } from "@/components/permission-gate";
@@ -134,8 +135,13 @@ export default function MyApprovals() {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
 
-  const { data, isLoading } = useQuery<any>({
+  const { data, isLoading, isError, refetch, dataUpdatedAt, isFetching } = useQuery<any>({
     queryKey: ["/api/my-approvals"],
+    queryFn: async () => {
+      const result = await apiGet<any>("/api/my-approvals");
+      if (!result || Object.keys(ENTITY_LABELS).some(key => !Array.isArray(result[key]))) throw new Error("Invalid approvals response");
+      return result;
+    },
     enabled: can("report_generation"),
   });
 
@@ -264,7 +270,9 @@ export default function MyApprovals() {
         </div>
       )}
 
-      {!isLoading && !hasAnyItems && (
+      <QueryFreshness updatedAt={dataUpdatedAt} refreshing={isFetching} refresh={() => void refetch()} />
+      {isError && <QueryFailure label="approvals" stale={!!data} retry={() => void refetch()} />}
+      {!isLoading && !isError && !hasAnyItems && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Inbox className="w-12 h-12 text-muted-foreground mb-3" />

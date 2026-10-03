@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, authFetch, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiGet, authFetch, checkedArrayJson, checkedEntryJson, queryClient } from "@/lib/queryClient";
+import { QueryFailure } from "@/components/query-feedback";
+import { useReportingMonth } from "@/hooks/use-reporting-month";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
+import { ReportingContextStrip } from "@/components/reporting-context-strip";
+import { compatibleCarbonSources, compatibleCarbonMetricSources } from "@/lib/carbon-source-inputs";
+import { overviewPeriodContext } from "@/lib/overview-period";
 import { useSiteContext } from "@/hooks/use-site-context";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -174,9 +180,12 @@ export default function CarbonCalculator() {
   const { can } = usePermissions();
   const canEdit = can("metrics_data_entry");
   const { activeSiteId, activeSites } = useSiteContext();
+  const reporting = useReportingMonth();
+  const [dirty, setDirty] = useState(false);
+  const confirmContext = useUnsavedChanges(dirty, () => setDirty(false));
   const [inputs, setInputs] = useState<CarbonInputs>(defaultInputs);
   const [calculationScope, setCalculationScope] = useState(activeSiteId ?? "__org__");
-  const [reportingPeriod, setReportingPeriod] = useState(PERIOD_OPTIONS[0]);
+  const [reportingPeriod, setReportingPeriod] = useState(reporting.month);
   const [periodType, setPeriodType] = useState("monthly");
   const [employeeCount, setEmployeeCount] = useState("");
   const [result, setResult] = useState<CalculationResult | null>(null);
@@ -190,16 +199,31 @@ export default function CarbonCalculator() {
   });
 
   useEffect(() => {
-    setCalculationScope(activeSiteId ?? "__org__");
+    if (!dirty) { setCalculationScope(activeSiteId ?? "__org__"); setInputs(defaultInputs); setDataQuality({}); setEmployeeCount(""); setResult(null); }
   }, [activeSiteId]);
+  useEffect(() => { if (!dirty) { setReportingPeriod(reporting.month); setInputs(defaultInputs); setDataQuality({}); setEmployeeCount(""); setResult(null); } }, [reporting.month]);
+  const { data: recordedSources = [], isError: sourceError } = useQuery<any[]>({
+    queryKey: ["/api/raw-data", reportingPeriod, calculationScope],
+    queryFn: () => authFetch(`/api/raw-data/${reportingPeriod}?siteId=${encodeURIComponent(calculationScope === "__org__" ? "null" : calculationScope)}`).then(checkedArrayJson),
+    enabled: periodType === "monthly",
+  });
+  const { data: recordedEntry, isError: entrySourceError } = useQuery<{ metrics: any[]; values: any[] }>({
+    queryKey: ["/api/data-entry", reportingPeriod, calculationScope],
+    queryFn: () => authFetch(`/api/data-entry/${reportingPeriod}?siteId=${encodeURIComponent(calculationScope === "__org__" ? "null" : calculationScope)}`).then(checkedEntryJson),
+    enabled: periodType === "monthly",
+  });
+  const rawSourceInputs = periodType === "monthly" && Array.isArray(recordedSources)
+    ? compatibleCarbonSources(recordedSources, reportingPeriod, calculationScope === "__org__" ? null : calculationScope) : [];
+  const metricSourceInputs = periodType === "monthly" && Array.isArray(recordedEntry?.metrics) && Array.isArray(recordedEntry?.values)
+    ? compatibleCarbonMetricSources(recordedEntry.metrics, recordedEntry.values, reportingPeriod, calculationScope === "__org__" ? null : calculationScope) : [];
+  const sourceInputs = [...rawSourceInputs, ...metricSourceInputs.filter(source => !rawSourceInputs.some(raw => raw.field === source.field))];
 
-  const { data: history, isLoading: historyLoading } = useQuery<CalculationResult[]>({
+  const { data: history, isLoading: historyLoading, isError: historyError, refetch: refetchHistory } = useQuery<CalculationResult[]>({
     queryKey: ["/api/carbon/calculations", calculationScope],
     queryFn: async () => {
       const siteId = calculationScope === "__org__" ? "null" : calculationScope;
       const res = await authFetch(`/api/carbon/calculations?siteId=${encodeURIComponent(siteId)}`);
-      if (!res.ok) throw new Error("Failed to load carbon calculation history");
-      return res.json();
+      return checkedArrayJson(res);
     },
   });
 
@@ -210,6 +234,7 @@ export default function CarbonCalculator() {
     },
     onSuccess: (data: CalculationResult) => {
       setResult(data);
+      setDirty(false);
       queryClient.invalidateQueries({ queryKey: ["/api/carbon/calculations"] });
       toast({ title: "Calculation complete", description: "Your carbon footprint has been estimated." });
     },
@@ -238,10 +263,14 @@ export default function CarbonCalculator() {
   };
 
   const handleInputChange = (field: keyof CarbonInputs, value: string) => {
+    setDirty(true);
+    setResult(null);
     setInputs((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleDqChange = (key: string, val: string) => {
+    setDirty(true);
+    setResult(null);
     setDataQuality((prev) => ({ ...prev, [key]: val as any }));
   };
 
@@ -294,23 +323,35 @@ export default function CarbonCalculator() {
         <PermissionBanner module="metrics_data_entry" action="save carbon calculations" data-testid="banner-carbon-permission" />
       )}
 
+      <ReportingContextStrip month={reportingPeriod} scope={activeSites.find(site => site.id === calculationScope)?.name || "Organisation-wide"} readOnly={!canEdit} />
+      {(sourceError || entrySourceError) && <QueryFailure label="some recorded energy sources" retry={() => { void queryClient.invalidateQueries({ queryKey: ["/api/raw-data"] }); void queryClient.invalidateQueries({ queryKey: ["/api/data-entry"] }); }} />}
+      {canEdit && sourceInputs.length > 0 && <Card><CardContent className="space-y-3 p-4">
+        <p className="text-sm font-medium">Reuse recorded energy figures</p>
+        <p className="text-sm text-muted-foreground">{sourceInputs.map(source => `${source.label}: ${source.value} ${source.unit}`).join(" · ")} · {overviewPeriodContext(reportingPeriod).label}. Only blank inputs will be filled; nothing is saved until you calculate. Check the source and data-quality setting before calculating.</p>
+        <Button variant="outline" onClick={() => {
+          setInputs(previous => { const next = { ...previous }; for (const source of sourceInputs) if (next[source.field] === "") next[source.field] = source.value; return next; });
+          setDataQuality(previous => { const next = { ...previous }; for (const source of sourceInputs) if (inputs[source.field] === "") next[source.field] = source.quality; return next; });
+          setDirty(true); setResult(null);
+        }}>Use these figures in blank inputs</Button>
+        <a href={`/data-entry?period=${reportingPeriod}&siteId=${calculationScope}`} className="ml-3 text-sm text-primary underline">View source data</a>
+      </CardContent></Card>}
       <div className="flex flex-wrap items-center gap-3">
         <div className="space-y-1">
           <Label htmlFor="carbon-reporting-period" className="text-xs text-muted-foreground">Reporting Period</Label>
-          <Select value={reportingPeriod} onValueChange={setReportingPeriod}>
+          <Select value={reportingPeriod} onValueChange={value => { if (!confirmContext()) return; setReportingPeriod(value); reporting.setMonth(value); setInputs(defaultInputs); setResult(null); setDataQuality({}); setEmployeeCount(""); }}>
             <SelectTrigger id="carbon-reporting-period" className="w-36" data-testid="select-reporting-period">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PERIOD_OPTIONS.map((p) => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+              {Array.from(new Set([reportingPeriod, ...PERIOD_OPTIONS])).map((p) => (
+                <SelectItem key={p} value={p}>{overviewPeriodContext(p).label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1">
           <Label htmlFor="carbon-period-type" className="text-xs text-muted-foreground">Period Type</Label>
-          <Select value={periodType} onValueChange={setPeriodType}>
+          <Select value={periodType} onValueChange={value => { if (!confirmContext()) return; setPeriodType(value); setInputs(defaultInputs); setDataQuality({}); setResult(null); setEmployeeCount(""); }}>
             <SelectTrigger id="carbon-period-type" className="w-36" data-testid="select-period-type">
               <SelectValue />
             </SelectTrigger>
@@ -324,7 +365,10 @@ export default function CarbonCalculator() {
         <div className="space-y-1">
           <Label htmlFor="carbon-scope" className="text-xs text-muted-foreground">Calculation boundary</Label>
           <Select value={calculationScope} onValueChange={(value) => {
+            if (!confirmContext()) return;
             setCalculationScope(value);
+            setInputs(defaultInputs); setDataQuality({});
+            setEmployeeCount("");
             setResult(null);
           }}>
             <SelectTrigger id="carbon-scope" aria-describedby="carbon-scope-help" className="w-48" data-testid="select-carbon-scope">
@@ -346,7 +390,7 @@ export default function CarbonCalculator() {
           <Input
             id="carbon-employee-count"
             type="number" value={employeeCount}
-            onChange={(e) => setEmployeeCount(e.target.value)}
+            onChange={(e) => { setDirty(true); setResult(null); setEmployeeCount(e.target.value); }}
             placeholder="Employee count" className="w-36" min={0}
             data-testid="input-employee-count"
           />
@@ -758,7 +802,7 @@ export default function CarbonCalculator() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {historyLoading ? (
+          {historyError ? <QueryFailure label="carbon calculation history" stale={!!history?.length} retry={() => void refetchHistory()} /> : historyLoading ? (
             <div className="space-y-2">
               {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10" />)}
             </div>

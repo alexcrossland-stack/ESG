@@ -14,7 +14,7 @@ type Result = {
 };
 
 const cwd = process.cwd();
-const nodeBinDir = path.join(process.env.HOME || "", "node", "bin");
+const nodeBinDir = path.dirname(process.execPath);
 const env = {
   ...process.env,
   PATH: nodeBinDir ? `${nodeBinDir}:${process.env.PATH || ""}` : process.env.PATH || "",

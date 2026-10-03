@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, copyFile } from "fs/promises";
+import { rm, readFile, copyFile, readdir, writeFile } from "fs/promises";
+import { gzipSync, brotliCompressSync } from "node:zlib";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -37,6 +38,15 @@ async function buildAll() {
 
   console.log("building client...");
   await viteBuild();
+  for (const name of await readdir("dist/public/assets")) {
+    if (!/\.(js|css)$/.test(name)) continue;
+    const file = `dist/public/assets/${name}`;
+    const source = await readFile(file);
+    await Promise.all([
+      writeFile(`${file}.gz`, gzipSync(source, { level: 9 })),
+      writeFile(`${file}.br`, brotliCompressSync(source)),
+    ]);
+  }
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));

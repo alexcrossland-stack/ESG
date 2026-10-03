@@ -9,12 +9,16 @@ const originals = {
   getMetrics: mutableStorage.getMetrics,
   getEvidenceFiles: mutableStorage.getEvidenceFiles,
   getMetricValuesForMetric: mutableStorage.getMetricValuesForMetric,
+  getMetricValuesForMetrics: mutableStorage.getMetricValuesForMetrics,
 };
 
 const requestedMetricIds: string[] = [];
 const requestedEvidencePeriods: Array<string | undefined> = [];
 
 try {
+  mutableStorage.getMetricValuesForMetrics = async (companyId: string, metricIds: string[]) => {
+    return (await Promise.all(metricIds.map(metricId => mutableStorage.getMetricValuesForMetric(companyId, metricId)))).flat();
+  };
   mutableStorage.getMetrics = async () => [
     { id: "monthly", name: "Monthly energy", enabled: true, frequency: "monthly", metricType: "manual" },
     { id: "quarterly", name: "Quarterly workforce", enabled: true, frequency: "quarterly", metricType: "manual" },
@@ -137,6 +141,7 @@ try {
   mutableStorage.getMetrics = originals.getMetrics;
   mutableStorage.getEvidenceFiles = originals.getEvidenceFiles;
   mutableStorage.getMetricValuesForMetric = originals.getMetricValuesForMetric;
+  mutableStorage.getMetricValuesForMetrics = originals.getMetricValuesForMetrics;
 }
 
 console.log("\n=== ESG status reporting context: 2/2 passed ===\n");

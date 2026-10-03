@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
+import { apiGet } from "@/lib/queryClient";
+import { QueryFailure, QueryFreshness } from "@/components/query-feedback";
 import { ClipboardCheck, BarChart3, CheckSquare, FileCheck, FileText, FileQuestion, Inbox } from "lucide-react";
 
 const TYPE_CONFIG: Record<string, { label: string; groupLabel: string; icon: any }> = {
@@ -28,8 +30,13 @@ function getDueBadge(dueDate: string | null, isOverdue: boolean) {
 }
 
 export default function MyTasks() {
-  const { data: tasks, isLoading } = useQuery<any[]>({
+  const { data: tasks, isLoading, isError, refetch, dataUpdatedAt, isFetching } = useQuery<any[]>({
     queryKey: ["/api/my-tasks"],
+    queryFn: async () => {
+      const rows = await apiGet<any>("/api/my-tasks");
+      if (!Array.isArray(rows) || rows.some(row => !row || typeof row.entityId !== "string" || typeof row.entityType !== "string")) throw new Error("Invalid task response");
+      return rows;
+    },
   });
 
   const grouped = (tasks || []).reduce((acc: Record<string, any[]>, task: any) => {
@@ -48,13 +55,16 @@ export default function MyTasks() {
         <h1 className="text-2xl font-semibold">My Tasks</h1>
       </div>
 
+      <QueryFreshness updatedAt={dataUpdatedAt} refreshing={isFetching} refresh={() => void refetch()} />
+      {isError && <QueryFailure label="tasks" stale={!!tasks} retry={() => void refetch()} />}
+
       {isLoading && (
         <div className="space-y-4">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-32 w-full" />)}
         </div>
       )}
 
-      {!isLoading && (!tasks || tasks.length === 0) && (
+      {!isLoading && !isError && tasks?.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Inbox className="w-12 h-12 text-muted-foreground mb-3" />

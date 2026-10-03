@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
+import { serveAssets, serveStatic } from "./static";
 import { createServer } from "http";
 import { ensureIndexes } from "./ensure-indexes";
 import { storage, db } from "./storage";
@@ -79,6 +79,8 @@ app.use((req, res, next) => {
 });
 
 const deploymentWriteLockFile = process.env.DEPLOYMENT_WRITE_LOCK_FILE;
+// Public content-addressed files do not need a database-backed session.
+if (isProd) serveAssets(app);
 app.use((req, res, next) => {
   if (
     deploymentWriteLockFile
@@ -763,6 +765,8 @@ app.use((req, res, next) => {
   }
 
   await registerRoutes(httpServer, app);
+
+  app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found" }));
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

@@ -53,5 +53,5 @@ export function getPolicyPortfolioStatus({
     .map((value) => new Date(value))
     .filter((value) => !Number.isNaN(value.getTime()));
 
-  return { hasAny, published, adoptedCount, reviewDates };
+  return { hasAny, published, adoptedCount, reviewDates, missingReviewDateCount: adoptedCount - reviewDates.length };
 }

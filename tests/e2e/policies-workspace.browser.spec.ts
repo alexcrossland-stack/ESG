@@ -299,6 +299,10 @@ test.describe("Unified Policies workspace", () => {
     await expect(page.getByTestId("button-use-template-environmental-policy")).toBeVisible();
 
     await page.getByTestId("button-use-template-environmental-policy").click();
+    await expect(page).toHaveURL(/\/policies\?tab=register&policy=draft-1$/);
+    await page.getByTestId("button-back-from-viewer").click();
+    await page.getByTestId("tab-policy-templates").click();
+    await page.getByRole("button", { name: "Create another draft", exact: true }).click();
     await expect(page).toHaveURL(/\/policies\?tab=templates&template=environmental-policy$/);
     await expect(page.getByRole("heading", { name: "Environmental Policy", exact: true })).toBeVisible();
     await expect(page.getByTestId("button-back-to-library")).toBeVisible();
@@ -311,7 +315,7 @@ test.describe("Unified Policies workspace", () => {
   test("guided template creation generates a draft and opens it in the register", async ({ browser }) => {
     const { context, page } = await openPolicies(browser, "admin", "/policies?tab=templates");
 
-    await page.getByTestId("button-use-template-environmental-policy").click();
+    await page.getByRole("button", { name: "Create another draft", exact: true }).click();
     await expect(page.getByTestId("input-companyName")).toHaveValue("Northstar Components");
     await expect(page.getByTestId("input-policyOwner")).toHaveValue("Alex Admin");
     const priorities = page.getByRole("group", { name: "Environmental priorities", exact: true });

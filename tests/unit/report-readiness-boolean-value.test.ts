@@ -12,9 +12,11 @@ const originals = {
   getMetrics: storage.getMetrics,
   getRawDataByPeriod: storage.getRawDataByPeriod,
   getMetricValuesForMetric: storage.getMetricValuesForMetric,
+  getMetricValuesForMetrics: storage.getMetricValuesForMetrics,
 };
 
 try {
+  (storage as any).getMetricValuesForMetrics = async (companyId: string, metricIds: string[]) => (await Promise.all(metricIds.map(metricId => storage.getMetricValuesForMetric(companyId, metricId, { scope: "all" })))).flat();
   (storage as any).getCompany = async () => ({
     name: "Boolean Readiness SME",
     industry: "Professional services",
@@ -65,4 +67,5 @@ try {
   (storage as any).getMetrics = originals.getMetrics;
   (storage as any).getRawDataByPeriod = originals.getRawDataByPeriod;
   (storage as any).getMetricValuesForMetric = originals.getMetricValuesForMetric;
+  (storage as any).getMetricValuesForMetrics = originals.getMetricValuesForMetrics;
 }
