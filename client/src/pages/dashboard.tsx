@@ -9,6 +9,7 @@ import { PageHeader, PageLayout } from "@/components/page-layout";
 import { SmeDashboardOverview } from "@/components/sme-dashboard-overview";
 import { SmeNextTasks } from "@/components/sme-next-tasks";
 import { ReportingContextStrip } from "@/components/reporting-context-strip";
+import { ReportingMonthPicker } from "@/components/reporting-month-picker";
 import { QueryFreshness } from "@/components/query-feedback";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,9 +35,7 @@ export default function Dashboard() {
   return <PageLayout className="space-y-4">
     {new URLSearchParams(window.location.search).get("from") === "portfolio" && <Button asChild variant="outline" className="self-start"><Link href="/portfolio">Back to Portfolio Dashboard</Link></Button>}
     <PageHeader title="Overview" eyebrow={authData?.company?.name} titleTestId="text-dashboard-title" description="Know where you stand. Focus on what matters next."
-      actions={<label className="flex w-full flex-col gap-1.5 text-xs font-medium text-muted-foreground sm:w-auto">Reporting month
-        <input className="min-h-11 w-full min-w-0 rounded-lg border border-input bg-card px-3 py-2 text-base text-foreground sm:w-44 sm:text-sm" type="month" value={reporting.month} onChange={event => reporting.setMonth(event.target.value)} aria-label="Overview reporting month" />
-      </label>} />
+      actions={<ReportingMonthPicker month={reporting.month} onChange={reporting.setMonth} disabled={reporting.isLoading} />} />
     <ReportingContextStrip month={reporting.month} readOnly={!can("metrics_data_entry")} />
     <QueryFreshness updatedAt={dataUpdatedAt} refreshing={isFetching} refresh={refresh} />
     {monthContext.position !== "current" && <div className="flex flex-col gap-2 rounded-xl border bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="overview-period-notice">
